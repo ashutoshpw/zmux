@@ -155,10 +155,10 @@ final class WorkspaceRowView: NSControl {
 
     override var acceptsFirstResponder: Bool { true }
 
-    func update(title: String, subtitle: String, isSelected: Bool, isRunning: Bool) {
+    func update(title: String, subtitle: String, isSelected: Bool, isRunning: Bool, unread: Int = 0) {
         titleLabel.stringValue = title
-        subtitleLabel.stringValue = subtitle
-        statusDot.layer?.backgroundColor = (isRunning ? ZmuxPalette.success : ZmuxPalette.inactive).cgColor
+        subtitleLabel.stringValue = unread > 0 ? "\(unread) unread · \(subtitle)" : subtitle
+        statusDot.layer?.backgroundColor = (unread > 0 ? NSColor.systemOrange : (isRunning ? ZmuxPalette.success : ZmuxPalette.inactive)).cgColor
         layer?.backgroundColor = isSelected ? ZmuxPalette.selection.cgColor : NSColor.clear.cgColor
         layer?.borderColor = isSelected ? ZmuxPalette.selectionBorder.cgColor : NSColor.clear.cgColor
         terminalIcon.contentTintColor = isSelected ? .white : .secondaryLabelColor
@@ -384,6 +384,9 @@ final class TerminalTabBar: BackgroundView {
             selected.scrollToVisible(selected.bounds)
         }
     }
+    func updateAttention(_ notifications: [AttentionNotification]) {
+        for tab in tabs { tab.updateAttention(notifications.filter { !$0.read && $0.surfaceId == tab.surface.id }.count) }
+    }
     @objc private func addTab() { owner?.newTerminalInPane(pane.id) }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner else { return [] }
@@ -406,6 +409,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     let surface: Surface
     weak var owner: AppController?
     private var mouseOrigin: NSPoint?
+    private let titleLabel = NSTextField(labelWithString: "")
 
     init(surface: Surface, selected: Bool, owner: AppController) {
         self.surface = surface
@@ -414,7 +418,8 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         let icon = NSImageView(image: NSImage(systemSymbolName: "terminal", accessibilityDescription: nil) ?? NSImage())
         icon.contentTintColor = selected ? .labelColor : ZmuxPalette.subdued
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11)
-        let title = NSTextField(labelWithString: surface.title)
+        let title = titleLabel
+        title.stringValue = surface.title
         title.font = .systemFont(ofSize: 11.5, weight: selected ? .medium : .regular)
         title.textColor = selected ? .labelColor : ZmuxPalette.subdued
         title.lineBreakMode = .byTruncatingTail
@@ -469,7 +474,54 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         context == .withinApplication ? .move : []
     }
+    func updateAttention(_ unread: Int) {
+        titleLabel.stringValue = (unread > 0 ? "● " : "") + surface.title
+        titleLabel.textColor = unread > 0 ? .systemOrange : .labelColor
+        setAccessibilityLabel(surface.title + (unread > 0 ? ", \(unread) unread" : ""))
+    }
     @objc private func closeTab() { owner?.closeTerminalTab(surface.id) }
     @objc private func renameTab() { owner?.renameTerminalTab(surface.id) }
     @objc private func closeOthers() { owner?.closeOtherTabs(surface.id) }
+}
+
+@MainActor
+final class NotificationRowView: BackgroundView {
+    private let item: AttentionNotification
+    private weak var owner: AppController?
+    init(item: AttentionNotification, available: Bool, owner: AppController) {
+        self.item = item; self.owner = owner
+        super.init(color: NSColor.white.withAlphaComponent(item.read ? 0.025 : 0.065))
+        layer?.cornerRadius = 7
+        let title = NSTextField(wrappingLabelWithString: (item.read ? "" : "● ") + item.title)
+        title.font = .systemFont(ofSize: 12, weight: item.read ? .regular : .semibold)
+        title.textColor = item.read ? .secondaryLabelColor : .labelColor
+        let body = NSTextField(wrappingLabelWithString: item.body)
+        body.font = .systemFont(ofSize: 11); body.textColor = ZmuxPalette.subdued
+        let date = Date(timeIntervalSince1970: Double(item.timestampMs) / 1000)
+        let detail = NSTextField(labelWithString: "\(item.source) · \(date.formatted(date: .omitted, time: .shortened))" + (available ? "" : " · Terminal closed"))
+        detail.font = .systemFont(ofSize: 10); detail.textColor = ZmuxPalette.subdued
+        let labels = NSStackView(views: [title, body, detail])
+        labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 4
+        let open = IconButton(symbol: "arrow.up.forward", label: "Open terminal", target: self, action: #selector(openTarget))
+        open.isEnabled = available
+        let read = IconButton(symbol: "checkmark", label: "Mark read", target: self, action: #selector(markRead))
+        read.isEnabled = !item.read
+        let dismiss = IconButton(symbol: "xmark", label: "Dismiss notification", target: self, action: #selector(dismissItem))
+        let actions = NSStackView(views: [open, read, dismiss])
+        actions.spacing = 2
+        for button in [open, read, dismiss] {
+            button.widthAnchor.constraint(equalToConstant: 24).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        }
+        for view in [labels, actions] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        NSLayoutConstraint.activate([
+            labels.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), labels.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            labels.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10), labels.trailingAnchor.constraint(equalTo: actions.leadingAnchor, constant: -6),
+            actions.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6), actions.topAnchor.constraint(equalTo: topAnchor, constant: 6)
+        ])
+    }
+    required init?(coder: NSCoder) { nil }
+    @objc private func openTarget() { owner?.openNotification(item.id) }
+    @objc private func markRead() { owner?.readNotification(item.id) }
+    @objc private func dismissItem() { owner?.dismissNotification(item.id) }
 }

@@ -30,6 +30,9 @@ Release signing, notarization and automatic updates are later distribution gates
 - Workspace creation, renaming and switching; horizontal/vertical pane splits and closure.
 - Independent terminal tabs, selection/traversal, renaming, drag between panes, and close-other.
 - In-process Recently Closed history with retryable restoration of tabs and grouped layouts.
+- Collapsible sidebar (⌘B), Workspaces/Notifications tabs, unread workspace/tab badges and an
+  always-visible bell control. Inbox entries open their exact terminal, mark read or dismiss.
+- Bell, OSC 9 and OSC 777 notifications, plus explicit `zmux notify`; plain output does not notify.
 - Keyboard input, arrow/control keys, an IME composition implementation, viewport selection,
   copy/paste and kernel PTY resize.
 - Accessible icon controls, an original app icon, and active terminal titles from OSC metadata.
@@ -67,6 +70,11 @@ Examples: `zmux status`, `zmux list-workspaces`, `zmux list-panes`, and
 `zmux close-surface SURFACE_ID`, `zmux recently-closed`, and `zmux reopen-closed [CLOSED_ID]`.
 Mutations acknowledge acceptance; inspect tab readiness for asynchronous shell launch results.
 IDs currently use positive integers; cmux-style refs, UUIDs and option parity remain pending.
+For attention, run `zmux notify --surface SURFACE_ID --title "Review ready" --body "Build finished"`
+and `zmux list-notifications`. Use `open-notification --id ID`, `mark-notification-read --id ID`,
+`dismiss-notification --id ID`, or `clear-notifications --through ID` to acknowledge exact history.
+The inbox retains 128 entries and reports omissions; desktop OS notifications, shell/agent hooks,
+status/progress/log operations and persisted unread state remain later work.
 Each command has its own offline `--help`.
 
 ## Build locally

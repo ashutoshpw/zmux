@@ -4,17 +4,29 @@ import Darwin
 private enum UICommand: Sendable {
     case action(String, UInt64?, String?, String?, UInt64?)
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
+    case attention(String, UInt64?, UInt64?, Bool?)
     case input(UInt64, String)
     case resize(UInt64, Int, Int)
 }
 
 @MainActor
-final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
+final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWindowDelegate {
     let window: NSWindow
     var cloudWindow: NSWindowController?
     private(set) var snapshot: DesktopSnapshot?
 
     private let bridge = NativeBridge()
+    private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
+    private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
+    private var sidebarWidth: NSLayoutConstraint?
+    private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
+    private var sidebarScroll: NSScrollView?
+    private var sidebarDocumentConstraints: [NSLayoutConstraint] = []
+    private var sidebarModes: NSSegmentedControl?
+    private lazy var clearNotificationsButton = IconButton(symbol: "trash", label: "Clear displayed notifications", target: self, action: #selector(clearNotifications))
+    private var notificationList: NSStackView?
+    private var notificationKey = ""
+    private lazy var notificationButton = IconButton(symbol: "bell", label: "Notifications", target: self, action: #selector(showNotifications))
     private let canvas = BackgroundView(color: ZmuxPalette.terminal)
     private let workspaceList = FlippedStackView()
     private let mainHeader = MainHeaderView()
@@ -42,6 +54,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
             defer: false
         )
         super.init()
+        window.delegate = self
         window.title = "Terminal"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -67,6 +80,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
                         try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
                     case .surface(let action, let surface, let pane, let index, let closed):
                         try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
+                    case .attention(let operation, let id, let through, let active):
+                        try await self.bridge.attention(operation, id: id, through: through, active: active)
                     case .input(let session, let text):
                         try await self.bridge.input(session: session, text: text)
                     case .resize(let session, let rows, let cols):
@@ -93,6 +108,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        appActive(NSApp.isActive)
     }
 
     func shutdown() async throws {
@@ -121,21 +137,25 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         let content = BackgroundView(color: ZmuxPalette.window)
         window.contentView = content
 
-        let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
         let sidebarChrome = DraggableChromeView(color: ZmuxPalette.sidebar)
         let sidebarSeparator = SeparatorView()
         let rightSeparator = SeparatorView()
-        let localHeading = NSTextField(labelWithString: "Local")
-        localHeading.font = .systemFont(ofSize: 11, weight: .semibold)
-        localHeading.textColor = ZmuxPalette.subdued
+        let modes = NSSegmentedControl(images: [NSImage(systemSymbolName: "square.stack", accessibilityDescription: "Workspaces") ?? NSImage(), NSImage(systemSymbolName: "bell", accessibilityDescription: "Notifications") ?? NSImage()], trackingMode: .selectOne, target: self, action: #selector(sidebarModeChanged(_:)))
+        modes.segmentStyle = .texturedRounded
+        modes.selectedSegment = 0
+        modes.setToolTip("Workspaces", forSegment: 0)
+        modes.setToolTip("Notifications", forSegment: 1)
+        modes.setAccessibilityLabel("Sidebar tabs")
+        sidebarModes = modes
 
         let newWorkspaceButton = makeIconButton(symbol: "plus", label: "New workspace", action: #selector(newWorkspace))
         let cloudButton = makeIconButton(symbol: "icloud", label: "Cloud account", action: #selector(showCloudSettings))
-        let sidebarActions = NSStackView(views: [newWorkspaceButton, cloudButton])
+        let sidebarActions = NSStackView(views: [newWorkspaceButton, clearNotificationsButton, cloudButton])
         sidebarActions.orientation = .horizontal
         sidebarActions.spacing = 3
 
         let scroll = NSScrollView()
+        sidebarScroll = scroll
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
@@ -151,16 +171,19 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         let splitRightButton = makeIconButton(symbol: "rectangle.split.2x1", label: "Split right", action: #selector(splitRight))
         let splitDownButton = makeIconButton(symbol: "rectangle.split.1x2", label: "Split down", action: #selector(splitDown))
         let newTabButton = makeIconButton(symbol: "plus", label: "New terminal tab (⌘T)", action: #selector(newTerminal))
-        for button in [newTabButton, splitRightButton, splitDownButton] {
+        let toggleSidebarButton = makeIconButton(symbol: "sidebar.left", label: "Toggle sidebar (⌘B)", action: #selector(toggleSidebar))
+        for button in [toggleSidebarButton, notificationButton, newTabButton, splitRightButton, splitDownButton] {
             mainHeader.actions.addArrangedSubview(button)
         }
 
-        for view in [sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, localHeading, sidebarActions, scroll, cloudFooter, mainHeader, canvas] {
+        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, modes, sidebarActions, scroll, cloudFooter, mainHeader, canvas] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
-        content.addSubview(sidebarPanel)
+        content.addSubview(sidebarContainer)
+        sidebarContainer.addSubview(sidebarPanel)
+        sidebarContainer.layer?.masksToBounds = true
         sidebarPanel.addSubview(sidebarChrome)
-        sidebarPanel.addSubview(localHeading)
+        sidebarPanel.addSubview(modes)
         sidebarPanel.addSubview(sidebarActions)
         sidebarPanel.addSubview(scroll)
         sidebarPanel.addSubview(cloudFooter)
@@ -169,7 +192,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         content.addSubview(mainHeader)
         content.addSubview(canvas)
 
-        for button in actionButtons {
+        for button in actionButtons + [notificationButton, clearNotificationsButton] {
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 button.widthAnchor.constraint(equalToConstant: 28),
@@ -178,9 +201,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         }
 
         NSLayoutConstraint.activate([
-            sidebarPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            sidebarPanel.topAnchor.constraint(equalTo: content.topAnchor),
-            sidebarPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            sidebarContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            sidebarContainer.topAnchor.constraint(equalTo: content.topAnchor),
+            sidebarContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            sidebarPanel.leadingAnchor.constraint(equalTo: sidebarContainer.leadingAnchor),
+            sidebarPanel.topAnchor.constraint(equalTo: sidebarContainer.topAnchor),
+            sidebarPanel.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
             sidebarPanel.widthAnchor.constraint(equalToConstant: 224),
 
             sidebarChrome.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
@@ -194,17 +220,15 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
 
             sidebarActions.trailingAnchor.constraint(equalTo: sidebarChrome.trailingAnchor, constant: -8),
             sidebarActions.centerYAnchor.constraint(equalTo: sidebarChrome.centerYAnchor),
-            localHeading.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor, constant: 14),
-            localHeading.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 12),
-            localHeading.trailingAnchor.constraint(lessThanOrEqualTo: sidebarPanel.trailingAnchor, constant: -12),
+            modes.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor, constant: 10),
+            modes.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 8),
+            modes.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor, constant: -10),
+            modes.heightAnchor.constraint(equalToConstant: 25),
 
             scroll.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: localHeading.bottomAnchor, constant: 7),
+            scroll.topAnchor.constraint(equalTo: modes.bottomAnchor, constant: 7),
             scroll.bottomAnchor.constraint(equalTo: cloudFooter.topAnchor),
-            workspaceList.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
-            workspaceList.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
-            workspaceList.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
 
             cloudFooter.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             cloudFooter.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
@@ -215,16 +239,34 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
             rightSeparator.bottomAnchor.constraint(equalTo: sidebarPanel.bottomAnchor),
             rightSeparator.widthAnchor.constraint(equalToConstant: 1),
 
-            mainHeader.leadingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
+            mainHeader.leadingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
             mainHeader.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             mainHeader.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             mainHeader.heightAnchor.constraint(equalToConstant: 42),
-            canvas.leadingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
+            canvas.leadingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
             canvas.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             canvas.topAnchor.constraint(equalTo: mainHeader.bottomAnchor),
             canvas.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
+        sidebarWidth = sidebarContainer.widthAnchor.constraint(equalToConstant: sidebarCollapsed ? 0 : 224)
+        sidebarWidth?.isActive = true
+        sidebarPanel.isHidden = sidebarCollapsed
+        clearNotificationsButton.isHidden = true
+        setSidebarDocument(workspaceList)
     }
+
+    @objc func toggleSidebar() {
+        sidebarCollapsed.toggle()
+        UserDefaults.standard.set(sidebarCollapsed, forKey: "sidebarCollapsed")
+        sidebarWidth?.constant = sidebarCollapsed ? 0 : 224
+        sidebarPanel.isHidden = sidebarCollapsed
+        window.contentView?.layoutSubtreeIfNeeded()
+        if let terminal = focusedTerminal { window.makeFirstResponder(terminal) }
+    }
+
+    func appActive(_ active: Bool) { enqueue(.attention("app_active", nil, nil, active && window.isKeyWindow)) }
+    func windowDidBecomeKey(_ notification: Notification) { appActive(NSApp.isActive) }
+    func windowDidResignKey(_ notification: Notification) { appActive(false) }
 
     private func makeIconButton(symbol: String, label: String, action: Selector) -> IconButton {
         let button = IconButton(symbol: symbol, label: label, target: self, action: action)
@@ -249,6 +291,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         let items: [(String, Selector, String)] = [
             ("New Workspace", #selector(newWorkspace), "n"),
             ("New Terminal Tab", #selector(newTerminal), "t"),
+            ("Toggle Sidebar", #selector(toggleSidebar), "b"),
+            ("Notifications", #selector(showNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),
             ("Split Down", #selector(splitDown), "D"),
             ("Rename Workspace", #selector(renameWorkspace), ""),
@@ -299,9 +343,11 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         rebuildWorkspaceRowsIfNeeded(snapshot)
         updateWorkspaceRows(snapshot)
         updateHeader(snapshot)
+        updateNotifications(snapshot)
         updateTerminalLayoutIfNeeded(snapshot)
 
         for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
+        updateTabAttention(canvas, snapshot: snapshot)
         if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }),
            let terminal = terminals[pane.sessionId] {
             if !didSetInitialTerminalFocus {
@@ -311,6 +357,11 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
                 window.makeFirstResponder(terminal)
             }
         }
+    }
+
+    private func updateTabAttention(_ view: NSView, snapshot: DesktopSnapshot) {
+        if let bar = view as? TerminalTabBar { bar.updateAttention(snapshot.notifications) }
+        for child in view.subviews { updateTabAttention(child, snapshot: snapshot) }
     }
 
     private func rebuildWorkspaceRowsIfNeeded(_ snapshot: DesktopSnapshot) {
@@ -347,7 +398,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
                 let panes = workspace.root.panes.count
                 subtitle = panes == 1 ? "Local shell" : "\(panes) local terminals"
             }
-            row.update(title: workspace.name, subtitle: subtitle, isSelected: isSelected, isRunning: isRunning)
+            let surfaces = Set(workspace.root.panes.flatMap { $0.surfaces }.map { $0.id })
+            let unread = snapshot.notifications.filter { !$0.read && surfaces.contains($0.surfaceId) }.count
+            row.update(title: workspace.name, subtitle: subtitle, isSelected: isSelected, isRunning: isRunning, unread: unread)
         }
     }
 
@@ -621,6 +674,70 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         enqueue(.action("close_workspace", nil, nil, nil, workspace.id))
     }
 
+    private func setSidebarDocument(_ view: NSView) {
+        guard let scroll = sidebarScroll else { return }
+        NSLayoutConstraint.deactivate(sidebarDocumentConstraints)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = view
+        sidebarDocumentConstraints = [view.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            view.topAnchor.constraint(equalTo: scroll.contentView.topAnchor), view.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)]
+        NSLayoutConstraint.activate(sidebarDocumentConstraints)
+    }
+    @objc private func sidebarModeChanged(_ sender: NSSegmentedControl) {
+        if sender.selectedSegment == 1 { showNotifications() }
+        else { clearNotificationsButton.isHidden = true; setSidebarDocument(workspaceList) }
+    }
+    @objc func showNotifications() {
+        if sidebarCollapsed { toggleSidebar() }
+        sidebarModes?.selectedSegment = 1
+        clearNotificationsButton.isHidden = false
+        if notificationList == nil {
+            let list = FlippedStackView()
+            list.orientation = .vertical; list.alignment = .leading; list.spacing = 6
+            list.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 12, right: 8)
+            notificationList = list
+        }
+        if let list = notificationList { setSidebarDocument(list) }
+        notificationKey = ""
+        if let snapshot { updateNotifications(snapshot) }
+    }
+    private func updateNotifications(_ snapshot: DesktopSnapshot) {
+        let unread = snapshot.notifications.filter { !$0.read }.count
+        notificationButton.image = NSImage(systemSymbolName: unread > 0 ? "bell.badge.fill" : "bell", accessibilityDescription: "Notifications")
+        notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
+        notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
+        notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
+        guard let list = notificationList else { return }
+        let key = snapshot.notifications.map { "\($0.id):\($0.read)" }.joined(separator: ",") + ":\(snapshot.model.revision):\(snapshot.notificationsDropped)"
+        guard key != notificationKey else { return }
+        notificationKey = key
+        list.arrangedSubviews.forEach { list.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let live = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.map { $0.id })
+        if snapshot.notifications.isEmpty {
+            let label = NSTextField(wrappingLabelWithString: "No notifications. Terminal bells and explicit notifications appear here.")
+            label.textColor = ZmuxPalette.subdued; list.addArrangedSubview(label)
+            label.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
+        }
+        for item in snapshot.notifications.reversed() {
+            let row = NotificationRowView(item: item, available: live.contains(item.surfaceId), owner: self)
+            list.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
+        }
+        if snapshot.notificationsDropped > 0 {
+            let label = NSTextField(labelWithString: "\(snapshot.notificationsDropped) older signals omitted by history limits")
+            label.font = .systemFont(ofSize: 10); label.textColor = ZmuxPalette.subdued; list.addArrangedSubview(label)
+        }
+    }
+    func openNotification(_ id: UInt64) {
+        enqueue(.attention("open", id, nil, nil))
+        window.makeKeyAndOrderFront(nil)
+    }
+    func readNotification(_ id: UInt64) { enqueue(.attention("read", id, nil, nil)) }
+    func dismissNotification(_ id: UInt64) { enqueue(.attention("dismiss", id, nil, nil)) }
+    @objc private func clearNotifications() {
+        if let through = snapshot?.notifications.last?.id { enqueue(.attention("clear", nil, through, nil)) }
+    }
+
     @objc func showCloudSettings() {
         let controller = cloudWindow ?? CloudWindowController(owner: self)
         cloudWindow = controller
@@ -665,7 +782,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         guard let initialSnapshot = snapshot, let first = initialSnapshot.workspace else {
             throw BridgeFailure(message: "No initial workspace")
         }
-        let expectedControls = Set(["New workspace", "Cloud account", "Split right", "Split down", "Close pane", "Cloud settings"])
+        let expectedControls = Set(["New workspace", "Cloud account", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
         let accessibleControls = Set((actionButtons + [cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
         guard expectedControls.isSubset(of: accessibleControls) else {
             throw BridgeFailure(message: "Native icon controls are missing accessibility labels")
@@ -716,6 +833,28 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
         guard snapshot?.workspace?.focusedPane == originalPane.id else { throw BridgeFailure(message: "Reopen did not restore tab placement") }
         try performShortcut("w", modifiers: [.command])
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
+        let wasCollapsed = sidebarCollapsed
+        let priorWidth = canvas.bounds.width
+        try performShortcut("b", modifiers: [.command])
+        guard sidebarCollapsed != wasCollapsed, canvas.bounds.width != priorWidth else { throw BridgeFailure(message: "Sidebar toggle did not resize terminal space") }
+        try performShortcut("b", modifiers: [.command])
+        guard sidebarCollapsed == wasCollapsed else { throw BridgeFailure(message: "Sidebar visibility did not restore") }
+        newTerminal()
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.frames.first?.snapshot?.state == "running" }
+        guard let attentionTab = snapshot?.workspace?.root.panes.first?.selectedSurface else { throw BridgeFailure(message: "No attention test tab") }
+        enqueue(.input(originalPane.sessionId, "printf '\\033]777;notify;Agent ready;Review requested\\007'\r"))
+        try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read } }
+        showNotifications()
+        guard sidebarModes?.selectedSegment == 1, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
+        if let item = snapshot?.notifications.last(where: { $0.surfaceId == originalPane.selectedSurface }) {
+            openNotification(item.id)
+            try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface && $0.notifications.first(where: { $0.id == item.id })?.read == true }
+        }
+        closeTerminalTab(attentionTab)
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
+        sidebarModes?.selectedSegment = 0
+        clearNotificationsButton.isHidden = true
+        setSidebarDocument(workspaceList)
         splitRight()
         try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
         window.setContentSize(NSSize(width: 1250, height: 820))
@@ -776,6 +915,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
             "close_tab_shortcut": true,
             "reopen_tab_shortcut": true,
             "sibling_process_preserved": true,
+            "sidebar_toggle": true,
+            "notification_inbox": true,
+            "notification_target_routing": true,
             "active_terminal_title": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,
@@ -843,6 +985,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    func applicationDidBecomeActive(_ notification: Notification) { controller?.appActive(true) }
+    func applicationDidResignActive(_ notification: Notification) { controller?.appActive(false) }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 

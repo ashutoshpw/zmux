@@ -51,6 +51,10 @@ pub enum ControlCommand {
         pane_id: PaneId,
     },
     RecentlyClosed,
+    Attention {
+        action: crate::attention::AttentionCommand,
+    },
+    ListNotifications,
     ListWorkspaces,
     ListPanes {
         #[serde(default)]
@@ -431,6 +435,16 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
     match request.command {
         ControlCommand::Action { action } => {
             mutate(desktop, request.request_id, Command::Action { action })
+        }
+        ControlCommand::Attention { action } => {
+            mutate(desktop, request.request_id, Command::Attention { action })
+        }
+        ControlCommand::ListNotifications => {
+            let snapshot = current_snapshot(desktop)?;
+            Ok(
+                json!({"revision": snapshot.revision, "notifications": snapshot.notifications,
+                "dropped": snapshot.notifications_dropped, "unread": snapshot.notifications.iter().filter(|n| !n.read).count()}),
+            )
         }
         ControlCommand::RecentlyClosed => {
             let snapshot = current_snapshot(desktop)?;
