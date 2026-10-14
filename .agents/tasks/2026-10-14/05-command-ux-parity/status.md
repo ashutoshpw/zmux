@@ -4,6 +4,9 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- Diagnostic run 38644079733 identifies ⇧⌘T smoke synthesis: charactersIgnoringModifiers
+  incorrectly discarded Shift, invoking New Terminal. Corrected shifted characters and hardware
+  keycodes; native shortcut regression remains enabled and must pass before artifact delivery.
 - Hosted run 38643467867 passed universal Swift/WebKit compilation/signing and portable checks,
   but a native smoke predicate timed out. Added call-site/state diagnostics; artifact delivery
   remains pending until the failed native behavior is identified and repaired.
