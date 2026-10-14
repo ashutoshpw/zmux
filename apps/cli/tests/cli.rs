@@ -19,14 +19,14 @@ fn socket_path() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_nanos();
+        .subsec_nanos();
     std::env::temp_dir()
         .join(format!(
-            "zmux-cli-{}-{nonce}-{}",
+            "zl{:x}{nonce:x}{:x}",
             std::process::id(),
             NEXT_PATH.fetch_add(1, Ordering::Relaxed)
         ))
-        .join("control.sock")
+        .join("c")
 }
 
 fn invoke(args: &[&str]) -> Output {
@@ -150,6 +150,10 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
     };
     assert_eq!(status["workspace_count"], 1);
     assert_eq!(status["protocol_version"], 1);
+    for _ in 0..20 {
+        let workspaces = invoke_app(&socket, &["list-workspaces"]);
+        assert_eq!(workspaces["workspaces"].as_array().unwrap().len(), 1);
+    }
 
     let rejected = Command::new(env!("CARGO_BIN_EXE_zmux"))
         .arg("--socket")

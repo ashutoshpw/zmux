@@ -222,6 +222,8 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
         setBusy(false)
         if (error as? CloudFailure)?.requiresSignIn == true {
             setSignedIn(false)
+            devices.arrangedSubviews.forEach { devices.removeArrangedSubview($0); $0.removeFromSuperview() }
+            deviceIDs.removeAll()
             accountLabel.stringValue = "Connect your workspace"
             detailLabel.stringValue = "Sign in to register this Mac and manage your devices."
             owner?.updateCloudStatus("Sign in to Cloud", connected: false)

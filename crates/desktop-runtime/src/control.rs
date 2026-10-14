@@ -28,6 +28,7 @@ pub const MAX_CONTROL_REQUEST_BYTES: usize = 16_384;
 pub const MAX_CONTROL_RESPONSE_BYTES: usize = 1_048_576;
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(500);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_millis(250);
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -488,7 +489,22 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
 }
 
 fn current_snapshot(desktop: &Desktop) -> Result<Arc<Snapshot>, (&'static str, String)> {
-    desktop.snapshot().map_err(desktop_error)
+    let deadline = Instant::now() + SNAPSHOT_TIMEOUT;
+    loop {
+        match desktop.snapshot() {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(DesktopError::Busy) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(DesktopError::Busy) => {
+                return Err((
+                    "desktop_busy",
+                    "desktop snapshot remained busy until the read deadline".into(),
+                ));
+            }
+            Err(error) => return Err(desktop_error(error)),
+        }
+    }
 }
 
 fn mutate(
@@ -698,14 +714,14 @@ mod tests {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
-            .as_nanos();
+            .subsec_nanos();
         std::env::temp_dir()
             .join(format!(
-                "zmux-control-{}-{nonce}-{}-{label}",
+                "zc{:x}{nonce:x}{:x}",
                 std::process::id(),
                 NEXT_PATH.fetch_add(1, Ordering::Relaxed)
             ))
-            .join("control.sock")
+            .join(&label[..1])
     }
 
     fn desktop() -> Arc<Desktop> {

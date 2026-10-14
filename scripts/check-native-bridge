@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import os
 import subprocess
+import sys
 
 root = Path(__file__).resolve().parent.parent
 subprocess.run(["cargo", "build", "--locked", "-p", "zmux-native-bridge"], cwd=root, check=True)
@@ -13,7 +14,15 @@ executable = libdir / "zmux-native-abi-check"
 subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
                 "-I", str(root / "crates/native-bridge/include"), str(root / "crates/native-bridge/tests/abi.c"),
                 "-L", str(libdir), "-lzmux_native_bridge", f"-Wl,-rpath,{libdir}", "-o", str(executable)], check=True)
-result = subprocess.run([str(executable)], check=True, capture_output=True, text=True)
+environment = os.environ.copy()
+# The ABI test owns its shell behavior; user zsh startup files can otherwise consume or
+# delay input before the test command reaches an interactive prompt.
+environment["SHELL"] = "/bin/sh"
+result = subprocess.run([str(executable)], capture_output=True, text=True, env=environment)
+if result.returncode != 0:
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    raise SystemExit(f"C ABI executable failed with status {result.returncode}")
 responses = [json.loads(line) for line in result.stdout.splitlines()]
 assert len(responses) == 7, responses
 assert responses[0]["error"]["code"] == "unsupported_version"
