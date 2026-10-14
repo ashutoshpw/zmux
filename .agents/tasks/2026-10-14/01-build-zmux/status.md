@@ -21,9 +21,11 @@
   Rust 1.95, Linux-first remote host support, compatible permissive dependencies with notices.
 
 ## Next action
-Dogfood the downloadable native app, record responsiveness/resource baselines and establish
-numerical budgets before marking M0 complete or expanding the UI. The desktop C ABI now executes workspace effects through the Rust
-coordinator; the original model-only core ABI remains available separately.
+Follow [command and UX parity task](../05-command-ux-parity/plan.md): expand the frozen
+command contracts and measure native resource budgets, then implement per-pane terminal
+surfaces/tabs, sidebar collapse, attention inbox and embedded browser in phased commits.
+The new task retains the full original roadmap and PR #1 scope; the delivered development
+app is not full command or UX parity.
 
 ## Outstanding gates
 - This machine is Linux; native builds and automated smoke checks use hosted macOS runners.
