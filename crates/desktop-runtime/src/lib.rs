@@ -450,23 +450,42 @@ impl Worker {
         }
     }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
+        let mut candidate = self.model.clone();
+        // Capture metadata from the owning session before close/create. A rejected action
+        // must leave even descriptor state unchanged.
+        for (id, slot) in &self.slots {
+            if let Some(cwd) = slot
+                .cached
+                .as_ref()
+                .and_then(|s| s.viewport.working_directory.clone())
+            {
+                candidate.set_session_cwd(*id, cwd);
+            }
+        }
+        let transition = candidate
+            .apply(action)
+            .map_err(|e| DesktopError::Failure(e.to_string()))?;
+        let starts = transition
+            .effects
+            .iter()
+            .filter(|e| matches!(e, Effect::StartSession { .. }))
+            .count();
         let owned = self.pending_launches
             + self.retired.len()
             + self.slots.values().filter(|s| s.session.is_some()).count();
-        if matches!(
-            &action,
-            Action::CreateWorkspace { .. } | Action::SplitPane { .. }
-        ) && (self.slots.len() >= MAX_TERMINALS || owned >= MAX_TERMINALS)
+        if starts > 0
+            && (self.slots.len() + starts > MAX_TERMINALS || owned + starts > MAX_TERMINALS)
         {
             return Err(DesktopError::Failure(format!(
-                "development build supports at most {MAX_TERMINALS} terminals; close a pane first"
+                "development build supports at most {MAX_TERMINALS} terminals; close a tab and wait for cleanup first"
             )));
         }
-        let transition = self
-            .model
-            .apply(action)
-            .map_err(|e| DesktopError::Failure(e.to_string()))?;
-        for effect in transition.effects {
+        self.model = candidate;
+        self.effects(transition.effects);
+        Ok(())
+    }
+    fn effects(&mut self, effects: Vec<Effect>) {
+        for effect in effects {
             match effect {
                 Effect::StopSession { session_id } => {
                     if let Some(mut slot) = self.slots.remove(&session_id)
@@ -475,7 +494,21 @@ impl Worker {
                         self.retire(session);
                     }
                 }
-                Effect::StartSession { session_id, .. } => {
+                Effect::StartSession {
+                    session_id, cwd, ..
+                } => {
+                    // A preceding launch-worker failure can abort the whole restore group.
+                    if !self
+                        .model
+                        .snapshot()
+                        .workspaces
+                        .iter()
+                        .flat_map(|w| w.root.panes())
+                        .flat_map(|p| &p.surfaces)
+                        .any(|s| s.session_id == session_id)
+                    {
+                        continue;
+                    }
                     self.slots.insert(
                         session_id,
                         Slot {
@@ -487,7 +520,14 @@ impl Worker {
                         },
                     );
                     let sender = self.completion_tx.clone();
-                    let shell = self.shell.clone();
+                    let mut shell = self.shell.clone();
+                    if let Some(cwd) = cwd {
+                        shell.cwd = Some(PathBuf::from(cwd));
+                    }
+                    if let Some(cwd) = &shell.cwd {
+                        self.model
+                            .set_session_cwd(session_id, cwd.to_string_lossy().into_owned());
+                    }
                     self.pending_launches += 1;
                     let result = thread::Builder::new()
                         .name(format!("zmux-launch-{}", session_id.0))
@@ -511,20 +551,29 @@ impl Worker {
                         let slot = self.slots.get_mut(&session_id).expect("new slot");
                         slot.starting = false;
                         slot.failure = Some(format!("launch worker failed: {error}"));
+                        self.last_error = slot.failure.clone();
+                        let cleanup = self.model.finish_restore(session_id, false);
+                        self.effects(cleanup);
                     }
                 }
             }
         }
-        Ok(())
     }
     fn complete(&mut self, completion: Completion) {
         self.pending_launches -= 1;
+        let success = completion.result.is_ok();
         if let Some(slot) = self.slots.get_mut(&completion.id) {
             slot.starting = false;
             match completion.result {
                 Ok(session) => slot.session = Some(session),
-                Err(error) => slot.failure = Some(error.to_string()),
+                Err(error) => {
+                    let message = format!("terminal launch failed: {error}");
+                    slot.failure = Some(message.clone());
+                    self.last_error = Some(message);
+                }
             }
+            let cleanup = self.model.finish_restore(completion.id, success);
+            self.effects(cleanup);
         } else if let Ok(session) = completion.result {
             self.retire(session);
         }
@@ -537,9 +586,10 @@ impl Worker {
             .workspaces
             .iter()
             .flat_map(|workspace| workspace.root.panes())
-            .filter_map(|pane| {
-                self.slots.get(&pane.session_id).map(|slot| Frame {
-                    session_id: pane.session_id,
+            .flat_map(|pane| &pane.surfaces)
+            .filter_map(|surface| {
+                self.slots.get(&surface.session_id).map(|slot| Frame {
+                    session_id: surface.session_id,
                     process_id: slot.session.as_ref().map(Session::process_id),
                     starting: slot.starting,
                     snapshot: slot.cached.clone(),
@@ -556,7 +606,7 @@ impl Worker {
                     .root
                     .panes()
                     .into_iter()
-                    .map(|pane| pane.session_id)
+                    .map(|pane| pane.session_id())
                     .collect()
             })
             .unwrap_or_default();

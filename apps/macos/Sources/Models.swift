@@ -34,7 +34,12 @@ struct Frame: Decodable, Sendable {
     let sessionId: UInt64; let processId: UInt32?; let starting: Bool
     let snapshot: TerminalSnapshot?; let failure: String?
 }
-struct Pane: Decodable, Sendable { let id: UInt64; let sessionId: UInt64 }
+struct Surface: Decodable, Sendable { let id: UInt64; let sessionId: UInt64; let title: String; let cwd: String? }
+struct Pane: Decodable, Sendable {
+    let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
+    var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
+    var sessionId: UInt64 { selected.sessionId }
+}
 indirect enum PaneTree: Decodable, Sendable {
     case leaf(Pane)
     case split(String, PaneTree, PaneTree)
@@ -48,14 +53,15 @@ indirect enum PaneTree: Decodable, Sendable {
         }
     }
     var key: String {
-        switch self { case .leaf(let pane): return "p\(pane.id)"; case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))" }
+        switch self { case .leaf(let pane): return "p\(pane.id):\(pane.selectedSurface):" + pane.surfaces.map { "\($0.id):\($0.title)" }.joined(separator: ","); case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))" }
     }
     var panes: [Pane] {
         switch self { case .leaf(let pane): return [pane]; case .split(_, let a, let b): return a.panes + b.panes }
     }
 }
 struct Workspace: Decodable, Sendable { let id: UInt64; let name: String; let focusedPane: UInt64; let root: PaneTree }
-struct Model: Decodable, Sendable { let revision: UInt64; let focusedWorkspace: UInt64?; let workspaces: [Workspace] }
+struct ClosedItem: Decodable, Sendable { let id: UInt64; let title: String; let workspaceName: String; let restoring: Bool }
+struct Model: Decodable, Sendable { let modelVersion: UInt32; let closedItems: [ClosedItem]; let revision: UInt64; let focusedWorkspace: UInt64?; let workspaces: [Workspace] }
 struct DesktopSnapshot: Decodable, Sendable {
     let revision: UInt64; let model: Model; let frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool

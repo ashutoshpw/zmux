@@ -3,12 +3,13 @@ import Darwin
 
 private enum UICommand: Sendable {
     case action(String, UInt64?, String?, String?, UInt64?)
+    case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case input(UInt64, String)
     case resize(UInt64, Int, Int)
 }
 
 @MainActor
-final class AppController: NSObject {
+final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     let window: NSWindow
     var cloudWindow: NSWindowController?
     private(set) var snapshot: DesktopSnapshot?
@@ -28,6 +29,7 @@ final class AppController: NSObject {
     private var modelRevision: UInt64 = .max
     private var terminals: [UInt64: TerminalView] = [:]
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
+    private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
     private var workspaceCount = 1
     private var didSetInitialTerminalFocus = false
 
@@ -63,6 +65,8 @@ final class AppController: NSObject {
                     switch command {
                     case .action(let action, let pane, let axis, let title, let workspace):
                         try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
+                    case .surface(let action, let surface, let pane, let index, let closed):
+                        try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
                     case .input(let session, let text):
                         try await self.bridge.input(session: session, text: text)
                     case .resize(let session, let rows, let cols):
@@ -146,8 +150,8 @@ final class AppController: NSObject {
 
         let splitRightButton = makeIconButton(symbol: "rectangle.split.2x1", label: "Split right", action: #selector(splitRight))
         let splitDownButton = makeIconButton(symbol: "rectangle.split.1x2", label: "Split down", action: #selector(splitDown))
-        let closePaneButton = makeIconButton(symbol: "xmark", label: "Close pane", action: #selector(closePane))
-        for button in [splitRightButton, splitDownButton, closePaneButton] {
+        let newTabButton = makeIconButton(symbol: "plus", label: "New terminal tab (⌘T)", action: #selector(newTerminal))
+        for button in [newTabButton, splitRightButton, splitDownButton] {
             mainHeader.actions.addArrangedSubview(button)
         }
 
@@ -244,16 +248,33 @@ final class AppController: NSObject {
         let workspaceMenu = NSMenu(title: "Workspace")
         let items: [(String, Selector, String)] = [
             ("New Workspace", #selector(newWorkspace), "n"),
+            ("New Terminal Tab", #selector(newTerminal), "t"),
             ("Split Right", #selector(splitRight), "d"),
             ("Split Down", #selector(splitDown), "D"),
             ("Rename Workspace", #selector(renameWorkspace), ""),
-            ("Close Pane", #selector(closePane), "w")
+            ("Rename Tab…", #selector(renameTab), ""),
+            ("Close Tab", #selector(closeTab), "w"),
+            ("Close Pane", #selector(closePane), "")
         ]
         for (title, action, key) in items {
             let item = workspaceMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = self
         }
+        let next = workspaceMenu.addItem(withTitle: "Next Tab", action: #selector(nextTab), keyEquivalent: "]")
+        next.keyEquivalentModifierMask = [.command, .shift]; next.target = self
+        let previous = workspaceMenu.addItem(withTitle: "Previous Tab", action: #selector(previousTab), keyEquivalent: "[")
+        previous.keyEquivalentModifierMask = [.command, .shift]; previous.target = self
         workspaceItem.submenu = workspaceMenu
+
+        let historyItem = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
+        menu.addItem(historyItem)
+        let history = NSMenu(title: "History")
+        let reopen = history.addItem(withTitle: "Reopen Last Closed", action: #selector(reopenClosed), keyEquivalent: "t")
+        reopen.keyEquivalentModifierMask = [.command, .shift]; reopen.target = self
+        let recent = history.addItem(withTitle: "Recently Closed", action: nil, keyEquivalent: "")
+        recent.submenu = recentlyClosedMenu
+        recentlyClosedMenu.delegate = self
+        historyItem.submenu = history
 
         let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         menu.addItem(editItem)
@@ -271,6 +292,8 @@ final class AppController: NSObject {
     }
 
     private func present(_ snapshot: DesktopSnapshot) {
+        let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.map { $0.sessionId })
+        terminals = terminals.filter { liveSessions.contains($0.key) }
         self.snapshot = snapshot
         statusMessage = snapshot.lastError ?? "Ready"
         rebuildWorkspaceRowsIfNeeded(snapshot)
@@ -347,6 +370,7 @@ final class AppController: NSObject {
     }
 
     private func terminalTitle(in snapshot: DesktopSnapshot) -> String {
+        if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }), pane.selected.title != "Terminal" { return pane.selected.title }
         if let title = focusedViewport(in: snapshot)?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             return title
         }
@@ -372,7 +396,6 @@ final class AppController: NSObject {
         layoutKey = key
         didSetInitialTerminalFocus = false
         canvas.subviews.forEach { $0.removeFromSuperview() }
-        terminals.removeAll()
         if let workspace = snapshot.workspace {
             let root = paneView(workspace.root)
             root.frame = canvas.bounds
@@ -405,12 +428,30 @@ final class AppController: NSObject {
     private func paneView(_ tree: PaneTree) -> NSView {
         switch tree {
         case .leaf(let pane):
-            let view = TerminalView(pane: pane)
+            let view = terminals[pane.sessionId] ?? TerminalView(pane: pane)
+            view.pane = pane
+            view.removeFromSuperview()
             view.onInput = { [weak self] text in self?.enqueue(.input(pane.sessionId, text)) }
             view.onResize = { [weak self] rows, cols in self?.enqueue(.resize(pane.sessionId, rows, cols)) }
             view.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
             terminals[pane.sessionId] = view
-            return view
+            let container = BackgroundView(color: ZmuxPalette.terminal)
+            let tabs = TerminalTabBar(pane: pane, owner: self)
+            tabs.translatesAutoresizingMaskIntoConstraints = false
+            view.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(tabs)
+            container.addSubview(view)
+            NSLayoutConstraint.activate([
+                tabs.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                tabs.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                tabs.topAnchor.constraint(equalTo: container.topAnchor),
+                tabs.heightAnchor.constraint(equalToConstant: 32),
+                view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                view.topAnchor.constraint(equalTo: tabs.bottomAnchor),
+                view.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            ])
+            return container
         case .split(let axis, let first, let second):
             let split = NSSplitView()
             split.isVertical = axis == "horizontal"
@@ -444,6 +485,83 @@ final class AppController: NSObject {
     @objc func newWorkspace() {
         workspaceCount += 1
         enqueue(.action("create_workspace", nil, nil, "Workspace \(workspaceCount)", nil))
+    }
+
+    private var focusedPane: Pane? {
+        snapshot?.workspace?.root.panes.first { $0.id == snapshot?.workspace?.focusedPane }
+    }
+
+    func selectTab(_ id: UInt64) { enqueue(.surface("select_surface", id, nil, nil, nil)) }
+    func closeTerminalTab(_ id: UInt64) { enqueue(.surface("close_surface", id, nil, nil, nil)) }
+    func newTerminalInPane(_ paneID: UInt64) { enqueue(.surface("create_surface", nil, paneID, nil, nil)) }
+    @objc func newTerminal() {
+        if let pane = focusedPane { newTerminalInPane(pane.id) } else { newWorkspace() }
+    }
+    @objc func closeTab() { if let pane = focusedPane { closeTerminalTab(pane.selectedSurface) } }
+    @objc func reopenClosed() { enqueue(.surface("reopen_closed", nil, nil, nil, nil)) }
+    @objc private func reopenHistoryItem(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? NSNumber else { return }
+        enqueue(.surface("reopen_closed", nil, nil, nil, id.uint64Value))
+    }
+    @objc func nextTab() { cycleTab(1) }
+    @objc func previousTab() { cycleTab(-1) }
+    private func cycleTab(_ delta: Int) {
+        guard let pane = focusedPane, let index = pane.surfaces.firstIndex(where: { $0.id == pane.selectedSurface }) else { return }
+        selectTab(pane.surfaces[(index + delta + pane.surfaces.count) % pane.surfaces.count].id)
+    }
+    @objc func renameTab() {
+        if let surface = focusedPane?.selected { renameTerminalTab(surface.id) }
+    }
+    func renameTerminalTab(_ id: UInt64) {
+        guard let surface = snapshot?.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }).first(where: { $0.id == id }) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename terminal tab"
+        let field = NSTextField(string: surface.title)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Rename"); alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            Task { [weak self] in
+                do { try await self?.bridge.action("rename_surface", title: field.stringValue, surface: id) }
+                catch { self?.showError(error.localizedDescription) }
+            }
+        }
+    }
+    func closeOtherTabs(_ id: UInt64) {
+        guard let pane = snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.surfaces.contains(where: { $0.id == id }) }),
+              confirmClose(title: "Close other tabs?", count: pane.surfaces.count - 1) else { return }
+        enqueue(.surface("close_other_surfaces", id, nil, nil, nil))
+    }
+    private func confirmClose(title: String, count: Int) -> Bool {
+        guard count > 0 else { return false }
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "This closes \(count) terminal session(s). Reopening starts fresh shells; running jobs cannot be recovered."
+        alert.addButton(withTitle: "Close"); alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+    func reorderTab(_ id: UInt64, in paneID: UInt64, to index: Int) {
+        enqueue(.surface("move_surface", id, paneID, index, nil))
+    }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === recentlyClosedMenu else { return }
+        menu.removeAllItems()
+        for item in (snapshot?.model.closedItems ?? []).reversed() {
+            let entry = menu.addItem(withTitle: "\(item.title) — \(item.workspaceName)" + (item.restoring ? " (restoring…)" : ""), action: #selector(reopenHistoryItem(_:)), keyEquivalent: "")
+            entry.target = self; entry.representedObject = NSNumber(value: item.id); entry.isEnabled = !item.restoring
+        }
+        if menu.items.isEmpty { let empty = menu.addItem(withTitle: "No recently closed items", action: nil, keyEquivalent: ""); empty.isEnabled = false }
+    }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(reopenClosed): return snapshot?.model.closedItems.last.map { !$0.restoring } ?? false
+        case #selector(reopenHistoryItem(_:)):
+            guard let id = item.representedObject as? NSNumber else { return false }
+            return snapshot?.model.closedItems.contains { $0.id == id.uint64Value && !$0.restoring } ?? false
+        case #selector(closeTab), #selector(closePane), #selector(renameTab), #selector(splitRight), #selector(splitDown): return focusedPane != nil
+        case #selector(nextTab), #selector(previousTab): return (focusedPane?.surfaces.count ?? 0) > 1
+        default: return true
+        }
     }
 
     @objc func splitRight() { split("horizontal") }
@@ -499,9 +617,8 @@ final class AppController: NSObject {
     @objc private func closeWorkspaceFromMenu(_ sender: NSMenuItem) {
         guard let number = sender.representedObject as? NSNumber,
               let workspace = snapshot?.model.workspaces.first(where: { $0.id == number.uint64Value }) else { return }
-        for pane in workspace.root.panes {
-            enqueue(.action("close_pane", pane.id, nil, nil, nil))
-        }
+        guard confirmClose(title: "Close workspace?", count: workspace.root.panes.reduce(0) { $0 + $1.surfaces.count }) else { return }
+        enqueue(.action("close_workspace", nil, nil, nil, workspace.id))
     }
 
     @objc func showCloudSettings() {
@@ -585,6 +702,20 @@ final class AppController: NSObject {
               cliStatus["running_sessions"] as? Int == 1 else {
             throw BridgeFailure(message: "Bundled CLI did not observe the native terminal")
         }
+        guard let originalPane = snapshot?.workspace?.root.panes.first,
+              let originalPID = snapshot?.frames.first?.processId else { throw BridgeFailure(message: "Missing original tab") }
+        try performShortcut("t", modifiers: [.command])
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.frames.first?.snapshot?.state == "running" }
+        guard snapshot?.workspace?.root.panes.count == 1, snapshot?.frames.first?.processId != originalPID else {
+            throw BridgeFailure(message: "New terminal shortcut did not create an independent tab")
+        }
+        try performShortcut("w", modifiers: [.command])
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
+        try performShortcut("t", modifiers: [.command, .shift])
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.model.closedItems.isEmpty && $0.frames.first?.snapshot?.state == "running" }
+        guard snapshot?.workspace?.focusedPane == originalPane.id else { throw BridgeFailure(message: "Reopen did not restore tab placement") }
+        try performShortcut("w", modifiers: [.command])
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
         splitRight()
         try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
         window.setContentSize(NSSize(width: 1250, height: 820))
@@ -641,6 +772,10 @@ final class AppController: NSObject {
             "kernel_resize": true,
             "workspace_switch": true,
             "pane_close": true,
+            "terminal_tab_shortcut": true,
+            "close_tab_shortcut": true,
+            "reopen_tab_shortcut": true,
+            "sibling_process_preserved": true,
             "active_terminal_title": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,
@@ -650,6 +785,16 @@ final class AppController: NSObject {
             "source_sha": Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local"
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+    }
+
+    private func performShortcut(_ key: String, modifiers: NSEvent.ModifierFlags) throws {
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: modifiers.contains(.shift) ? key.uppercased() : key,
+            charactersIgnoringModifiers: key, isARepeat: false, keyCode: 0),
+            NSApp.mainMenu?.performKeyEquivalent(with: event) == true else {
+            throw BridgeFailure(message: "Native menu did not handle shortcut \(key)")
+        }
     }
 
     private func waitUntil(_ predicate: (DesktopSnapshot) -> Bool) async throws {

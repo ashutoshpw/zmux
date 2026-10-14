@@ -4,7 +4,7 @@ import AppKit
 // The macOS 15 SDK's legacy input protocol lacks actor annotations. AppKit calls it
 // on the UI thread; preserve MainActor isolation and runtime checking at this boundary.
 final class TerminalView: NSView, @preconcurrency NSTextInputClient {
-    let pane: Pane
+    var pane: Pane
     var onInput: ((String) -> Void)?
     var onResize: ((Int, Int) -> Void)?
     var onFocus: (() -> Void)?

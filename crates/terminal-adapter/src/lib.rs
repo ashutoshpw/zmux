@@ -141,8 +141,11 @@ impl vt100::Callbacks for Metadata {
                     i += 1;
                 }
             }
-            // This is display metadata only: never open a path or execute shell content.
-            self.working_directory = Some(display_text(&decoded, 2048));
+            // Preserve a path exactly or reject it. The session coordinator may use this
+            // local shell-integration metadata as a cwd descriptor; never interpret it as input.
+            self.working_directory = String::from_utf8(decoded).ok().filter(|path| {
+                path.starts_with('/') && path.len() <= 4096 && !path.chars().any(char::is_control)
+            });
         }
     }
 }

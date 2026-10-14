@@ -41,7 +41,9 @@ Example action request:
 ```
 
 Actions use the shared core API: `create_workspace`, `rename_workspace`, `focus_pane`,
-`split_pane`, and `close_pane`, with snake-case field names. Unknown fields and malformed
+`split_pane`, `close_pane`, `create_surface`, `select_surface`, `rename_surface`,
+`close_surface`, `reorder_surface`, `move_surface`, `close_other_surfaces`, `close_workspace`
+and `reopen_closed`, with snake-case field names. Unknown fields and malformed
 requests are rejected. Successful replies contain `version`, `ok`, `snapshot` and `effects`.
 An unsuccessful protocol reply contains `ok: false` and `error.code` / `error.message`.
 Error codes are `invalid_request`, `unsupported_version`, and `action_rejected`.
@@ -92,3 +94,18 @@ Acceptance means queued; revisioned snapshots carry model, visible terminal fram
 Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup off the UI thread.
 There are at most four desktop contexts and eight terminals per desktop, including pending or
 retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
+
+## Workspace model version 2
+
+The JSON model carries `model_version: 2`; the function ABI/request envelope remains version 1.
+Each pane owns ordered `surfaces` and `selected_surface`; a terminal surface owns `session_id`,
+`title` and optional `cwd`. The old pane-level `session_id` field is replaced by this model.
+Native UI and Rust are packaged together; older hosts must reject an unfamiliar model version.
+Legacy socket pane inspection still projects the selected session for existing CLI callers.
+
+Desktop `frames` projects only selected tabs in the active workspace. Hidden sessions stay alive;
+local-control inspection sees all sessions. Moving a surface retains its IDs and process. Close
+history contains descriptors, never input or process handles, and uses new IDs on restoration.
+The coordinator consumes a history record only when all launches succeed; failure cleans up the
+provisional group and retains history. Pure core users applying `reopen_closed` must call Rust
+`finish_restore` on launch completion; the model-only C API does not orchestrate restoration.

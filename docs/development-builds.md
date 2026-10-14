@@ -28,6 +28,8 @@ Release signing, notarization and automatic updates are later distribution gates
 - Real local login shells managed by Rust session workers.
 - Native AppKit terminal drawing with ANSI colors, cursor and wide-character grid positions.
 - Workspace creation, renaming and switching; horizontal/vertical pane splits and closure.
+- Independent terminal tabs, selection/traversal, renaming, drag between panes, and close-other.
+- In-process Recently Closed history with retryable restoration of tabs and grouped layouts.
 - Keyboard input, arrow/control keys, an IME composition implementation, viewport selection,
   copy/paste and kernel PTY resize.
 - Accessible icon controls, an original app icon, and active terminal titles from OSC metadata.
@@ -35,16 +37,22 @@ Release signing, notarization and automatic updates are later distribution gates
 - Browser cloud sign-in with PKCE, Keychain credentials and account/device management.
 - A serialized command path and revisioned snapshots; native UI does not parse PTY output.
 
-Use **⌘N** for a workspace, **⌘D** to split right, **⇧⌘D** to split down, and **⌘W** to close
-the focused pane. Use the Edit menu for viewport copy, paste and select-all.
+Use **⌘N** for a workspace, **⌘T** for a terminal tab, **⌘D** to split right, **⇧⌘D** to
+split down, **⌘W** to close the selected tab, and **⇧⌘T** to reopen the last closed item.
+Use **⇧⌘[** / **⇧⌘]** to traverse tabs, or History → Recently Closed to choose an item. Use the Edit menu for viewport copy, paste and select-all.
 
 Initial limits: eight terminals per app context, 16 KiB per paste, 1,000 retained terminal
 scrollback lines, and bounded command/input buffers. The first view displays the live
-viewport; scrollback navigation, saved layouts, tabs, search, full terminal-protocol coverage,
+viewport; scrollback navigation, saved layouts, search, full terminal-protocol coverage,
 remote SSH sessions and iOS are not delivered by this build. Cloud browser sign-in and
 account/device management are integrated, but production service deployment remains pending
 the hosting discussion. This does not yet provide remote terminals.
-Interactive IME/accessibility behavior and resource budgets still need manual native dogfood.
+Closed-item history holds up to 32 items and lasts until app exit. Reopening starts fresh
+local shells at saved working directories; it never replays commands or resurrects killed jobs.
+A missing directory leaves a visible error and retryable history. Workspace closures preserve
+the grouped split layout. A removed individual pane currently restores into a new workspace;
+restoring its original split position and multiwindow recovery remain open parity gaps.
+Interactive drag/IME/accessibility behavior and resource budgets still need manual native dogfood.
 
 ## Command line control
 
@@ -54,7 +62,12 @@ directory on your PATH. The installer creates a symlink without overwriting an e
 file. Keep the app at its installed location.
 
 Examples: `zmux status`, `zmux list-workspaces`, `zmux list-panes`, and
-`zmux new-workspace "Build"`. Each command has its own `--help`.
+`zmux new-workspace "Build"`. For tabs, use `zmux new-surface PANE_ID`,
+`zmux list-pane-surfaces PANE_ID`, `zmux select-surface SURFACE_ID`,
+`zmux close-surface SURFACE_ID`, `zmux recently-closed`, and `zmux reopen-closed [CLOSED_ID]`.
+Mutations acknowledge acceptance; inspect tab readiness for asynchronous shell launch results.
+IDs currently use positive integers; cmux-style refs, UUIDs and option parity remain pending.
+Each command has its own offline `--help`.
 
 ## Build locally
 
@@ -77,12 +90,13 @@ Services; it does not operate on the user's cmux app.
 An artifact is uploaded only after portable/native Rust checks, universal compilation,
 signing verification and packaged AppKit smoke checks pass. The smoke check drives a real
 shell through native input, observes ANSI-colored output, splits panes, verifies `stty size`,
-switches workspaces, closes a pane and captures an actual native rendering surface.
+switches workspaces, closes a pane, exercises ⌘T/⌘W/⇧⌘T through the native menu,
+checks that the sibling PID survives, and captures an actual native rendering surface.
 Those checks establish basic delivery, not complete UX parity or production readiness.
 The hosted native smoke test runs on Apple Silicon. Intel executables are cross-compiled
 and checked for architecture/signature, but Intel runtime behavior still needs dogfood.
 
-## Verified build receipt
+## Previous verified build receipt
 
 [Download the verified development artifact](https://github.com/ashutoshpw/zmux/actions/runs/38637673581/artifacts/11928138411)
 from [successful run 38637673581](https://github.com/ashutoshpw/zmux/actions/runs/38637673581).

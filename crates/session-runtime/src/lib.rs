@@ -168,6 +168,22 @@ impl Drop for ProcessGuard {
 
 impl Session {
     pub fn spawn(launch: Launch) -> Result<Self, SessionError> {
+        // portable-pty may fall back to a home directory on a failed chdir. Restore
+        // must fail visibly rather than launching a shell in an unexpected location.
+        if let Some(cwd) = &launch.cwd {
+            let metadata = std::fs::metadata(cwd).map_err(|error| {
+                SessionError::Failure(format!(
+                    "working directory {} is unavailable: {error}",
+                    cwd.display()
+                ))
+            })?;
+            if !metadata.is_dir() {
+                return Err(SessionError::Failure(format!(
+                    "working directory {} is not a directory",
+                    cwd.display()
+                )));
+            }
+        }
         let terminal =
             Terminal::new(launch.size).map_err(|e| SessionError::Failure(e.to_string()))?;
         let pair = native_pty_system()
