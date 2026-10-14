@@ -2,9 +2,19 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceKind {
+    Terminal,
+    Browser,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Surface {
     pub id: SurfaceId,
-    pub session_id: SessionId,
+    pub kind: SurfaceKind,
+    pub session_id: Option<SessionId>,
+    pub url: Option<String>,
+    pub navigation: u64,
     pub title: String,
     pub cwd: Option<String>,
 }
@@ -12,7 +22,10 @@ impl Surface {
     pub(crate) fn terminal(id: SurfaceId, session_id: SessionId) -> Self {
         Self {
             id,
-            session_id,
+            kind: SurfaceKind::Terminal,
+            session_id: Some(session_id),
+            url: None,
+            navigation: 0,
             title: "Terminal".into(),
             cwd: None,
         }
@@ -61,7 +74,74 @@ impl WorkspaceStore {
         action: Action,
         effects: &mut Vec<Effect>,
     ) -> Result<(), ActionError> {
+        match &action {
+            Action::NavigateBrowser { surface_id, url }
+            | Action::ObserveBrowser {
+                surface_id, url, ..
+            } => {
+                validate_browser_url(url)?;
+                let (wi, pane, index) = self.location(*surface_id)?;
+                let surface = &mut self.state.workspaces[wi]
+                    .root
+                    .pane_mut(pane)
+                    .unwrap()
+                    .surfaces[index];
+                if surface.kind != SurfaceKind::Browser {
+                    return Err(ActionError::InvalidOperation(
+                        "surface is not a browser".into(),
+                    ));
+                }
+                if let Action::ObserveBrowser { title, .. } = &action {
+                    let title: String = title
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(MAX_NAME_CHARS)
+                        .collect();
+                    if !title.is_empty() {
+                        surface.title = title;
+                    }
+                } else {
+                    surface.navigation = surface
+                        .navigation
+                        .checked_add(1)
+                        .ok_or(ActionError::Exhausted)?;
+                }
+                surface.url = Some(url.clone());
+                return Ok(());
+            }
+            _ => {}
+        }
         match action {
+            Action::CreateBrowser { pane_id, url } => {
+                validate_browser_url(&url)?;
+                let wi = self.workspace_index(pane_id)?;
+                let pane = self.pane(pane_id)?;
+                Self::check_tab_capacity(pane.surfaces.len() + 1)?;
+                let id = SurfaceId(self.reserve(1)?);
+                let surface = Surface {
+                    id,
+                    kind: SurfaceKind::Browser,
+                    session_id: None,
+                    url: Some(url),
+                    navigation: 0,
+                    title: "Browser".into(),
+                    cwd: None,
+                };
+                let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
+                pane.selected_surface = id;
+                pane.surfaces.push(surface);
+                self.focus(wi, pane_id);
+            }
+            Action::NavigateBrowser { surface_id, url }
+            | Action::ObserveBrowser {
+                surface_id,
+                url,
+                title: _,
+            } => {
+                // Observation is handled separately below to keep navigation generations distinct.
+                let _ = (surface_id, url);
+                unreachable!("browser navigation dispatched before generic actions")
+            }
             Action::CreateSurface { pane_id } => {
                 let wi = self.workspace_index(pane_id)?;
                 let pane = self.pane(pane_id)?;
@@ -271,11 +351,13 @@ impl WorkspaceStore {
         Ok(())
     }
     fn start(pane_id: PaneId, surface: &Surface, effects: &mut Vec<Effect>) {
-        effects.push(Effect::StartSession {
-            pane_id,
-            session_id: surface.session_id,
-            cwd: surface.cwd.clone(),
-        });
+        if let Some(session_id) = surface.session_id {
+            effects.push(Effect::StartSession {
+                pane_id,
+                session_id,
+                cwd: surface.cwd.clone(),
+            });
+        }
     }
     fn remove_surface(
         &mut self,
@@ -285,9 +367,9 @@ impl WorkspaceStore {
         let (wi, pane_id, index) = self.location(id)?;
         let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
         let surface = pane.surfaces.remove(index);
-        effects.push(Effect::StopSession {
-            session_id: surface.session_id,
-        });
+        if let Some(session_id) = surface.session_id {
+            effects.push(Effect::StopSession { session_id });
+        }
         if !pane.surfaces.is_empty() {
             if pane.selected_surface == id {
                 pane.selected_surface = pane.surfaces[index.min(pane.surfaces.len() - 1)].id;
@@ -393,7 +475,10 @@ impl WorkspaceStore {
         let ids = self.reserve(2)?;
         let surface = Surface {
             id: SurfaceId(ids),
-            session_id: SessionId(ids + 1),
+            kind: old.kind.clone(),
+            session_id: old.session_id.map(|_| SessionId(ids + 1)),
+            url: old.url.clone(),
+            navigation: 0,
             title: old.title.clone(),
             cwd: old.cwd.clone(),
         };
@@ -450,6 +535,14 @@ impl WorkspaceStore {
         }
         let record = self.state.closed_items[index].clone();
         let prior_focus = self.focused();
+        let prior_surfaces: Vec<_> = self
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .map(|s| s.id)
+            .collect();
         match &record.content {
             ClosedContent::Tabs { pane_id, tabs } => {
                 let original_pane = *pane_id;
@@ -546,9 +639,14 @@ impl WorkspaceStore {
             .iter()
             .flat_map(|w| w.root.panes())
             .flat_map(|p| &p.surfaces)
-            .filter(|s| waiting.contains(&s.session_id))
+            .filter(|s| !prior_surfaces.contains(&s.id))
             .map(|s| s.id)
             .collect();
+        if waiting.is_empty() {
+            self.state.closed_items.remove(index);
+            self.prune_restore_anchors();
+            return Ok(());
+        }
         self.pending_restores.push(PendingRestore {
             history_id: record.id,
             surfaces,
@@ -668,7 +766,7 @@ impl WorkspaceStore {
             let ids: Vec<_> = workspace.root.panes().iter().map(|p| p.id).collect();
             for id in ids {
                 for surface in &mut workspace.root.pane_mut(id).unwrap().surfaces {
-                    if surface.session_id == session_id {
+                    if surface.session_id == Some(session_id) {
                         surface.cwd = Some(cwd);
                         return;
                     }
@@ -676,4 +774,26 @@ impl WorkspaceStore {
             }
         }
     }
+}
+
+/// Browser content cannot select local files, scripts or privileged URL handlers.
+fn validate_browser_url(url: &str) -> Result<(), ActionError> {
+    if url == "about:blank" {
+        return Ok(());
+    }
+    let authority = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"));
+    if url.len() > 8192
+        || url.chars().any(|c| c.is_control() || c.is_whitespace())
+        || authority.is_none_or(|rest| {
+            let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+            host.is_empty() || host.contains('@') || host.contains('\\')
+        })
+    {
+        return Err(ActionError::InvalidOperation(
+            "browser URL must be http://, https:// or about:blank without credentials".into(),
+        ));
+    }
+    Ok(())
 }

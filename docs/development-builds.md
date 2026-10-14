@@ -33,6 +33,8 @@ Release signing, notarization and automatic updates are later distribution gates
 - Collapsible sidebar (⌘B), Workspaces/Notifications tabs, unread workspace/tab badges and an
   always-visible bell control. Inbox entries open their exact terminal, mark read or dismiss.
 - Bell, OSC 9 and OSC 777 notifications, plus explicit `zmux notify`; plain output does not notify.
+- Embedded system WebKit browser tabs with address bar, back/forward/reload/stop, find and zoom.
+  Browser views retain in-memory page state when hidden and do not allocate PTYs.
 - Keyboard input, arrow/control keys, an IME composition implementation, viewport selection,
   copy/paste and kernel PTY resize.
 - Accessible icon controls, an original app icon, and active terminal titles from OSC metadata.
@@ -42,9 +44,10 @@ Release signing, notarization and automatic updates are later distribution gates
 
 Use **⌘N** for a workspace, **⌘T** for a terminal tab, **⌘D** to split right, **⇧⌘D** to
 split down, **⌘W** to close the selected tab, and **⇧⌘T** to reopen the last closed item.
-Use **⇧⌘[** / **⇧⌘]** to traverse tabs, or History → Recently Closed to choose an item. Use the Edit menu for viewport copy, paste and select-all.
+Use **⇧⌘[** / **⇧⌘]** to traverse tabs, or History → Recently Closed to choose an item. Use the globe icon or Workspace → New Browser Tab to browse, and ⌘L to focus the browser
+address bar. Use the Browser menu for page find/zoom/navigation. Use the Edit menu for copy/paste.
 
-Initial limits: eight terminals per app context, 16 KiB per paste, 1,000 retained terminal
+Initial limits: eight terminals and four browser tabs per app context, 16 KiB per paste, 1,000 retained terminal
 scrollback lines, and bounded command/input buffers. The first view displays the live
 viewport; scrollback navigation, saved layouts, search, full terminal-protocol coverage,
 remote SSH sessions and iOS are not delivered by this build. Cloud browser sign-in and
@@ -69,10 +72,17 @@ Examples: `zmux status`, `zmux list-workspaces`, `zmux list-panes`, and
 `zmux list-pane-surfaces PANE_ID`, `zmux select-surface SURFACE_ID`,
 `zmux close-surface SURFACE_ID`, `zmux recently-closed`, and `zmux reopen-closed [CLOSED_ID]`.
 Mutations acknowledge acceptance; inspect tab readiness for asynchronous shell launch results.
+For an embedded browser use `zmux browser open PANE_ID https://example.com` and
+`zmux browser navigate SURFACE_ID https://example.com/docs`.
 IDs currently use positive integers; cmux-style refs, UUIDs and option parity remain pending.
 For attention, run `zmux notify --surface SURFACE_ID --title "Review ready" --body "Build finished"`
 and `zmux list-notifications`. Use `open-notification --id ID`, `mark-notification-read --id ID`,
 `dismiss-notification --id ID`, or `clear-notifications --through ID` to acknowledge exact history.
+Browser tabs use private, per-tab WebKit storage. Persistent/shared profiles, downloads,
+permissions/dialog workflows and browser automation remain pending. Only http/https/about:blank
+are supported; local files, credential URLs and privileged schemes are rejected. The app permits
+user-selected HTTP web content while preserving default TLS certificate validation and the
+cloud client's HTTPS requirement.
 The inbox retains 128 entries and reports omissions; desktop OS notifications, shell/agent hooks,
 status/progress/log operations and persisted unread state remain later work.
 Each command has its own offline `--help`.

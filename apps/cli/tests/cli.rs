@@ -88,6 +88,7 @@ fn help_and_version_are_complete_and_offline() {
         "focus-pane",
         "split-pane",
         "close-pane",
+        "browser",
         "new-surface",
         "list-pane-surfaces",
         "select-surface",
@@ -314,6 +315,28 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
         thread::sleep(Duration::from_millis(10));
     }
 
+    let browser = invoke_app(&socket, &["browser", "open", &new_pane, "about:blank"]);
+    let browser_id = id(&browser, "focused_surface");
+    let surfaces = invoke_app(&socket, &["list-pane-surfaces", &new_pane]);
+    let browser = surfaces["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "browser")
+        .unwrap();
+    assert!(browser["session_id"].is_null());
+    invoke_app(
+        &socket,
+        &["browser", "navigate", &browser_id, "https://example.com/"],
+    );
+    let surfaces = invoke_app(&socket, &["list-pane-surfaces", &new_pane]);
+    assert!(
+        surfaces["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["url"] == "https://example.com/")
+    );
     invoke_app(&socket, &["close-pane", &new_pane]);
     let panes = invoke_app(&socket, &["list-panes", "--workspace", &workspace_id]);
     assert_eq!(panes["panes"].as_array().unwrap().len(), 1);

@@ -27,7 +27,7 @@ actor NativeBridge {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let snapshot = try decoder.decode(DesktopSnapshot.self, from: data)
-        guard snapshot.model.modelVersion == 2 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        guard snapshot.model.modelVersion == 3 else { throw BridgeFailure(message: "Unsupported workspace model version") }
         revision = snapshot.revision
         return snapshot
     }
@@ -40,6 +40,13 @@ actor NativeBridge {
         if let surface { action["surface_id"] = surface }
         if let index { action["index"] = index }
         if let closed { action["closed_id"] = closed }
+        try await send(["command": "action", "action": action])
+    }
+    func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?) async throws {
+        var action: [String: Any] = ["action": name, "url": url]
+        if let surface { action["surface_id"] = surface }
+        if let pane { action["pane_id"] = pane }
+        if let title { action["title"] = title }
         try await send(["command": "action", "action": action])
     }
     func attention(_ operation: String, id: UInt64? = nil, through: UInt64? = nil, active: Bool? = nil) async throws {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 mod surfaces;
 use surfaces::PendingRestore;
-pub use surfaces::{ClosedContent, ClosedItem, Surface};
+pub use surfaces::{ClosedContent, ClosedItem, Surface, SurfaceKind};
 
 pub const MAX_WORKSPACES: usize = 32;
 pub const MAX_PANES_PER_WORKSPACE: usize = 64;
@@ -23,7 +23,7 @@ identifier!(PaneId);
 identifier!(SessionId);
 identifier!(SurfaceId);
 
-pub const MODEL_VERSION: u32 = 2;
+pub const MODEL_VERSION: u32 = 3;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
 pub const MAX_CLOSED_ITEMS: usize = 32;
 
@@ -48,7 +48,7 @@ impl Pane {
             .find(|s| s.id == self.selected_surface)
             .expect("selected surface exists")
     }
-    pub fn session_id(&self) -> SessionId {
+    pub fn session_id(&self) -> Option<SessionId> {
         self.selected().session_id
     }
 }
@@ -172,6 +172,19 @@ impl Default for Snapshot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    CreateBrowser {
+        pane_id: PaneId,
+        url: String,
+    },
+    NavigateBrowser {
+        surface_id: SurfaceId,
+        url: String,
+    },
+    ObserveBrowser {
+        surface_id: SurfaceId,
+        url: String,
+        title: String,
+    },
     CreateSurface {
         pane_id: PaneId,
     },
@@ -324,7 +337,7 @@ impl WorkspaceStore {
                 };
                 effects.push(Effect::StartSession {
                     pane_id: pane.id,
-                    session_id: pane.session_id(),
+                    session_id: pane.session_id().expect("new terminal pane"),
                     cwd: None,
                 });
                 self.state.workspaces.push(Workspace {
@@ -384,7 +397,7 @@ impl WorkspaceStore {
                 };
                 effects.push(Effect::StartSession {
                     pane_id: pane.id,
-                    session_id: pane.session_id(),
+                    session_id: pane.session_id().expect("new terminal pane"),
                     cwd,
                 });
                 let workspace = &mut self.state.workspaces[index];

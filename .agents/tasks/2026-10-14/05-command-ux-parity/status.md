@@ -4,6 +4,10 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- P3a first slice implemented: typed browser surfaces without PTYs; public WebKit tab host,
+  navigation/address/find/zoom, retained hidden-tab state and CLI browser open/navigate.
+  Model migrated to v3; native smoke includes a real document/form and hidden-state retention.
+  Linux checks pass; hosted build/native validation pending. No full browser parity claim.
 - P2 first slice implemented: collapsible sidebar, Workspaces/Notifications tabs, persistent
   visibility, exact-target attention inbox/badges, bell/OSC parsing and explicit CLI notification
   commands. Linux checks pass; hosted/native gates pending. See references/p2-attention-sidebar.md.

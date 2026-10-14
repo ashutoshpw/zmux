@@ -1,10 +1,12 @@
 import AppKit
 import Darwin
+import WebKit
 
 private enum UICommand: Sendable {
     case action(String, UInt64?, String?, String?, UInt64?)
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case attention(String, UInt64?, UInt64?, Bool?)
+    case browser(String, UInt64?, UInt64?, String, String?)
     case input(UInt64, String)
     case resize(UInt64, Int, Int)
 }
@@ -40,6 +42,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var layoutKey = ""
     private var modelRevision: UInt64 = .max
     private var terminals: [UInt64: TerminalView] = [:]
+    private var browsers: [UInt64: BrowserView] = [:]
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
     private var workspaceCount = 1
@@ -80,6 +83,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
                     case .surface(let action, let surface, let pane, let index, let closed):
                         try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
+                    case .browser(let operation, let surface, let pane, let url, let title):
+                        try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title)
                     case .attention(let operation, let id, let through, let active):
                         try await self.bridge.attention(operation, id: id, through: through, active: active)
                     case .input(let session, let text):
@@ -170,9 +175,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
 
         let splitRightButton = makeIconButton(symbol: "rectangle.split.2x1", label: "Split right", action: #selector(splitRight))
         let splitDownButton = makeIconButton(symbol: "rectangle.split.1x2", label: "Split down", action: #selector(splitDown))
+        let browserButton = makeIconButton(symbol: "globe", label: "New browser tab", action: #selector(newBrowser))
         let newTabButton = makeIconButton(symbol: "plus", label: "New terminal tab (⌘T)", action: #selector(newTerminal))
         let toggleSidebarButton = makeIconButton(symbol: "sidebar.left", label: "Toggle sidebar (⌘B)", action: #selector(toggleSidebar))
-        for button in [toggleSidebarButton, notificationButton, newTabButton, splitRightButton, splitDownButton] {
+        for button in [toggleSidebarButton, notificationButton, newTabButton, browserButton, splitRightButton, splitDownButton] {
             mainHeader.actions.addArrangedSubview(button)
         }
 
@@ -291,6 +297,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let items: [(String, Selector, String)] = [
             ("New Workspace", #selector(newWorkspace), "n"),
             ("New Terminal Tab", #selector(newTerminal), "t"),
+            ("New Browser Tab", #selector(newBrowser), ""),
+            ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
             ("Toggle Sidebar", #selector(toggleSidebar), "b"),
             ("Notifications", #selector(showNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),
@@ -320,6 +328,17 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         recentlyClosedMenu.delegate = self
         historyItem.submenu = history
 
+        let browserItem = NSMenuItem(title: "Browser", action: nil, keyEquivalent: "")
+        let browserMenu = NSMenu(title: "Browser")
+        for (title, action, key) in [
+            ("Back", #selector(browserBack), "["), ("Forward", #selector(browserForward), "]"),
+            ("Reload", #selector(browserReload), "r"), ("Find in Page…", #selector(browserFind), "f"),
+            ("Zoom In", #selector(browserZoomIn), "+"), ("Zoom Out", #selector(browserZoomOut), "-"),
+            ("Actual Size", #selector(browserZoomReset), "0")
+        ] {
+            let item = browserMenu.addItem(withTitle: title, action: action, keyEquivalent: key); item.target = self
+        }
+        browserItem.submenu = browserMenu; menu.addItem(browserItem)
         let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         menu.addItem(editItem)
         let edit = NSMenu(title: "Edit")
@@ -336,8 +355,13 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func present(_ snapshot: DesktopSnapshot) {
-        let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.map { $0.sessionId })
+        let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
+        let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
+        browsers = browsers.filter { key, value in
+            if liveBrowsers.contains(key) { return true }
+            value.close(); return false
+        }
         self.snapshot = snapshot
         statusMessage = snapshot.lastError ?? "Ready"
         rebuildWorkspaceRowsIfNeeded(snapshot)
@@ -347,9 +371,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         updateTerminalLayoutIfNeeded(snapshot)
 
         for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
+        for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
+            browsers[surface.id]?.update(surface)
+        }
         updateTabAttention(canvas, snapshot: snapshot)
         if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }),
-           let terminal = terminals[pane.sessionId] {
+           let session = pane.sessionId, let terminal = terminals[session] {
             if !didSetInitialTerminalFocus {
                 window.makeFirstResponder(terminal)
                 didSetInitialTerminalFocus = true
@@ -360,7 +387,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func updateTabAttention(_ view: NSView, snapshot: DesktopSnapshot) {
-        if let bar = view as? TerminalTabBar { bar.updateAttention(snapshot.notifications) }
+        if let bar = view as? TerminalTabBar { bar.updateAttention(snapshot.notifications, surfaces: snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }) }
         for child in view.subviews { updateTabAttention(child, snapshot: snapshot) }
     }
 
@@ -439,8 +466,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
 
     private func focusedViewport(in snapshot: DesktopSnapshot) -> Viewport? {
         guard let workspace = snapshot.workspace,
-              let pane = workspace.root.panes.first(where: { $0.id == workspace.focusedPane }) else { return nil }
-        return snapshot.frames.first(where: { $0.sessionId == pane.sessionId })?.snapshot?.viewport
+              let pane = workspace.root.panes.first(where: { $0.id == workspace.focusedPane }), let session = pane.sessionId else { return nil }
+        return snapshot.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport
     }
 
     private func updateTerminalLayoutIfNeeded(_ snapshot: DesktopSnapshot) {
@@ -476,18 +503,28 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             ])
         }
         canvas.layoutSubtreeIfNeeded()
+        if let pane = focusedPane, let browser = browsers[pane.selectedSurface] { browser.focusAddress() }
     }
 
     private func paneView(_ tree: PaneTree) -> NSView {
         switch tree {
         case .leaf(let pane):
-            let view = terminals[pane.sessionId] ?? TerminalView(pane: pane)
-            view.pane = pane
+            let view: NSView
+            if let session = pane.sessionId {
+                let terminal = terminals[session] ?? TerminalView(pane: pane)
+                terminal.pane = pane
+                terminal.onInput = { [weak self] text in self?.enqueue(.input(session, text)) }
+                terminal.onResize = { [weak self] rows, cols in self?.enqueue(.resize(session, rows, cols)) }
+                terminal.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
+                terminals[session] = terminal
+                view = terminal
+            } else {
+                let browser = browsers[pane.selectedSurface] ?? BrowserView(surface: pane.selected, owner: self)
+                browser.update(pane.selected)
+                browsers[pane.selectedSurface] = browser
+                view = browser
+            }
             view.removeFromSuperview()
-            view.onInput = { [weak self] text in self?.enqueue(.input(pane.sessionId, text)) }
-            view.onResize = { [weak self] rows, cols in self?.enqueue(.resize(pane.sessionId, rows, cols)) }
-            view.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
-            terminals[pane.sessionId] = view
             let container = BackgroundView(color: ZmuxPalette.terminal)
             let tabs = TerminalTabBar(pane: pane, owner: self)
             tabs.translatesAutoresizingMaskIntoConstraints = false
@@ -544,6 +581,28 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         snapshot?.workspace?.root.panes.first { $0.id == snapshot?.workspace?.focusedPane }
     }
 
+    private var focusedBrowser: BrowserView? {
+        guard let pane = focusedPane else { return nil }
+        return browsers[pane.selectedSurface]
+    }
+    @objc private func browserBack() { focusedBrowser?.webView.goBack() }
+    @objc private func browserForward() { focusedBrowser?.webView.goForward() }
+    @objc private func browserReload() { focusedBrowser?.webView.reload() }
+    @objc private func browserZoomIn() { focusedBrowser?.adjustZoom(0.1) }
+    @objc private func browserZoomOut() { focusedBrowser?.adjustZoom(-0.1) }
+    @objc private func browserZoomReset() { focusedBrowser?.resetZoom() }
+    @objc private func browserFind() { focusedBrowser?.findInPage() }
+    @objc func newBrowser() {
+        guard let pane = focusedPane else { return }
+        createBrowser(in: pane.id, url: "about:blank")
+    }
+    func createBrowser(in pane: UInt64, url: String) { enqueue(.browser("create_browser", nil, pane, url, nil)) }
+    func navigateBrowser(_ id: UInt64, url: String) { enqueue(.browser("navigate_browser", id, nil, url, nil)) }
+    func observeBrowser(_ id: UInt64, url: String, title: String) { enqueue(.browser("observe_browser", id, nil, url, title)) }
+    @objc func focusBrowserAddress() {
+        if let pane = focusedPane, let browser = browsers[pane.selectedSurface] { browser.focusAddress() }
+        else { newBrowser() }
+    }
     func selectTab(_ id: UInt64) { enqueue(.surface("select_surface", id, nil, nil, nil)) }
     func closeTerminalTab(_ id: UInt64) { enqueue(.surface("close_surface", id, nil, nil, nil)) }
     func newTerminalInPane(_ paneID: UInt64) { enqueue(.surface("create_surface", nil, paneID, nil, nil)) }
@@ -612,6 +671,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             guard let id = item.representedObject as? NSNumber else { return false }
             return snapshot?.model.closedItems.contains { $0.id == id.uint64Value && !$0.restoring } ?? false
         case #selector(closeTab), #selector(closePane), #selector(renameTab), #selector(splitRight), #selector(splitDown): return focusedPane != nil
+        case #selector(browserBack): return focusedBrowser?.webView.canGoBack == true
+        case #selector(browserForward): return focusedBrowser?.webView.canGoForward == true
+        case #selector(browserReload), #selector(browserFind), #selector(browserZoomIn), #selector(browserZoomOut), #selector(browserZoomReset): return focusedBrowser != nil
+        case #selector(newBrowser), #selector(focusBrowserAddress): return focusedPane != nil
         case #selector(nextTab), #selector(previousTab): return (focusedPane?.surfaces.count ?? 0) > 1
         default: return true
         }
@@ -748,8 +811,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
 
     private var focusedTerminal: TerminalView? {
         guard let snapshot,
-              let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }) else { return nil }
-        return terminals[pane.sessionId]
+              let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }), let session = pane.sessionId else { return nil }
+        return terminals[session]
     }
 
     @objc func copySelection(_ sender: Any?) {
@@ -819,7 +882,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               cliStatus["running_sessions"] as? Int == 1 else {
             throw BridgeFailure(message: "Bundled CLI did not observe the native terminal")
         }
-        guard let originalPane = snapshot?.workspace?.root.panes.first,
+        guard let originalPane = snapshot?.workspace?.root.panes.first, let originalSession = originalPane.sessionId,
               let originalPID = snapshot?.frames.first?.processId else { throw BridgeFailure(message: "Missing original tab") }
         try performShortcut("t", modifiers: [.command])
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.frames.first?.snapshot?.state == "running" }
@@ -842,7 +905,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         newTerminal()
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.frames.first?.snapshot?.state == "running" }
         guard let attentionTab = snapshot?.workspace?.root.panes.first?.selectedSurface else { throw BridgeFailure(message: "No attention test tab") }
-        enqueue(.input(originalPane.sessionId, "printf '\\033]777;notify;Agent ready;Review requested\\007'\r"))
+        enqueue(.input(originalSession, "printf '\\033]777;notify;Agent ready;Review requested\\007'\r"))
         try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read } }
         showNotifications()
         guard sidebarModes?.selectedSegment == 1, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
@@ -880,6 +943,23 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await waitUntil { $0.model.focusedWorkspace == first.id && $0.frames.count == 2 }
         closePane()
         try await waitUntil { $0.workspace?.root.panes.count == 1 && $0.frames.count == 1 }
+        splitRight()
+        try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
+        newBrowser()
+        try await waitUntil { $0.workspace?.root.panes.contains { $0.selected.kind == "browser" } == true }
+        guard let browserPane = focusedPane, let browser = browsers[browserPane.selectedSurface] else { throw BridgeFailure(message: "Embedded browser was not created") }
+        browser.webView.loadHTMLString("<!doctype html><title>zmux browser fixture</title><style>body{background:#1c1c1e;color:#eee;font:16px -apple-system;padding:32px}input{font:inherit;padding:8px;border-radius:6px}</style><h1>Browser ready</h1><input id='entry' aria-label='Entry'>", baseURL: nil)
+        try await waitUntil { [weak self] _ in self?.browsers[browserPane.selectedSurface]?.webView.title == "zmux browser fixture" && self?.browsers[browserPane.selectedSurface]?.webView.isLoading == false }
+        let browserResult = try await browser.webView.evaluateJavaScript("document.querySelector('#entry').value = 'native input'; document.querySelector('h1').textContent + ':' + document.querySelector('#entry').value")
+        guard browserResult as? String == "Browser ready:native input" else { throw BridgeFailure(message: "Embedded WebKit did not interact with the document") }
+        if let terminalTab = browserPane.surfaces.first(where: { $0.kind == "terminal" }) {
+            selectTab(terminalTab.id)
+            try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == browserPane.id })?.selectedSurface == terminalTab.id }
+            selectTab(browserPane.selectedSurface)
+            try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == browserPane.id })?.selectedSurface == browserPane.selectedSurface }
+            let preserved = try await browser.webView.evaluateJavaScript("document.querySelector('#entry').value")
+            guard preserved as? String == "native input" else { throw BridgeFailure(message: "Hidden browser state was reset") }
+        }
         guard let view = window.contentView,
               let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
             throw BridgeFailure(message: "Native drawing surface unavailable")
@@ -918,6 +998,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "sidebar_toggle": true,
             "notification_inbox": true,
             "notification_target_routing": true,
+            "embedded_webkit": true,
+            "browser_hidden_state": true,
             "active_terminal_title": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,

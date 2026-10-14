@@ -460,10 +460,10 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
                 .find(|p| p.id == pane_id)
                 .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))?;
             let surfaces: Vec<_> = pane.surfaces.iter().map(|surface| {
-                let frame = frame_for(&snapshot, surface.session_id);
+                let frame = surface.session_id.and_then(|id| frame_for(&snapshot, id));
                 json!({"surface_id": surface.id, "session_id": surface.session_id, "title": surface.title,
-                    "cwd": surface.cwd, "selected": pane.selected_surface == surface.id,
-                    "process_id": frame.and_then(|f| f.process_id), "starting": frame.is_none_or(|f| f.starting),
+                    "cwd": surface.cwd, "kind": surface.kind, "url": surface.url, "selected": pane.selected_surface == surface.id,
+                    "process_id": frame.and_then(|f| f.process_id), "starting": surface.session_id.is_some() && frame.is_none_or(|f| f.starting),
                     "state": frame.and_then(|f| f.snapshot.as_ref()).map(|s| state_name(s.state)),
                     "failure": frame.and_then(|f| f.failure.clone())})
             }).collect();
@@ -656,7 +656,7 @@ fn list_panes(
         .filter(|workspace| requested_workspace.is_none_or(|id| workspace.id == id))
         .flat_map(|workspace| {
             workspace.root.panes().into_iter().map(|pane| {
-                let frame = frame_for(snapshot, pane.session_id());
+                let frame = pane.session_id().and_then(|id| frame_for(snapshot, id));
                 json!({
                     "workspace_id": workspace.id,
                     "workspace_name": workspace.name,
@@ -666,7 +666,7 @@ fn list_panes(
                     "session_id": pane.session_id(),
                     "focused": workspace.focused_pane == pane.id,
                     "process_id": frame.and_then(|item| item.process_id),
-                    "starting": frame.is_none_or(|item| item.starting),
+                    "starting": pane.session_id().is_some() && frame.is_none_or(|item| item.starting),
                     "state": frame.and_then(|item| item.snapshot.as_ref()).map(|item| state_name(item.state)),
                     "failure": frame.and_then(|item| item.failure.as_ref()),
                 })
@@ -690,6 +690,8 @@ fn read_screen(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'static 
                 .map(|pane| (workspace, pane.session_id()))
         })
         .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))?;
+    let session_id =
+        session_id.ok_or_else(|| ("not_terminal", "selected surface is a browser".into()))?;
     let frame = frame_for(snapshot, session_id)
         .ok_or_else(|| ("screen_unavailable", "terminal frame is unavailable".into()))?;
     let terminal = frame.snapshot.as_ref().ok_or_else(|| {
@@ -718,14 +720,15 @@ fn read_screen(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'static 
 }
 
 fn pane_session(snapshot: &Snapshot, pane_id: PaneId) -> Result<SessionId, (&'static str, String)> {
-    snapshot
+    let pane = snapshot
         .model
         .workspaces
         .iter()
-        .flat_map(|workspace| workspace.root.panes())
-        .find(|pane| pane.id == pane_id)
-        .map(|pane| pane.session_id())
-        .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))
+        .flat_map(|w| w.root.panes())
+        .find(|p| p.id == pane_id)
+        .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))?;
+    pane.session_id()
+        .ok_or_else(|| ("not_terminal", "selected surface is a browser".into()))
 }
 
 fn frame_for(snapshot: &Snapshot, session_id: SessionId) -> Option<&crate::Frame> {

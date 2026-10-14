@@ -384,8 +384,11 @@ final class TerminalTabBar: BackgroundView {
             selected.scrollToVisible(selected.bounds)
         }
     }
-    func updateAttention(_ notifications: [AttentionNotification]) {
-        for tab in tabs { tab.updateAttention(notifications.filter { !$0.read && $0.surfaceId == tab.surface.id }.count) }
+    func updateAttention(_ notifications: [AttentionNotification], surfaces: [Surface]) {
+        for tab in tabs {
+            if let surface = surfaces.first(where: { $0.id == tab.surface.id }) { tab.surface = surface }
+            tab.updateAttention(notifications.filter { !$0.read && $0.surfaceId == tab.surface.id }.count)
+        }
     }
     @objc private func addTab() { owner?.newTerminalInPane(pane.id) }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -406,7 +409,7 @@ final class TerminalTabBar: BackgroundView {
 
 @MainActor
 final class TerminalTabControl: BackgroundView, NSDraggingSource {
-    let surface: Surface
+    var surface: Surface
     weak var owner: AppController?
     private var mouseOrigin: NSPoint?
     private let titleLabel = NSTextField(labelWithString: "")
@@ -415,9 +418,9 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         self.surface = surface
         self.owner = owner
         super.init(color: selected ? ZmuxPalette.terminal : ZmuxPalette.chrome)
-        let icon = NSImageView(image: NSImage(systemSymbolName: "terminal", accessibilityDescription: nil) ?? NSImage())
+        let icon = NSImageView(image: NSImage(systemSymbolName: surface.kind == "browser" ? "globe" : "terminal", accessibilityDescription: nil) ?? NSImage())
         icon.contentTintColor = selected ? .labelColor : ZmuxPalette.subdued
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         let title = titleLabel
         title.stringValue = surface.title
         title.font = .systemFont(ofSize: 11.5, weight: selected ? .medium : .regular)

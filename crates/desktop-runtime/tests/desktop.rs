@@ -234,7 +234,7 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
         &desktop,
         1,
         Command::Input {
-            session_id: first.session_id,
+            session_id: first.session_id.unwrap(),
             text: "export ZMUX_OWNED_VALUE=first; printf '\\nFIRST_READY\\n'\r".into(),
         },
     );
@@ -273,7 +273,7 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
         &desktop,
         3,
         Command::Input {
-            session_id: second.session_id,
+            session_id: second.session_id.unwrap(),
             text: "export ZMUX_OWNED_VALUE=second; printf '\\nSECOND_READY\\n'\r".into(),
         },
     );
@@ -297,7 +297,7 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
         &desktop,
         5,
         Command::Input {
-            session_id: first.session_id,
+            session_id: first.session_id.unwrap(),
             text: "printf '\\nPRESERVED_%s\\n' \"$ZMUX_OWNED_VALUE\"\r".into(),
         },
     );
@@ -337,7 +337,7 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
         moved
             .control_frames
             .iter()
-            .find(|f| f.session_id == second.session_id)
+            .find(|f| f.session_id == second.session_id.unwrap())
             .unwrap()
             .process_id,
         Some(second_pid)
@@ -378,18 +378,18 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
         .unwrap()
         .selected()
         .clone();
-    assert_ne!(tab.session_id, second.session_id);
+    assert_ne!(tab.session_id.unwrap(), second.session_id.unwrap());
     send(
         &desktop,
         10,
         Command::Input {
-            session_id: tab.session_id,
+            session_id: tab.session_id.unwrap(),
             text: "printf '\\nRESTORED_%s\\n' \"${ZMUX_OWNED_VALUE-fresh}\"\r".into(),
         },
     );
     wait(&desktop, |s| {
         s.control_frames.iter().any(|f| {
-            f.session_id == tab.session_id
+            f.session_id == tab.session_id.unwrap()
                 && f.snapshot
                     .as_ref()
                     .is_some_and(|v| v.viewport.contents.lines().any(|l| l == "RESTORED_fresh"))
@@ -419,7 +419,7 @@ fn restore_uses_saved_cwd_and_missing_directory_retains_retryable_history() {
         &desktop,
         1,
         Command::Input {
-            session_id: surface.session_id,
+            session_id: surface.session_id.unwrap(),
             text: command,
         },
     );
@@ -542,13 +542,13 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         &desktop,
         3,
         Command::Input {
-            session_id: first.session_id,
+            session_id: first.session_id.unwrap(),
             text: "printf '\\nNORMAL_BACKGROUND_OUTPUT\\n'\r".into(),
         },
     );
     wait(&desktop, |s| {
         s.control_frames.iter().any(|f| {
-            f.session_id == first.session_id
+            f.session_id == first.session_id.unwrap()
                 && f.snapshot.as_ref().is_some_and(|v| {
                     v.viewport
                         .contents
@@ -562,7 +562,7 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         &desktop,
         4,
         Command::Input {
-            session_id: first.session_id,
+            session_id: first.session_id.unwrap(),
             text: "printf '\\007\\033]777;notify;Agent;Ready for review\\007'\r".into(),
         },
     );
@@ -658,5 +658,47 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         stale.model.workspaces[0].root.panes()[0].selected_surface,
         first.id
     );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn browser_metadata_never_allocates_a_terminal_and_has_independent_capacity() {
+    use zmux_desktop_runtime::MAX_BROWSERS;
+    let desktop = desktop();
+    let initial = wait(&desktop, ready);
+    let pane = initial.model.workspaces[0].focused_pane;
+    let first_pid = initial.frames[0].process_id;
+    for index in 0..MAX_BROWSERS {
+        let id = index as u64 + 1;
+        send(
+            &desktop,
+            id,
+            Command::Action {
+                action: Action::CreateBrowser {
+                    pane_id: pane,
+                    url: "about:blank".into(),
+                },
+            },
+        );
+        let state = wait(&desktop, |s| s.last_request_id == id);
+        assert!(state.frames.is_empty());
+        assert_eq!(state.control_frames.len(), 1);
+        assert_eq!(state.control_frames[0].process_id, first_pid);
+        assert_eq!(state.pending_launches, 0);
+    }
+    let before = desktop.snapshot().unwrap();
+    send(
+        &desktop,
+        99,
+        Command::Action {
+            action: Action::CreateBrowser {
+                pane_id: pane,
+                url: "about:blank".into(),
+            },
+        },
+    );
+    let rejected = wait(&desktop, |s| s.last_request_id == 99);
+    assert!(rejected.last_error.is_some());
+    assert_eq!(rejected.model, before.model);
     desktop.shutdown(Duration::from_secs(5)).unwrap();
 }
