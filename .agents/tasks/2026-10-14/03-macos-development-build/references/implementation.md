@@ -16,7 +16,7 @@
 - Session launch happens off the action coordinator; closed launch results are canceled/reaped.
 - Bound active/starting/retiring processes and queue capacity. No UI-thread process joins.
 - Export styled terminal runs with ANSI colors, wide Unicode positions and terminal keyboard modes.
-- Swift/AppKit compilation and packaged native smoke evidence are pending the hosted build.
+- Swift/AppKit compilation and packaged native smoke passed; see the final delivery receipt below.
 
 ## Remaining gates
 Development build is ad-hoc signed, not notarized or release-signed. Interactive IME,
@@ -72,3 +72,15 @@ need their own checks; successful packaging alone is not proof of those behavior
 - Native bitmap visibly renders terminal output and ANSI red; composited AppKit buttons
   were blank in view caching. Capture with effective appearance and add a WindowServer
   image when runner screen permissions permit, keeping the behavioral gates unchanged.
+
+## Final delivery receipt
+- Source: `ee2599abc05b51f8459b7a0395c2bfa9e78c336f` on `main`.
+- [Native workflow 38630706232](https://github.com/ashutoshpw/zmux/actions/runs/38630706232): all required steps passed, including the unchanged native behavioral gates.
+- [Artifact 11926235790](https://github.com/ashutoshpw/zmux/actions/runs/38630706232/artifacts/11926235790): `Zmux-macos-dev-universal-ee2599abc05b51f8459b7a0395c2bfa9e78c336f`.
+- Inner ZIP: `Zmux-dev-universal-ee2599a.zip`.
+- SHA-256: `efd9a594526c173efc12e4f92c7c848a3f29909b32e2f1cfd2f927fd418d89f0`.
+- Downloaded ZIP passes CRC/integrity checks; both executable and dylib contain arm64/x86_64 and retain executable permissions. Bundled LICENSE/notices equal repository versions; bundle/receipt/build metadata agree on the source SHA.
+- Native smoke report: input, ANSI color, pane split/close, kernel resize and workspace switching all true; AppKit viewport PNG is 66,641 bytes.
+- Viewed the bitmap: terminal text, red ANSI output and cursor are visible. AppKit composited button labels are omitted by caching; WindowServer capture returned status 1 and produced no image. This does not establish complete native visual correctness; manual dogfood remains required.
+- Rust foundation workflow `38630171986` passed Linux/macOS at `078313f`; only native host/capture code changed afterward, and native workflow `38630706232` reran all Rust/C checks at the final source SHA.
+- Following documentation-only commits do not change the app or the artifact's source identity. Full project roadmap remains in progress.

@@ -15,9 +15,9 @@ permissive licenses; retain upstream notices rather than relabeling them as MIT.
 | `nix` 0.28.0 | Terminate owned Unix PTY process groups | MIT | <https://github.com/nix-rust/nix> |
 | `thiserror` | Explicit domain errors | MIT OR Apache-2.0 | <https://github.com/dtolnay/thiserror> |
 
-Resolved package versions and full license material will be inventoried before the first
-distribution. Review native bundles and transitive assets separately from Rust manifests.
-This is a source prototype, not a completed distributable license audit.
+Resolved package versions and available license texts are inventoried and bundled in the
+development app. Review native bundles and transitive assets separately from Rust manifests
+before release; the development inventory is not a completed release license audit.
 
 ## Implementation sources
 

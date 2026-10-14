@@ -3,10 +3,13 @@
 Zmux is an independently implemented terminal workspace project: a Rust core with a thin
 native Swift/AppKit macOS interface. Original Zmux code is MIT licensed.
 
-Implementation includes the portable workspace/action foundation and a headless Unix PTY
-prototype, plus a handle-based C ABI feasibility bridge. A native terminal app, remote
-sessions and cloud services are still planned;
-no release is available yet.
+The native development app connects the Rust workspace/session core to Swift/AppKit.
+It provides local shells, workspaces and split panes. Remote sessions, cloud services,
+mobile clients and full terminal UX parity remain in development.
+
+[Download a macOS development build](docs/development-builds.md) from a successful GitHub
+Actions run. Universal app compilation, packaged native smoke checks and artifact upload
+are required before a build is offered; this is an ad-hoc signed development app.
 
 ## Development
 
@@ -33,7 +36,8 @@ See [prototype limits](docs/terminal-prototype.md).
 ## Architecture and progress
 
 - [Project plan](.agents/tasks/2026-10-14/01-build-zmux/plan.md)
-- [Current implementation task](.agents/tasks/2026-10-14/02-foundation-prototype/plan.md)
+- [Native development build task](.agents/tasks/2026-10-14/03-macos-development-build/plan.md)
+- [Completed portable foundation](.agents/tasks/2026-10-14/02-foundation-prototype/plan.md)
 - [Architecture](.agents/tasks/2026-10-14/01-build-zmux/references/architecture.md)
 - [Session reliability](.agents/tasks/2026-10-14/01-build-zmux/references/session-reliability.md)
 - [Native bridge contract](docs/native-bridge.md)

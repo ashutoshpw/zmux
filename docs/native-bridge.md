@@ -1,14 +1,14 @@
 # Native bridge feasibility contract
 
 `zmux-native-bridge` builds a C-callable shared/static library around the original Rust
-workspace model. [zmux.h](../crates/native-bridge/include/zmux.h) is the caller contract.
-This slice proves the foreign C boundary. Swift linkage, terminal drawing handles,
-async session events and an AppKit app are not implemented or validated yet.
+workspace model and desktop runtime. [zmux.h](../crates/native-bridge/include/zmux.h) is
+the caller contract. The native Swift/AppKit development app uses the desktop exports;
+the original core exports remain available for model-only integrations.
 
 ## Ownership and execution
 
 Create one core context and retain its process-local token. Dispatch requests on a serial
-background executor in an eventual Swift wrapper; never place model serialization or
+background executor; the native Swift actor serializes these calls. Never place model serialization or
 session I/O on the AppKit main thread. Each dispatch returns an independently owned buffer
 token. Query its byte length, copy into caller-owned writable storage, then release it.
 The buffer is UTF-8 JSON without a trailing NUL; the caller supplies any string terminator.
@@ -47,8 +47,8 @@ An unsuccessful protocol reply contains `ok: false` and `error.code` / `error.me
 Error codes are `invalid_request`, `unsupported_version`, and `action_rejected`.
 
 This model-only bridge returns `start_session`/`stop_session` effects; it does not allocate
-PTYs or execute commands. The future Rust workspace coordinator must apply effects and
-publish session results. Do not treat creation of a pane here as evidence of a live terminal.
+PTYs or execute commands. The desktop coordinator applies these effects and publishes
+session results through its separate exports. Core-only pane creation does not start a terminal.
 This is an in-process integration API, not the final local socket/remote protocol.
 
 ## ABI statuses and limits
@@ -76,11 +76,13 @@ Run `scripts/check-native-bridge`. It compiles an independent C caller with warn
 links the actual Rust shared library, and decodes its wire replies independently in Python.
 It covers malformed/versioned requests, core dispatch, stale/wrong-kind handles, buffer
 lifetime after core destruction, insufficient/null destinations, and buffer-capacity rejection
-before mutation. Full Rust checks also run this command through `scripts/check`.
+before mutation. It also exits and closes a real desktop terminal while retaining a foreign
+host's default SIGPIPE disposition, ensuring cleanup cannot kill that host or change its
+signal policy. Full Rust checks run this command through `scripts/check`.
 
-The CI workflow exercises the existing Rust/PTY/C foundation on Linux and macOS when
-published. Its macOS lane is not an AppKit/Swift/UI or resource-budget check. No hosted run
-has been executed as part of this local implementation.
+The foundation CI workflow exercises the Rust/PTY/C foundation on Linux and macOS.
+The separate [native workflow](development-builds.md) compiles the universal Swift/Rust
+app and runs packaged AppKit smoke checks. Neither is a resource-budget measurement.
 
 ## Desktop integration
 
