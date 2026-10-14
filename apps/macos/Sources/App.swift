@@ -40,6 +40,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var commandTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private var layoutKey = ""
+    private var splitFractions: [String: CGFloat] = [:]
     private var modelRevision: UInt64 = .max
     private var terminals: [UInt64: TerminalView] = [:]
     private var browsers: [UInt64: BrowserView] = [:]
@@ -369,6 +370,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         updateHeader(snapshot)
         updateNotifications(snapshot)
         updateTerminalLayoutIfNeeded(snapshot)
+        let liveSplits = Set(snapshot.model.workspaces.flatMap { $0.root.splitKeys })
+        splitFractions = splitFractions.filter { liveSplits.contains($0.key) }
 
         for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
         for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
@@ -437,6 +440,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let isError = snapshot.lastError != nil
         if let error = snapshot.lastError {
             detail = error
+        } else if let pane = focusedPane, pane.selected.kind == "browser" {
+            detail = pane.selected.url == "about:blank" ? "Private browser" : (pane.selected.url ?? "Private browser")
         } else if let workingDirectory = focusedViewport(in: snapshot)?.workingDirectory, !workingDirectory.isEmpty {
             detail = (workingDirectory as NSString).abbreviatingWithTildeInPath
         } else if let workspace = snapshot.workspace {
@@ -475,13 +480,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard key != layoutKey else { return }
         layoutKey = key
         didSetInitialTerminalFocus = false
-        canvas.subviews.forEach { $0.removeFromSuperview() }
+        canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
         if let workspace = snapshot.workspace {
             let root = paneView(workspace.root)
             root.frame = canvas.bounds
             root.autoresizingMask = [.width, .height]
             canvas.addSubview(root)
-            initializeSplits(root)
         } else {
             let empty = NSStackView()
             empty.orientation = .vertical
@@ -502,6 +506,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 empty.centerYAnchor.constraint(equalTo: canvas.centerYAnchor)
             ])
         }
+        // Resolve AppKit constraints before setting divider positions; an earlier
+        // position can be discarded when a new tab's native host is laid out.
+        canvas.layoutSubtreeIfNeeded()
+        canvas.subviews.forEach(initializeSplits)
         canvas.layoutSubtreeIfNeeded()
         if let pane = focusedPane, let browser = browsers[pane.selectedSurface] { browser.focusAddress() }
     }
@@ -544,6 +552,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             return container
         case .split(let axis, let first, let second):
             let split = NSSplitView()
+            split.identifier = NSUserInterfaceItemIdentifier(tree.geometryKey)
             split.isVertical = axis == "horizontal"
             split.dividerStyle = .thin
             split.addArrangedSubview(paneView(first))
@@ -553,12 +562,23 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
     }
 
+    private func rememberSplits(_ view: NSView) {
+        if let split = view as? NSSplitView, let first = split.arrangedSubviews.first, let key = split.identifier?.rawValue {
+            let total = (split.isVertical ? split.bounds.width : split.bounds.height) - split.dividerThickness
+            let size = split.isVertical ? first.frame.width : first.frame.height
+            if total > 0 { splitFractions[key] = min(0.8, max(0.2, size / total)) }
+        }
+        view.subviews.forEach(rememberSplits)
+    }
     private func initializeSplits(_ view: NSView) {
         if let split = view as? NSSplitView {
             split.adjustSubviews()
-            split.setPosition((split.isVertical ? split.bounds.width : split.bounds.height) / 2, ofDividerAt: 0)
-            split.subviews.forEach(initializeSplits)
+            split.layoutSubtreeIfNeeded()
+            let fraction = split.identifier.flatMap { splitFractions[$0.rawValue] } ?? 0.5
+            let total = (split.isVertical ? split.bounds.width : split.bounds.height) - split.dividerThickness
+            split.setPosition(total * fraction, ofDividerAt: 0)
         }
+        view.subviews.forEach(initializeSplits)
     }
 
     private func workspaceMenu(for workspace: Workspace) -> NSMenu {
@@ -960,6 +980,18 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             let preserved = try await browser.webView.evaluateJavaScript("document.querySelector('#entry').value")
             guard preserved as? String == "native input" else { throw BridgeFailure(message: "Hidden browser state was reset") }
         }
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard browser.bounds.width >= canvas.bounds.width * 0.3,
+              browser.bounds.width <= canvas.bounds.width * 0.7 else {
+            throw BridgeFailure(message: "Browser split is cramped: \(browser.bounds.width) of \(canvas.bounds.width)")
+        }
+        if let pageImage = try await browser.webView.takeSnapshot(with: nil),
+           let tiff = pageImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+           let png = bitmap.representation(using: .png, properties: [:]) {
+            try png.write(to: report.deletingLastPathComponent().appendingPathComponent("zmux-browser-smoke.png"), options: .atomic)
+        }
+        enqueue(.input(originalSession, "PS1='❯ '; printf '\\033[2J\\033[H\\033[32mnative terminal ready\\033[0m\\n'\r"))
+        try await waitUntil { $0.frames.contains { $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("native terminal ready") == true } }
         guard let view = window.contentView,
               let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
             throw BridgeFailure(message: "Native drawing surface unavailable")
@@ -1000,6 +1032,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "notification_target_routing": true,
             "embedded_webkit": true,
             "browser_hidden_state": true,
+            "balanced_browser_split": true,
             "active_terminal_title": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,

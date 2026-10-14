@@ -55,6 +55,12 @@ indirect enum PaneTree: Decodable, Sendable {
     var key: String {
         switch self { case .leaf(let pane): return "p\(pane.id):\(pane.selectedSurface):" + pane.surfaces.map { "\($0.id)" }.joined(separator: ","); case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))" }
     }
+    var geometryKey: String {
+        switch self { case .leaf(let pane): return "p\(pane.id)"; case .split(let axis, let a, let b): return "\(axis)(\(a.geometryKey),\(b.geometryKey))" }
+    }
+    var splitKeys: [String] {
+        switch self { case .leaf: return []; case .split(_, let a, let b): return [geometryKey] + a.splitKeys + b.splitKeys }
+    }
     var panes: [Pane] {
         switch self { case .leaf(let pane): return [pane]; case .split(_, let a, let b): return a.panes + b.panes }
     }

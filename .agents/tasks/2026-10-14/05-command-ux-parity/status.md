@@ -4,6 +4,10 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- Run 38645312568 passed packaged native tests and produced artifact 11932730656; its downloaded
+  archive, checksums, source metadata and both architectures verified. Screenshot review caught
+  a cramped browser split after tab switches. Resolve divider geometry after layout, retain
+  existing split ratios, and require a balanced-browser assertion before final delivery.
 - Corrected-event run 38644706173 exposed an unhandled shifted menu equivalent. Reassessed
   against AppKit's documented uppercase/Shift equivalence; canonicalized Reopen to uppercase T
   with Command and refresh dynamic menu availability before synthetic event dispatch. The

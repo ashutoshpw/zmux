@@ -12,7 +12,8 @@
   A globe icon/menu creates tabs; ⌘L focuses the address. Rust owns explicit navigation intent;
   native observations update URL/title without changing its generation or causing reload loops.
 - Browser title/attention updates refresh tab labels without rebuilding the terminal/split tree.
-  UI focus is routed to the owning surface. Browser views are lazy-created and released on close.
+  UI focus is routed to the owning surface. Split dividers are set after native layout,
+  retain ratios across tab/workspace view rebuilds and discard stale geometry cache entries. Browser views are lazy-created and released on close.
 - Only HTTP(S) and about:blank are allowed. No page message handler or privileged socket bridge
   exists. Local/script/credential URLs are rejected, TLS failures use WebKit defaults. ATS
   permits user-selected HTTP web content only; cloud URLSession remains HTTPS-only.
@@ -33,3 +34,7 @@ full browser automation, remote browsing, external-link policy UI, cross-origin 
 resource/process-termination soak remain open. Browser descriptors restore URL/profile-default,
 not a serialized back-forward list or page memory after closure. Interactive WebKit focus,
 forms/IME, VoiceOver, real HTTP redirects/TLS and tab drag still require native dogfood.
+
+Native visual review includes a balanced-browser-width assertion. A separate public-WebKit
+snapshot records page pixels because cached AppKit rendering does not reliably include remote
+WebContent layers on runners without WindowServer capture permission.

@@ -121,7 +121,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         back.isEnabled = webView.canGoBack; forward.isEnabled = webView.canGoForward
         status.stringValue = "Private browser"; status.textColor = ZmuxPalette.subdued
-        if let url = webView.url, Self.allowed(url) {
+        if let url = webView.url ?? URL(string: "about:blank"), Self.allowed(url) {
             address.stringValue = url.absoluteString == "about:blank" ? "" : url.absoluteString
             owner?.observeBrowser(surfaceID, url: url.absoluteString, title: webView.title ?? "Browser")
         }
