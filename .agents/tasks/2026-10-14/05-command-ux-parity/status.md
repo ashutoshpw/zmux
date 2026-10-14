@@ -4,6 +4,9 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- Geometry build 38646079812 exposed the SDK's callback-only takeSnapshot API. Adapted its
+  completion to a continuation returning Sendable PNG data; require actual page pixels rather
+  than silently omitting browser visual evidence. Geometry validation remains enabled.
 - Run 38645312568 passed packaged native tests and produced artifact 11932730656; its downloaded
   archive, checksums, source metadata and both architectures verified. Screenshot review caught
   a cramped browser split after tab switches. Resolve divider geometry after layout, retain
