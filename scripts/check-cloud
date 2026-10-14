@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/../services/control-plane"
+
+: "${DATABASE_URL:?DATABASE_URL must point to a disposable PostgreSQL database}"
+: "${ZMUX_CLOUD_ORIGIN:?ZMUX_CLOUD_ORIGIN is required}"
+: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}"
+
+bun install --frozen-lockfile
+bun run migrate
+bun run typecheck
+bun test
+docker build --tag zmux-control-plane:check .

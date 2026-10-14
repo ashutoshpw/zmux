@@ -1,0 +1,53 @@
+name: Cloud deployment package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    uses: ./.github/workflows/cloud.yml
+  package:
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build immutable cloud image
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          docker build --label "org.opencontainers.image.revision=$SOURCE_SHA" --tag "zmux-cloud:$SOURCE_SHA" services/control-plane
+          mkdir -p dist/cloud
+          docker save "zmux-cloud:$SOURCE_SHA" | gzip > "dist/cloud/zmux-cloud-$SOURCE_SHA.tar.gz"
+          sha256sum "dist/cloud/zmux-cloud-$SOURCE_SHA.tar.gz" > "dist/cloud/zmux-cloud-$SOURCE_SHA.tar.gz.sha256"
+      - name: Record intended deployment origin
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          configuration = json.loads(Path('config/deployment.json').read_text())
+          receipt = {'source_sha': os.environ['SOURCE_SHA'], 'cloud_origin': configuration['cloud_origin'],
+                     'image': 'zmux-cloud:' + os.environ['SOURCE_SHA'], 'deployed': False,
+                     'pending': 'Deployment host selection; deployment must be implemented and executed in GitHub Actions.'}
+          Path('dist/cloud/deployment-package.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Validated cloud image packaged for **' + configuration['cloud_origin'] + '**.\n\n')
+              summary.write('This run creates a deployment package. It does not deploy a live service; host selection remains pending.\n')
+          PY
+      - name: Upload cloud deployment package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zmux-cloud-${{ github.sha }}
+          path: dist/cloud/
+          retention-days: 14
+          if-no-files-found: error

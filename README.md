@@ -1,11 +1,12 @@
-# Zmux
+# zmux
 
-Zmux is an independently implemented terminal workspace project: a Rust core with a thin
-native Swift/AppKit macOS interface. Original Zmux code is MIT licensed.
+zmux is an independently implemented terminal workspace project: a Rust core with a thin
+native Swift/AppKit macOS interface. Original zmux code is MIT licensed.
 
 The native development app connects the Rust workspace/session core to Swift/AppKit.
-It provides local shells, workspaces and split panes. Remote sessions, cloud services,
-mobile clients and full terminal UX parity remain in development.
+It provides local shells, workspaces, split panes and a bundled automation CLI. The cloud
+client and identity/device service are implemented; production hosting is pending. Remote
+terminal transport, mobile clients and full terminal UX parity remain in development.
 
 [Download a macOS development build](docs/development-builds.md) from a successful GitHub
 Actions run. Universal app compilation, packaged native smoke checks and artifact upload
@@ -25,13 +26,19 @@ requires a macOS development machine; portable checks do not establish native UI
 ## Try the headless terminal prototype
 
 ```sh
-cargo run --locked -p zmux -- prototype -- /bin/sh -c 'printf "Hello from Zmux\n"'
+cargo run --locked -p zmux -- prototype -- /bin/sh -c 'printf "Hello from zmux\n"'
 ```
 
 This runs a local command in a real PTY and returns its final visible screen and exit status
 as JSON. It does not open a native window, retain the full output transcript, or connect
 remotely. It times out after 10 seconds; set `--timeout SECONDS` before `--` when needed.
 See [prototype limits](docs/terminal-prototype.md).
+
+## Cloud
+
+The intended origin is `https://zmux.w3dev.app`. Deployment runs through GitHub Actions
+only, after hosting selection. See [deployment status and handoff](docs/cloud-deployment.md)
+and the [service contract](services/control-plane/README.md).
 
 ## Architecture and progress
 
@@ -45,5 +52,5 @@ See [prototype limits](docs/terminal-prototype.md).
 
 ## Licensing
 
-See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md). Dependencies retain their own licenses; MIT for Zmux's original
+See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md). Dependencies retain their own licenses; MIT for zmux's original
 code does not relabel third-party material. No cmux implementation or assets are bundled.

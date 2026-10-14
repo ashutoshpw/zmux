@@ -1,0 +1,51 @@
+name: Cloud service checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/control-plane/**'
+      - 'scripts/check-cloud'
+      - '.github/workflows/cloud.yml'
+  pull_request:
+    paths:
+      - 'services/control-plane/**'
+      - 'scripts/check-cloud'
+      - '.github/workflows/cloud.yml'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  control-plane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: zmux
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: zmux_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zmux -d zmux_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://zmux:test-only@127.0.0.1:5432/zmux_test
+      ZMUX_CLOUD_ORIGIN: http://127.0.0.1:41992
+      ZMUX_TEST_ORIGIN: http://127.0.0.1:41992
+      BETTER_AUTH_SECRET: ci-only-secret-ci-only-secret-123456
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.4.2
+      - name: Check control plane against PostgreSQL
+        run: scripts/check-cloud

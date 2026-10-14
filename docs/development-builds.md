@@ -5,9 +5,9 @@
 ## Download and run
 
 1. Open a successful workflow run and find its **Artifacts** section (GitHub sign-in required).
-2. Download `Zmux-macos-dev-universal-<source-sha>`.
-3. Extract the Actions artifact, then extract the inner `Zmux-dev-universal-<sha>.zip`.
-4. Move **Zmux DEV** to your Applications folder and open it.
+2. Download `zmux-macos-dev-universal-<source-sha>`.
+3. Extract the Actions artifact, then extract the inner `zmux-dev-universal-<sha>.zip`.
+4. Move **zmux** to your Applications folder and open it.
 
 The bundle supports Apple Silicon and Intel Macs running macOS 14 or later. The artifact
 also contains SHA-256 checksums, architecture/source metadata, native smoke results and a
@@ -30,6 +30,9 @@ Release signing, notarization and automatic updates are later distribution gates
 - Workspace creation, renaming and switching; horizontal/vertical pane splits and closure.
 - Keyboard input, arrow/control keys, an IME composition implementation, viewport selection,
   copy/paste and kernel PTY resize.
+- Accessible icon controls, an original app icon, and active terminal titles from OSC metadata.
+- Bundled `zmux --help` and JSON automation commands over a private same-user Unix socket.
+- Browser cloud sign-in with PKCE, Keychain credentials and account/device management.
 - A serialized command path and revisioned snapshots; native UI does not parse PTY output.
 
 Use **⌘N** for a workspace, **⌘D** to split right, **⇧⌘D** to split down, and **⌘W** to close
@@ -38,8 +41,20 @@ the focused pane. Use the Edit menu for viewport copy, paste and select-all.
 Initial limits: eight terminals per app context, 16 KiB per paste, 1,000 retained terminal
 scrollback lines, and bounded command/input buffers. The first view displays the live
 viewport; scrollback navigation, saved layouts, tabs, search, full terminal-protocol coverage,
-remote SSH sessions, cloud authentication and iOS are not delivered by this build.
+remote SSH sessions and iOS are not delivered by this build. Cloud browser sign-in and
+account/device management are integrated, but production service deployment remains pending
+the hosting discussion. This does not yet provide remote terminals.
 Interactive IME/accessibility behavior and resource budgets still need manual native dogfood.
+
+## Command line control
+
+Inside a zmux terminal, run `zmux --help` or `zmux help send-text`. To use the CLI from
+other terminals, choose **zmux → Install Command Line Tool…** and select a writable
+directory on your PATH. The installer creates a symlink without overwriting an existing
+file. Keep the app at its installed location.
+
+Examples: `zmux status`, `zmux list-workspaces`, `zmux list-panes`, and
+`zmux new-workspace "Build"`. Each command has its own `--help`.
 
 ## Build locally
 
@@ -54,7 +69,7 @@ scripts/check-macos-app
 The build script cross-compiles Rust and Swift for arm64 and x86_64, combines both executable
 and runtime library, stages the bundle, ad-hoc signs it, verifies architectures/signatures,
 and creates the ZIP with `ditto`. `--architecture host` produces only the local architecture.
-The native check opens only the freshly packaged Zmux development bundle through Launch
+The native check opens only the freshly packaged zmux development bundle through Launch
 Services; it does not operate on the user's cmux app.
 
 ## Workflow evidence
