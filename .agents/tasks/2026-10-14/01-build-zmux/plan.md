@@ -10,8 +10,8 @@ it independently, without copying cmux GPL/BUSL code or assets.
 
 ## Context
 - User selected `zmux` and `/data/PROJECTS/ashutoshpw/zmux` as the new repository.
-- Repository contains planning documents on `main`; no remote is configured.
-- This task currently covers planning; implementation will follow in validated phases.
+- Repository contains planning documents on `main`; `origin` points to `ashutoshpw/zmux`.
+- Implementation authorized; follow validated phases and cohesive commits on `main`.
 - Include the behavior of cmux PR #1 through independent implementation on Zmux `main`.
 - macOS-first delivery is the proposed scope; cloud and iOS follow a useful local app.
 - User reports cmux hangs with remote sessions; the cause has not been diagnosed.
@@ -47,6 +47,7 @@ and dependency licensing before expanding features. egui/eframe is deferred.
 - [ ] Cloud/mobile milestones meet their own delivery gates before being marked complete.
 
 ## References
+- [Foundation implementation](../02-foundation-prototype/plan.md) — first Rust core, terminal and bridge slice.
 - [PR #1 parity and commits](references/pr-1-parity.md) — required behaviors and phased commit policy.
 - [Architecture](references/architecture.md) — modules, contracts, state, and trust boundaries.
 - [Session reliability](references/session-reliability.md) — worker isolation, limits, diagnostics, and stress gates.

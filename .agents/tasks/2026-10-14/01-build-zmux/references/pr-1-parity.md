@@ -51,7 +51,7 @@ Zmux layout persistence is tracked independently in M2.
   create its worktree under `~/.worktrees/ashutoshpw/zmux/<branch-name>/`; for PR work use
   `pr-<number>/`. Use tracking branches when a corresponding remote branch exists, not detached HEAD.
 - Keep completed slices integrated into `main`; remote push and hosted deployment are separate
-  actions. No remote is configured at planning time.
+  actions. `origin` now points to `ashutoshpw/zmux`; pushing remains a separate action.
 
 ## Parity signoff
 Track each matrix row with implementation paths, original tests, and observed results as work
