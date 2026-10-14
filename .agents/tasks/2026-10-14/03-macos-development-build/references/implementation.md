@@ -63,3 +63,12 @@ need their own checks; successful packaging alone is not proof of those behavior
 - Configure that option through the safe, permissively licensed `socket2` API on macOS.
   Preserve the embedding host's process-wide signal disposition. Closed wake readers still
   return BrokenPipe, benign for an already-stopped worker. Native revalidation pending.
+
+### First successful packaged run
+- Run `38630171775` at `078313f915c233ea6666fee6204e3720842912b0` passed universal build,
+  signing and all native smoke conditions. Foundation run `38630171986` also passed.
+- Artifact `11925702949` was downloaded: ZIP integrity/checksum, bundled notices, executable,
+  dylib, universal headers, source metadata and smoke receipt agree.
+- Native bitmap visibly renders terminal output and ANSI red; composited AppKit buttons
+  were blank in view caching. Capture with effective appearance and add a WindowServer
+  image when runner screen permissions permit, keeping the behavioral gates unchanged.

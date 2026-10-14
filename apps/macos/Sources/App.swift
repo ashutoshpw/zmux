@@ -233,10 +233,26 @@ final class AppController: NSObject {
         closePane()
         try await waitUntil { $0.workspace?.root.panes.count == 1 && $0.frames.count == 1 }
         guard let view = window.contentView, let image = view.bitmapImageRepForCachingDisplay(in:view.bounds) else { throw BridgeFailure(message: "Native drawing surface unavailable") }
-        view.cacheDisplay(in:view.bounds,to:image)
+        view.displayIfNeeded()
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            view.cacheDisplay(in:view.bounds,to:image)
+        }
         guard let png = image.representation(using:.png,properties:[:]), png.count > 4096 else { throw BridgeFailure(message: "Native render did not produce a usable PNG") }
-        try png.write(to: report.deletingLastPathComponent().appendingPathComponent("Zmux-native-smoke.png"),options:.atomic)
-        let evidence: [String: Any] = ["success":true,"native_input":true,"ansi_color":true,"split_panes":true,"kernel_resize":true,"workspace_switch":true,"pane_close":true,"native_render_png_bytes":png.count,"source_sha":Bundle.main.object(forInfoDictionaryKey:"ZmuxSourceSHA") as? String ?? "local"]
+        let directory = report.deletingLastPathComponent()
+        try png.write(to: directory.appendingPathComponent("Zmux-native-smoke.png"),options:.atomic)
+        // WindowServer capture includes composited native controls omitted by view caching.
+        // Run the external tool off AppKit; availability depends on runner screen permissions.
+        let windowNumber = String(window.windowNumber)
+        let capturePath = directory.appendingPathComponent("Zmux-native-window.png").path
+        let captureStatus = try await Task.detached {
+            let capture = Process()
+            capture.executableURL = URL(fileURLWithPath:"/usr/sbin/screencapture")
+            capture.arguments = ["-x","-o","-l",windowNumber,capturePath]
+            try capture.run()
+            capture.waitUntilExit()
+            return capture.terminationStatus
+        }.value
+        let evidence: [String: Any] = ["success":true,"native_input":true,"ansi_color":true,"split_panes":true,"kernel_resize":true,"workspace_switch":true,"pane_close":true,"native_render_png_bytes":png.count,"window_capture_status":captureStatus,"source_sha":Bundle.main.object(forInfoDictionaryKey:"ZmuxSourceSHA") as? String ?? "local"]
         try JSONSerialization.data(withJSONObject:evidence,options:[.prettyPrinted,.sortedKeys]).write(to:report,options:.atomic)
     }
     private func waitUntil(_ predicate: (DesktopSnapshot) -> Bool) async throws {

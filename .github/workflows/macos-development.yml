@@ -46,6 +46,7 @@ jobs:
             dist/build-info.json
             dist/native-smoke.json
             dist/Zmux-native-smoke.png
+            dist/Zmux-native-window.png
           if-no-files-found: error
           retention-days: 14
       - name: Upload diagnostics on failure
@@ -57,6 +58,7 @@ jobs:
             dist/native-*.log
             dist/native-smoke.json
             dist/Zmux-native-smoke.png
+            dist/Zmux-native-window.png
           if-no-files-found: ignore
           retention-days: 7
       - name: Build receipt
