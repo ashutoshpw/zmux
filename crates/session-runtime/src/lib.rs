@@ -108,30 +108,48 @@ impl AsRawFd for MasterFd<'_> {
 struct ProcessGuard {
     child: Box<dyn Child + Send + Sync>,
     reaped: bool,
+    signaled: bool,
     pid: u32,
 }
 impl ProcessGuard {
-    fn signal(&mut self) -> Result<(), SessionError> {
+    fn poll_exit(&mut self) -> Result<bool, SessionError> {
         if self.reaped {
+            return Ok(true);
+        }
+        if self
+            .child
+            .try_wait()
+            .map_err(|e| SessionError::Failure(format!("poll canceled PTY process: {e}")))?
+            .is_some()
+        {
+            self.reaped = true;
+        }
+        Ok(self.reaped)
+    }
+    fn signal(&mut self) -> Result<(), SessionError> {
+        if self.signaled || self.poll_exit()? {
             return Ok(());
         }
-        // The native Unix backend creates a new session/process group for this child.
-        // The unreaped leader's PID cannot be reused while this guard owns it.
+        // The leader remains unreaped, so its PID cannot be reused. Signal the group once.
         match killpg(Pid::from_raw(self.pid as i32), Signal::SIGKILL) {
-            Ok(()) | Err(Errno::ESRCH) => {}
-            Err(error) => {
-                return Err(SessionError::Failure(format!(
-                    "terminate PTY process group: {error}"
-                )));
+            Ok(()) | Err(Errno::ESRCH) => {
+                self.signaled = true;
+                Ok(())
             }
+            Err(Errno::EPERM) if self.poll_exit()? => Ok(()),
+            Err(error) => Err(SessionError::Failure(format!(
+                "terminate PTY process group: {error}"
+            ))),
         }
-        Ok(())
     }
     fn stop(&mut self) -> Result<(), SessionError> {
         if self.reaped {
             return Ok(());
         }
         self.signal()?;
+        if self.reaped {
+            return Ok(());
+        }
         self.child
             .wait()
             .map_err(|e| SessionError::Failure(format!("reap PTY process: {e}")))?;
@@ -185,6 +203,7 @@ impl Session {
         let process = ProcessGuard {
             child,
             reaped: false,
+            signaled: false,
             pid,
         };
         drop(pair.slave);
@@ -238,6 +257,27 @@ impl Session {
                             }
                             Err(error) => eprintln!("zmux panic publication failed: {error}"),
                         }
+                    }
+                }
+                // Explicitly report cleanup failures rather than hiding them inside Drop.
+                let shared = Arc::clone(&worker.shared);
+                let Worker {
+                    master,
+                    io,
+                    mut process,
+                    ..
+                } = worker;
+                drop(io);
+                drop(master);
+                if let Err(error) = process.stop() {
+                    match shared.snapshot.lock() {
+                        Ok(mut slot) => {
+                            let mut last = (**slot).clone();
+                            last.state = State::Failed;
+                            last.failure = Some(error.to_string());
+                            *slot = Arc::new(last);
+                        }
+                        Err(error) => eprintln!("zmux cleanup publication failed: {error}"),
                     }
                 }
             })

@@ -30,3 +30,10 @@ need their own checks; successful packaging alone is not proof of those behavior
 - Repair: signal the process group, then close both PTY master descriptors before waiting
   for child reaping on worker destruction. Preserve the original three-second regression deadline.
 - Hosted revalidation is required; no artifact is claimed from the failed run.
+
+### Hosted shutdown follow-up
+- Run `38627893169` at `e229f92` exposed EPERM on repeated process-group signaling during
+  cleanup, leaving unreaped leaders detectable by the desktop lifecycle tests.
+- Track successful signaling, never signal the same group twice, and poll/reap already-exited
+  leaders. Treat EPERM as benign only when the owned child is independently observed exited.
+- Explicit worker cleanup reports errors through terminal state, rather than only a Drop log.
