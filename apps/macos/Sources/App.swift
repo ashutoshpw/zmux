@@ -551,33 +551,17 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             ])
             return container
         case .split(let axis, let first, let second):
-            let split = NSSplitView()
-            split.identifier = NSUserInterfaceItemIdentifier(tree.geometryKey)
-            split.isVertical = axis == "horizontal"
-            split.dividerStyle = .thin
-            split.addArrangedSubview(paneView(first))
-            split.addArrangedSubview(paneView(second))
-            split.adjustSubviews()
-            return split
+            return PaneSplitView(key: tree.geometryKey, vertical: axis == "horizontal",
+                fraction: splitFractions[tree.geometryKey] ?? 0.5, first: paneView(first), second: paneView(second))
         }
     }
 
     private func rememberSplits(_ view: NSView) {
-        if let split = view as? NSSplitView, let first = split.arrangedSubviews.first, let key = split.identifier?.rawValue {
-            let total = (split.isVertical ? split.bounds.width : split.bounds.height) - split.dividerThickness
-            let size = split.isVertical ? first.frame.width : first.frame.height
-            if total > 0 { splitFractions[key] = min(0.8, max(0.2, size / total)) }
-        }
+        if let split = view as? PaneSplitView { splitFractions[split.geometryKey] = split.fraction }
         view.subviews.forEach(rememberSplits)
     }
     private func initializeSplits(_ view: NSView) {
-        if let split = view as? NSSplitView {
-            split.adjustSubviews()
-            split.layoutSubtreeIfNeeded()
-            let fraction = split.identifier.flatMap { splitFractions[$0.rawValue] } ?? 0.5
-            let total = (split.isVertical ? split.bounds.width : split.bounds.height) - split.dividerThickness
-            split.setPosition(total * fraction, ofDividerAt: 0)
-        }
+        (view as? PaneSplitView)?.layoutPanes()
         view.subviews.forEach(initializeSplits)
     }
 
@@ -973,12 +957,18 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let browserResult = try await browser.webView.evaluateJavaScript("document.querySelector('#entry').value = 'native input'; document.querySelector('h1').textContent + ':' + document.querySelector('#entry').value")
         guard browserResult as? String == "Browser ready:native input" else { throw BridgeFailure(message: "Embedded WebKit did not interact with the document") }
         if let terminalTab = browserPane.surfaces.first(where: { $0.kind == "terminal" }) {
+            (canvas.subviews.first as? PaneSplitView)?.setFraction(0.6)
             selectTab(terminalTab.id)
             try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == browserPane.id })?.selectedSurface == terminalTab.id }
             selectTab(browserPane.selectedSurface)
             try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == browserPane.id })?.selectedSurface == browserPane.selectedSurface }
             let preserved = try await browser.webView.evaluateJavaScript("document.querySelector('#entry').value")
             guard preserved as? String == "native input" else { throw BridgeFailure(message: "Hidden browser state was reset") }
+            guard let split = canvas.subviews.first as? PaneSplitView, abs(split.fraction - 0.6) < 0.01,
+                  browser.bounds.width >= canvas.bounds.width * 0.38, browser.bounds.width <= canvas.bounds.width * 0.42 else {
+                throw BridgeFailure(message: "User split ratio was lost during tab switching")
+            }
+            split.setFraction(0.5)
         }
         window.contentView?.layoutSubtreeIfNeeded()
         guard browser.bounds.width >= canvas.bounds.width * 0.3,
@@ -1040,6 +1030,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "embedded_webkit": true,
             "browser_hidden_state": true,
             "balanced_browser_split": true,
+            "split_ratio_retained": true,
             "browser_render_png_bytes": pagePNG.count,
             "active_terminal_title": true,
             "native_cloud_callback": true,

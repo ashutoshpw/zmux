@@ -4,6 +4,10 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- Run 38646603782 compiled but the new visual assertion reproduced a 104/1026-pixel browser
+  pane. Native content constraints still overrode NSSplitView positions. Replaced this competing
+  geometry ownership with a bounded frame-based host and accessible draggable divider; retain
+  split ratios and the same native geometry/PTY resize checks. Final artifact still pending.
 - Geometry build 38646079812 exposed the SDK's callback-only takeSnapshot API. Adapted its
   completion to a continuation returning Sendable PNG data; require actual page pixels rather
   than silently omitting browser visual evidence. Geometry validation remains enabled.

@@ -528,3 +528,98 @@ final class NotificationRowView: BackgroundView {
     @objc private func markRead() { owner?.readNotification(item.id) }
     @objc private func dismissItem() { owner?.dismissNotification(item.id) }
 }
+
+/// Owns presentation geometry explicitly. Child content constraints cannot select pane widths.
+@MainActor
+final class PaneSplitView: BackgroundView {
+    let geometryKey: String
+    let vertical: Bool
+    private(set) var fraction: CGFloat
+    private let first: NSView
+    private let second: NSView
+    private let divider = PaneDividerView()
+    override var isFlipped: Bool { true }
+
+    init(key: String, vertical: Bool, fraction: CGFloat, first: NSView, second: NSView) {
+        geometryKey = key; self.vertical = vertical; self.fraction = fraction
+        self.first = first; self.second = second
+        super.init(color: ZmuxPalette.terminal)
+        divider.owner = self
+        for child in [first, second, divider] {
+            child.translatesAutoresizingMaskIntoConstraints = true
+            child.autoresizingMask = []
+            addSubview(child)
+        }
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(vertical ? "Horizontal terminal split" : "Vertical terminal split")
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() { super.layout(); layoutPanes() }
+    override func resizeSubviews(withOldSize oldSize: NSSize) { layoutPanes() }
+    func layoutPanes() {
+        let extent = max(0, (vertical ? bounds.width : bounds.height) - 1)
+        let leading = floor(extent * fraction)
+        if vertical {
+            first.frame = NSRect(x: 0, y: 0, width: leading, height: bounds.height)
+            divider.frame = NSRect(x: leading - 3, y: 0, width: 7, height: bounds.height)
+            second.frame = NSRect(x: leading + 1, y: 0, width: extent - leading, height: bounds.height)
+        } else {
+            first.frame = NSRect(x: 0, y: 0, width: bounds.width, height: leading)
+            divider.frame = NSRect(x: 0, y: leading - 3, width: bounds.width, height: 7)
+            second.frame = NSRect(x: 0, y: leading + 1, width: bounds.width, height: extent - leading)
+        }
+        divider.needsDisplay = true
+        divider.setAccessibilityValue(NSNumber(value: Double(fraction * 100)))
+        first.needsLayout = true; second.needsLayout = true
+    }
+    func resize(to point: NSPoint) {
+        let extent = (vertical ? bounds.width : bounds.height) - 1
+        guard extent > 0 else { return }
+        setFraction((vertical ? point.x : point.y) / extent)
+    }
+    func setFraction(_ value: CGFloat) {
+        fraction = min(0.8, max(0.2, value))
+        layoutPanes()
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+}
+
+@MainActor
+private final class PaneDividerView: BackgroundView {
+    weak var owner: PaneSplitView?
+    init() {
+        super.init(color: .clear)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.splitter)
+        setAccessibilityLabel("Resize panes")
+    }
+    required init?(coder: NSCoder) { nil }
+    override var acceptsFirstResponder: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        ZmuxPalette.separator.setFill()
+        let line = owner?.vertical == true ? NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height)
+            : NSRect(x: 0, y: bounds.midY - 0.5, width: bounds.width, height: 1)
+        line.fill()
+    }
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: owner?.vertical == true ? .resizeLeftRight : .resizeUpDown)
+    }
+    override func mouseDown(with event: NSEvent) { /* Preserve the terminal's input focus while dragging. */ }
+    override func mouseDragged(with event: NSEvent) {
+        if let owner { owner.resize(to: owner.convert(event.locationInWindow, from: nil)) }
+    }
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123, 126: if let owner { owner.setFraction(owner.fraction - 0.05) }
+        case 124, 125: if let owner { owner.setFraction(owner.fraction + 0.05) }
+        default: super.keyDown(with: event)
+        }
+    }
+    override func accessibilityPerformIncrement() -> Bool {
+        guard let owner else { return false }; owner.setFraction(owner.fraction + 0.05); return true
+    }
+    override func accessibilityPerformDecrement() -> Bool {
+        guard let owner else { return false }; owner.setFraction(owner.fraction - 0.05); return true
+    }
+}
