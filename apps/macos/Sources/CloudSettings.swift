@@ -3,7 +3,7 @@ import AuthenticationServices
 
 @MainActor
 final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAuthenticationPresentationContextProviding {
-    private weak var owner: AppController?
+    private weak var appController: AppController?
     private let endpoint: CloudEndpoint
     private let client: CloudClient
     private let accountLabel = NSTextField(labelWithString: "Connect your workspace")
@@ -20,7 +20,7 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
     private var busy = false
 
     init(owner: AppController) {
-        self.owner = owner
+        self.appController = owner
         // Build validation supplies a valid owned origin. A malformed configuration fails visibly.
         do { endpoint = try CloudEndpoint(CloudEndpoint.configured) }
         catch { preconditionFailure("Invalid packaged cloud origin: \(error.localizedDescription)") }
@@ -178,7 +178,7 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
             self.detailLabel.stringValue = "Sign in to register this Mac and manage your devices."
             self.devices.arrangedSubviews.forEach { self.devices.removeArrangedSubview($0); $0.removeFromSuperview() }
             self.message.stringValue = result
-            self.owner?.updateCloudStatus("Sign in to Cloud", connected: false)
+            self.appController?.updateCloudStatus("Sign in to Cloud", connected: false)
         }
     }
     @objc private func registerMac(_ sender: Any?) {
@@ -226,16 +226,16 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
             deviceIDs.removeAll()
             accountLabel.stringValue = "Connect your workspace"
             detailLabel.stringValue = "Sign in to register this Mac and manage your devices."
-            owner?.updateCloudStatus("Sign in to Cloud", connected: false)
+            appController?.updateCloudStatus("Sign in to Cloud", connected: false)
         } else {
-            owner?.updateCloudStatus("Cloud unavailable", connected: false)
+            appController?.updateCloudStatus("Cloud unavailable", connected: false)
         }
     }
     private func present(_ account: CloudAccount) {
         setBusy(false); setSignedIn(true)
         accountLabel.stringValue = account.user.name.isEmpty ? "Connected" : account.user.name
         detailLabel.stringValue = account.user.email
-        owner?.updateCloudStatus(account.user.name.isEmpty ? "Cloud connected" : account.user.name, connected: true)
+        appController?.updateCloudStatus(account.user.name.isEmpty ? "Cloud connected" : account.user.name, connected: true)
         devices.arrangedSubviews.forEach { devices.removeArrangedSubview($0); $0.removeFromSuperview() }
         deviceIDs.removeAll()
         let active = account.devices.filter { $0.revokedAt == nil }
