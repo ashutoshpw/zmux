@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "apps/cli", "crates/native-bridge"]
+members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "apps/cli", "crates/native-bridge", "crates/desktop-runtime"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,7 +10,7 @@ license = "MIT"
 repository = "https://github.com/ashutoshpw/zmux"
 
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
 portable-pty = "=0.9.0"
@@ -19,6 +19,7 @@ filedescriptor = "=0.8.3"
 nix = { version = "0.28", features = ["signal", "process"] }
 zmux-terminal-adapter = { path = "crates/terminal-adapter" }
 zmux-session-runtime = { path = "crates/session-runtime" }
+zmux-desktop-runtime = { path = "crates/desktop-runtime" }
 zmux-workspace-core = { path = "crates/workspace-core" }
 
 [workspace.lints.rust]

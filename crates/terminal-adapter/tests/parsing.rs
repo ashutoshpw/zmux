@@ -43,3 +43,20 @@ fn terminated_control_strings_and_ordinary_unicode_do_not_accumulate_the_limit()
     terminal.process(b"\r\x1b[2Kstill-responsive").unwrap();
     assert!(terminal.viewport().contents.contains("still-responsive"));
 }
+
+#[test]
+fn native_runs_export_color_and_keep_wide_unicode_at_grid_positions() {
+    use zmux_terminal_adapter::Color;
+    let mut terminal = Terminal::new(Size { rows: 4, cols: 30 }).unwrap();
+    terminal
+        .process("\x1b[31mRED\x1b[0m界x".as_bytes())
+        .unwrap();
+    let viewport = terminal.viewport();
+    assert_eq!(viewport.lines[0][0].text, "RED");
+    assert_eq!(viewport.lines[0][0].style.foreground, Color::Indexed(1));
+    assert_eq!(viewport.lines[0][1].column, 3);
+    assert_eq!(viewport.lines[0][1].width, 2);
+    assert_eq!(viewport.lines[0][1].text, "界");
+    assert_eq!(viewport.lines[0][2].column, 5);
+    assert!(viewport.lines[0][2].text.starts_with('x'));
+}

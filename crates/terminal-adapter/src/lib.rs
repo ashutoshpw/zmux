@@ -1,6 +1,32 @@
 //! Headless parser feasibility adapter, not a production renderer or full terminal engine.
 
 use serde::Serialize;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum Color {
+    Default,
+    Indexed(u8),
+    Rgb([u8; 3]),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Style {
+    pub foreground: Color,
+    pub background: Color,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub inverse: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Run {
+    pub column: u16,
+    pub width: u16,
+    pub text: String,
+    pub style: Style,
+}
 use thiserror::Error;
 
 pub const MAX_ROWS: u16 = 120;
@@ -42,6 +68,10 @@ pub struct Viewport {
     pub contents: String,
     pub cursor_row: u16,
     pub cursor_col: u16,
+    pub lines: Vec<Vec<Run>>,
+    pub application_cursor: bool,
+    pub bracketed_paste: bool,
+    pub hide_cursor: bool,
 }
 
 #[derive(Default)]
@@ -104,6 +134,56 @@ impl Terminal {
         Ok(())
     }
 
+    fn runs(&self) -> Vec<Vec<Run>> {
+        (0..self.size.rows)
+            .map(|row| {
+                let mut runs: Vec<Run> = Vec::new();
+                for col in 0..self.size.cols {
+                    let cell = self
+                        .parser
+                        .screen()
+                        .cell(row, col)
+                        .expect("validated screen geometry");
+                    if cell.is_wide_continuation() {
+                        continue;
+                    }
+                    let text = if cell.contents().is_empty() {
+                        " "
+                    } else {
+                        cell.contents()
+                    };
+                    let width = if cell.is_wide() { 2 } else { 1 };
+                    let style = Style {
+                        foreground: color(cell.fgcolor()),
+                        background: color(cell.bgcolor()),
+                        bold: cell.bold(),
+                        italic: cell.italic(),
+                        underline: cell.underline(),
+                        inverse: cell.inverse(),
+                    };
+                    // ASCII runs share a draw call; isolate Unicode glyphs at their actual grid origin.
+                    if text.is_ascii()
+                        && let Some(last) = runs.last_mut()
+                        && last.text.is_ascii()
+                        && last.style == style
+                        && last.column + last.width == col
+                    {
+                        last.text.push_str(text);
+                        last.width += width;
+                    } else {
+                        runs.push(Run {
+                            column: col,
+                            width,
+                            text: text.into(),
+                            style,
+                        });
+                    }
+                }
+                runs
+            })
+            .collect()
+    }
+
     /// Only the visible screen crosses the bridge, never a clone of complete scrollback.
     pub fn viewport(&self) -> Viewport {
         let (cursor_row, cursor_col) = self.parser.screen().cursor_position();
@@ -112,6 +192,18 @@ impl Terminal {
             contents: self.parser.screen().contents(),
             cursor_row,
             cursor_col,
+            lines: self.runs(),
+            application_cursor: self.parser.screen().application_cursor(),
+            bracketed_paste: self.parser.screen().bracketed_paste(),
+            hide_cursor: self.parser.screen().hide_cursor(),
         }
+    }
+}
+
+fn color(value: vt100::Color) -> Color {
+    match value {
+        vt100::Color::Default => Color::Default,
+        vt100::Color::Idx(index) => Color::Indexed(index),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb([r, g, b]),
     }
 }

@@ -212,7 +212,10 @@ impl Session {
                     pending: Vec::new(),
                     written: 0,
                 };
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| worker.run())) {
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| worker.run()));
+                worker.shared.stop.store(true, Ordering::Release);
+                match result {
                     Ok(Ok(state)) => worker.publish(state, None),
                     Ok(Err(error)) => worker.publish(State::Failed, Some(error.to_string())),
                     Err(_) => {
@@ -239,6 +242,11 @@ impl Session {
             worker: Some(worker),
             process_id: pid,
         })
+    }
+
+    /// Lets an owning coordinator reap completed workers without blocking its command loop.
+    pub fn is_finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     pub fn process_id(&self) -> u32 {
@@ -308,7 +316,6 @@ impl Session {
     fn ensure_running(&self) -> Result<(), SessionError> {
         if self.shared.stop.load(Ordering::Acquire)
             || self.worker.as_ref().is_none_or(JoinHandle::is_finished)
-            || self.snapshot()?.state != State::Running
         {
             return Err(SessionError::Closed);
         }

@@ -1,0 +1,20 @@
+[package]
+name = "zmux-desktop-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+zmux-workspace-core.workspace = true
+zmux-session-runtime.workspace = true
+zmux-terminal-adapter.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+nix.workspace = true

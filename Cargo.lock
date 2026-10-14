@@ -362,11 +362,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "zmux-desktop-runtime"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "serde",
+ "thiserror 2.0.21",
+ "zmux-session-runtime",
+ "zmux-terminal-adapter",
+ "zmux-workspace-core",
+]
+
+[[package]]
 name = "zmux-native-bridge"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "zmux-desktop-runtime",
  "zmux-workspace-core",
 ]
 

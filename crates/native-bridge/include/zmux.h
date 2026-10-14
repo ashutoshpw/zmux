@@ -30,6 +30,15 @@ ZmuxResult zmux_buffer_length(uint64_t buffer);
 int32_t zmux_buffer_copy(uint64_t buffer, uint8_t *destination, size_t capacity);
 int32_t zmux_buffer_release(uint64_t buffer);
 
+/* Native desktop operations: actual Rust-owned shells, actions, and terminal frames.
+   Dispatch acknowledges queue acceptance. Later snapshots report command outcomes.
+   Snapshot OK/value=0 means unchanged; nonzero value is an owned buffer token.
+   Destroy waits for cleanup and MUST run off the native UI thread. */
+ZmuxResult zmux_desktop_create(void);
+ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_t length);
+ZmuxResult zmux_desktop_snapshot(uint64_t desktop, uint64_t revision);
+int32_t zmux_desktop_destroy(uint64_t desktop);
+
 #ifdef __cplusplus
 }
 #endif

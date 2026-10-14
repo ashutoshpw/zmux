@@ -8,11 +8,12 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, OnceLock, TryLockError},
 };
+use zmux_desktop_runtime::{Desktop, DesktopError, Request as DesktopRequest, Shell};
 use zmux_workspace_core::{Action, WorkspaceStore};
 
 pub const ABI_VERSION: u32 = 1;
 pub const MAX_REQUEST_BYTES: usize = 16_384;
-const MAX_RESPONSE_BYTES: usize = 1_048_576;
+const MAX_RESPONSE_BYTES: usize = 8_388_608;
 const MAX_CORES: usize = 32;
 const MAX_BUFFERS: usize = 16;
 
@@ -40,6 +41,7 @@ impl ZmuxResult {
 }
 
 enum Entry {
+    Desktop(Arc<Desktop>),
     Core(Arc<Mutex<WorkspaceStore>>),
     Buffer(Option<Arc<Vec<u8>>>),
 }
@@ -276,6 +278,97 @@ pub extern "C" fn zmux_buffer_release(id: u64) -> i32 {
     guard(|| {
         let mut registry = registry().try_lock().map_err(lock_status)?;
         if !matches!(registry.entries.get(&id), Some(Entry::Buffer(Some(_)))) {
+            return Err(INVALID_HANDLE);
+        }
+        registry.entries.remove(&id);
+        Ok(0)
+    })
+    .status
+}
+
+fn desktop(id: u64) -> Result<Arc<Desktop>, i32> {
+    let registry = registry().try_lock().map_err(lock_status)?;
+    match registry.entries.get(&id) {
+        Some(Entry::Desktop(desktop)) => Ok(Arc::clone(desktop)),
+        _ => Err(INVALID_HANDLE),
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_create() -> ZmuxResult {
+    guard(|| {
+        let mut registry = registry().try_lock().map_err(lock_status)?;
+        if registry
+            .entries
+            .values()
+            .filter(|e| matches!(e, Entry::Desktop(_)))
+            .count()
+            >= 4
+        {
+            return Err(CAPACITY);
+        }
+        let desktop = Desktop::new(Shell::default()).map_err(|_| INTERNAL)?;
+        registry.insert(Entry::Desktop(Arc::new(desktop)))
+    })
+}
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_dispatch(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_REQUEST_BYTES || (request.is_null() && length != 0) {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        // SAFETY: same checked pointer/length and caller ownership contract as core dispatch.
+        let bytes = if length == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(request, length) }
+        };
+        let reply = match serde_json::from_slice::<DesktopRequest>(bytes) {
+            Err(error) => error_reply("invalid_request", error.to_string()),
+            Ok(request) if request.version != ABI_VERSION => {
+                error_reply("unsupported_version", "expected protocol version 1".into())
+            }
+            Ok(request) => match desktop.submit(request) {
+                Ok(()) => json!({"version": ABI_VERSION, "ok": true}),
+                Err(DesktopError::QueueFull) => return Err(BUSY),
+                Err(error) => error_reply("command_rejected", error.to_string()),
+            },
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+/// OK/value=0 means no change since revision; otherwise value owns a JSON snapshot buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_snapshot(id: u64, revision: u64) -> ZmuxResult {
+    guard(|| {
+        let snapshot = desktop(id)?.snapshot().map_err(|error| match error {
+            DesktopError::Busy => BUSY,
+            _ => INTERNAL,
+        })?;
+        if snapshot.revision == revision {
+            return Ok(0);
+        }
+        let reservation = Reservation::new()?;
+        reservation.publish(serde_json::to_vec(&*snapshot).map_err(|_| INTERNAL)?)
+    })
+}
+/// Shutdown can wait up to five seconds; native hosts must call it off the AppKit thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_destroy(id: u64) -> i32 {
+    guard(|| {
+        let desktop = desktop(id)?;
+        desktop
+            .shutdown(std::time::Duration::from_secs(5))
+            .map_err(|_| INTERNAL)?;
+        let mut registry = registry().try_lock().map_err(lock_status)?;
+        if !matches!(registry.entries.get(&id), Some(Entry::Desktop(_))) {
             return Err(INVALID_HANDLE);
         }
         registry.entries.remove(&id);

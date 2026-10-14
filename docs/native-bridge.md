@@ -64,7 +64,7 @@ This is an in-process integration API, not the final local socket/remote protoco
 | `ZMUX_INTERNAL` | Internal failure; outcome may be uncertain, never blindly retry a mutation |
 
 Limits: 32 live core contexts, 16 live/reserved response buffers, 16 KiB per request and
-1 MiB per response. Reserve response capacity before applying actions. Current bounded
+8 MiB per response. Reserve response capacity before applying actions. Current bounded
 workspace shapes fit within the response ceiling; a later shape/schema change needs to
 revisit that bound. Copying an undersized buffer must never partially modify the destination.
 Poisoned locks report internal failure, not retryable contention. Released buffers must not
@@ -81,3 +81,12 @@ before mutation. Full Rust checks also run this command through `scripts/check`.
 The CI workflow exercises the existing Rust/PTY/C foundation on Linux and macOS when
 published. Its macOS lane is not an AppKit/Swift/UI or resource-budget check. No hosted run
 has been executed as part of this local implementation.
+
+## Desktop integration
+
+The additional `zmux_desktop_*` exports own a real Rust desktop coordinator and local PTYs.
+Dispatch accepts versioned requests with `request_id` and `payload` (action/input/resize).
+Acceptance means queued; revisioned snapshots carry model, visible terminal frames and errors.
+Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup off the UI thread.
+There are at most four desktop contexts and eight terminals per desktop, including pending or
+retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
