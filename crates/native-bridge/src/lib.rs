@@ -6,9 +6,12 @@ use serde_json::json;
 use std::{
     collections::HashMap,
     panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
     sync::{Arc, Mutex, OnceLock, TryLockError},
 };
-use zmux_desktop_runtime::{Desktop, DesktopError, Request as DesktopRequest, Shell};
+use zmux_desktop_runtime::{
+    Desktop, DesktopError, Request as DesktopRequest, Shell, control::ControlServer,
+};
 use zmux_workspace_core::{Action, WorkspaceStore};
 
 pub const ABI_VERSION: u32 = 1;
@@ -41,9 +44,13 @@ impl ZmuxResult {
 }
 
 enum Entry {
-    Desktop(Arc<Desktop>),
+    Desktop(Arc<NativeDesktop>),
     Core(Arc<Mutex<WorkspaceStore>>),
     Buffer(Option<Arc<Vec<u8>>>),
+}
+struct NativeDesktop {
+    runtime: Arc<Desktop>,
+    control: Option<ControlServer>,
 }
 struct Registry {
     next: u64,
@@ -289,6 +296,13 @@ pub extern "C" fn zmux_buffer_release(id: u64) -> i32 {
 fn desktop(id: u64) -> Result<Arc<Desktop>, i32> {
     let registry = registry().try_lock().map_err(lock_status)?;
     match registry.entries.get(&id) {
+        Some(Entry::Desktop(desktop)) => Ok(Arc::clone(&desktop.runtime)),
+        _ => Err(INVALID_HANDLE),
+    }
+}
+fn native_desktop(id: u64) -> Result<Arc<NativeDesktop>, i32> {
+    let registry = registry().try_lock().map_err(lock_status)?;
+    match registry.entries.get(&id) {
         Some(Entry::Desktop(desktop)) => Ok(Arc::clone(desktop)),
         _ => Err(INVALID_HANDLE),
     }
@@ -306,8 +320,22 @@ pub extern "C" fn zmux_desktop_create() -> ZmuxResult {
         {
             return Err(CAPACITY);
         }
-        let desktop = Desktop::new(Shell::default()).map_err(|_| INTERNAL)?;
-        registry.insert(Entry::Desktop(Arc::new(desktop)))
+        let runtime = Arc::new(Desktop::new(Shell::default()).map_err(|error| {
+            eprintln!("zmux desktop startup failed: {error}");
+            INTERNAL
+        })?);
+        // Native tests create multiple contexts, so local control is explicitly opt-in.
+        // The app supplies one absolute, owner-private path before creating its desktop.
+        let control = std::env::var_os("ZMUX_SOCKET")
+            .map(PathBuf::from)
+            .map(|path| {
+                ControlServer::start(&path, Arc::clone(&runtime)).map_err(|error| {
+                    eprintln!("zmux local control startup failed: {error}");
+                    INTERNAL
+                })
+            })
+            .transpose()?;
+        registry.insert(Entry::Desktop(Arc::new(NativeDesktop { runtime, control })))
     })
 }
 /// # Safety
@@ -363,8 +391,17 @@ pub extern "C" fn zmux_desktop_snapshot(id: u64, revision: u64) -> ZmuxResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_desktop_destroy(id: u64) -> i32 {
     guard(|| {
-        let desktop = desktop(id)?;
+        let desktop = native_desktop(id)?;
+        if let Some(control) = &desktop.control {
+            control
+                .shutdown(std::time::Duration::from_secs(2))
+                .map_err(|error| {
+                    eprintln!("zmux local control shutdown failed: {error}");
+                    INTERNAL
+                })?;
+        }
         desktop
+            .runtime
             .shutdown(std::time::Duration::from_secs(5))
             .map_err(|_| INTERNAL)?;
         let mut registry = registry().try_lock().map_err(lock_status)?;

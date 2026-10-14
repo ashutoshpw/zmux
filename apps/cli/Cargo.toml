@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 zmux-session-runtime.workspace = true
+zmux-desktop-runtime.workspace = true
+zmux-workspace-core.workspace = true
 serde_json.workspace = true
 
 [lints]

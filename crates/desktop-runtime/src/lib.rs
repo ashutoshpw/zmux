@@ -1,4 +1,6 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
+pub mod control;
+
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -84,6 +86,8 @@ pub enum DesktopError {
     Closed,
     #[error("desktop snapshot is being published; retry")]
     Busy,
+    #[error("desktop command acknowledgement timed out; outcome is unknown")]
+    Timeout,
     #[error("{0}")]
     Failure(String),
 }
@@ -105,15 +109,28 @@ pub struct Snapshot {
     pub closed: bool,
     pub pending_launches: usize,
     pub cleanup_error: Option<String>,
+    /// All live terminal frames for local inspection. Native rendering receives only `frames`.
+    #[serde(skip)]
+    pub control_frames: Vec<Frame>,
 }
 struct Shared {
     stop: AtomicBool,
     snapshot: Mutex<Arc<Snapshot>>,
 }
 pub struct Desktop {
-    sender: SyncSender<Request>,
+    sender: SyncSender<Envelope>,
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+struct Envelope {
+    request: Request,
+    acknowledgement: Option<SyncSender<Execution>>,
+}
+
+pub(crate) struct Execution {
+    pub result: Result<(), String>,
+    pub snapshot: Arc<Snapshot>,
 }
 
 impl Desktop {
@@ -129,6 +146,7 @@ impl Desktop {
                 closed: false,
                 pending_launches: 0,
                 cleanup_error: None,
+                control_frames: Vec::new(),
             })),
         });
         let (sender, receiver) = mpsc::sync_channel(MAX_COMMANDS);
@@ -168,6 +186,31 @@ impl Desktop {
     }
 
     pub fn submit(&self, request: Request) -> Result<(), DesktopError> {
+        self.validate(&request)?;
+        self.send(Envelope {
+            request,
+            acknowledgement: None,
+        })
+    }
+
+    pub(crate) fn execute(
+        &self,
+        request: Request,
+        timeout: Duration,
+    ) -> Result<Execution, DesktopError> {
+        self.validate(&request)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Envelope {
+            request,
+            acknowledgement: Some(sender),
+        })?;
+        receiver.recv_timeout(timeout).map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+            mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+        })
+    }
+
+    fn validate(&self, request: &Request) -> Result<(), DesktopError> {
         if self.shared.stop.load(Ordering::Acquire) {
             return Err(DesktopError::Closed);
         }
@@ -186,7 +229,11 @@ impl Desktop {
             .validate()
             .map_err(|e| DesktopError::Failure(e.to_string()))?;
         }
-        self.sender.try_send(request).map_err(|e| match e {
+        Ok(())
+    }
+
+    fn send(&self, envelope: Envelope) -> Result<(), DesktopError> {
+        self.sender.try_send(envelope).map_err(|e| match e {
             TrySendError::Full(_) => DesktopError::QueueFull,
             TrySendError::Disconnected(_) => DesktopError::Closed,
         })
@@ -263,23 +310,17 @@ struct Worker {
     revision: u64,
 }
 impl Worker {
-    fn run(&mut self, receiver: Receiver<Request>) {
+    fn run(&mut self, receiver: Receiver<Envelope>) {
         while !self.shared.stop.load(Ordering::Acquire) {
             let mut dirty = false;
             match receiver.recv_timeout(UPDATE_INTERVAL) {
-                Ok(request) => {
-                    self.command(request);
-                    dirty = true;
-                }
+                Ok(envelope) => self.command(envelope),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             for _ in 1..MAX_COMMANDS {
                 match receiver.try_recv() {
-                    Ok(request) => {
-                        self.command(request);
-                        dirty = true;
-                    }
+                    Ok(envelope) => self.command(envelope),
                     Err(_) => break,
                 }
             }
@@ -373,7 +414,8 @@ impl Worker {
         }
         self.retired.push(session);
     }
-    fn command(&mut self, request: Request) {
+    fn command(&mut self, envelope: Envelope) {
+        let request = envelope.request;
         self.last_request_id = request.request_id;
         let result = match request.payload {
             Command::Action { action } => self.action(action),
@@ -400,7 +442,12 @@ impl Worker {
                 None => Err(DesktopError::Failure("terminal no longer exists".into())),
             },
         };
-        self.last_error = result.err().map(|e| e.to_string());
+        let result = result.map_err(|error| error.to_string());
+        self.last_error = result.as_ref().err().cloned();
+        let snapshot = self.publish(false);
+        if let Some(sender) = envelope.acknowledgement {
+            let _ = sender.try_send(Execution { result, snapshot });
+        }
     }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
         let owned = self.pending_launches
@@ -483,44 +530,58 @@ impl Worker {
         }
         // Results for closed panes are canceled and reaped, never reattached.
     }
-    fn publish(&mut self, closed: bool) {
+    fn publish(&mut self, closed: bool) -> Arc<Snapshot> {
         self.revision += 1;
         let model = self.model.snapshot();
-        let frames = model
+        let control_frames: Vec<_> = model
             .workspaces
             .iter()
-            .find(|w| Some(w.id) == model.focused_workspace)
+            .flat_map(|workspace| workspace.root.panes())
+            .filter_map(|pane| {
+                self.slots.get(&pane.session_id).map(|slot| Frame {
+                    session_id: pane.session_id,
+                    process_id: slot.session.as_ref().map(Session::process_id),
+                    starting: slot.starting,
+                    snapshot: slot.cached.clone(),
+                    failure: slot.failure.clone(),
+                })
+            })
+            .collect();
+        let focused_sessions: Vec<_> = model
+            .workspaces
+            .iter()
+            .find(|workspace| Some(workspace.id) == model.focused_workspace)
             .map(|workspace| {
                 workspace
                     .root
                     .panes()
                     .into_iter()
-                    .filter_map(|pane| {
-                        self.slots.get(&pane.session_id).map(|slot| Frame {
-                            session_id: pane.session_id,
-                            process_id: slot.session.as_ref().map(Session::process_id),
-                            starting: slot.starting,
-                            snapshot: slot.cached.clone(),
-                            failure: slot.failure.clone(),
-                        })
-                    })
+                    .map(|pane| pane.session_id)
                     .collect()
             })
             .unwrap_or_default();
+        let frames = control_frames
+            .iter()
+            .filter(|frame| focused_sessions.contains(&frame.session_id))
+            .cloned()
+            .collect();
+        let published = Arc::new(Snapshot {
+            revision: self.revision,
+            model,
+            frames,
+            last_request_id: self.last_request_id,
+            last_error: self.last_error.clone(),
+            closed,
+            pending_launches: self.pending_launches,
+            cleanup_error: self.cleanup_error.clone(),
+            control_frames,
+        });
         match self.shared.snapshot.lock() {
             Ok(mut snapshot) => {
-                *snapshot = Arc::new(Snapshot {
-                    revision: self.revision,
-                    model,
-                    frames,
-                    last_request_id: self.last_request_id,
-                    last_error: self.last_error.clone(),
-                    closed,
-                    pending_launches: self.pending_launches,
-                    cleanup_error: self.cleanup_error.clone(),
-                })
+                *snapshot = Arc::clone(&published);
             }
             Err(error) => eprintln!("zmux desktop publication failed: {error}"),
         }
+        published
     }
 }

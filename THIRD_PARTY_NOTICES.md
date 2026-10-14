@@ -9,6 +9,7 @@ of file-level notices, native binaries, assets, or separately installed software
 | --- | --- | --- | --- |
 | `anyhow` | 1.0.104 | MIT OR Apache-2.0 | https://github.com/dtolnay/anyhow |
 | `arrayvec` | 0.7.8 | MIT OR Apache-2.0 | https://github.com/bluss/arrayvec |
+| `autocfg` | 1.5.1 | Apache-2.0 OR MIT | https://github.com/cuviper/autocfg |
 | `bitflags` | 1.3.2 | MIT/Apache-2.0 | https://github.com/bitflags/bitflags |
 | `bitflags` | 2.13.2 | MIT OR Apache-2.0 | https://github.com/bitflags/bitflags |
 | `cfg-if` | 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/cfg-if |
@@ -20,6 +21,7 @@ of file-level notices, native binaries, assets, or separately installed software
 | `libc` | 0.2.190 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc |
 | `log` | 0.4.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/log |
 | `memchr` | 2.8.3 | Unlicense OR MIT | https://github.com/BurntSushi/memchr |
+| `memoffset` | 0.9.1 | MIT | https://github.com/Gilnaa/memoffset |
 | `nix` | 0.28.0 | MIT | https://github.com/nix-rust/nix |
 | `portable-pty` | 0.9.0 | MIT | https://github.com/wezterm/wezterm |
 | `proc-macro2` | 1.0.107 | MIT OR Apache-2.0 | https://github.com/dtolnay/proc-macro2 |
@@ -261,7 +263,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-Applies to: arrayvec 0.7.8: `LICENSE-APACHE`; bitflags 1.3.2: `LICENSE-APACHE`; bitflags 2.13.2: `LICENSE-APACHE`; cfg-if 1.0.5: `LICENSE-APACHE`; lazy_static 1.5.1: `LICENSE-APACHE`; log 0.4.34: `LICENSE-APACHE`; socket2 0.6.3: `LICENSE-APACHE`; unicode-width 0.2.2: `LICENSE-APACHE`
+Applies to: arrayvec 0.7.8: `LICENSE-APACHE`; autocfg 1.5.1: `LICENSE-APACHE`; bitflags 1.3.2: `LICENSE-APACHE`; bitflags 2.13.2: `LICENSE-APACHE`; cfg-if 1.0.5: `LICENSE-APACHE`; lazy_static 1.5.1: `LICENSE-APACHE`; log 0.4.34: `LICENSE-APACHE`; socket2 0.6.3: `LICENSE-APACHE`; unicode-width 0.2.2: `LICENSE-APACHE`
 
 ```text
                               Apache License
@@ -471,6 +473,36 @@ Applies to: arrayvec 0.7.8: `LICENSE-MIT`
 
 ```text
 Copyright (c) Ulrik Sverdrup "bluss" 2015-2023
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+Applies to: autocfg 1.5.1: `LICENSE-MIT`
+
+```text
+Copyright (c) 2018 Josh Stone
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -926,6 +958,30 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+Applies to: memoffset 0.9.1: `LICENSE`
+
+```text
+Copyright (c) 2017 Gilad Naaman
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 Applies to: nix 0.28.0: `LICENSE`

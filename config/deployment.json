@@ -1,0 +1,6 @@
+{
+  "cloud_origin": "https://zmux.w3dev.app",
+  "native_client_id": "zmux-macos-dev",
+  "native_callback": "zmux-dev://oauth/callback",
+  "bundle_id": "app.w3dev.zmux.dev"
+}

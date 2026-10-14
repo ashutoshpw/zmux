@@ -15,7 +15,8 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     private var marked = NSAttributedString(string: "")
     private var markedSelection = NSRange(location: 0, length: 0)
     private var selection: ((Int, Int), (Int, Int))?
-    private let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private let font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+    private let contentInset: CGFloat = 10
     private var cellWidth: CGFloat { ("M" as NSString).size(withAttributes: [.font: font]).width }
     private var lineHeight: CGFloat { ceil(font.ascender - font.descender + 3) }
     override var acceptsFirstResponder: Bool { true }
@@ -31,8 +32,8 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     required init?(coder: NSCoder) { nil }
     override func layout() {
         super.layout()
-        let rows = max(1, min(120, Int((bounds.height - 12) / lineHeight)))
-        let cols = max(1, min(240, Int((bounds.width - 12) / cellWidth)))
+        let rows = max(1, min(120, Int((bounds.height - contentInset * 2) / lineHeight)))
+        let cols = max(1, min(240, Int((bounds.width - contentInset * 2) / cellWidth)))
         if lastSize != (rows, cols) { lastSize = (rows, cols); onResize?(rows, cols) }
     }
     override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
@@ -46,20 +47,22 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             let changed = lastBytes != snapshot.bytesRead || viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || oldState != frameState
             viewport = snapshot.viewport
             lastBytes = snapshot.bytesRead
+            setAccessibilityLabel(snapshot.viewport.title?.isEmpty == false ? snapshot.viewport.title : "Terminal")
             setAccessibilityValue(snapshot.viewport.contents)
             if changed { needsDisplay = true }
         } else { needsDisplay = true }
     }
     override func draw(_ dirtyRect: NSRect) {
-        NSColor(calibratedRed: 0.065, green: 0.075, blue: 0.095, alpha: 1).setFill()
+        NSGraphicsContext.current?.shouldAntialias = true
+        ZmuxPalette.terminal.setFill()
         bounds.fill()
         guard let viewport else {
-            (frameState as NSString).draw(at: NSPoint(x: 12, y: 12), withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
+            (frameState as NSString).draw(at: NSPoint(x: contentInset, y: contentInset), withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
             return
         }
         for (row, runs) in viewport.lines.enumerated() {
             for run in runs {
-                let rect = NSRect(x: 6 + CGFloat(run.column) * cellWidth, y: 6 + CGFloat(row) * lineHeight, width: CGFloat(run.width) * cellWidth, height: lineHeight)
+                let rect = NSRect(x: contentInset + CGFloat(run.column) * cellWidth, y: contentInset + CGFloat(row) * lineHeight, width: CGFloat(run.width) * cellWidth, height: lineHeight)
                 let foreground = color(run.style.inverse ? run.style.background : run.style.foreground, foreground: true)
                 let background = color(run.style.inverse ? run.style.foreground : run.style.background, foreground: false)
                 background.setFill(); rect.fill()
@@ -76,10 +79,10 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             for row in lo.0...hi.0 {
                 let start = row == lo.0 ? lo.1 : 0
                 let end = row == hi.0 ? hi.1 : viewport.size.cols
-                NSRect(x: 6 + CGFloat(start) * cellWidth, y: 6 + CGFloat(row) * lineHeight, width: CGFloat(max(0, end - start)) * cellWidth, height: lineHeight).fill()
+                NSRect(x: contentInset + CGFloat(start) * cellWidth, y: contentInset + CGFloat(row) * lineHeight, width: CGFloat(max(0, end - start)) * cellWidth, height: lineHeight).fill()
             }
         }
-        let cursor = NSRect(x: 6 + CGFloat(viewport.cursorCol) * cellWidth, y: 6 + CGFloat(viewport.cursorRow) * lineHeight, width: cellWidth, height: lineHeight)
+        let cursor = NSRect(x: contentInset + CGFloat(viewport.cursorCol) * cellWidth, y: contentInset + CGFloat(viewport.cursorRow) * lineHeight, width: cellWidth, height: lineHeight)
         if frameState == "running" && !viewport.hideCursor && window?.firstResponder === self {
             NSColor.white.withAlphaComponent(0.4).setFill(); cursor.fill()
         }
@@ -87,8 +90,8 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     private func color(_ color: TerminalColor, foreground: Bool) -> NSColor {
         if let rgb = color.rgb, rgb.count == 3 { return NSColor(calibratedRed: CGFloat(rgb[0]) / 255, green: CGFloat(rgb[1]) / 255, blue: CGFloat(rgb[2]) / 255, alpha: 1) }
-        guard let index = color.index else { return foreground ? NSColor(calibratedWhite: 0.88, alpha: 1) : NSColor(calibratedRed: 0.065, green: 0.075, blue: 0.095, alpha: 1) }
-        let palette: [UInt32] = [0x171b22,0xe06c75,0x98c379,0xe5c07b,0x61afef,0xc678dd,0x56b6c2,0xd9dce3,0x5c6370,0xff7b86,0xb0df8e,0xffd68b,0x83c3ff,0xdf98ff,0x78dae6,0xffffff]
+        guard let index = color.index else { return foreground ? NSColor(calibratedWhite: 0.88, alpha: 1) : ZmuxPalette.terminal }
+        let palette: [UInt32] = [0x1c1c1e,0xe06c75,0x98c379,0xe5c07b,0x61afef,0xc678dd,0x56b6c2,0xd9dce3,0x5c6370,0xff7b86,0xb0df8e,0xffd68b,0x83c3ff,0xdf98ff,0x78dae6,0xffffff]
         if index < 16 {
             let value = palette[index]
             return NSColor(calibratedRed: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
@@ -108,7 +111,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     private func gridPoint(_ event: NSEvent) -> (Int, Int) {
         let point = convert(event.locationInWindow, from: nil)
-        return (max(0, min((viewport?.size.rows ?? 1) - 1, Int((point.y - 6) / lineHeight))), max(0, min(viewport?.size.cols ?? 1, Int((point.x - 6) / cellWidth))))
+        return (max(0, min((viewport?.size.rows ?? 1) - 1, Int((point.y - contentInset) / lineHeight))), max(0, min(viewport?.size.cols ?? 1, Int((point.x - contentInset) / cellWidth))))
     }
     private func normalizedSelection() -> ((Int, Int), (Int, Int))? {
         guard let (a, b) = selection, a != b else { return nil }
@@ -189,7 +192,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         return marked.attributedSubstring(from: intersection)
     }
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
-        let rect = NSRect(x: 6 + CGFloat(viewport?.cursorCol ?? 0) * cellWidth, y: 6 + CGFloat(viewport?.cursorRow ?? 0) * lineHeight, width: cellWidth, height: lineHeight)
+        let rect = NSRect(x: contentInset + CGFloat(viewport?.cursorCol ?? 0) * cellWidth, y: contentInset + CGFloat(viewport?.cursorRow ?? 0) * lineHeight, width: cellWidth, height: lineHeight)
         return window?.convertToScreen(convert(rect, to: nil)) ?? .zero
     }
     func characterIndex(for point: NSPoint) -> Int { 0 }

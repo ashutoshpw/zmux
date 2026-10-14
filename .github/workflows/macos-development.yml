@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - 'apps/macos/**'
+      - 'apps/cli/**'
+      - 'config/deployment.json'
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -39,10 +41,10 @@ jobs:
       - name: Upload downloadable development build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Zmux-macos-dev-universal-${{ github.sha }}
+          name: zmux-macos-dev-universal-${{ github.sha }}
           path: |
-            dist/Zmux-dev-universal-*.zip
-            dist/Zmux-dev-universal-*.zip.sha256
+            dist/zmux-dev-universal-*.zip
+            dist/zmux-dev-universal-*.zip.sha256
             dist/build-info.json
             dist/native-smoke.json
             dist/Zmux-native-smoke.png
@@ -68,6 +70,6 @@ jobs:
           from pathlib import Path
           metadata = json.loads(Path('dist/build-info.json').read_text())
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(f"Download **Zmux-macos-dev-universal-{metadata['source_sha']}** from this run's Artifacts.\n\n")
+              summary.write(f"Download **zmux-macos-dev-universal-{metadata['source_sha']}** from this run's Artifacts.\n\n")
               summary.write('Universal arm64/x86_64 development app for macOS 14+. Ad-hoc signed; not notarized.\n')
           PY

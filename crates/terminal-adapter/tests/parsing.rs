@@ -1,6 +1,34 @@
 use zmux_terminal_adapter::{Size, Terminal};
 
 #[test]
+fn shell_metadata_survives_fragmented_osc_without_becoming_terminal_text() {
+    let mut terminal = Terminal::new(Size { rows: 4, cols: 30 }).unwrap();
+    for byte in
+        "hello\x1b]2;user@host: ~/世界\x07\x1b]7;file://host/Users/me/My%20Project\x1b\\".as_bytes()
+    {
+        terminal.process(&[*byte]).unwrap();
+    }
+    assert_eq!(terminal.viewport().title, "user@host: ~/世界");
+    assert_eq!(
+        terminal.viewport().working_directory.as_deref(),
+        Some("/Users/me/My Project")
+    );
+    assert_eq!(terminal.viewport().contents, "hello");
+    terminal
+        .process(b"\x1b]0;replacement\x07\x1b]7;https://example.com/unsafe\x07")
+        .unwrap();
+    assert_eq!(terminal.viewport().title, "replacement");
+    assert_eq!(
+        terminal.viewport().working_directory.as_deref(),
+        Some("/Users/me/My Project")
+    );
+    terminal
+        .process(format!("\x1b]2;{}\x07", "x".repeat(2000)).as_bytes())
+        .unwrap();
+    assert_eq!(terminal.viewport().title.len(), 256);
+}
+
+#[test]
 fn split_utf8_and_escape_sequences_preserve_visible_output() {
     let mut terminal = Terminal::new(Size { rows: 4, cols: 30 }).unwrap();
     // Independent expected output; byte-by-byte delivery includes fragmented UTF-8 and CSI.

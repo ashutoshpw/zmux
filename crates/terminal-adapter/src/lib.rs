@@ -64,6 +64,8 @@ impl Size {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Viewport {
+    pub title: String,
+    pub working_directory: Option<String>,
     pub size: Size,
     pub contents: String,
     pub cursor_row: u16,
@@ -83,17 +85,78 @@ enum ControlMode {
 }
 
 pub struct Terminal {
-    parser: vt100::Parser,
+    parser: vt100::Parser<Metadata>,
     size: Size,
     control: ControlMode,
     failed: bool,
+}
+
+#[derive(Default)]
+struct Metadata {
+    title: String,
+    working_directory: Option<String>,
+}
+
+fn display_text(bytes: &[u8], limit: usize) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .filter(|c| {
+            !c.is_control() && !matches!(*c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(limit)
+        .collect()
+}
+
+impl vt100::Callbacks for Metadata {
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        self.title = display_text(title, 256);
+    }
+
+    fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        if let [b"7", value] = params {
+            let Ok(uri) = std::str::from_utf8(value) else {
+                return;
+            };
+            let Some(authority_path) = uri.strip_prefix("file://") else {
+                return;
+            };
+            let Some(start) = authority_path.find('/') else {
+                return;
+            };
+            let path = &authority_path.as_bytes()[start..];
+            let mut decoded = Vec::with_capacity(path.len());
+            let mut i = 0;
+            while i < path.len() {
+                if path[i] == b'%'
+                    && i + 2 < path.len()
+                    && let (Some(hi), Some(lo)) = (
+                        (path[i + 1] as char).to_digit(16),
+                        (path[i + 2] as char).to_digit(16),
+                    )
+                {
+                    decoded.push((hi * 16 + lo) as u8);
+                    i += 3;
+                } else {
+                    decoded.push(path[i]);
+                    i += 1;
+                }
+            }
+            // This is display metadata only: never open a path or execute shell content.
+            self.working_directory = Some(display_text(&decoded, 2048));
+        }
+    }
 }
 
 impl Terminal {
     pub fn new(size: Size) -> Result<Self, InvalidSize> {
         let size = size.validate()?;
         Ok(Self {
-            parser: vt100::Parser::new(size.rows, size.cols, MAX_SCROLLBACK_LINES),
+            parser: vt100::Parser::new_with_callbacks(
+                size.rows,
+                size.cols,
+                MAX_SCROLLBACK_LINES,
+                Metadata::default(),
+            ),
             size,
             control: ControlMode::Ground,
             failed: false,
@@ -188,6 +251,8 @@ impl Terminal {
     pub fn viewport(&self) -> Viewport {
         let (cursor_row, cursor_col) = self.parser.screen().cursor_position();
         Viewport {
+            title: self.parser.callbacks().title.clone(),
+            working_directory: self.parser.callbacks().working_directory.clone(),
             size: self.size,
             contents: self.parser.screen().contents(),
             cursor_row,
