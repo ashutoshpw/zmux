@@ -1012,10 +1012,14 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func performShortcut(_ key: String, modifiers: NSEvent.ModifierFlags) throws {
+        // AppKit removes command/option/control from charactersIgnoringModifiers, but
+        // retains Shift. Supplying lowercase here would synthesize an unshifted shortcut.
+        let characters = modifiers.contains(.shift) ? key.uppercased() : key
+        let keyCode: UInt16 = ["t": 17, "w": 13, "b": 11][key] ?? 0
         guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, characters: modifiers.contains(.shift) ? key.uppercased() : key,
-            charactersIgnoringModifiers: key, isARepeat: false, keyCode: 0),
+            context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode),
             NSApp.mainMenu?.performKeyEquivalent(with: event) == true else {
             throw BridgeFailure(message: "Native menu did not handle shortcut \(key)")
         }
