@@ -11,7 +11,7 @@ sidebars, notifications, navigation and recovery.
 ## Context
 Task 04 delivered a limited native app and identity/device service, not cmux parity.
 Baseline: zmux `5642b48`; cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
-This turn creates the implementation plan only. Original roadmap and PR #1 scope remain.
+Implementation started with the shared surface model and native tab lifecycle. Original roadmap and PR #1 scope remain.
 
 ## Approach
 Use shared Rust window/workspace/pane/surface actions with a thin AppKit host and public
@@ -44,6 +44,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [P1 terminal tabs](references/p1-terminal-tabs.md) — delivered contracts, evidence and remaining gaps.
 - [Full UX parity](references/ux-parity.md) — interaction audit and required undo-close semantics.
 - [UI action inventory](references/ui-action-inventory.json) — source-discovered shortcut actions, pending behavioral audit.
 - [Source review](references/source-review.md) — findings, WebKit decision and provenance.

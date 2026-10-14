@@ -7,7 +7,7 @@ fn create(store: &mut WorkspaceStore, name: &str) -> (WorkspaceId, PaneId, Sessi
     let snapshot = store.snapshot();
     let workspace = snapshot.workspaces.last().unwrap();
     let pane = workspace.root.panes()[0];
-    (workspace.id, pane.id, pane.session_id)
+    (workspace.id, pane.id, pane.session_id())
 }
 
 #[test]
@@ -25,6 +25,7 @@ fn split_and_close_preserve_surviving_identity_and_stop_only_closed_session() {
             Effect::StartSession {
                 pane_id,
                 session_id,
+                ..
             },
         ] => (*pane_id, *session_id),
         _ => panic!("split must request exactly one session"),
@@ -47,7 +48,7 @@ fn split_and_close_preserve_surviving_identity_and_stop_only_closed_session() {
     assert_eq!(snapshot.focused_workspace, Some(workspace_id));
     assert_eq!(snapshot.workspaces[0].focused_pane, first_id);
     assert!(
-        matches!(&snapshot.workspaces[0].root, PaneTree::Leaf { pane } if pane.id == first_id && pane.session_id == first_session)
+        matches!(&snapshot.workspaces[0].root, PaneTree::Leaf { pane } if pane.id == first_id && pane.session_id() == first_session)
     );
 }
 

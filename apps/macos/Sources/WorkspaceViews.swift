@@ -333,3 +333,143 @@ final class CloudFooterView: BackgroundView {
     }
 }
 
+
+/// The bar only submits shared actions; terminal sessions remain owned by Rust.
+@MainActor
+final class TerminalTabBar: BackgroundView {
+    private let pane: Pane
+    private weak var owner: AppController?
+    private let scroll = NSScrollView()
+    private let strip = NSView()
+    private var tabs: [TerminalTabControl] = []
+    private static let dragType = NSPasteboard.PasteboardType("app.zmux.terminal-surface")
+
+    init(pane: Pane, owner: AppController) {
+        self.pane = pane
+        self.owner = owner
+        super.init(color: ZmuxPalette.chrome)
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.horizontalScroller?.controlSize = .mini
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = strip
+        strip.frame = NSRect(x: 0, y: 0, width: pane.surfaces.count * 160, height: 32)
+        for (index, surface) in pane.surfaces.enumerated() {
+            let tab = TerminalTabControl(surface: surface, selected: surface.id == pane.selectedSurface, owner: owner)
+            tab.frame = NSRect(x: index * 160, y: 0, width: 160, height: 32)
+            strip.addSubview(tab)
+            tabs.append(tab)
+        }
+        let plus = IconButton(symbol: "plus", label: "New terminal tab", target: self, action: #selector(addTab))
+        plus.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(scroll); addSubview(plus)
+        NSLayoutConstraint.activate([
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scroll.trailingAnchor.constraint(equalTo: plus.leadingAnchor, constant: -2),
+            plus.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            plus.centerYAnchor.constraint(equalTo: centerYAnchor),
+            plus.widthAnchor.constraint(equalToConstant: 24), plus.heightAnchor.constraint(equalToConstant: 24)
+        ])
+        registerForDraggedTypes([Self.dragType])
+        setAccessibilityLabel("Terminal tabs")
+    }
+    required init?(coder: NSCoder) { nil }
+    override func layout() {
+        super.layout()
+        if let selected = tabs.first(where: { $0.surface.id == pane.selectedSurface }) {
+            selected.scrollToVisible(selected.bounds)
+        }
+    }
+    @objc private func addTab() { owner?.newTerminalInPane(pane.id) }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner else { return [] }
+        return .move
+    }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { draggingEntered(sender) == .move }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner,
+              let value = sender.draggingPasteboard.string(forType: Self.dragType), let id = UInt64(value), id == tab.surface.id else { return false }
+        let x = strip.convert(sender.draggingLocation, from: nil).x
+        var index = min(pane.surfaces.count, max(0, Int((x + 80) / 160)))
+        if let oldIndex = pane.surfaces.firstIndex(where: { $0.id == id }), oldIndex < index { index -= 1 }
+        owner?.reorderTab(id, in: pane.id, to: index)
+        return true
+    }
+}
+
+@MainActor
+final class TerminalTabControl: BackgroundView, NSDraggingSource {
+    let surface: Surface
+    weak var owner: AppController?
+    private var mouseOrigin: NSPoint?
+
+    init(surface: Surface, selected: Bool, owner: AppController) {
+        self.surface = surface
+        self.owner = owner
+        super.init(color: selected ? ZmuxPalette.terminal : ZmuxPalette.chrome)
+        let icon = NSImageView(image: NSImage(systemSymbolName: "terminal", accessibilityDescription: nil) ?? NSImage())
+        icon.contentTintColor = selected ? .labelColor : ZmuxPalette.subdued
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11)
+        let title = NSTextField(labelWithString: surface.title)
+        title.font = .systemFont(ofSize: 11.5, weight: selected ? .medium : .regular)
+        title.textColor = selected ? .labelColor : ZmuxPalette.subdued
+        title.lineBreakMode = .byTruncatingTail
+        let close = IconButton(symbol: "xmark", label: "Close \(surface.title)", target: self, action: #selector(closeTab))
+        for view in [icon, title, close] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 13), icon.heightAnchor.constraint(equalToConstant: 13),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7), title.centerYAnchor.constraint(equalTo: centerYAnchor),
+            title.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -3),
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4), close.centerYAnchor.constraint(equalTo: centerYAnchor),
+            close.widthAnchor.constraint(equalToConstant: 22), close.heightAnchor.constraint(equalToConstant: 22)
+        ])
+        toolTip = surface.cwd.map { "\(surface.title)\n\($0)" } ?? surface.title
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(surface.title)
+        setAccessibilitySelected(selected)
+        let menu = NSMenu()
+        for (label, action) in [("Rename Tab…", #selector(renameTab)), ("Close Tab", #selector(closeTab)), ("Close Other Tabs…", #selector(closeOthers))] {
+            let item = menu.addItem(withTitle: label, action: action, keyEquivalent: ""); item.target = self
+        }
+        self.menu = menu
+    }
+    required init?(coder: NSCoder) { nil }
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        return hit is NSButton ? hit : self
+    }
+    override func mouseDown(with event: NSEvent) {
+        mouseOrigin = event.locationInWindow
+        owner?.selectTab(surface.id)
+        if event.clickCount == 2 { renameTab() }
+    }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.charactersIgnoringModifiers == " " { owner?.selectTab(surface.id) }
+        else { super.keyDown(with: event) }
+    }
+    override func accessibilityPerformPress() -> Bool { owner?.selectTab(surface.id); return owner != nil }
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin = mouseOrigin, hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 5 else { return }
+        mouseOrigin = nil
+        let item = NSPasteboardItem()
+        item.setString(String(surface.id), forType: NSPasteboard.PasteboardType("app.zmux.terminal-surface"))
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        let image = NSImage(size: bounds.size)
+        image.lockFocus(); ZmuxPalette.chrome.setFill(); bounds.fill(); image.unlockFocus()
+        dragging.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [dragging], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+    @objc private func closeTab() { owner?.closeTerminalTab(surface.id) }
+    @objc private func renameTab() { owner?.renameTerminalTab(surface.id) }
+    @objc private func closeOthers() { owner?.closeOtherTabs(surface.id) }
+}

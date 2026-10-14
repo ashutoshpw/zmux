@@ -1,9 +1,16 @@
 # Status
 
-- **State:** planned
+- **State:** in-progress
 - **Updated:** 2026-10-14
 
 ## Notes
+- P1 first slice implemented: terminal surfaces/tabs, native controls/shortcuts/history, move/reorder,
+  grouped closures and retryable fresh-shell restoration, plus actual CLI/socket commands.
+  `scripts/check` passes; macOS hosted/native and interactive gates remain pending.
+  See references/p1-terminal-tabs.md. P0/P1 as whole phases remain incomplete.
+- Implementation started: first cohesive slice owns terminal surfaces/tabs, close history, native
+  tab controls and local-control routing. P0 native measurement and exhaustive discovery remain open;
+  the existing eight-terminal limit will stay in place until native measurements justify changing it.
 - User clarified that ⌘T is an example: full interaction parity is required, including reopening
   closed terminal tabs. Added separate UI inventory, broad UX gap matrix and explicit P1
   ⇧⌘T/Recently Closed, workspace/window recovery, close-other and focus-history contracts.
@@ -22,4 +29,4 @@
   deployments must use GitHub Actions. Cloud/VM parity remains open until actually delivered.
 
 ## Next action
-Execute P0 contract expansion and native baseline measurement, then P1 shared surface model.
+Validate the P1 native artifact, then continue remaining P1 navigation/window contracts and P2 attention/sidebar; retain P0 discovery and measured resource gates.

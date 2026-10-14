@@ -88,6 +88,17 @@ fn help_and_version_are_complete_and_offline() {
         "focus-pane",
         "split-pane",
         "close-pane",
+        "new-surface",
+        "list-pane-surfaces",
+        "select-surface",
+        "close-surface",
+        "rename-tab",
+        "reorder-surface",
+        "move-surface",
+        "close-other-tabs",
+        "close-workspace",
+        "reopen-closed",
+        "recently-closed",
         "send-text",
         "read-screen",
         "prototype",
@@ -202,6 +213,42 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
         );
         thread::sleep(Duration::from_millis(10));
     }
+
+    let created_tab = invoke_app(&socket, &["new-surface", &original_pane]);
+    let tab_id = id(&created_tab, "focused_surface");
+    invoke_app(&socket, &["rename-tab", &tab_id, "CLI Tab"]);
+    let tabs = invoke_app(&socket, &["list-pane-surfaces", &original_pane]);
+    let tabs = tabs["surfaces"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2);
+    assert!(tabs.iter().any(
+        |tab| tab["surface_id"].as_u64().unwrap().to_string() == tab_id
+            && tab["title"] == "CLI Tab"
+            && tab["selected"] == true
+    ));
+    let first_tab_id = id(&tabs[0], "surface_id");
+    invoke_app(&socket, &["reorder-surface", &tab_id, "0"]);
+    let reordered = invoke_app(&socket, &["list-pane-surfaces", &original_pane]);
+    assert_eq!(id(&reordered["surfaces"][0], "surface_id"), tab_id);
+    invoke_app(&socket, &["select-surface", &first_tab_id]);
+    invoke_app(&socket, &["close-surface", &tab_id]);
+    let closed = invoke_app(&socket, &["recently-closed"]);
+    assert_eq!(closed["closed_items"].as_array().unwrap().len(), 1);
+    let history_id = id(&closed["closed_items"][0], "id");
+    invoke_app(&socket, &["reopen-closed", &history_id]);
+    let restore_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let closed = invoke_app(&socket, &["recently-closed"]);
+        if closed["closed_items"].as_array().unwrap().is_empty() {
+            break;
+        }
+        assert!(Instant::now() < restore_deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let restored = invoke_app(&socket, &["list-pane-surfaces", &original_pane]);
+    assert_eq!(restored["surfaces"].as_array().unwrap().len(), 2);
+    let restored_id = id(&restored["surfaces"][1], "surface_id");
+    assert_ne!(restored_id, tab_id);
+    invoke_app(&socket, &["close-surface", &restored_id]);
 
     let split = invoke_app(&socket, &["split-pane", &original_pane, "horizontal"]);
     let new_pane = id(&split, "focused_pane");

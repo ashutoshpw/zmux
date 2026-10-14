@@ -15,7 +15,7 @@ use zmux_desktop_runtime::control::{
     MAX_CONTROL_RESPONSE_BYTES,
 };
 use zmux_session_runtime::{Launch, Session, SessionError, State};
-use zmux_workspace_core::{Axis, PaneId, WorkspaceId};
+use zmux_workspace_core::{Action, Axis, PaneId, SurfaceId, WorkspaceId};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -38,7 +38,18 @@ Commands:
   rename-workspace      Rename a workspace by ID
   focus-pane            Focus a pane by ID
   split-pane            Split a pane horizontally or vertically
-  close-pane            Close a pane and its terminal
+  close-pane            Close a pane and all its tabs
+  new-surface           Create a terminal tab in a pane
+  list-pane-surfaces    List every terminal tab in a pane
+  select-surface        Select a tab and focus its pane
+  close-surface         Close one tab; preserve sibling sessions
+  rename-tab            Rename a terminal tab
+  reorder-surface       Reorder a tab (zero-based index)
+  move-surface          Move a live tab to another pane
+  close-other-tabs      Close other tabs in a pane
+  close-workspace       Close a workspace as one recoverable item
+  reopen-closed         Reopen the last or selected closed item
+  recently-closed       List bounded in-process close history
   send-text             Send exact UTF-8 text to a pane
   read-screen           Read a pane's current visible screen
   prototype             Run a standalone PTY command without the app
@@ -211,6 +222,91 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
         Some("close-pane") => help_or_exact("close-pane", tail, 1, |values| {
             Ok(ControlCommand::ClosePane {
                 pane_id: PaneId(parse_id(&values[0], "pane")?),
+            })
+        })?,
+        Some("recently-closed") => {
+            app_no_args("recently-closed", tail, ControlCommand::RecentlyClosed)?
+        }
+        Some("reopen-closed") => {
+            if help_requested(tail) {
+                Parsed::Offline(Offline::Help(Some("reopen-closed".into())))
+            } else {
+                let values = utf8_args(tail)?;
+                let closed_id = match values.as_slice() {
+                    [] => None,
+                    [id] => Some(parse_id(id, "closed item")?),
+                    _ => return Err(CliError("usage: zmux reopen-closed [CLOSED_ID]".into())),
+                };
+                Parsed::App(ControlCommand::Action {
+                    action: Action::ReopenClosed { closed_id },
+                })
+            }
+        }
+        Some("new-surface") => help_or_exact("new-surface", tail, 1, |v| {
+            Ok(ControlCommand::Action {
+                action: Action::CreateSurface {
+                    pane_id: PaneId(parse_id(&v[0], "pane")?),
+                },
+            })
+        })?,
+        Some("list-pane-surfaces") => help_or_exact("list-pane-surfaces", tail, 1, |v| {
+            Ok(ControlCommand::ListPaneSurfaces {
+                pane_id: PaneId(parse_id(&v[0], "pane")?),
+            })
+        })?,
+        Some("select-surface" | "close-surface" | "close-other-tabs") => {
+            let command = command.unwrap();
+            help_or_exact(command, tail, 1, |v| {
+                let surface_id = SurfaceId(parse_id(&v[0], "surface")?);
+                Ok(ControlCommand::Action {
+                    action: match command {
+                        "select-surface" => Action::SelectSurface { surface_id },
+                        "close-surface" => Action::CloseSurface { surface_id },
+                        _ => Action::CloseOtherSurfaces { surface_id },
+                    },
+                })
+            })?
+        }
+        Some("rename-tab") => help_or_exact("rename-tab", tail, 2, |v| {
+            Ok(ControlCommand::Action {
+                action: Action::RenameSurface {
+                    surface_id: SurfaceId(parse_id(&v[0], "surface")?),
+                    name: v[1].clone(),
+                },
+            })
+        })?,
+        Some("reorder-surface" | "move-surface") => {
+            let command = command.unwrap();
+            help_or_exact(
+                command,
+                tail,
+                if command == "move-surface" { 3 } else { 2 },
+                |v| {
+                    let surface_id = SurfaceId(parse_id(&v[0], "surface")?);
+                    let index = v
+                        .last()
+                        .unwrap()
+                        .parse::<usize>()
+                        .map_err(|_| CliError("index must be a nonnegative integer".into()))?;
+                    Ok(ControlCommand::Action {
+                        action: if command == "move-surface" {
+                            Action::MoveSurface {
+                                surface_id,
+                                pane_id: PaneId(parse_id(&v[1], "pane")?),
+                                index,
+                            }
+                        } else {
+                            Action::ReorderSurface { surface_id, index }
+                        },
+                    })
+                },
+            )?
+        }
+        Some("close-workspace") => help_or_exact("close-workspace", tail, 1, |v| {
+            Ok(ControlCommand::Action {
+                action: Action::CloseWorkspace {
+                    workspace_id: WorkspaceId(parse_id(&v[0], "workspace")?),
+                },
             })
         })?,
         Some("send-text") => parse_send_text(tail)?,
@@ -529,13 +625,46 @@ fn print_help(command: Option<&str>) -> Result<(), CliError> {
             "Usage: zmux [OPTIONS] split-pane PANE_ID <horizontal|vertical>\n\nSplits the pane and focuses the newly created pane.\n"
         }
         Some("close-pane") => {
-            "Usage: zmux [OPTIONS] close-pane PANE_ID\n\nCloses the pane and cancels its terminal. Closing the last pane removes its workspace.\n"
+            "Usage: zmux [OPTIONS] close-pane PANE_ID\n\nCloses the pane and cancels all its terminal tabs. Closing the last pane removes its workspace.\n"
         }
         Some("send-text") => {
             "Usage: zmux [OPTIONS] send-text PANE_ID <TEXT|--stdin>\n\nSends exact UTF-8 bytes in order. No newline is added; shell input usually ends with a carriage return. Input is limited to 4096 bytes and is never retried after an uncertain result.\n"
         }
         Some("read-screen") => {
             "Usage: zmux [OPTIONS] read-screen PANE_ID\n\nReads the current bounded visible screen, cursor, size, process state, and exit metadata.\n"
+        }
+        Some("new-surface") => {
+            "Usage: zmux new-surface PANE_ID\n\nCreates and selects an independent local terminal tab without splitting.\n"
+        }
+        Some("list-pane-surfaces") => {
+            "Usage: zmux list-pane-surfaces PANE_ID\n\nLists all tabs, stable IDs, selected state and process readiness, including hidden tabs.\n"
+        }
+        Some("select-surface") => {
+            "Usage: zmux select-surface SURFACE_ID\n\nSelects a live tab and focuses its pane/workspace.\n"
+        }
+        Some("close-surface") => {
+            "Usage: zmux close-surface SURFACE_ID\n\nCloses only this tab and records a restore descriptor. An empty pane/workspace collapses.\n"
+        }
+        Some("rename-tab") => {
+            "Usage: zmux rename-tab SURFACE_ID TITLE\n\nSets a terminal tab title.\n"
+        }
+        Some("reorder-surface") => {
+            "Usage: zmux reorder-surface SURFACE_ID INDEX\n\nMoves a tab to a zero-based final index in its pane.\n"
+        }
+        Some("move-surface") => {
+            "Usage: zmux move-surface SURFACE_ID PANE_ID INDEX\n\nMoves the live session to another pane at a zero-based final index. No shell is respawned.\n"
+        }
+        Some("close-other-tabs") => {
+            "Usage: zmux close-other-tabs SURFACE_ID\n\nCloses sibling tabs as one recoverable group. This explicit CLI command does not prompt.\n"
+        }
+        Some("close-workspace") => {
+            "Usage: zmux close-workspace WORKSPACE_ID\n\nCloses all workspace terminals as one recoverable layout. This explicit CLI command does not prompt.\n"
+        }
+        Some("reopen-closed") => {
+            "Usage: zmux reopen-closed [CLOSED_ID]\n\nStarts restoration of the latest or selected item. Completion is asynchronous; check recently-closed and tab readiness. Local shells start fresh at the saved cwd; commands are never replayed. Failed launches retain history for retry. Removed panes fall back to a new workspace.\n"
+        }
+        Some("recently-closed") => {
+            "Usage: zmux recently-closed\n\nLists up to 32 in-process closed items and their restore state, oldest first. History is cleared when zmux exits.\n"
         }
         Some("prototype") => {
             "Usage: zmux prototype [--timeout SECONDS] -- PROGRAM [ARG ...]\n\nRuns a standalone local Unix PTY and prints its final visible screen as JSON. It does not require the native app.\n"

@@ -21,7 +21,7 @@ use std::{
 };
 use thiserror::Error;
 use zmux_session_runtime::State;
-use zmux_workspace_core::{Action, Axis, PaneId, SessionId, WorkspaceId};
+use zmux_workspace_core::{Action, Axis, PaneId, SessionId, SurfaceId, WorkspaceId};
 
 pub const CONTROL_VERSION: u32 = 1;
 pub const MAX_CONTROL_REQUEST_BYTES: usize = 16_384;
@@ -43,6 +43,14 @@ pub struct ControlRequest {
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
     Status,
+    /// Shared action transport; the same enum is used by the native bridge.
+    Action {
+        action: Action,
+    },
+    ListPaneSurfaces {
+        pane_id: PaneId,
+    },
+    RecentlyClosed,
     ListWorkspaces,
     ListPanes {
         #[serde(default)]
@@ -421,6 +429,32 @@ fn handle_request(desktop: &Desktop, request: ControlRequest) -> ControlResponse
 
 fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::Action { action } => {
+            mutate(desktop, request.request_id, Command::Action { action })
+        }
+        ControlCommand::RecentlyClosed => {
+            let snapshot = current_snapshot(desktop)?;
+            Ok(json!({"revision": snapshot.revision, "closed_items": snapshot.model.closed_items}))
+        }
+        ControlCommand::ListPaneSurfaces { pane_id } => {
+            let snapshot = current_snapshot(desktop)?;
+            let pane = snapshot
+                .model
+                .workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .find(|p| p.id == pane_id)
+                .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))?;
+            let surfaces: Vec<_> = pane.surfaces.iter().map(|surface| {
+                let frame = frame_for(&snapshot, surface.session_id);
+                json!({"surface_id": surface.id, "session_id": surface.session_id, "title": surface.title,
+                    "cwd": surface.cwd, "selected": pane.selected_surface == surface.id,
+                    "process_id": frame.and_then(|f| f.process_id), "starting": frame.is_none_or(|f| f.starting),
+                    "state": frame.and_then(|f| f.snapshot.as_ref()).map(|s| state_name(s.state)),
+                    "failure": frame.and_then(|f| f.failure.clone())})
+            }).collect();
+            Ok(json!({"revision": snapshot.revision, "pane_id": pane_id, "surfaces": surfaces}))
+        }
         ControlCommand::Status => {
             let snapshot = current_snapshot(desktop)?;
             Ok(status(&snapshot))
@@ -533,7 +567,12 @@ fn mutate(
             .iter()
             .find(|item| item.id == id)
     });
+    let selected_surface: Option<SurfaceId> = workspace
+        .and_then(|w| w.root.panes().into_iter().find(|p| p.id == w.focused_pane))
+        .map(|p| p.selected_surface);
     Ok(json!({
+        "focused_surface": selected_surface,
+        "pending_launches": execution.snapshot.pending_launches,
         "revision": execution.snapshot.revision,
         "focused_workspace": workspace.map(|item| item.id),
         "focused_pane": workspace.map(|item| item.focused_pane),
@@ -576,6 +615,7 @@ fn status(snapshot: &Snapshot) -> Value {
         "pending_launches": snapshot.pending_launches,
         "closed": snapshot.closed,
         "protocol_version": CONTROL_VERSION,
+        "model_version": zmux_workspace_core::MODEL_VERSION,
     })
 }
 
@@ -602,12 +642,14 @@ fn list_panes(
         .filter(|workspace| requested_workspace.is_none_or(|id| workspace.id == id))
         .flat_map(|workspace| {
             workspace.root.panes().into_iter().map(|pane| {
-                let frame = frame_for(snapshot, pane.session_id);
+                let frame = frame_for(snapshot, pane.session_id());
                 json!({
                     "workspace_id": workspace.id,
                     "workspace_name": workspace.name,
                     "pane_id": pane.id,
-                    "session_id": pane.session_id,
+                    "selected_surface": pane.selected_surface,
+                    "surface_count": pane.surfaces.len(),
+                    "session_id": pane.session_id(),
                     "focused": workspace.focused_pane == pane.id,
                     "process_id": frame.and_then(|item| item.process_id),
                     "starting": frame.is_none_or(|item| item.starting),
@@ -631,7 +673,7 @@ fn read_screen(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'static 
                 .panes()
                 .into_iter()
                 .find(|pane| pane.id == pane_id)
-                .map(|pane| (workspace, pane.session_id))
+                .map(|pane| (workspace, pane.session_id()))
         })
         .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))?;
     let frame = frame_for(snapshot, session_id)
@@ -668,7 +710,7 @@ fn pane_session(snapshot: &Snapshot, pane_id: PaneId) -> Result<SessionId, (&'st
         .iter()
         .flat_map(|workspace| workspace.root.panes())
         .find(|pane| pane.id == pane_id)
-        .map(|pane| pane.session_id)
+        .map(|pane| pane.session_id())
         .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))
 }
 

@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+mod surfaces;
+use surfaces::PendingRestore;
+pub use surfaces::{ClosedContent, ClosedItem, Surface};
 
 pub const MAX_WORKSPACES: usize = 32;
 pub const MAX_PANES_PER_WORKSPACE: usize = 64;
@@ -18,6 +21,11 @@ macro_rules! identifier {
 identifier!(WorkspaceId);
 identifier!(PaneId);
 identifier!(SessionId);
+identifier!(SurfaceId);
+
+pub const MODEL_VERSION: u32 = 2;
+pub const MAX_SURFACES_PER_PANE: usize = 32;
+pub const MAX_CLOSED_ITEMS: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -29,7 +37,20 @@ pub enum Axis {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Pane {
     pub id: PaneId,
-    pub session_id: SessionId,
+    pub selected_surface: SurfaceId,
+    pub surfaces: Vec<Surface>,
+}
+
+impl Pane {
+    pub fn selected(&self) -> &Surface {
+        self.surfaces
+            .iter()
+            .find(|s| s.id == self.selected_surface)
+            .expect("selected surface exists")
+    }
+    pub fn session_id(&self) -> SessionId {
+        self.selected().session_id
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -59,6 +80,13 @@ impl PaneTree {
                 first.collect(panes);
                 second.collect(panes);
             }
+        }
+    }
+
+    fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
+        match self {
+            Self::Leaf { pane } => (pane.id == id).then_some(pane),
+            Self::Split { first, second, .. } => first.pane_mut(id).or_else(|| second.pane_mut(id)),
         }
     }
 
@@ -120,16 +148,62 @@ pub struct Workspace {
     pub root: PaneTree,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Snapshot {
+    pub model_version: u32,
     pub revision: u64,
+    pub closed_items: Vec<ClosedItem>,
     pub focused_workspace: Option<WorkspaceId>,
     pub workspaces: Vec<Workspace>,
+}
+
+impl Default for Snapshot {
+    fn default() -> Self {
+        Self {
+            model_version: MODEL_VERSION,
+            revision: 0,
+            closed_items: Vec::new(),
+            focused_workspace: None,
+            workspaces: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    CreateSurface {
+        pane_id: PaneId,
+    },
+    SelectSurface {
+        surface_id: SurfaceId,
+    },
+    CloseSurface {
+        surface_id: SurfaceId,
+    },
+    RenameSurface {
+        surface_id: SurfaceId,
+        name: String,
+    },
+    ReorderSurface {
+        surface_id: SurfaceId,
+        index: usize,
+    },
+    MoveSurface {
+        surface_id: SurfaceId,
+        pane_id: PaneId,
+        index: usize,
+    },
+    CloseOtherSurfaces {
+        surface_id: SurfaceId,
+    },
+    CloseWorkspace {
+        workspace_id: WorkspaceId,
+    },
+    ReopenClosed {
+        #[serde(default)]
+        closed_id: Option<u64>,
+    },
     CreateWorkspace {
         name: String,
     },
@@ -156,6 +230,7 @@ pub enum Effect {
     StartSession {
         pane_id: PaneId,
         session_id: SessionId,
+        cwd: Option<String>,
     },
     StopSession {
         session_id: SessionId,
@@ -176,6 +251,10 @@ pub enum ActionError {
     UnknownWorkspace(WorkspaceId),
     #[error("pane {0:?} does not exist")]
     UnknownPane(PaneId),
+    #[error("surface {0:?} does not exist")]
+    UnknownSurface(SurfaceId),
+    #[error("{0}")]
+    InvalidOperation(String),
     #[error("{resource} limit reached ({limit})")]
     Capacity {
         resource: &'static str,
@@ -185,10 +264,13 @@ pub enum ActionError {
     Exhausted,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WorkspaceStore {
     state: Snapshot,
     next_id: u64,
+    pending_restores: Vec<PendingRestore>,
+    restored_panes: std::collections::HashMap<PaneId, PaneId>,
+    restored_workspaces: std::collections::HashMap<WorkspaceId, WorkspaceId>,
 }
 
 impl Default for WorkspaceStore {
@@ -196,6 +278,9 @@ impl Default for WorkspaceStore {
         Self {
             state: Snapshot::default(),
             next_id: 1,
+            pending_restores: Vec::new(),
+            restored_panes: Default::default(),
+            restored_workspaces: Default::default(),
         }
     }
 }
@@ -208,6 +293,13 @@ impl WorkspaceStore {
 
     /// Rejected actions do not change state, identifiers, or the revision.
     pub fn apply(&mut self, action: Action) -> Result<Transition, ActionError> {
+        let mut candidate = self.clone();
+        let result = candidate.apply_inner(action)?;
+        *self = candidate;
+        Ok(result)
+    }
+
+    fn apply_inner(&mut self, action: Action) -> Result<Transition, ActionError> {
         let revision = self
             .state
             .revision
@@ -223,15 +315,17 @@ impl WorkspaceStore {
                         limit: MAX_WORKSPACES,
                     });
                 }
-                let ids = self.reserve(3)?;
+                let ids = self.reserve(4)?;
                 let workspace_id = WorkspaceId(ids);
                 let pane = Pane {
                     id: PaneId(ids + 1),
-                    session_id: SessionId(ids + 2),
+                    selected_surface: SurfaceId(ids + 3),
+                    surfaces: vec![Surface::terminal(SurfaceId(ids + 3), SessionId(ids + 2))],
                 };
                 effects.push(Effect::StartSession {
                     pane_id: pane.id,
-                    session_id: pane.session_id,
+                    session_id: pane.session_id(),
+                    cwd: None,
                 });
                 self.state.workspaces.push(Workspace {
                     id: workspace_id,
@@ -271,49 +365,35 @@ impl WorkspaceStore {
                         limit: MAX_SPLIT_DEPTH,
                     });
                 }
-                let ids = self.reserve(2)?;
+                let cwd = workspace
+                    .root
+                    .panes()
+                    .into_iter()
+                    .find(|p| p.id == pane_id)
+                    .expect("validated pane")
+                    .selected()
+                    .cwd
+                    .clone();
+                let ids = self.reserve(3)?;
+                let mut surface = Surface::terminal(SurfaceId(ids + 2), SessionId(ids + 1));
+                surface.cwd = cwd.clone();
                 let pane = Pane {
                     id: PaneId(ids),
-                    session_id: SessionId(ids + 1),
+                    selected_surface: SurfaceId(ids + 2),
+                    surfaces: vec![surface],
                 };
                 effects.push(Effect::StartSession {
                     pane_id: pane.id,
-                    session_id: pane.session_id,
+                    session_id: pane.session_id(),
+                    cwd,
                 });
                 let workspace = &mut self.state.workspaces[index];
                 workspace.focused_pane = pane.id;
                 workspace.root.split(pane_id, axis, pane);
                 self.state.focused_workspace = Some(workspace.id);
             }
-            Action::ClosePane { pane_id } => {
-                let index = self.workspace_index(pane_id)?;
-                let workspace = &self.state.workspaces[index];
-                let session_id = workspace
-                    .root
-                    .panes()
-                    .into_iter()
-                    .find(|pane| pane.id == pane_id)
-                    .expect("validated pane")
-                    .session_id;
-                // Build the replacement before changing state; closing collapses empty splits.
-                match workspace.root.clone().without(pane_id) {
-                    Some(root) => {
-                        let workspace = &mut self.state.workspaces[index];
-                        if workspace.focused_pane == pane_id {
-                            workspace.focused_pane = root.panes()[0].id;
-                        }
-                        workspace.root = root;
-                    }
-                    None => {
-                        let removed = self.state.workspaces.remove(index);
-                        if self.state.focused_workspace == Some(removed.id) {
-                            self.state.focused_workspace =
-                                self.state.workspaces.last().map(|w| w.id);
-                        }
-                    }
-                }
-                effects.push(Effect::StopSession { session_id });
-            }
+            Action::ClosePane { pane_id } => self.close_pane(pane_id, &mut effects)?,
+            action => self.surface_action(action, &mut effects)?,
         }
         self.state.revision = revision;
         Ok(Transition { revision, effects })
