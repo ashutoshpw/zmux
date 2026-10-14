@@ -84,18 +84,25 @@ and checked for architecture/signature, but Intel runtime behavior still needs d
 
 ## Verified build receipt
 
-[Download the verified development artifact](https://github.com/ashutoshpw/zmux/actions/runs/38630706232/artifacts/11926235790)
-from [successful run 38630706232](https://github.com/ashutoshpw/zmux/actions/runs/38630706232).
-Source: `ee2599abc05b51f8459b7a0395c2bfa9e78c336f`; artifact expires 2026-10-28.
+[Download the verified development artifact](https://github.com/ashutoshpw/zmux/actions/runs/38637673581/artifacts/11928138411)
+from [successful run 38637673581](https://github.com/ashutoshpw/zmux/actions/runs/38637673581).
+Source: `3585949a60845fbdcf4d76b3d49b2f62f970a104`; artifact expires 2026-10-28.
 
 Inner ZIP SHA-256:
 
 ```text
-efd9a594526c173efc12e4f92c7c848a3f29909b32e2f1cfd2f927fd418d89f0
+b68e41657516c5f0166978d88ce1be16bff107c77d5da5d5dc506bae7b322d1c
 ```
 
-The artifact was downloaded and checked for ZIP integrity, both binary architectures,
-executable permissions, bundled notices and matching source metadata. All native smoke
-conditions passed. WindowServer capture was unavailable on this runner; the cached viewport
-image renders terminal output, but omits composited native button labels. Full visual
-correctness remains a manual native dogfood gate.
+The artifact was downloaded and checked for ZIP integrity, arm64/x86_64 architectures in
+the app, CLI and library, executable permissions, icon, notices and matching source metadata.
+Native input, ANSI colors, splits, kernel resize, workspace switching, pane closure, active
+PTY title propagation, accessible icon controls, cloud callback validation and bundled CLI
+control all passed. Both the CLI and app executable print useful `--help` output.
+
+The cached AppKit screenshot was inspected and shows workspace labels, selected-row styling,
+terminal title, icon controls and cloud footer. WindowServer capture was unavailable on this
+runner; native traffic-light chrome, interactive IME/accessibility, Keychain/browser sign-in
+against the deployed service, and resource budgets still require manual native dogfood.
+Cloud account/device integration is included; the service is not yet deployed and remote
+terminal transport is not implemented.

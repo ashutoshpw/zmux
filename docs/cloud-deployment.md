@@ -34,3 +34,10 @@ an external provider directly as a substitute for the Actions job.
 
 Account/device APIs do not yet provide remote PTY transport, VMs or relay services. Their
 availability must remain explicit in both the service readiness response and native UI.
+
+## Remaining service operations
+
+Before production rollout, add scheduled cleanup for expired authorization codes and
+expired/revoked native tokens and device records, plus backups and monitoring. Native
+registration currently updates `last_seen_at` once; periodic native heartbeats are a
+separate device-presence feature. The account/device UI does not imply a live connection.
