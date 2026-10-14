@@ -321,8 +321,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let historyItem = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
         menu.addItem(historyItem)
         let history = NSMenu(title: "History")
-        let reopen = history.addItem(withTitle: "Reopen Last Closed", action: #selector(reopenClosed), keyEquivalent: "t")
-        reopen.keyEquivalentModifierMask = [.command, .shift]; reopen.target = self
+        let reopen = history.addItem(withTitle: "Reopen Last Closed", action: #selector(reopenClosed), keyEquivalent: "T")
+        reopen.keyEquivalentModifierMask = [.command]; reopen.target = self
         let recent = history.addItem(withTitle: "Recently Closed", action: nil, keyEquivalent: "")
         recent.submenu = recentlyClosedMenu
         recentlyClosedMenu.delegate = self
@@ -1016,6 +1016,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         // retains Shift. Supplying lowercase here would synthesize an unshifted shortcut.
         let characters = modifiers.contains(.shift) ? key.uppercased() : key
         let keyCode: UInt16 = ["t": 17, "w": 13, "b": 11][key] ?? 0
+        // A synthetic menu invocation does not run AppKit's normal event-dispatch menu
+        // update. Refresh dynamic availability, including newly added close history.
+        NSApp.mainMenu?.items.forEach { $0.submenu?.update() }
+        NSApp.mainMenu?.update()
         guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, characters: characters,
