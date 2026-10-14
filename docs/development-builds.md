@@ -114,27 +114,26 @@ Those checks establish basic delivery, not complete UX parity or production read
 The hosted native smoke test runs on Apple Silicon. Intel executables are cross-compiled
 and checked for architecture/signature, but Intel runtime behavior still needs dogfood.
 
-## Previous verified build receipt
+## Verified build receipt
 
-[Download the verified development artifact](https://github.com/ashutoshpw/zmux/actions/runs/38637673581/artifacts/11928138411)
-from [successful run 38637673581](https://github.com/ashutoshpw/zmux/actions/runs/38637673581).
-Source: `3585949a60845fbdcf4d76b3d49b2f62f970a104`; artifact expires 2026-10-28.
+[Download the verified universal development build](https://github.com/ashutoshpw/zmux/actions/runs/38647522249/artifacts/11932279010)
+from [successful run 38647522249](https://github.com/ashutoshpw/zmux/actions/runs/38647522249).
+Source: `7e9355b4dd820580443777ae6b3dd9a5fb0f4024`; expires 2026-10-28.
 
 Inner ZIP SHA-256:
 
 ```text
-b68e41657516c5f0166978d88ce1be16bff107c77d5da5d5dc506bae7b322d1c
+af702ab35d18da35de71421eed0b48477a61f3e0b67a2f548aa47db2b02b897e
 ```
 
-The artifact was downloaded and checked for ZIP integrity, arm64/x86_64 architectures in
-the app, CLI and library, executable permissions, icon, notices and matching source metadata.
-Native input, ANSI colors, splits, kernel resize, workspace switching, pane closure, active
-PTY title propagation, accessible icon controls, cloud callback validation and bundled CLI
-control all passed. Both the CLI and app executable print useful `--help` output.
+The downloaded archive was checked for integrity, checksum, matching metadata, executable
+permissions, notices/icon and both architectures in the app, CLI and runtime library. Native
+input/rendering, pane/workspace operations, terminal tab create/close/reopen, surviving PIDs,
+sidebar/attention routing, WebKit form/state retention and balanced/retained split geometry passed.
 
-The cached AppKit screenshot was inspected and shows workspace labels, selected-row styling,
-terminal title, icon controls and cloud footer. WindowServer capture was unavailable on this
-runner; native traffic-light chrome, interactive IME/accessibility, Keychain/browser sign-in
-against the deployed service, and resource budgets still require manual native dogfood.
-Cloud account/device integration is included; the service is not yet deployed and remote
-terminal transport is not implemented.
+Both captured images were inspected. `Zmux-native-smoke.png` shows AppKit chrome and balanced
+panes; `zmux-browser-smoke.png` shows actual WebKit page pixels and retained form input. Cached
+AppKit rendering omits remote WebContent layers; WindowServer capture was unavailable on this
+runner. Physical keyboard/drag/IME/VoiceOver, Intel runtime and measured resource/remote-soak
+budgets still require native dogfood. Cloud callback smoke is offline, and the service remains
+undeployed. See the [detailed delivery receipt](../.agents/tasks/2026-10-14/05-command-ux-parity/references/native-delivery.md).
