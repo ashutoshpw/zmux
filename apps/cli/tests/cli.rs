@@ -99,6 +99,12 @@ fn help_and_version_are_complete_and_offline() {
         "close-workspace",
         "reopen-closed",
         "recently-closed",
+        "notify",
+        "list-notifications",
+        "mark-notification-read",
+        "open-notification",
+        "dismiss-notification",
+        "clear-notifications",
         "send-text",
         "read-screen",
         "prototype",
@@ -226,6 +232,36 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
             && tab["selected"] == true
     ));
     let first_tab_id = id(&tabs[0], "surface_id");
+    invoke_app(
+        &socket,
+        &[
+            "notify",
+            "--surface",
+            &tab_id,
+            "--title",
+            "CLI attention",
+            "--body",
+            "Review requested",
+        ],
+    );
+    let notifications = invoke_app(&socket, &["list-notifications"]);
+    let notification_id = id(&notifications["notifications"][0], "id");
+    assert_eq!(
+        notifications["notifications"][0]["body"],
+        "Review requested"
+    );
+    assert_eq!(notifications["unread"], 1);
+    invoke_app(&socket, &["open-notification", "--id", &notification_id]);
+    let notifications = invoke_app(&socket, &["list-notifications"]);
+    assert_eq!(notifications["unread"], 0);
+    invoke_app(&socket, &["dismiss-notification", "--id", &notification_id]);
+    assert!(
+        invoke_app(&socket, &["list-notifications"])["notifications"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
     invoke_app(&socket, &["reorder-surface", &tab_id, "0"]);
     let reordered = invoke_app(&socket, &["list-pane-surfaces", &original_pane]);
     assert_eq!(id(&reordered["surfaces"][0], "surface_id"), tab_id);

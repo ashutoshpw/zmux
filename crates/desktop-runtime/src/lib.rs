@@ -1,5 +1,7 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
+pub mod attention;
 pub mod control;
+use attention::{Attention, AttentionCommand, Notification};
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,7 +20,9 @@ use zmux_session_runtime::{
     INPUT_CHUNK_BYTES, Launch, Session, SessionError, Snapshot as TerminalSnapshot,
 };
 use zmux_terminal_adapter::Size;
-use zmux_workspace_core::{Action, Effect, SessionId, Snapshot as Model, WorkspaceStore};
+use zmux_workspace_core::{
+    Action, Effect, SessionId, Snapshot as Model, SurfaceId, WorkspaceStore,
+};
 
 pub const MAX_TERMINALS: usize = 8;
 const MAX_COMMANDS: usize = 32;
@@ -57,6 +61,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Attention {
+        action: AttentionCommand,
+    },
     Action {
         action: Action,
     },
@@ -104,6 +111,8 @@ pub struct Snapshot {
     pub revision: u64,
     pub model: Model,
     pub frames: Vec<Frame>,
+    pub notifications: Vec<Notification>,
+    pub notifications_dropped: u64,
     pub last_request_id: u64,
     pub last_error: Option<String>,
     pub closed: bool,
@@ -141,6 +150,8 @@ impl Desktop {
                 revision: 0,
                 model: Model::default(),
                 frames: Vec::new(),
+                notifications: Vec::new(),
+                notifications_dropped: 0,
                 last_request_id: 0,
                 last_error: None,
                 closed: false,
@@ -157,6 +168,8 @@ impl Desktop {
             .spawn(move || {
                 let mut worker = Worker {
                     model: WorkspaceStore::default(),
+                    attention: Attention::default(),
+                    app_active: false,
                     slots: HashMap::new(),
                     retired: Vec::new(),
                     shell,
@@ -290,6 +303,7 @@ struct Slot {
     starting: bool,
     failure: Option<String>,
     resize: Option<Size>,
+    last_notice: u64,
 }
 struct Completion {
     id: SessionId,
@@ -297,6 +311,8 @@ struct Completion {
 }
 struct Worker {
     model: WorkspaceStore,
+    attention: Attention,
+    app_active: bool,
     slots: HashMap<SessionId, Slot>,
     retired: Vec<Session>,
     shell: Shell,
@@ -328,7 +344,8 @@ impl Worker {
                 self.complete(completion);
                 dirty = true;
             }
-            for slot in self.slots.values_mut() {
+            let mut notices = Vec::new();
+            for (id, slot) in &mut self.slots {
                 if let Some(session) = &slot.session {
                     if let Some(size) = slot.resize {
                         match session.resize(size) {
@@ -343,6 +360,15 @@ impl Worker {
                     }
                     match session.snapshot() {
                         Ok(snapshot) => {
+                            for notice in &snapshot.viewport.notices {
+                                if notice.sequence > slot.last_notice {
+                                    self.attention.dropped = self.attention.dropped.saturating_add(
+                                        notice.sequence.saturating_sub(slot.last_notice + 1),
+                                    );
+                                    slot.last_notice = notice.sequence;
+                                    notices.push((*id, notice.clone()));
+                                }
+                            }
                             let changed = slot.cached.as_ref().is_none_or(|old| {
                                 old.bytes_read != snapshot.bytes_read
                                     || old.state != snapshot.state
@@ -359,6 +385,29 @@ impl Worker {
                             dirty = true;
                         }
                     }
+                }
+            }
+            for (session, notice) in notices {
+                let model = self.model.snapshot();
+                if let Some(surface_id) = model
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .find(|s| s.session_id == session)
+                    .map(|s| s.id)
+                {
+                    let read = self.surface_is_visible(surface_id);
+                    if let Err(error) = self.attention.notify(
+                        surface_id,
+                        &notice.source,
+                        &notice.title,
+                        &notice.body,
+                        read,
+                    ) {
+                        self.last_error = Some(error);
+                    }
+                    dirty = true;
                 }
             }
             self.retired.retain_mut(|session| {
@@ -418,6 +467,7 @@ impl Worker {
         let request = envelope.request;
         self.last_request_id = request.request_id;
         let result = match request.payload {
+            Command::Attention { action } => self.attention_action(action),
             Command::Action { action } => self.action(action),
             Command::Input { session_id, text } => self
                 .slots
@@ -448,6 +498,62 @@ impl Worker {
         if let Some(sender) = envelope.acknowledgement {
             let _ = sender.try_send(Execution { result, snapshot });
         }
+    }
+    fn surface_is_visible(&self, id: SurfaceId) -> bool {
+        let state = self.model.snapshot();
+        self.app_active
+            && state
+                .workspaces
+                .iter()
+                .filter(|w| Some(w.id) == state.focused_workspace)
+                .flat_map(|w| {
+                    w.root
+                        .panes()
+                        .into_iter()
+                        .filter(|p| p.id == w.focused_pane)
+                })
+                .any(|p| p.selected_surface == id)
+    }
+    fn attention_action(&mut self, command: AttentionCommand) -> Result<(), DesktopError> {
+        let result: Result<(), String> = (|| {
+            match command {
+                AttentionCommand::Notify {
+                    surface_id,
+                    title,
+                    body,
+                } => {
+                    let state = self.model.snapshot();
+                    if !state
+                        .workspaces
+                        .iter()
+                        .flat_map(|w| w.root.panes())
+                        .flat_map(|p| &p.surfaces)
+                        .any(|s| s.id == surface_id)
+                    {
+                        return Err(format!("surface {} does not exist", surface_id.0));
+                    }
+                    self.attention.notify(
+                        surface_id,
+                        "cli",
+                        &title,
+                        &body,
+                        self.surface_is_visible(surface_id),
+                    )?;
+                }
+                AttentionCommand::Read { id } => self.attention.read(id)?,
+                AttentionCommand::Dismiss { id } => self.attention.dismiss(id)?,
+                AttentionCommand::Clear { through_id } => self.attention.clear(through_id),
+                AttentionCommand::AppActive { active } => self.app_active = active,
+                AttentionCommand::Open { id } => {
+                    let surface_id = self.attention.find(id)?.surface_id;
+                    self.action(Action::SelectSurface { surface_id })
+                        .map_err(|e| e.to_string())?;
+                    self.attention.read(id)?;
+                }
+            }
+            Ok(())
+        })();
+        result.map_err(DesktopError::Failure)
     }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
         let mut candidate = self.model.clone();
@@ -517,6 +623,7 @@ impl Worker {
                             starting: true,
                             failure: None,
                             resize: None,
+                            last_notice: 0,
                         },
                     );
                     let sender = self.completion_tx.clone();
@@ -619,6 +726,8 @@ impl Worker {
             revision: self.revision,
             model,
             frames,
+            notifications: self.attention.items.clone(),
+            notifications_dropped: self.attention.dropped,
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),
             closed,

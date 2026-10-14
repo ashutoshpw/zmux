@@ -44,6 +44,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [P2 attention/sidebar](references/p2-attention-sidebar.md) — in-app signals, routing, badges and pending gates.
 - [P1 terminal tabs](references/p1-terminal-tabs.md) — delivered contracts, evidence and remaining gaps.
 - [Full UX parity](references/ux-parity.md) — interaction audit and required undo-close semantics.
 - [UI action inventory](references/ui-action-inventory.json) — source-discovered shortcut actions, pending behavioral audit.

@@ -63,7 +63,16 @@ impl Size {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct TerminalNotice {
+    pub sequence: u64,
+    pub source: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Viewport {
+    pub notices: Vec<TerminalNotice>,
     pub title: String,
     pub working_directory: Option<String>,
     pub size: Size,
@@ -94,6 +103,8 @@ pub struct Terminal {
 #[derive(Default)]
 struct Metadata {
     title: String,
+    notices: Vec<TerminalNotice>,
+    next_notice: u64,
     working_directory: Option<String>,
 }
 
@@ -107,12 +118,41 @@ fn display_text(bytes: &[u8], limit: usize) -> String {
         .collect()
 }
 
+impl Metadata {
+    fn notice(&mut self, source: &str, title: &[u8], body: &[u8]) {
+        let title = display_text(title, 128);
+        if title.is_empty() {
+            return;
+        }
+        self.next_notice = self.next_notice.saturating_add(1);
+        if self.notices.len() == 32 {
+            self.notices.remove(0);
+        }
+        self.notices.push(TerminalNotice {
+            sequence: self.next_notice,
+            source: source.into(),
+            title,
+            body: display_text(body, 2048),
+        });
+    }
+}
 impl vt100::Callbacks for Metadata {
+    fn audible_bell(&mut self, _: &mut vt100::Screen) {
+        self.notice("bell", b"Terminal needs attention", b"");
+    }
+    fn visual_bell(&mut self, _: &mut vt100::Screen) {
+        self.notice("bell", b"Terminal needs attention", b"");
+    }
     fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
         self.title = display_text(title, 256);
     }
 
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
+        match params {
+            [b"9", message] => self.notice("osc9", b"Terminal notification", message),
+            [b"777", b"notify", title, body] => self.notice("osc777", title, body),
+            _ => {}
+        }
         if let [b"7", value] = params {
             let Ok(uri) = std::str::from_utf8(value) else {
                 return;
@@ -254,6 +294,7 @@ impl Terminal {
     pub fn viewport(&self) -> Viewport {
         let (cursor_row, cursor_col) = self.parser.screen().cursor_position();
         Viewport {
+            notices: self.parser.callbacks().notices.clone(),
             title: self.parser.callbacks().title.clone(),
             working_directory: self.parser.callbacks().working_directory.clone(),
             size: self.size,

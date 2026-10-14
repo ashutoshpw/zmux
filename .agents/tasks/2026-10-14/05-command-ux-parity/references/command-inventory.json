@@ -670,8 +670,11 @@
       "phase": "P1",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-068",
@@ -680,8 +683,11 @@
       "phase": "P1",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-069",
@@ -690,8 +696,11 @@
       "phase": "P1",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-070",
@@ -710,8 +719,11 @@
       "phase": "P1",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-072",
@@ -730,8 +742,11 @@
       "phase": "P1",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-074",
@@ -780,8 +795,11 @@
       "phase": "P1",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-079",
@@ -980,8 +998,11 @@
       "phase": "P5",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-099",
@@ -1910,8 +1931,11 @@
       "phase": "P2",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-192",
@@ -1920,8 +1944,11 @@
       "phase": "P2",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-193",
@@ -1930,8 +1957,11 @@
       "phase": "P2",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-194",
@@ -1940,8 +1970,11 @@
       "phase": "P2",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-195",
@@ -1950,8 +1983,11 @@
       "phase": "P2",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-196",
@@ -1980,8 +2016,11 @@
       "phase": "P2",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
     },
     {
       "id": "CMD-199",

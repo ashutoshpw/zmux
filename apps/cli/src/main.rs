@@ -10,6 +10,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use zmux_desktop_runtime::attention::AttentionCommand;
 use zmux_desktop_runtime::control::{
     CONTROL_VERSION, ControlCommand, ControlRequest, ControlResponse, MAX_CONTROL_REQUEST_BYTES,
     MAX_CONTROL_RESPONSE_BYTES,
@@ -50,6 +51,12 @@ Commands:
   close-workspace       Close a workspace as one recoverable item
   reopen-closed         Reopen the last or selected closed item
   recently-closed       List bounded in-process close history
+  notify                Send attention to a terminal surface
+  list-notifications    List notification IDs, targets and unread state
+  mark-notification-read Mark one notification read
+  open-notification     Focus its terminal and mark the exact notification read
+  dismiss-notification  Remove one notification
+  clear-notifications   Clear history through an observed notification ID
   send-text             Send exact UTF-8 text to a pane
   read-screen           Read a pane's current visible screen
   prototype             Run a standalone PTY command without the app
@@ -224,6 +231,75 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
                 pane_id: PaneId(parse_id(&values[0], "pane")?),
             })
         })?,
+        Some("list-notifications") => app_no_args(
+            "list-notifications",
+            tail,
+            ControlCommand::ListNotifications,
+        )?,
+        Some("notify") => {
+            if help_requested(tail) {
+                Parsed::Offline(Offline::Help(Some("notify".into())))
+            } else {
+                let values = utf8_args(tail)?;
+                let mut surface = None;
+                let mut title = None;
+                let mut body = String::new();
+                if values.len() % 2 != 0 {
+                    return Err(CliError(
+                        "notify expects flag/value pairs; run zmux help notify".into(),
+                    ));
+                }
+                for pair in values.chunks_exact(2) {
+                    match pair[0].as_str() {
+                        "--surface" if surface.is_none() => {
+                            surface = Some(SurfaceId(parse_id(&pair[1], "surface")?))
+                        }
+                        "--title" if title.is_none() => title = Some(pair[1].clone()),
+                        "--body" if body.is_empty() => body = pair[1].clone(),
+                        other => {
+                            return Err(CliError(format!(
+                                "invalid or repeated notify option {other}"
+                            )));
+                        }
+                    }
+                }
+                Parsed::App(ControlCommand::Attention {
+                    action: AttentionCommand::Notify {
+                        surface_id: surface
+                            .ok_or_else(|| CliError("notify requires --surface".into()))?,
+                        title: title.ok_or_else(|| CliError("notify requires --title".into()))?,
+                        body,
+                    },
+                })
+            }
+        }
+        Some(
+            "mark-notification-read"
+            | "open-notification"
+            | "dismiss-notification"
+            | "clear-notifications",
+        ) => {
+            let name = command.unwrap();
+            help_or_exact(name, tail, 2, |v| {
+                let flag = if name == "clear-notifications" {
+                    "--through"
+                } else {
+                    "--id"
+                };
+                if v[0] != flag {
+                    return Err(CliError(format!("{name} requires {flag} ID")));
+                }
+                let id = parse_id(&v[1], "notification")?;
+                Ok(ControlCommand::Attention {
+                    action: match name {
+                        "mark-notification-read" => AttentionCommand::Read { id },
+                        "open-notification" => AttentionCommand::Open { id },
+                        "dismiss-notification" => AttentionCommand::Dismiss { id },
+                        _ => AttentionCommand::Clear { through_id: id },
+                    },
+                })
+            })?
+        }
         Some("recently-closed") => {
             app_no_args("recently-closed", tail, ControlCommand::RecentlyClosed)?
         }
@@ -632,6 +708,24 @@ fn print_help(command: Option<&str>) -> Result<(), CliError> {
         }
         Some("read-screen") => {
             "Usage: zmux [OPTIONS] read-screen PANE_ID\n\nReads the current bounded visible screen, cursor, size, process state, and exit metadata.\n"
+        }
+        Some("notify") => {
+            "Usage: zmux notify --surface SURFACE_ID --title TITLE [--body TEXT]\n\nAdds bounded in-app attention for an exact live terminal. Ordinary output does not notify.\n"
+        }
+        Some("list-notifications") => {
+            "Usage: zmux list-notifications\n\nLists retained notification IDs, surface targets, read state and omitted-event count.\n"
+        }
+        Some("mark-notification-read") => {
+            "Usage: zmux mark-notification-read --id ID\n\nMarks only this notification generation read.\n"
+        }
+        Some("open-notification") => {
+            "Usage: zmux open-notification --id ID\n\nSelects its live terminal then marks it read. A closed target fails without changing unread state.\n"
+        }
+        Some("dismiss-notification") => {
+            "Usage: zmux dismiss-notification --id ID\n\nRemoves one notification.\n"
+        }
+        Some("clear-notifications") => {
+            "Usage: zmux clear-notifications --through ID\n\nClears notifications up to an observed ID; newer arrivals survive.\n"
         }
         Some("new-surface") => {
             "Usage: zmux new-surface PANE_ID\n\nCreates and selects an independent local terminal tab without splitting.\n"

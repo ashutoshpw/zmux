@@ -4,6 +4,9 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- P2 first slice implemented: collapsible sidebar, Workspaces/Notifications tabs, persistent
+  visibility, exact-target attention inbox/badges, bell/OSC parsing and explicit CLI notification
+  commands. Linux checks pass; hosted/native gates pending. See references/p2-attention-sidebar.md.
 - P1 first slice implemented: terminal surfaces/tabs, native controls/shortcuts/history, move/reorder,
   grouped closures and retryable fresh-shell restoration, plus actual CLI/socket commands.
   `scripts/check` passes; macOS hosted/native and interactive gates remain pending.

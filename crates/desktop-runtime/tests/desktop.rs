@@ -402,6 +402,7 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
 fn restore_uses_saved_cwd_and_missing_directory_retains_retryable_history() {
     let directory = std::env::temp_dir().join(format!("zmux-restore-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
+    let directory = std::fs::canonicalize(directory).unwrap();
     let desktop = desktop();
     let initial = wait(&desktop, ready);
     let pane = initial.model.workspaces[0].focused_pane;
@@ -511,4 +512,151 @@ fn restore_uses_saved_cwd_and_missing_directory_retains_retryable_history() {
     );
     desktop.shutdown(Duration::from_secs(5)).unwrap();
     std::fs::remove_dir(directory).unwrap();
+}
+
+#[test]
+fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_generation_safe_ack() {
+    use zmux_desktop_runtime::attention::AttentionCommand as Attention;
+    let desktop = desktop();
+    let initial = wait(&desktop, ready);
+    let first = initial.model.workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    let pane = initial.model.workspaces[0].focused_pane;
+    send(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CreateSurface { pane_id: pane },
+        },
+    );
+    wait(&desktop, |s| s.control_frames.len() == 2 && ready(s));
+    send(
+        &desktop,
+        2,
+        Command::Attention {
+            action: Attention::AppActive { active: true },
+        },
+    );
+    send(
+        &desktop,
+        3,
+        Command::Input {
+            session_id: first.session_id,
+            text: "printf '\\nNORMAL_BACKGROUND_OUTPUT\\n'\r".into(),
+        },
+    );
+    wait(&desktop, |s| {
+        s.control_frames.iter().any(|f| {
+            f.session_id == first.session_id
+                && f.snapshot.as_ref().is_some_and(|v| {
+                    v.viewport
+                        .contents
+                        .lines()
+                        .any(|l| l == "NORMAL_BACKGROUND_OUTPUT")
+                })
+        })
+    });
+    assert!(desktop.snapshot().unwrap().notifications.is_empty());
+    send(
+        &desktop,
+        4,
+        Command::Input {
+            session_id: first.session_id,
+            text: "printf '\\007\\033]777;notify;Agent;Ready for review\\007'\r".into(),
+        },
+    );
+    let attention = wait(&desktop, |s| s.notifications.len() == 2);
+    assert!(
+        attention
+            .notifications
+            .iter()
+            .all(|n| n.surface_id == first.id && !n.read)
+    );
+    let bell = attention.notifications[0].id;
+    let agent = attention.notifications[1].id;
+    send(
+        &desktop,
+        5,
+        Command::Attention {
+            action: Attention::Open { id: bell },
+        },
+    );
+    let opened = wait(&desktop, |s| s.last_request_id == 5);
+    assert_eq!(
+        opened.model.workspaces[0].root.panes()[0].selected_surface,
+        first.id
+    );
+    assert!(opened.notifications[0].read);
+    assert!(!opened.notifications[1].read);
+    send(
+        &desktop,
+        6,
+        Command::Attention {
+            action: Attention::Notify {
+                surface_id: first.id,
+                title: "Foreground".into(),
+                body: String::new(),
+            },
+        },
+    );
+    let foreground = wait(&desktop, |s| s.last_request_id == 6);
+    assert!(foreground.notifications.last().unwrap().read);
+    let last = foreground.notifications.last().unwrap().id;
+    send(
+        &desktop,
+        7,
+        Command::Attention {
+            action: Attention::Clear { through_id: agent },
+        },
+    );
+    let cleared = wait(&desktop, |s| s.last_request_id == 7);
+    assert_eq!(cleared.notifications.len(), 1);
+    assert_eq!(cleared.notifications[0].id, last);
+    send(
+        &desktop,
+        8,
+        Command::Attention {
+            action: Attention::AppActive { active: false },
+        },
+    );
+    send(
+        &desktop,
+        9,
+        Command::Attention {
+            action: Attention::Notify {
+                surface_id: first.id,
+                title: "Background".into(),
+                body: String::new(),
+            },
+        },
+    );
+    let background = wait(&desktop, |s| s.last_request_id == 9);
+    let target = background.notifications.last().unwrap().id;
+    assert!(!background.notifications.last().unwrap().read);
+    send(
+        &desktop,
+        10,
+        Command::Action {
+            action: Action::CloseSurface {
+                surface_id: first.id,
+            },
+        },
+    );
+    wait(&desktop, |s| s.last_request_id == 10);
+    send(
+        &desktop,
+        11,
+        Command::Attention {
+            action: Attention::Open { id: target },
+        },
+    );
+    let stale = wait(&desktop, |s| s.last_request_id == 11);
+    assert!(stale.last_error.is_some());
+    assert!(!stale.notifications.last().unwrap().read);
+    assert_ne!(
+        stale.model.workspaces[0].root.panes()[0].selected_surface,
+        first.id
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
 }
