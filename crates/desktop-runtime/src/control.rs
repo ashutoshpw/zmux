@@ -779,16 +779,8 @@ mod tests {
             serve_connection(server_stream, &desktop_for_server, unexpected_uid)
         });
         let mut client = client;
-        let request = serde_json::to_vec(&ControlRequest {
-            version: CONTROL_VERSION,
-            request_id: 9,
-            command: ControlCommand::Status,
-        })
-        .unwrap();
-        client
-            .write_all(&(request.len() as u32).to_be_bytes())
-            .unwrap();
-        client.write_all(&request).unwrap();
+        // Peer credentials are rejected before reading any request. Sending a body here
+        // races the intentional close and can produce BrokenPipe on macOS.
         let mut response_length = [0; 4];
         client.read_exact(&mut response_length).unwrap();
         let mut response = vec![0; u32::from_be_bytes(response_length) as usize];
