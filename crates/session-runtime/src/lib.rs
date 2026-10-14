@@ -180,11 +180,15 @@ impl Session {
             .map_err(|e| SessionError::Failure(format!("duplicate PTY: {e}")))?;
         io.set_non_blocking(true)
             .map_err(|e| SessionError::Failure(format!("configure PTY: {e}")))?;
-        // Standard-library socket writes suppress SIGPIPE per socket/send. The
-        // foreign host may retain SIG_DFL; never depend on Rust main's policy or
-        // change process-wide signal disposition from this library.
+        // Linux standard-library sends suppress SIGPIPE. Darwin requires the
+        // socket option explicitly, including for a native host with SIG_DFL.
+        // Never change process-wide signal disposition from this library.
         let (wake_tx, wake_rx) = UnixStream::pair()
             .map_err(|e| SessionError::Failure(format!("create wake channel: {e}")))?;
+        #[cfg(target_os = "macos")]
+        socket2::SockRef::from(&wake_tx)
+            .set_nosigpipe(true)
+            .map_err(|e| SessionError::Failure(format!("configure wake SIGPIPE handling: {e}")))?;
         wake_tx
             .set_nonblocking(true)
             .map_err(|e| SessionError::Failure(e.to_string()))?;

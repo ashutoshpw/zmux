@@ -31,6 +31,7 @@ of file-level notices, native binaries, assets, or separately installed software
 | `serial2` | 0.2.38 | BSD-2-Clause OR Apache-2.0 | https://github.com/de-vri-es/serial2-rs |
 | `shared_library` | 0.1.9 | Apache-2.0/MIT | https://github.com/tomaka/shared_library/ |
 | `shell-words` | 1.1.1 | MIT/Apache-2.0 | https://github.com/tmiasko/shell-words |
+| `socket2` | 0.6.3 | MIT OR Apache-2.0 | https://github.com/rust-lang/socket2 |
 | `syn` | 2.0.119 | MIT OR Apache-2.0 | https://github.com/dtolnay/syn |
 | `syn` | 3.0.9 | MIT OR Apache-2.0 | https://github.com/dtolnay/syn |
 | `thiserror` | 1.0.69 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror |
@@ -260,7 +261,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-Applies to: arrayvec 0.7.8: `LICENSE-APACHE`; bitflags 1.3.2: `LICENSE-APACHE`; bitflags 2.13.2: `LICENSE-APACHE`; cfg-if 1.0.5: `LICENSE-APACHE`; lazy_static 1.5.1: `LICENSE-APACHE`; log 0.4.34: `LICENSE-APACHE`; unicode-width 0.2.2: `LICENSE-APACHE`
+Applies to: arrayvec 0.7.8: `LICENSE-APACHE`; bitflags 1.3.2: `LICENSE-APACHE`; bitflags 2.13.2: `LICENSE-APACHE`; cfg-if 1.0.5: `LICENSE-APACHE`; lazy_static 1.5.1: `LICENSE-APACHE`; log 0.4.34: `LICENSE-APACHE`; socket2 0.6.3: `LICENSE-APACHE`; unicode-width 0.2.2: `LICENSE-APACHE`
 
 ```text
                               Apache License
@@ -526,7 +527,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-Applies to: cfg-if 1.0.5: `LICENSE-MIT`
+Applies to: cfg-if 1.0.5: `LICENSE-MIT`; socket2 0.6.3: `LICENSE-MIT`
 
 ```text
 Copyright (c) 2014 Alex Crichton

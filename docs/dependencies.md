@@ -11,6 +11,7 @@ permissive licenses; retain upstream notices rather than relabeling them as MIT.
 | `portable-pty` 0.9.0 | Unix PTY allocation/process launch | MIT | <https://github.com/wezterm/wezterm> |
 | `vt100` 0.16.2 | Headless parser feasibility candidate | MIT | <https://github.com/doy/vt100-rust> |
 | `filedescriptor` 0.8.3 | Safe descriptor duplication/nonblocking I/O/poll | MIT | <https://github.com/wezterm/wezterm> |
+| `socket2` 0.6.3 | Safe Darwin wake-socket SIGPIPE suppression | MIT OR Apache-2.0 | <https://github.com/rust-lang/socket2> |
 | `nix` 0.28.0 | Terminate owned Unix PTY process groups | MIT | <https://github.com/nix-rust/nix> |
 | `thiserror` | Explicit domain errors | MIT OR Apache-2.0 | <https://github.com/dtolnay/thiserror> |
 

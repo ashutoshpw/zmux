@@ -14,5 +14,8 @@ serde.workspace = true
 thiserror.workspace = true
 zmux-terminal-adapter.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+socket2.workspace = true
+
 [lints]
 workspace = true

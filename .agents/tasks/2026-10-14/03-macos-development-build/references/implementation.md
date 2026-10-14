@@ -58,7 +58,8 @@ need their own checks; successful packaging alone is not proof of those behavior
 - Extended the independent C caller to retain SIGPIPE's default disposition, exit a real
   desktop shell, then destroy its context. `scripts/check-native-bridge` failed before the
   fix with SIGPIPE on Linux, reproducing the foreign-host failure rather than mocking it.
-- The wake channel now uses `std::os::unix::net::UnixStream`, whose socket writes suppress
-  SIGPIPE without changing the embedding host's signal disposition. Closed wake readers
-  still return BrokenPipe, which is benign for an already-stopped worker.
-- The same C check and full `scripts/check` pass after the repair. Native revalidation pending.
+- The wake channel uses `std::os::unix::net::UnixStream`. Linux writes suppress SIGPIPE;
+  run `38629863830` at `aded543` demonstrated Darwin still needs explicit `SO_NOSIGPIPE`.
+- Configure that option through the safe, permissively licensed `socket2` API on macOS.
+  Preserve the embedding host's process-wide signal disposition. Closed wake readers still
+  return BrokenPipe, benign for an already-stopped worker. Native revalidation pending.
