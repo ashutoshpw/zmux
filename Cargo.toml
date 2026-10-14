@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "apps/cli"]
+members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "apps/cli", "crates/native-bridge"]
 
 [workspace.package]
 version = "0.1.0"

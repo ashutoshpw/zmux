@@ -17,7 +17,7 @@ use std::{
     os::fd::{AsRawFd, RawFd},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, TryLockError,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
@@ -249,9 +249,7 @@ impl Session {
         if bytes.is_empty() || bytes.len() > INPUT_CHUNK_BYTES {
             return Err(SessionError::InputSize);
         }
-        if self.shared.stop.load(Ordering::Acquire) {
-            return Err(SessionError::Closed);
-        }
+        self.ensure_running()?;
         self.input.try_send(bytes.to_vec()).map_err(|e| match e {
             TrySendError::Full(_) => SessionError::QueueFull,
             TrySendError::Disconnected(_) => SessionError::Closed,
@@ -268,14 +266,8 @@ impl Session {
     pub fn resize(&self, size: Size) -> Result<(), SessionError> {
         size.validate()
             .map_err(|e| SessionError::Failure(e.to_string()))?;
-        if self.shared.stop.load(Ordering::Acquire) {
-            return Err(SessionError::Closed);
-        }
-        *self
-            .shared
-            .resize
-            .try_lock()
-            .map_err(|_| SessionError::Busy)? = Some(size);
+        self.ensure_running()?;
+        *self.shared.resize.try_lock().map_err(lock_error)? = Some(size);
         self.wake()
     }
 
@@ -284,7 +276,7 @@ impl Session {
             .snapshot
             .try_lock()
             .map(|s| Arc::clone(&s))
-            .map_err(|_| SessionError::Busy)
+            .map_err(lock_error)
     }
 
     /// This is a nonblocking cancellation request, safe for an eventual native view teardown.
@@ -313,13 +305,18 @@ impl Session {
         Ok(())
     }
 
-    fn wake(&self) -> Result<(), SessionError> {
-        match self
-            .wake
-            .try_lock()
-            .map_err(|_| SessionError::Busy)?
-            .write(&[1])
+    fn ensure_running(&self) -> Result<(), SessionError> {
+        if self.shared.stop.load(Ordering::Acquire)
+            || self.worker.as_ref().is_none_or(JoinHandle::is_finished)
+            || self.snapshot()?.state != State::Running
         {
+            return Err(SessionError::Closed);
+        }
+        Ok(())
+    }
+
+    fn wake(&self) -> Result<(), SessionError> {
+        match self.wake.try_lock().map_err(lock_error)?.write(&[1]) {
             Ok(_) => Ok(()),
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock
@@ -508,6 +505,15 @@ impl Worker {
         match self.shared.snapshot.lock() {
             Ok(mut slot) => *slot = snapshot,
             Err(error) => eprintln!("zmux snapshot publication failed: {error}"),
+        }
+    }
+}
+
+fn lock_error<T>(error: TryLockError<T>) -> SessionError {
+    match error {
+        TryLockError::WouldBlock => SessionError::Busy,
+        TryLockError::Poisoned(_) => {
+            SessionError::Failure("session state lock poisoned; recovery required".into())
         }
     }
 }

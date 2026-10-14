@@ -1,0 +1,24 @@
+[package]
+name = "zmux-native-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+zmux-workspace-core.workspace = true
+
+# Unsafe is confined to this reviewed foreign-call boundary; all core/runtime crates forbid it.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

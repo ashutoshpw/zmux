@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Compile a foreign C caller and validate its actual bridge responses."""
+from pathlib import Path
+import json
+import os
+import subprocess
+
+root = Path(__file__).resolve().parent.parent
+subprocess.run(["cargo", "build", "--locked", "-p", "zmux-native-bridge"], cwd=root, check=True)
+metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=root, text=True))
+libdir = Path(metadata["target_directory"]) / "debug"
+executable = libdir / "zmux-native-abi-check"
+subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+                "-I", str(root / "crates/native-bridge/include"), str(root / "crates/native-bridge/tests/abi.c"),
+                "-L", str(libdir), "-lzmux_native_bridge", f"-Wl,-rpath,{libdir}", "-o", str(executable)], check=True)
+result = subprocess.run([str(executable)], check=True, capture_output=True, text=True)
+responses = [json.loads(line) for line in result.stdout.splitlines()]
+assert len(responses) == 7, responses
+assert responses[0]["error"]["code"] == "unsupported_version"
+assert responses[1]["error"]["code"] == "invalid_request"
+created = responses[2]
+assert created["ok"] and created["version"] == 1
+assert created["snapshot"]["revision"] == 1
+assert created["snapshot"]["workspaces"][0]["name"] == "from-C"
+assert len(created["effects"]) == 1 and created["effects"][0]["effect"] == "start_session"
+assert responses[3]["error"]["code"] == "action_rejected"
+assert responses[4]["error"]["code"] == "invalid_request"
+assert responses[5]["snapshot"] == created["snapshot"]
+assert responses[6]["snapshot"]["revision"] == 0 and responses[6]["snapshot"]["workspaces"] == []
+print("C ABI checks passed: wire decoding, ownership, stale handles, bounded copy, and capacity-before-mutation.")

@@ -133,3 +133,18 @@ fn saturated_input_returns_backpressure_without_blocking_cancellation() {
     session.shutdown(Duration::from_secs(3)).unwrap();
     assert_eq!(session.snapshot().unwrap().state, State::Closed);
 }
+
+#[test]
+fn exited_session_rejects_new_input_and_resize_requests() {
+    let mut session = launch("exit 0");
+    wait_for(&session, |s| s.state == State::Exited);
+    assert!(matches!(
+        session.resize(Size { rows: 10, cols: 40 }),
+        Err(SessionError::Closed)
+    ));
+    assert!(matches!(
+        session.send_input(b"unused\n"),
+        Err(SessionError::Closed)
+    ));
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}

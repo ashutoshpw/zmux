@@ -35,6 +35,24 @@ No pre-existing code or tests exist. Tests exercise production APIs rather than 
 - CLI execution timeout was checked with a sleeping command: reports an execution failure and returns after cleanup.
 - Limits are conservative prototype guardrails, not measured native performance budgets.
 
+### Slice 3 — native bridge feasibility and scoped CI
+- `scripts/check-native-bridge`: independent C shared-library caller and Python wire decoding passed.
+- Checks cover version/malformed requests, action dispatch, stale/wrong-kind tokens, copy bounds,
+  buffer lifetime after core destruction, and capacity rejection before model mutation.
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`: passed including bridge.
+- Lifecycle review found resize accepted work after a process had exited. The same focused
+  command was demonstrated red and green: `cargo test -p zmux-session-runtime exited_session_rejects_new_input_and_resize_requests`.
+  The pre-fix assertion failed on accepted resize; the repaired public API rejects new work
+  once completion is known and distinguishes poisoned state from retryable lock contention.
+- Final `scripts/check`: 17 Rust behavioral tests plus foreign C ABI checks passed.
+- Added CI only for existing Rust/PTY/C modules on Linux and macOS. Checkout action v5 was
+  pinned to the commit returned by live GitHub metadata; no workflow was pushed or run.
+- The bridge currently owns model-only contexts and JSON responses. Session effects are
+  returned, not executed, and neither Swift nor native rendering is present.
+- Two Windows-only winapi target packages omit top-level license files in their registry
+  archives; declared permissive licenses are inventoried and upstream text review remains
+  a future distribution gate. No Windows target is supported by this prototype.
+
 ## Native gates
 No native UI or signed artifact can be validated on this Linux machine. A macOS machine
 must establish Swift linkage, rendering/IME/accessibility, input latency, CPU/memory budgets,

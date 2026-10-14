@@ -21,6 +21,12 @@ image-processing code or assume its desktop behavior establishes terminal perfor
 The evaluated reference is [PhotoCraft at a62ef68](https://github.com/storytold/photocraft/tree/a62ef68ca2495b680634e0421b702e4de88287a6):
 its module separation informs the design discussion; Zmux's native UI/terminal stack is its own decision.
 
+## Current implementation boundary
+The [foundation task](../../02-foundation-prototype/plan.md) implements the Rust action
+model, headless PTY/parser prototype, development CLI and model-only C ABI. The proposed
+native coordinator, Swift wrapper, renderer, storage and remote/cloud clients remain pending.
+The parser is a feasibility candidate rather than the finalized terminal engine.
+
 ## Monorepo boundaries and ownership
 Paths below are proposals, not existing packages. Each row can become an independently
 owned workstream after its upstream contract is defined. Start with one repository;
