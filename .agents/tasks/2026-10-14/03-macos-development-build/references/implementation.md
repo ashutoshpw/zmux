@@ -52,3 +52,13 @@ need their own checks; successful packaging alone is not proof of those behavior
 - Preserve the Launch Services acceptance gate and add a diagnostic-only direct packaged
   executable run plus macOS crash reports when that gate fails. Local `scripts/check`
   and Python syntax validation pass; native startup remains unverified.
+
+### Foreign-host SIGPIPE repair
+- Run `38629209149` directly observed packaged executable exit `-13` (SIGPIPE).
+- Extended the independent C caller to retain SIGPIPE's default disposition, exit a real
+  desktop shell, then destroy its context. `scripts/check-native-bridge` failed before the
+  fix with SIGPIPE on Linux, reproducing the foreign-host failure rather than mocking it.
+- The wake channel now uses `std::os::unix::net::UnixStream`, whose socket writes suppress
+  SIGPIPE without changing the embedding host's signal disposition. Closed wake readers
+  still return BrokenPipe, which is benign for an already-stopped worker.
+- The same C check and full `scripts/check` pass after the repair. Native revalidation pending.

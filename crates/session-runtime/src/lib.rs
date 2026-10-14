@@ -15,6 +15,7 @@ use serde::Serialize;
 use std::{
     io::{self, Read, Write},
     os::fd::{AsRawFd, RawFd},
+    os::unix::net::UnixStream,
     path::PathBuf,
     sync::{
         Arc, Mutex, TryLockError,
@@ -89,7 +90,7 @@ struct Shared {
 
 pub struct Session {
     input: SyncSender<Vec<u8>>,
-    wake: Mutex<FileDescriptor>,
+    wake: Mutex<UnixStream>,
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
     process_id: u32,
@@ -179,13 +180,16 @@ impl Session {
             .map_err(|e| SessionError::Failure(format!("duplicate PTY: {e}")))?;
         io.set_non_blocking(true)
             .map_err(|e| SessionError::Failure(format!("configure PTY: {e}")))?;
-        let (mut wake_tx, mut wake_rx) = filedescriptor::socketpair()
+        // Standard-library socket writes suppress SIGPIPE per socket/send. The
+        // foreign host may retain SIG_DFL; never depend on Rust main's policy or
+        // change process-wide signal disposition from this library.
+        let (wake_tx, wake_rx) = UnixStream::pair()
             .map_err(|e| SessionError::Failure(format!("create wake channel: {e}")))?;
         wake_tx
-            .set_non_blocking(true)
+            .set_nonblocking(true)
             .map_err(|e| SessionError::Failure(e.to_string()))?;
         wake_rx
-            .set_non_blocking(true)
+            .set_nonblocking(true)
             .map_err(|e| SessionError::Failure(e.to_string()))?;
         let mut command = CommandBuilder::new(&launch.program);
         command.args(&launch.args);
@@ -394,7 +398,7 @@ impl Drop for Session {
 struct Worker {
     master: Box<dyn MasterPty + Send>,
     io: FileDescriptor,
-    wake: FileDescriptor,
+    wake: UnixStream,
     process: ProcessGuard,
     terminal: Terminal,
     input: Receiver<Vec<u8>>,
