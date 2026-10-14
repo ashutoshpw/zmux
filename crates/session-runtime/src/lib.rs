@@ -111,7 +111,7 @@ struct ProcessGuard {
     pid: u32,
 }
 impl ProcessGuard {
-    fn stop(&mut self) -> Result<(), SessionError> {
+    fn signal(&mut self) -> Result<(), SessionError> {
         if self.reaped {
             return Ok(());
         }
@@ -125,6 +125,13 @@ impl ProcessGuard {
                 )));
             }
         }
+        Ok(())
+    }
+    fn stop(&mut self) -> Result<(), SessionError> {
+        if self.reaped {
+            return Ok(());
+        }
+        self.signal()?;
         self.child
             .wait()
             .map_err(|e| SessionError::Failure(format!("reap PTY process: {e}")))?;
@@ -343,6 +350,7 @@ impl Drop for Session {
     }
 }
 
+// Field order is intentional: release both master descriptors before ProcessGuard waits.
 struct Worker {
     master: Box<dyn MasterPty + Send>,
     io: FileDescriptor,
@@ -365,7 +373,9 @@ impl Worker {
         let mut dirty = false;
         loop {
             if self.shared.stop.load(Ordering::Acquire) {
-                self.process.stop()?;
+                // Darwin can keep an output-blocked child in exit until its PTY master closes.
+                // Signal now; Worker fields drop master/io before ProcessGuard reaps the child.
+                self.process.signal()?;
                 return Ok(State::Closed);
             }
             let size = self

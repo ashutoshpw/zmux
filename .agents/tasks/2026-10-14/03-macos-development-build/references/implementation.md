@@ -22,3 +22,11 @@
 Development build is ad-hoc signed, not notarized or release-signed. Interactive IME,
 accessibility, selection, performance budgets, remote reconnection, cloud and mobile parity
 need their own checks; successful packaging alone is not proof of those behaviors.
+
+### First hosted macOS check
+- Run `38627613214` at `0cce9ae` failed the existing output-flood cancellation regression:
+  `output_flood_does_not_prevent_cancel_and_leader_reaping` timed out during shutdown.
+- Linux foundation checks passed at the same SHA; native app compilation had not run yet.
+- Repair: signal the process group, then close both PTY master descriptors before waiting
+  for child reaping on worker destruction. Preserve the original three-second regression deadline.
+- Hosted revalidation is required; no artifact is claimed from the failed run.
