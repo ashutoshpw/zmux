@@ -44,3 +44,11 @@ need their own checks; successful packaging alone is not proof of those behavior
   NSTextInputClient protocol is nonisolated while the view is MainActor-isolated.
 - Use the compiler-supported preconcurrency protocol conformance and retain MainActor
   isolation/runtime preconditions. Strict concurrency and warnings-as-errors remain enabled.
+
+### Packaged startup gate
+- Run `38628680714` at `443fde8` passed Rust validation, universal Swift/Rust compilation,
+  architecture verification and bundle signing. Launch Services returned without a smoke
+  report; stdout/stderr were empty. No downloadable app artifact was published.
+- Preserve the Launch Services acceptance gate and add a diagnostic-only direct packaged
+  executable run plus macOS crash reports when that gate fails. Local `scripts/check`
+  and Python syntax validation pass; native startup remains unverified.

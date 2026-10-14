@@ -13,15 +13,37 @@ report = dist / "native-smoke.json"
 if report.exists(): report.unlink()
 stdout = dist / "native-stdout.log"
 stderr = dist / "native-stderr.log"
+def diagnose_startup():
+    # Launch Services can report success even when the child crashes before stderr
+    # opens. Run the same packaged executable for diagnostics only; this cannot
+    # substitute for a successful Launch Services smoke check.
+    diagnostic = dist / "native-direct.log"
+    with diagnostic.open("w") as log:
+        try:
+            result = subprocess.run([str(dist / "Zmux DEV.app/Contents/MacOS/ZmuxDev"),
+                                     "--smoke-test", str(dist / "native-direct-smoke.json")],
+                                    stdout=log, stderr=subprocess.STDOUT, timeout=100)
+            log.write(f"\nPackaged executable return code: {result.returncode}\n")
+        except subprocess.TimeoutExpired:
+            log.write("\nPackaged executable diagnostic timed out\n")
+    print(diagnostic.read_text())
+    for directory in [Path.home() / "Library/Logs/DiagnosticReports", Path("/Library/Logs/DiagnosticReports")]:
+        if directory.exists():
+            for path in sorted(directory.glob("ZmuxDev*"))[-4:]:
+                target = dist / ("native-crash-" + path.name + ".log")
+                target.write_text(path.read_text(errors="replace"))
+                print(target.read_text()[:24_000])
 try:
     subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),str(dist / "Zmux DEV.app"),"--args","--smoke-test",str(report)],check=True,timeout=100)
 except Exception:
     for path in [stdout,stderr]:
         if path.exists(): print(path.read_text())
+    diagnose_startup()
     raise
 if not report.exists():
     for path in [stdout,stderr]:
         if path.exists(): print(path.read_text())
+    diagnose_startup()
     raise SystemExit("The packaged app did not produce native smoke evidence")
 evidence = json.loads(report.read_text())
 metadata = json.loads((dist / "build-info.json").read_text())
