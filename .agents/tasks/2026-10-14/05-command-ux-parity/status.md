@@ -4,6 +4,9 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- Hosted run 38643467867 passed universal Swift/WebKit compilation/signing and portable checks,
+  but a native smoke predicate timed out. Added call-site/state diagnostics; artifact delivery
+  remains pending until the failed native behavior is identified and repaired.
 - P3a first slice implemented: typed browser surfaces without PTYs; public WebKit tab host,
   navigation/address/find/zoom, retained hidden-tab state and CLI browser open/navigate.
   Model migrated to v3; native smoke includes a real document/form and hidden-state retention.

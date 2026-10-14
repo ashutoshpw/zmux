@@ -1021,13 +1021,18 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
     }
 
-    private func waitUntil(_ predicate: (DesktopSnapshot) -> Bool) async throws {
+    private func waitUntil(line: UInt = #line, _ predicate: (DesktopSnapshot) -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(20)
         while ContinuousClock.now < deadline {
             if let snapshot, predicate(snapshot) { return }
             try await Task.sleep(for: .milliseconds(32))
         }
-        throw BridgeFailure(message: "Native smoke condition timed out: \(statusMessage)")
+        let state = snapshot.map { value in
+            let panes = value.model.workspaces.flatMap { $0.root.panes }.map { "pane=\($0.id),selected=\($0.selectedSurface),tabs=" + $0.surfaces.map { "\($0.id):\($0.kind)" }.joined(separator: ",") }.joined(separator: "; ")
+            let frames = value.frames.map { "session=\($0.sessionId),pid=\($0.processId.map(String.init) ?? "nil"),state=\($0.snapshot?.state ?? "starting")" }.joined(separator: "; ")
+            return "model=\(value.model.revision),focused=\(value.model.focusedWorkspace.map(String.init) ?? "nil"),history=\(value.model.closedItems.count),notifications=\(value.notifications.count), \(panes), \(frames)"
+        } ?? "no snapshot"
+        throw BridgeFailure(message: "Native smoke condition at line \(line) timed out: \(statusMessage); \(state)")
     }
 }
 
