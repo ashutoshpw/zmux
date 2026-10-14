@@ -1,0 +1,71 @@
+name: macOS development build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/macos/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'scripts/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - '.github/workflows/macos-development.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-development-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  development:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Validate Rust core and foreign ABI
+        run: scripts/check
+      - name: Build universal native development app
+        run: scripts/build-macos-dev
+      - name: Exercise packaged app and native rendering
+        run: scripts/check-macos-app
+      - name: Upload downloadable development build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Zmux-macos-dev-universal-${{ github.sha }}
+          path: |
+            dist/Zmux-dev-universal-*.zip
+            dist/Zmux-dev-universal-*.zip.sha256
+            dist/build-info.json
+            dist/native-smoke.json
+            dist/Zmux-native-smoke.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Zmux-native-diagnostics-${{ github.sha }}
+          path: |
+            dist/native-*.log
+            dist/native-smoke.json
+            dist/Zmux-native-smoke.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Build receipt
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads(Path('dist/build-info.json').read_text())
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f"Download **Zmux-macos-dev-universal-{metadata['source_sha']}** from this run's Artifacts.\n\n")
+              summary.write('Universal arm64/x86_64 development app for macOS 14+. Ad-hoc signed; not notarized.\n')
+          PY

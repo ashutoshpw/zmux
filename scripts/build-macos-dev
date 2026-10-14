@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Build the independently authored universal development bundle on macOS."""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+import platform
+import plistlib
+import shutil
+import subprocess
+
+root = Path(__file__).resolve().parent.parent
+parser = argparse.ArgumentParser()
+parser.add_argument("--architecture", choices=["universal", "host"], default="universal")
+args = parser.parse_args()
+if platform.system() != "Darwin":
+    raise SystemExit("Native development builds require macOS; use GitHub's macOS development build workflow.")
+def run(argv, **kwargs):
+    return subprocess.run(argv, cwd=root, check=True, **kwargs)
+sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+architectures = ["arm64", "x86_64"] if args.architecture == "universal" else ["arm64" if platform.machine() == "arm64" else "x86_64"]
+dist = root / "dist"
+bundle = dist / "Zmux DEV.app"
+if bundle.is_symlink():
+    raise SystemExit("Refusing to replace a symlink at the generated bundle path")
+if bundle.exists():
+    shutil.rmtree(bundle)
+macos = bundle / "Contents/MacOS"
+frameworks = bundle / "Contents/Frameworks"
+resources = bundle / "Contents/Resources"
+for path in [macos, frameworks, resources]:
+    path.mkdir(parents=True, exist_ok=True)
+targetdir = Path(json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1"], cwd=root, text=True))["target_directory"])
+env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET="14.0")
+libraries = []
+for arch in architectures:
+    target = "aarch64-apple-darwin" if arch == "arm64" else "x86_64-apple-darwin"
+    run(["rustup", "target", "add", target])
+    run(["cargo", "build", "--locked", "--release", "--target", target, "-p", "zmux-native-bridge"], env=env)
+    libraries.append(targetdir / target / "release/libzmux_native_bridge.dylib")
+library = frameworks / "libzmux_native_bridge.dylib"
+run(["lipo", "-create", *map(str, libraries), "-output", str(library)])
+run(["install_name_tool", "-id", "@rpath/libzmux_native_bridge.dylib", str(library)])
+sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
+sources = sorted((root / "apps/macos/Sources").glob("*.swift"))
+binaries = []
+for arch in architectures:
+    binary = dist / f"ZmuxDev-{arch}"
+    run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete", "-warnings-as-errors", "-O", "-g",
+         "-target", f"{arch}-apple-macosx14.0", "-sdk", sdk,
+         "-import-objc-header", str(root / "crates/native-bridge/include/zmux.h"),
+         *map(str, sources), "-L", str(frameworks), "-lzmux_native_bridge", "-framework", "AppKit",
+         "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks", "-o", str(binary)])
+    binaries.append(binary)
+executable = macos / "ZmuxDev"
+run(["lipo", "-create", *map(str,binaries), "-output", str(executable)])
+info = {"CFBundleExecutable":"ZmuxDev", "CFBundleIdentifier":"app.w3dev.zmux.dev", "CFBundleName":"Zmux DEV",
+        "CFBundleDisplayName":"Zmux DEV", "CFBundlePackageType":"APPL", "CFBundleShortVersionString":"0.1.0",
+        "CFBundleVersion": os.environ.get("GITHUB_RUN_NUMBER", "1"), "LSMinimumSystemVersion":"14.0",
+        "NSPrincipalClass":"NSApplication", "NSHighResolutionCapable":True, "ZmuxSourceSHA":sha}
+with (bundle / "Contents/Info.plist").open("wb") as file:
+    plistlib.dump(info,file)
+for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"]:
+    shutil.copy2(root / name, resources / name)
+metadata = {"source_sha":sha,"architectures":architectures,"minimum_macos":"14.0","bundle_id":info["CFBundleIdentifier"],"signing":"ad-hoc","notarized":False}
+(resources / "build-info.json").write_text(json.dumps(metadata,indent=2)+"\n")
+run(["codesign","--force","--sign","-",str(library)])
+run(["codesign","--force","--sign","-",str(bundle)])
+run(["codesign","--verify","--deep","--strict","--verbose=2",str(bundle)])
+for path in [executable,library]:
+    actual = set(subprocess.check_output(["lipo","-archs",str(path)],text=True).split())
+    if actual != set(architectures):
+        raise SystemExit(f"Architecture mismatch for {path.name}: {actual}")
+run(["otool","-L",str(executable)])
+archive = dist / f"Zmux-dev-{'universal' if len(architectures)==2 else architectures[0]}-{sha[:7]}.zip"
+run(["ditto","-c","-k","--sequesterRsrc","--keepParent",str(bundle),str(archive)])
+(archive.with_suffix(".zip.sha256")).write_text(hashlib.sha256(archive.read_bytes()).hexdigest()+"  "+archive.name+"\n")
+(dist / "build-info.json").write_text(json.dumps(metadata,indent=2)+"\n")
+print(f"Built development bundle and archive: {archive.name}")
