@@ -5,7 +5,7 @@
 
 ## Notes
 - Implementation authorized. [Foundation task](../02-foundation-prototype/plan.md) tracks initial slices.
-- First slice adds MIT project setup and the original Rust workspace/action core; portable checks pass.
+- MIT setup, Rust workspace/action core, and headless local PTY/parser prototype implemented; portable checks pass.
 - `origin` is configured as `https://github.com/ashutoshpw/zmux.git`; no push is performed.
 - Chosen architecture: Rust shared core/CLI/session services with thin Swift/AppKit macOS UI.
 - egui/eframe is deferred. cmux remote-session hangs are unverified motivation for stress gates.

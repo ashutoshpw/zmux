@@ -7,7 +7,11 @@ permissive licenses; retain upstream notices rather than relabeling them as MIT.
 | Direct dependency | Purpose | Declared license | Source |
 | --- | --- | --- | --- |
 | `serde` | Public model/command serialization | MIT OR Apache-2.0 | <https://github.com/serde-rs/serde> |
-| `serde_json` | Protocol/bridge JSON (reserved for subsequent slice) | MIT OR Apache-2.0 | <https://github.com/serde-rs/json> |
+| `serde_json` | Prototype output and bridge JSON | MIT OR Apache-2.0 | <https://github.com/serde-rs/json> |
+| `portable-pty` 0.9.0 | Unix PTY allocation/process launch | MIT | <https://github.com/wezterm/wezterm> |
+| `vt100` 0.16.2 | Headless parser feasibility candidate | MIT | <https://github.com/doy/vt100-rust> |
+| `filedescriptor` 0.8.3 | Safe descriptor duplication/nonblocking I/O/poll | MIT | <https://github.com/wezterm/wezterm> |
+| `nix` 0.28.0 | Terminate owned Unix PTY process groups | MIT | <https://github.com/nix-rust/nix> |
 | `thiserror` | Explicit domain errors | MIT OR Apache-2.0 | <https://github.com/dtolnay/thiserror> |
 
 Resolved package versions and full license material will be inventoried before the first
@@ -20,16 +24,20 @@ Workspace/action implementation and behavioral fixtures were authored for Zmux f
 own plan. No cmux source, tests, assets or implementation patches were imported. Prior
 discussion referenced cmux licensing and PR #1 behavior; this is not a strict clean-room claim.
 
-## Resolved Rust packages (slice 1)
+## Resolved versions and notices
 
-| Package | Version | Declared license |
-| --- | --- | --- |
-| `proc-macro2` | 1.0.107 | MIT OR Apache-2.0 |
-| `quote` | 1.0.47 | MIT OR Apache-2.0 |
-| `serde` | 1.0.229 | MIT OR Apache-2.0 |
-| `serde_core` | 1.0.229 | MIT OR Apache-2.0 |
-| `serde_derive` | 1.0.229 | MIT OR Apache-2.0 |
-| `syn` | 3.0.9 | MIT OR Apache-2.0 |
-| `thiserror` | 2.0.21 | MIT OR Apache-2.0 |
-| `thiserror-impl` | 2.0.21 | MIT OR Apache-2.0 |
-| `unicode-ident` | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) inventories all resolved packages,
+including target-specific packages and available top-level license files. Generate it with
+`scripts/license-inventory`; `scripts/check` detects changes against the locked graph.
+The compiler dependency `unicode-ident` additionally requires Unicode-3.0 notices.
+Compatible permissive licensing does not mean every dependency is exclusively MIT.
+
+## Prototype source review
+
+Registry API/source review established that portable-pty's Unix backend creates a new
+session/process group; Zmux independently owns nonblocking I/O and group shutdown.
+vt100 0.16.2 has bounded cells/scrollback, but its vte dependency enables a growable OSC
+buffer. The original Zmux adapter therefore rejects oversized control strings explicitly.
+The parser is an experimental headless candidate, not a finalized native engine choice.
+No upstream source was copied into original Zmux implementation; upstream license texts
+are retained verbatim in the notice artifact.
