@@ -4,6 +4,10 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- Corrected-event run 38644706173 exposed an unhandled shifted menu equivalent. Reassessed
+  against AppKit's documented uppercase/Shift equivalence; canonicalized Reopen to uppercase T
+  with Command and refresh dynamic menu availability before synthetic event dispatch. The
+  native reopen/history-consumption assertions remain mandatory; another native run is pending.
 - Diagnostic run 38644079733 identifies ⇧⌘T smoke synthesis: charactersIgnoringModifiers
   incorrectly discarded Shift, invoking New Terminal. Corrected shifted characters and hardware
   keycodes; native shortcut regression remains enabled and must pass before artifact delivery.
