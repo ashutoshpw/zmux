@@ -985,11 +985,18 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               browser.bounds.width <= canvas.bounds.width * 0.7 else {
             throw BridgeFailure(message: "Browser split is cramped: \(browser.bounds.width) of \(canvas.bounds.width)")
         }
-        if let pageImage = try await browser.webView.takeSnapshot(with: nil),
-           let tiff = pageImage.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-           let png = bitmap.representation(using: .png, properties: [:]) {
-            try png.write(to: report.deletingLastPathComponent().appendingPathComponent("zmux-browser-smoke.png"), options: .atomic)
+        let pagePNG: Data = try await withCheckedThrowingContinuation { continuation in
+            browser.webView.takeSnapshot(with: nil) { image, error in
+                if let error { continuation.resume(throwing: error); return }
+                guard let image, let tiff = image.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiff),
+                      let png = bitmap.representation(using: .png, properties: [:]), png.count > 1024 else {
+                    continuation.resume(throwing: BridgeFailure(message: "WebKit did not produce usable page pixels")); return
+                }
+                continuation.resume(returning: png)
+            }
         }
+        try pagePNG.write(to: report.deletingLastPathComponent().appendingPathComponent("zmux-browser-smoke.png"), options: .atomic)
         enqueue(.input(originalSession, "PS1='❯ '; printf '\\033[2J\\033[H\\033[32mnative terminal ready\\033[0m\\n'\r"))
         try await waitUntil { $0.frames.contains { $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("native terminal ready") == true } }
         guard let view = window.contentView,
@@ -1033,6 +1040,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "embedded_webkit": true,
             "browser_hidden_state": true,
             "balanced_browser_split": true,
+            "browser_render_png_bytes": pagePNG.count,
             "active_terminal_title": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,
