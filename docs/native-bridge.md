@@ -43,7 +43,7 @@ Example action request:
 Actions use the shared core API: `create_workspace`, `rename_workspace`, `focus_pane`,
 `split_pane`, `close_pane`, `create_surface`, `select_surface`, `rename_surface`,
 `close_surface`, `reorder_surface`, `move_surface`, `close_other_surfaces`, `close_workspace`
-and `reopen_closed`, with snake-case field names. Unknown fields and malformed
+`reopen_closed`, `create_browser`, `navigate_browser` and `observe_browser`, with snake-case field names. Unknown fields and malformed
 requests are rejected. Successful replies contain `version`, `ok`, `snapshot` and `effects`.
 An unsuccessful protocol reply contains `ok: false` and `error.code` / `error.message`.
 Error codes are `invalid_request`, `unsupported_version`, and `action_rejected`.
@@ -95,11 +95,12 @@ Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup of
 There are at most four desktop contexts and eight terminals per desktop, including pending or
 retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
 
-## Workspace model version 2
+## Workspace model version 3
 
-The JSON model carries `model_version: 2`; the function ABI/request envelope remains version 1.
+The JSON model carries `model_version: 3`; the function ABI/request envelope remains version 1.
 Each pane owns ordered `surfaces` and `selected_surface`; a terminal surface owns `session_id`,
-`title` and optional `cwd`. The old pane-level `session_id` field is replaced by this model.
+`title` and optional `cwd`. Browser surfaces have `kind: browser`, no session, a URL and a
+navigation generation. Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
 Native UI and Rust are packaged together; older hosts must reject an unfamiliar model version.
 Legacy socket pane inspection still projects the selected session for existing CLI callers.
 

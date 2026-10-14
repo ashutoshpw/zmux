@@ -41,6 +41,7 @@ Commands:
   split-pane            Split a pane horizontally or vertically
   close-pane            Close a pane and all its tabs
   new-surface           Create a terminal tab in a pane
+  browser               Open or navigate an embedded browser tab
   list-pane-surfaces    List every terminal tab in a pane
   select-surface        Select a tab and focus its pane
   close-surface         Close one tab; preserve sibling sessions
@@ -231,6 +232,30 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
                 pane_id: PaneId(parse_id(&values[0], "pane")?),
             })
         })?,
+        Some("browser") => {
+            if help_requested(tail) || tail.first().is_some_and(|v| v == "help") {
+                Parsed::Offline(Offline::Help(Some("browser".into())))
+            } else {
+                let values = utf8_args(tail)?;
+                let action = match values.as_slice() {
+                    [verb, pane, url] if verb == "open" => Action::CreateBrowser {
+                        pane_id: PaneId(parse_id(pane, "pane")?),
+                        url: url.clone(),
+                    },
+                    [verb, surface, url] if verb == "navigate" || verb == "goto" => {
+                        Action::NavigateBrowser {
+                            surface_id: SurfaceId(parse_id(surface, "surface")?),
+                            url: url.clone(),
+                        }
+                    }
+                    _ => return Err(CliError(
+                        "usage: zmux browser open PANE_ID URL | browser navigate SURFACE_ID URL"
+                            .into(),
+                    )),
+                };
+                Parsed::App(ControlCommand::Action { action })
+            }
+        }
         Some("list-notifications") => app_no_args(
             "list-notifications",
             tail,
@@ -708,6 +733,9 @@ fn print_help(command: Option<&str>) -> Result<(), CliError> {
         }
         Some("read-screen") => {
             "Usage: zmux [OPTIONS] read-screen PANE_ID\n\nReads the current bounded visible screen, cursor, size, process state, and exit metadata.\n"
+        }
+        Some("browser") => {
+            "Usage: zmux browser open PANE_ID URL\n       zmux browser navigate SURFACE_ID URL\n\nCreates or navigates a real embedded WebKit surface. Allowed addresses: http, https and about:blank. Opening does not allocate a PTY. Native UI supplies back/forward/reload/address controls. Browser automation, persistent profiles and downloads remain pending.\n"
         }
         Some("notify") => {
             "Usage: zmux notify --surface SURFACE_ID --title TITLE [--body TEXT]\n\nAdds bounded in-app attention for an exact live terminal. Ordinary output does not notify.\n"

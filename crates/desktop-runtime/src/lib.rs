@@ -25,6 +25,7 @@ use zmux_workspace_core::{
 };
 
 pub const MAX_TERMINALS: usize = 8;
+pub const MAX_BROWSERS: usize = 4;
 const MAX_COMMANDS: usize = 32;
 const UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 
@@ -394,7 +395,7 @@ impl Worker {
                     .iter()
                     .flat_map(|w| w.root.panes())
                     .flat_map(|p| &p.surfaces)
-                    .find(|s| s.session_id == session)
+                    .find(|s| s.session_id == Some(session))
                     .map(|s| s.id)
                 {
                     let read = self.surface_is_visible(surface_id);
@@ -586,6 +587,19 @@ impl Worker {
                 "development build supports at most {MAX_TERMINALS} terminals; close a tab and wait for cleanup first"
             )));
         }
+        let browsers = candidate
+            .snapshot()
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser)
+            .count();
+        if browsers > MAX_BROWSERS {
+            return Err(DesktopError::Failure(format!(
+                "development build supports at most {MAX_BROWSERS} browser tabs"
+            )));
+        }
         self.model = candidate;
         self.effects(transition.effects);
         Ok(())
@@ -611,7 +625,7 @@ impl Worker {
                         .iter()
                         .flat_map(|w| w.root.panes())
                         .flat_map(|p| &p.surfaces)
-                        .any(|s| s.session_id == session_id)
+                        .any(|s| s.session_id == Some(session_id))
                     {
                         continue;
                     }
@@ -695,13 +709,16 @@ impl Worker {
             .flat_map(|workspace| workspace.root.panes())
             .flat_map(|pane| &pane.surfaces)
             .filter_map(|surface| {
-                self.slots.get(&surface.session_id).map(|slot| Frame {
-                    session_id: surface.session_id,
-                    process_id: slot.session.as_ref().map(Session::process_id),
-                    starting: slot.starting,
-                    snapshot: slot.cached.clone(),
-                    failure: slot.failure.clone(),
-                })
+                surface
+                    .session_id
+                    .and_then(|id| self.slots.get(&id))
+                    .map(|slot| Frame {
+                        session_id: surface.session_id.expect("terminal slot"),
+                        process_id: slot.session.as_ref().map(Session::process_id),
+                        starting: slot.starting,
+                        snapshot: slot.cached.clone(),
+                        failure: slot.failure.clone(),
+                    })
             })
             .collect();
         let focused_sessions: Vec<_> = model
@@ -713,7 +730,7 @@ impl Worker {
                     .root
                     .panes()
                     .into_iter()
-                    .map(|pane| pane.session_id())
+                    .filter_map(|pane| pane.session_id())
                     .collect()
             })
             .unwrap_or_default();

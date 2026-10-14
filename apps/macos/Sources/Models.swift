@@ -34,11 +34,11 @@ struct Frame: Decodable, Sendable {
     let sessionId: UInt64; let processId: UInt32?; let starting: Bool
     let snapshot: TerminalSnapshot?; let failure: String?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let sessionId: UInt64; let title: String; let cwd: String? }
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64 }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
-    var sessionId: UInt64 { selected.sessionId }
+    var sessionId: UInt64? { selected.sessionId }
 }
 indirect enum PaneTree: Decodable, Sendable {
     case leaf(Pane)
@@ -53,7 +53,7 @@ indirect enum PaneTree: Decodable, Sendable {
         }
     }
     var key: String {
-        switch self { case .leaf(let pane): return "p\(pane.id):\(pane.selectedSurface):" + pane.surfaces.map { "\($0.id):\($0.title)" }.joined(separator: ","); case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))" }
+        switch self { case .leaf(let pane): return "p\(pane.id):\(pane.selectedSurface):" + pane.surfaces.map { "\($0.id)" }.joined(separator: ","); case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))" }
     }
     var panes: [Pane] {
         switch self { case .leaf(let pane): return [pane]; case .split(_, let a, let b): return a.panes + b.panes }

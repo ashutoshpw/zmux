@@ -9,7 +9,7 @@ fn workspace(store: &mut WorkspaceStore) -> (WorkspaceId, PaneId, SurfaceId, Ses
     let state = store.snapshot();
     let w = state.workspaces.last().unwrap();
     let p = w.root.panes()[0];
-    (w.id, p.id, p.selected_surface, p.session_id())
+    (w.id, p.id, p.selected_surface, p.session_id().unwrap())
 }
 fn add_tab(store: &mut WorkspaceStore, pane: PaneId) -> Surface {
     store
@@ -44,7 +44,9 @@ fn tabs_move_and_reorder_without_restarting_sessions_and_close_only_their_owner(
         .apply(Action::SelectSurface { surface_id: first })
         .unwrap();
     assert_eq!(
-        store.snapshot().workspaces[0].root.panes()[0].session_id(),
+        store.snapshot().workspaces[0].root.panes()[0]
+            .session_id()
+            .unwrap(),
         first_session
     );
     assert!(
@@ -81,7 +83,7 @@ fn tabs_move_and_reorder_without_restarting_sessions_and_close_only_their_owner(
     assert_eq!(
         closed.effects,
         vec![Effect::StopSession {
-            session_id: second.session_id
+            session_id: second.session_id.unwrap()
         }]
     );
     assert_eq!(store.snapshot().workspaces.len(), 2);
@@ -101,7 +103,7 @@ fn reopen_consumes_history_only_after_launch_and_failed_restore_is_retriable() {
     let mut store = WorkspaceStore::default();
     let (_, pane, first, first_session) = workspace(&mut store);
     let second = add_tab(&mut store, pane);
-    store.set_session_cwd(second.session_id, "/tmp/original directory".into());
+    store.set_session_cwd(second.session_id.unwrap(), "/tmp/original directory".into());
     store
         .apply(Action::RenameSurface {
             surface_id: second.id,
@@ -125,7 +127,7 @@ fn reopen_consumes_history_only_after_launch_and_failed_restore_is_retriable() {
     let restored = state.workspaces[0].root.panes()[0].selected();
     assert_eq!(restored.title, "build");
     assert_ne!(restored.id, second.id);
-    assert_ne!(session, second.session_id);
+    assert_ne!(session, second.session_id.unwrap());
     assert!(state.closed_items[0].restoring);
     let before = store.snapshot();
     assert!(
@@ -145,7 +147,7 @@ fn reopen_consumes_history_only_after_launch_and_failed_restore_is_retriable() {
     let state = store.snapshot();
     assert_eq!(state.workspaces[0].root.panes()[0].selected_surface, first);
     assert_eq!(
-        state.workspaces[0].root.panes()[0].session_id(),
+        state.workspaces[0].root.panes()[0].session_id().unwrap(),
         first_session
     );
     assert!(!state.closed_items[0].restoring);
@@ -325,4 +327,83 @@ fn close_history_evicts_old_entries_and_single_tab_reorder_is_safe() {
     assert_eq!(state.closed_items.len(), MAX_CLOSED_ITEMS);
     assert!(state.closed_items.windows(2).all(|w| w[0].id < w[1].id));
     assert_eq!(state.workspaces[0].root.panes()[0].selected_surface, first);
+}
+
+#[test]
+fn browser_tabs_have_no_pty_and_restore_the_observed_url_without_replaying_navigation() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, terminal, _) = workspace(&mut store);
+    let created = store
+        .apply(Action::CreateBrowser {
+            pane_id: pane,
+            url: "https://example.com/initial".into(),
+        })
+        .unwrap();
+    assert!(created.effects.is_empty());
+    let browser = store.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    assert_eq!(browser.kind, SurfaceKind::Browser);
+    assert_eq!(browser.session_id, None);
+    store
+        .apply(Action::NavigateBrowser {
+            surface_id: browser.id,
+            url: "https://example.com/next".into(),
+        })
+        .unwrap();
+    let generation = store.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .navigation;
+    store
+        .apply(Action::ObserveBrowser {
+            surface_id: browser.id,
+            url: "https://example.com/redirected".into(),
+            title: "Docs".into(),
+        })
+        .unwrap();
+    let before = store.snapshot();
+    assert_eq!(
+        before.workspaces[0].root.panes()[0].selected().navigation,
+        generation
+    );
+    for url in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "data:text/html,test",
+        "https://user:secret@example.com/",
+        "https://",
+    ] {
+        assert!(
+            store
+                .apply(Action::NavigateBrowser {
+                    surface_id: browser.id,
+                    url: url.into()
+                })
+                .is_err()
+        );
+        assert_eq!(store.snapshot(), before);
+    }
+    let closed = store
+        .apply(Action::CloseSurface {
+            surface_id: browser.id,
+        })
+        .unwrap();
+    assert!(closed.effects.is_empty());
+    assert_eq!(
+        store.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        terminal
+    );
+    let restored = store
+        .apply(Action::ReopenClosed { closed_id: None })
+        .unwrap();
+    assert!(restored.effects.is_empty());
+    let state = store.snapshot();
+    let restored = state.workspaces[0].root.panes()[0].selected();
+    assert_eq!(
+        restored.url.as_deref(),
+        Some("https://example.com/redirected")
+    );
+    assert_eq!(restored.title, "Docs");
+    assert_ne!(restored.id, browser.id);
+    assert!(state.closed_items.is_empty());
 }
