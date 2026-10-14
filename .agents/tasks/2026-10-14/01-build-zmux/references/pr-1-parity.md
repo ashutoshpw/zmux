@@ -40,12 +40,14 @@ Zmux layout persistence is tracked independently in M2.
 - A commit is a coherent, reviewable behavior or foundation slice, with relevant checks and docs.
   Avoid one commit per trivial file edit and avoid bundling an entire multi-subsystem milestone.
 - Example slices: core workspace model plus behavioral checks; persistence plus recovery;
-  socket API plus CLI inspection; OAuth service plus security checks; native OAuth client integration.
+  Rust/Swift bridge plus native lifecycle checks; bounded session processing plus stress
+  evidence; socket API plus CLI inspection; OAuth service plus security checks;
+  native OAuth client integration.
 - Commit after the slice's applicable checks pass. Record unavailable native/hosted checks
   explicitly and do not label a release ready until those gates pass. Never bypass hooks.
 - Update milestone status and evidence with each completed slice. Repair failing checks before
   treating the slice as complete; after three repeated failed attempts reassess the approach.
-- Initial planning can be committed directly on unborn `main`. If implementation needs a branch,
+- Initial planning was committed directly on `main`. If implementation needs a branch,
   create its worktree under `~/.worktrees/ashutoshpw/zmux/<branch-name>/`; for PR work use
   `pr-<number>/`. Use tracking branches when a corresponding remote branch exists, not detached HEAD.
 - Keep completed slices integrated into `main`; remote push and hosted deployment are separate
