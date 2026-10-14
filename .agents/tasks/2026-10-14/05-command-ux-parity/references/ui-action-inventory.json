@@ -520,7 +520,11 @@
       "source": "Sources/KeyboardShortcutSettings.swift:145",
       "phase": "P1",
       "status": "needs-behavior-audit",
-      "evidence": []
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "native-delivery.md"
+      ],
+      "implementation_status": "partial-contract"
     },
     {
       "id": "UX-ACTION-066",
@@ -576,7 +580,11 @@
       "source": "Sources/KeyboardShortcutSettings.swift:152",
       "phase": "P1",
       "status": "needs-behavior-audit",
-      "evidence": []
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "native-delivery.md"
+      ],
+      "implementation_status": "partial-contract"
     },
     {
       "id": "UX-ACTION-073",
@@ -584,7 +592,11 @@
       "source": "Sources/KeyboardShortcutSettings.swift:153",
       "phase": "P1",
       "status": "needs-behavior-audit",
-      "evidence": []
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "native-delivery.md"
+      ],
+      "implementation_status": "partial-contract"
     },
     {
       "id": "UX-ACTION-074",
@@ -616,7 +628,11 @@
       "source": "Sources/KeyboardShortcutSettings.swift:157",
       "phase": "P1",
       "status": "needs-behavior-audit",
-      "evidence": []
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "native-delivery.md"
+      ],
+      "implementation_status": "partial-contract"
     },
     {
       "id": "UX-ACTION-078",
@@ -624,7 +640,11 @@
       "source": "Sources/KeyboardShortcutSettings.swift:158",
       "phase": "P1",
       "status": "needs-behavior-audit",
-      "evidence": []
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "native-delivery.md"
+      ],
+      "implementation_status": "partial-contract"
     },
     {
       "id": "UX-ACTION-079",
@@ -632,7 +652,11 @@
       "source": "Sources/KeyboardShortcutSettings.swift:159",
       "phase": "P1",
       "status": "needs-behavior-audit",
-      "evidence": []
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "native-delivery.md"
+      ],
+      "implementation_status": "partial-contract"
     },
     {
       "id": "UX-ACTION-080",

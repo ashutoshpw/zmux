@@ -26,7 +26,7 @@
   history bounds, repeat generations and cursor-safe clear. Actual CLI/socket integration
   validates notification creation, listing, open acknowledgement and dismissal.
 - Native smoke includes ⌘B resize/restore and actual OSC → inbox → target/read behavior.
-  Hosted compilation/smoke is pending; manual VoiceOver, interactive focus/drag, macOS desktop
+  Hosted compilation/smoke passed ([receipt](native-delivery.md)); manual VoiceOver, interactive focus/drag, macOS desktop
   permissions and measured resource/remote-stress budgets remain open.
 - The preceding P1 macOS run failed on a /var versus /private/var temp-directory alias in the
   saved-cwd test. Canonicalizing that fixture resolves the platform identity mismatch; the

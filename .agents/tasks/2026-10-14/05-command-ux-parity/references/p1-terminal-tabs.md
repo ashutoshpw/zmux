@@ -32,7 +32,8 @@
   cwd validation in the session owner fixes the tested preexisting-directory failure case.
   A concurrent filesystem change between validation and spawn remains a dependency limitation.
 - Packaged macOS smoke now exercises native menu shortcuts and sibling PID preservation.
-  Hosted native compilation/smoke and interactive drag/IME/accessibility evidence are pending.
+  Hosted universal compilation and packaged smoke passed; see [native receipt](native-delivery.md).
+  Interactive drag/IME/accessibility evidence remains open.
 
 ## Remaining P1 and P0 gates
 

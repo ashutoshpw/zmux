@@ -2189,8 +2189,11 @@
       "phase": "P3",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p3-embedded-browser.md",
+        "native-delivery.md"
+      ]
     },
     {
       "id": "CMD-216",
@@ -2209,8 +2212,11 @@
       "phase": "P3",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p3-embedded-browser.md",
+        "native-delivery.md"
+      ]
     },
     {
       "id": "CMD-218",
@@ -2219,8 +2225,11 @@
       "phase": "P3",
       "baseline": "missing",
       "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p3-embedded-browser.md",
+        "native-delivery.md"
+      ]
     },
     {
       "id": "CMD-219",

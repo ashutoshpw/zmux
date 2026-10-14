@@ -12,8 +12,8 @@
   A globe icon/menu creates tabs; ⌘L focuses the address. Rust owns explicit navigation intent;
   native observations update URL/title without changing its generation or causing reload loops.
 - Browser title/attention updates refresh tab labels without rebuilding the terminal/split tree.
-  UI focus is routed to the owning surface. Split dividers are set after native layout,
-  retain ratios across tab/workspace view rebuilds and discard stale geometry cache entries. Browser views are lazy-created and released on close.
+  UI focus is routed to the owning surface. A frame-based split host owns child geometry and its accessible draggable divider,
+  retains ratios across tab/workspace view rebuilds and discards stale geometry cache entries. Browser views are lazy-created and released on close.
 - Only HTTP(S) and about:blank are allowed. No page message handler or privileged socket bridge
   exists. Local/script/credential URLs are rejected, TLS failures use WebKit defaults. ATS
   permits user-selected HTTP web content only; cloud URLSession remains HTTPS-only.
@@ -26,7 +26,7 @@
 reopen, have independent admission, reject privileged URLs atomically, and work through the
 actual CLI/socket transport. The universal native workflow compiles WebKit and its smoke loads
 an actual document, edits/reads a form field, switches tabs and verifies page state is retained.
-Hosted/native evidence remains pending. A prior native compile exposed a missing NSImage
+Hosted native checks and downloaded visual review passed ([receipt](native-delivery.md)). A prior native compile exposed a missing NSImage
 symbol-weight argument in the new tab UI; that SDK compatibility fix is included here.
 
 This is the first P3a slice. Persistent/shared profiles, download handling, dialog/permissions,
