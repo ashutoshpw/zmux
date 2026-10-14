@@ -5,7 +5,8 @@
 
 ## Objective
 Deliver behavioral parity with the supplied cmux command inventory and close the core UX
-gaps: ⌘T terminal tabs, embedded browser, collapsible sidebar and attention notifications.
+gaps across the complete interaction lifecycle, including tab creation/reopening, browser,
+sidebars, notifications, navigation and recovery.
 
 ## Context
 Task 04 delivered a limited native app and identity/device service, not cmux parity.
@@ -15,13 +16,14 @@ This turn creates the implementation plan only. Original roadmap and PR #1 scope
 ## Approach
 Use shared Rust window/workspace/pane/surface actions with a thin AppKit host and public
 WKWebView APIs. Implement independently under MIT; no copied GPL/BUSL code or assets.
-Track every command, alias, option and observable result. Help-only stubs do not count.
+Track CLI contracts and UI/menu/context/shortcut/palette/gesture behavior in linked ledgers.
+Help-only stubs and command coverage alone do not establish product parity.
 Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## Steps
 - [x] Review source and establish initial command/UX gap inventory.
-- [ ] P0: expand all nested contracts, target/auth rules and measured resource budgets.
-- [ ] P1: window/pane/surface model, ⌘T terminal tabs and navigation commands.
+- [ ] P0: audit every interaction entrypoint, nested CLI contract and measured resource budget.
+- [ ] P1: topology, ⌘T tabs, ⇧⌘T/recently-closed recovery, focus history and navigation.
 - [ ] P2: collapsible sidebar, attention inbox/badges and notification automation.
 - [ ] P3a: embedded browser UI; P3b: full browser automation and advanced commands.
 - [ ] P4: launch/open, persistence/restore, settings, themes and customization.
@@ -33,6 +35,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 ## Acceptance criteria
 - [ ] Every frozen command leaf/alias/option has behavioral evidence; no unresolved gaps.
 - [ ] ⌘T creates a terminal tab without splitting; tabs retain independent live sessions.
+- [ ] ⇧⌘T restores closed tabs; close-other, workspace/window recovery and failure paths pass.
+- [ ] Every UI entrypoint is inventoried and verified, including behaviors absent from CLI help.
 - [ ] Real browser surfaces navigate and expose verified automation through shared routing.
 - [ ] Sidebar toggle remains reachable; attention inbox highlights and opens exact targets.
 - [ ] UI/menu/shortcut/CLI outcomes agree, including focus, errors and permissions.
@@ -40,6 +44,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Full UX parity](references/ux-parity.md) — interaction audit and required undo-close semantics.
+- [UI action inventory](references/ui-action-inventory.json) — source-discovered shortcut actions, pending behavioral audit.
 - [Source review](references/source-review.md) — findings, WebKit decision and provenance.
 - [Command inventory](references/command-inventory.json) — 428 initial tracked entries; nested audit remains.
 - [Phases](references/phases.md) — dependencies, ownership, implementation scope and exit gates.

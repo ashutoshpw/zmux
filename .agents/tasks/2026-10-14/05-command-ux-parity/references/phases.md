@@ -9,6 +9,9 @@ Existing roadmap M0–M7 and PR #1 requirements remain linked dependencies, not 
 
 Owner: CLI/protocol and acceptance workstream. Depends on no new runtime work.
 
+- Audit every menu/context menu, shortcut (including unbound), command palette, titlebar/sidebar,
+  drag/drop and terminal/browser interaction using `ux-parity.md` and `ui-action-inventory.json`.
+  Reconcile these with CLI contracts; no CLI equivalent does not remove a feature from scope.
 - Expand `command-inventory.json` against the pinned source dispatcher and nested help,
   including simulator/ios, dynamic workspace/tab action values, hooks/providers, vm/cloud,
   generic rpc methods, positional defaults and aliases. Source help already contains
@@ -48,6 +51,10 @@ Owner: Rust workspace/runtime plus thin native topology presentation. Depends on
 - ⌘T and a plus icon create a terminal tab in the focused pane. ⌘N creates a workspace;
   splits remain ⌘D/⇧⌘D. Expose selected tab/title/close controls and keyboard traversal.
   ⌘W closes the selected surface, collapsing its pane/workspace only when empty.
+- Implement ⇧⌘T, Recently Closed, workspace/window undo-close and focus back/forward/last
+  in this phase, including bounded restore descriptors, failed-restore retention, missing
+  container fallbacks and batch-close confirmation. Follow `ux-parity.md`; P4 persistence
+  does not defer in-process terminal tab reopening.
 - Keep hidden sessions alive. Switching tabs must not respawn shells or reset browser
   navigation. Closing a surface cancels only its owned resources; late events cannot revive it.
 - Implement navigation family and identity/tree/list/current commands against these shared
@@ -55,7 +62,8 @@ Owner: Rust workspace/runtime plus thin native topology presentation. Depends on
 
 Exit: ⌘T/menu/CLI produce identical topology; sibling session survives close; move/split
 preserves IDs and session; multiple windows and no-focus operations route correctly;
-keyboard focus, drag/reorder, IME and selected-tab behavior pass native checks.
+keyboard focus, drag/reorder, IME, selected-tab behavior and actual close/reopen history
+pass native checks. Killed local processes are not represented as resurrected sessions.
 
 ## P2 — Sidebar collapse and attention inbox (core product priority)
 

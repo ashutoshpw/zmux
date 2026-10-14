@@ -1,0 +1,1374 @@
+{
+  "cmux_sha": "3ba653b9e5afb11d0bc578031142950d6136697e",
+  "scope": "All action identifiers in the pinned shortcut enum; identifiers are discovery metadata, not copied implementation. Not exhaustive of menus, context menus, gestures or engine actions. No entry is verified solely from enum presence.",
+  "actions": [
+    {
+      "id": "UX-ACTION-001",
+      "source_action": "openSettings",
+      "source": "Sources/KeyboardShortcutSettings.swift:84",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-002",
+      "source_action": "openTeamPicker",
+      "source": "Sources/KeyboardShortcutSettings.swift:85",
+      "phase": "P7",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-003",
+      "source_action": "reloadConfiguration",
+      "source": "Sources/KeyboardShortcutSettings.swift:86",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-004",
+      "source_action": "showHideAllWindows",
+      "source": "Sources/KeyboardShortcutSettings.swift:87",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-005",
+      "source_action": "globalSearch",
+      "source": "Sources/KeyboardShortcutSettings.swift:88",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-006",
+      "source_action": "newWindow",
+      "source": "Sources/KeyboardShortcutSettings.swift:89",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-007",
+      "source_action": "closeWindow",
+      "source": "Sources/KeyboardShortcutSettings.swift:90",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-008",
+      "source_action": "toggleFullScreen",
+      "source": "Sources/KeyboardShortcutSettings.swift:91",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-009",
+      "source_action": "quit",
+      "source": "Sources/KeyboardShortcutSettings.swift:92",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-010",
+      "source_action": "toggleSidebar",
+      "source": "Sources/KeyboardShortcutSettings.swift:94",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-011",
+      "source_action": "focusSidebar",
+      "source": "Sources/KeyboardShortcutSettings.swift:95",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-012",
+      "source_action": "showWindowHints",
+      "source": "Sources/KeyboardShortcutSettings.swift:96",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-013",
+      "source_action": "newTab",
+      "source": "Sources/KeyboardShortcutSettings.swift:97",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-014",
+      "source_action": "newLocalWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:98",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-015",
+      "source_action": "newBrowserWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:99",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-016",
+      "source_action": "newCloudWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:100",
+      "phase": "P7",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-017",
+      "source_action": "newCloudMachine",
+      "source": "Sources/KeyboardShortcutSettings.swift:101",
+      "phase": "P7",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-018",
+      "source_action": "saveLayoutTemplate",
+      "source": "Sources/KeyboardShortcutSettings.swift:102",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-019",
+      "source_action": "openFolder",
+      "source": "Sources/KeyboardShortcutSettings.swift:103",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-020",
+      "source_action": "saveSession",
+      "source": "Sources/KeyboardShortcutSettings.swift:104",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-021",
+      "source_action": "openSession",
+      "source": "Sources/KeyboardShortcutSettings.swift:105",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-022",
+      "source_action": "reopenPreviousSession",
+      "source": "Sources/KeyboardShortcutSettings.swift:106",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-023",
+      "source_action": "goToWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:107",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-024",
+      "source_action": "commandPalette",
+      "source": "Sources/KeyboardShortcutSettings.swift:108",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-025",
+      "source_action": "agentInbox",
+      "source": "Sources/KeyboardShortcutSettings.swift:109",
+      "phase": "P6",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-026",
+      "source_action": "commandPaletteNext",
+      "source": "Sources/KeyboardShortcutSettings.swift:110",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-027",
+      "source_action": "commandPalettePrevious",
+      "source": "Sources/KeyboardShortcutSettings.swift:111",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-028",
+      "source_action": "sendFeedback",
+      "source": "Sources/KeyboardShortcutSettings.swift:112",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-029",
+      "source_action": "showNotifications",
+      "source": "Sources/KeyboardShortcutSettings.swift:113",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-030",
+      "source_action": "jumpToUnread",
+      "source": "Sources/KeyboardShortcutSettings.swift:114",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-031",
+      "source_action": "jumpToLastPrompt",
+      "source": "Sources/KeyboardShortcutSettings.swift:115",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-032",
+      "source_action": "toggleUnread",
+      "source": "Sources/KeyboardShortcutSettings.swift:116",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-033",
+      "source_action": "markOldestUnreadAndJumpNext",
+      "source": "Sources/KeyboardShortcutSettings.swift:117",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-034",
+      "source_action": "markAllNotificationsRead",
+      "source": "Sources/KeyboardShortcutSettings.swift:118",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-035",
+      "source_action": "clearAllNotifications",
+      "source": "Sources/KeyboardShortcutSettings.swift:119",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-036",
+      "source_action": "focusRightSidebar",
+      "source": "Sources/KeyboardShortcutSettings.swift:120",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-037",
+      "source_action": "switchRightSidebarToFiles",
+      "source": "Sources/KeyboardShortcutSettings.swift:121",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-038",
+      "source_action": "switchRightSidebarToFind",
+      "source": "Sources/KeyboardShortcutSettings.swift:122",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-039",
+      "source_action": "switchRightSidebarToSessions",
+      "source": "Sources/KeyboardShortcutSettings.swift:123",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-040",
+      "source_action": "switchRightSidebarToFeed",
+      "source": "Sources/KeyboardShortcutSettings.swift:124",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-041",
+      "source_action": "switchRightSidebarToDock",
+      "source": "Sources/KeyboardShortcutSettings.swift:125",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-042",
+      "source_action": "switchRightSidebarToMachines",
+      "source": "Sources/KeyboardShortcutSettings.swift:126",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-043",
+      "source_action": "triggerFlash",
+      "source": "Sources/KeyboardShortcutSettings.swift:127",
+      "phase": "P2",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-044",
+      "source_action": "nextSurface",
+      "source": "Sources/KeyboardShortcutSettings.swift:129",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-045",
+      "source_action": "prevSurface",
+      "source": "Sources/KeyboardShortcutSettings.swift:130",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-046",
+      "source_action": "moveSurfaceLeft",
+      "source": "Sources/KeyboardShortcutSettings.swift:131",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-047",
+      "source_action": "moveSurfaceRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:131",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-048",
+      "source_action": "moveSurfaceToPreviousPane",
+      "source": "Sources/KeyboardShortcutSettings.swift:132",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-049",
+      "source_action": "moveSurfaceToNextPane",
+      "source": "Sources/KeyboardShortcutSettings.swift:132",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-050",
+      "source_action": "moveSurfaceToPaneLeft",
+      "source": "Sources/KeyboardShortcutSettings.swift:133",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-051",
+      "source_action": "moveSurfaceToPaneRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:133",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-052",
+      "source_action": "moveSurfaceToPaneUp",
+      "source": "Sources/KeyboardShortcutSettings.swift:134",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-053",
+      "source_action": "moveSurfaceToPaneDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:134",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-054",
+      "source_action": "selectSurfaceByNumber",
+      "source": "Sources/KeyboardShortcutSettings.swift:135",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-055",
+      "source_action": "nextSidebarTab",
+      "source": "Sources/KeyboardShortcutSettings.swift:136",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-056",
+      "source_action": "prevSidebarTab",
+      "source": "Sources/KeyboardShortcutSettings.swift:137",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-057",
+      "source_action": "nextSidebarTabInGroup",
+      "source": "Sources/KeyboardShortcutSettings.swift:138",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-058",
+      "source_action": "prevSidebarTabInGroup",
+      "source": "Sources/KeyboardShortcutSettings.swift:139",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-059",
+      "source_action": "moveWorkspaceUp",
+      "source": "Sources/KeyboardShortcutSettings.swift:140",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-060",
+      "source_action": "moveWorkspaceDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:140",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-061",
+      "source_action": "focusHistoryBack",
+      "source": "Sources/KeyboardShortcutSettings.swift:141",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-062",
+      "source_action": "focusHistoryForward",
+      "source": "Sources/KeyboardShortcutSettings.swift:142",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-063",
+      "source_action": "focusHistoryLast",
+      "source": "Sources/KeyboardShortcutSettings.swift:143",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-064",
+      "source_action": "selectWorkspaceByNumber",
+      "source": "Sources/KeyboardShortcutSettings.swift:144",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-065",
+      "source_action": "renameTab",
+      "source": "Sources/KeyboardShortcutSettings.swift:145",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-066",
+      "source_action": "renameWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:146",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-067",
+      "source_action": "editWorkspaceDescription",
+      "source": "Sources/KeyboardShortcutSettings.swift:147",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-068",
+      "source_action": "markWorkspaceDone",
+      "source": "Sources/KeyboardShortcutSettings.swift:148",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-069",
+      "source_action": "cycleWorkspaceStatus",
+      "source": "Sources/KeyboardShortcutSettings.swift:149",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-070",
+      "source_action": "toggleChecklistItemComplete",
+      "source": "Sources/KeyboardShortcutSettings.swift:150",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-071",
+      "source_action": "closeTab",
+      "source": "Sources/KeyboardShortcutSettings.swift:151",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-072",
+      "source_action": "closeOtherTabsInPane",
+      "source": "Sources/KeyboardShortcutSettings.swift:152",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-073",
+      "source_action": "closeWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:153",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-074",
+      "source_action": "newWorkspaceGroup",
+      "source": "Sources/KeyboardShortcutSettings.swift:154",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-075",
+      "source_action": "groupSelectedWorkspaces",
+      "source": "Sources/KeyboardShortcutSettings.swift:155",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-076",
+      "source_action": "toggleFocusedWorkspaceGroupCollapsed",
+      "source": "Sources/KeyboardShortcutSettings.swift:156",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-077",
+      "source_action": "reopenClosedWorkspace",
+      "source": "Sources/KeyboardShortcutSettings.swift:157",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-078",
+      "source_action": "reopenClosedBrowserPanel",
+      "source": "Sources/KeyboardShortcutSettings.swift:158",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-079",
+      "source_action": "newSurface",
+      "source": "Sources/KeyboardShortcutSettings.swift:159",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-080",
+      "source_action": "toggleTerminalCopyMode",
+      "source": "Sources/KeyboardShortcutSettings.swift:160",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-081",
+      "source_action": "focusTextBoxInput",
+      "source": "Sources/KeyboardShortcutSettings.swift:161",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-082",
+      "source_action": "cycleTextBoxSubmitAction",
+      "source": "Sources/KeyboardShortcutSettings.swift:161",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-083",
+      "source_action": "attachTextBoxFile",
+      "source": "Sources/KeyboardShortcutSettings.swift:161",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-084",
+      "source_action": "sendCtrlFToTerminal",
+      "source": "Sources/KeyboardShortcutSettings.swift:162",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-085",
+      "source_action": "pasteLastScreenshot",
+      "source": "Sources/KeyboardShortcutSettings.swift:163",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-086",
+      "source_action": "sizeTerminalToMyWindow",
+      "source": "Sources/KeyboardShortcutSettings.swift:164",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-087",
+      "source_action": "clearScreenKeepScrollback",
+      "source": "Sources/KeyboardShortcutSettings.swift:165",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-088",
+      "source_action": "focusLeft",
+      "source": "Sources/KeyboardShortcutSettings.swift:167",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-089",
+      "source_action": "focusRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:168",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-090",
+      "source_action": "focusUp",
+      "source": "Sources/KeyboardShortcutSettings.swift:169",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-091",
+      "source_action": "focusDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:170",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-092",
+      "source_action": "focusPreviousPane",
+      "source": "Sources/KeyboardShortcutSettings.swift:171",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-093",
+      "source_action": "focusNextPane",
+      "source": "Sources/KeyboardShortcutSettings.swift:172",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-094",
+      "source_action": "focusPaneByNumber",
+      "source": "Sources/KeyboardShortcutSettings.swift:172",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-095",
+      "source_action": "splitRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:173",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-096",
+      "source_action": "splitDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:173",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-097",
+      "source_action": "toggleSplitZoom",
+      "source": "Sources/KeyboardShortcutSettings.swift:173",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-098",
+      "source_action": "newPaneAutoLayout",
+      "source": "Sources/KeyboardShortcutSettings.swift:173",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-099",
+      "source_action": "increaseWorkspaceTerminalFontSize",
+      "source": "Sources/KeyboardShortcutSettings.swift:174",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-100",
+      "source_action": "decreaseWorkspaceTerminalFontSize",
+      "source": "Sources/KeyboardShortcutSettings.swift:175",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-101",
+      "source_action": "resetWorkspaceTerminalFontSize",
+      "source": "Sources/KeyboardShortcutSettings.swift:176",
+      "phase": "P4",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-102",
+      "source_action": "equalizeSplits",
+      "source": "Sources/KeyboardShortcutSettings.swift:177",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-103",
+      "source_action": "resizePaneLeft",
+      "source": "Sources/KeyboardShortcutSettings.swift:178",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-104",
+      "source_action": "resizePaneRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:179",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-105",
+      "source_action": "resizePaneUp",
+      "source": "Sources/KeyboardShortcutSettings.swift:180",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-106",
+      "source_action": "resizePaneDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:181",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-107",
+      "source_action": "splitBrowserRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:182",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-108",
+      "source_action": "splitBrowserDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:183",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-109",
+      "source_action": "toggleCanvasLayout",
+      "source": "Sources/KeyboardShortcutSettings.swift:186",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-110",
+      "source_action": "canvasRevealFocusedPane",
+      "source": "Sources/KeyboardShortcutSettings.swift:187",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-111",
+      "source_action": "canvasOverview",
+      "source": "Sources/KeyboardShortcutSettings.swift:188",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-112",
+      "source_action": "canvasZoomIn",
+      "source": "Sources/KeyboardShortcutSettings.swift:189",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-113",
+      "source_action": "canvasZoomOut",
+      "source": "Sources/KeyboardShortcutSettings.swift:190",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-114",
+      "source_action": "canvasZoomReset",
+      "source": "Sources/KeyboardShortcutSettings.swift:191",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-115",
+      "source_action": "canvasTidy",
+      "source": "Sources/KeyboardShortcutSettings.swift:192",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-116",
+      "source_action": "canvasAlignLeft",
+      "source": "Sources/KeyboardShortcutSettings.swift:193",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-117",
+      "source_action": "canvasAlignRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:194",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-118",
+      "source_action": "canvasAlignTop",
+      "source": "Sources/KeyboardShortcutSettings.swift:195",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-119",
+      "source_action": "canvasAlignBottom",
+      "source": "Sources/KeyboardShortcutSettings.swift:196",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-120",
+      "source_action": "canvasEqualizeWidths",
+      "source": "Sources/KeyboardShortcutSettings.swift:197",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-121",
+      "source_action": "canvasEqualizeHeights",
+      "source": "Sources/KeyboardShortcutSettings.swift:198",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-122",
+      "source_action": "canvasDistributeHorizontally",
+      "source": "Sources/KeyboardShortcutSettings.swift:199",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-123",
+      "source_action": "canvasDistributeVertically",
+      "source": "Sources/KeyboardShortcutSettings.swift:200",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-124",
+      "source_action": "toggleRightSidebar",
+      "source": "Sources/KeyboardShortcutSettings.swift:203",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-125",
+      "source_action": "fileExplorerOpenSelection",
+      "source": "Sources/KeyboardShortcutSettings.swift:204",
+      "phase": "P1",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-126",
+      "source_action": "fileExplorerOpenSelectionFinderAlias",
+      "source": "Sources/KeyboardShortcutSettings.swift:205",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-127",
+      "source_action": "saveFilePreview",
+      "source": "Sources/KeyboardShortcutSettings.swift:208",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-128",
+      "source_action": "toggleFileEditorWordWrap",
+      "source": "Sources/KeyboardShortcutSettings.swift:208",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-129",
+      "source_action": "openBrowser",
+      "source": "Sources/KeyboardShortcutSettings.swift:209",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-130",
+      "source_action": "focusBrowserAddressBar",
+      "source": "Sources/KeyboardShortcutSettings.swift:210",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-131",
+      "source_action": "browserBack",
+      "source": "Sources/KeyboardShortcutSettings.swift:211",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-132",
+      "source_action": "browserForward",
+      "source": "Sources/KeyboardShortcutSettings.swift:211",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-133",
+      "source_action": "browserReload",
+      "source": "Sources/KeyboardShortcutSettings.swift:211",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-134",
+      "source_action": "browserHardReload",
+      "source": "Sources/KeyboardShortcutSettings.swift:212",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-135",
+      "source_action": "browserZoomIn",
+      "source": "Sources/KeyboardShortcutSettings.swift:213",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-136",
+      "source_action": "browserZoomOut",
+      "source": "Sources/KeyboardShortcutSettings.swift:214",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-137",
+      "source_action": "browserZoomReset",
+      "source": "Sources/KeyboardShortcutSettings.swift:215",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-138",
+      "source_action": "markdownZoomIn",
+      "source": "Sources/KeyboardShortcutSettings.swift:216",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-139",
+      "source_action": "markdownZoomOut",
+      "source": "Sources/KeyboardShortcutSettings.swift:217",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-140",
+      "source_action": "markdownZoomReset",
+      "source": "Sources/KeyboardShortcutSettings.swift:218",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-141",
+      "source_action": "find",
+      "source": "Sources/KeyboardShortcutSettings.swift:219",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-142",
+      "source_action": "findInDirectory",
+      "source": "Sources/KeyboardShortcutSettings.swift:220",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-143",
+      "source_action": "findNext",
+      "source": "Sources/KeyboardShortcutSettings.swift:221",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-144",
+      "source_action": "findPrevious",
+      "source": "Sources/KeyboardShortcutSettings.swift:222",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-145",
+      "source_action": "hideFind",
+      "source": "Sources/KeyboardShortcutSettings.swift:223",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-146",
+      "source_action": "useSelectionForFind",
+      "source": "Sources/KeyboardShortcutSettings.swift:224",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-147",
+      "source_action": "toggleBrowserDeveloperTools",
+      "source": "Sources/KeyboardShortcutSettings.swift:225",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-148",
+      "source_action": "showBrowserJavaScriptConsole",
+      "source": "Sources/KeyboardShortcutSettings.swift:226",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-149",
+      "source_action": "toggleBrowserFocusMode",
+      "source": "Sources/KeyboardShortcutSettings.swift:227",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-150",
+      "source_action": "toggleBrowserDesignMode",
+      "source": "Sources/KeyboardShortcutSettings.swift:228",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-151",
+      "source_action": "toggleReactGrab",
+      "source": "Sources/KeyboardShortcutSettings.swift:229",
+      "phase": "P3",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-152",
+      "source_action": "openDiffViewer",
+      "source": "Sources/KeyboardShortcutSettings.swift:230",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-153",
+      "source_action": "diffViewerScrollDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:231",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-154",
+      "source_action": "diffViewerScrollUp",
+      "source": "Sources/KeyboardShortcutSettings.swift:232",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-155",
+      "source_action": "diffViewerScrollHalfPageDown",
+      "source": "Sources/KeyboardShortcutSettings.swift:233",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-156",
+      "source_action": "diffViewerScrollHalfPageUp",
+      "source": "Sources/KeyboardShortcutSettings.swift:233",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-157",
+      "source_action": "diffViewerScrollDownEmacs",
+      "source": "Sources/KeyboardShortcutSettings.swift:234",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-158",
+      "source_action": "diffViewerScrollUpEmacs",
+      "source": "Sources/KeyboardShortcutSettings.swift:234",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-159",
+      "source_action": "diffViewerScrollToBottom",
+      "source": "Sources/KeyboardShortcutSettings.swift:235",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-160",
+      "source_action": "diffViewerScrollToTop",
+      "source": "Sources/KeyboardShortcutSettings.swift:236",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-161",
+      "source_action": "diffViewerOpenFileSearch",
+      "source": "Sources/KeyboardShortcutSettings.swift:237",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-162",
+      "source_action": "simulatorHome",
+      "source": "Sources/KeyboardShortcutSettings.swift:238",
+      "phase": "P8",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-163",
+      "source_action": "simulatorRotateLeft",
+      "source": "Sources/KeyboardShortcutSettings.swift:238",
+      "phase": "P8",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-164",
+      "source_action": "simulatorRotateRight",
+      "source": "Sources/KeyboardShortcutSettings.swift:238",
+      "phase": "P8",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-165",
+      "source_action": "simulatorToggleAppearance",
+      "source": "Sources/KeyboardShortcutSettings.swift:239",
+      "phase": "P8",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-166",
+      "source_action": "simulatorToggleSoftwareKeyboard",
+      "source": "Sources/KeyboardShortcutSettings.swift:239",
+      "phase": "P8",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-167",
+      "source_action": "diffViewerNextFile",
+      "source": "Sources/KeyboardShortcutSettings.swift:240",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-168",
+      "source_action": "diffViewerPreviousFile",
+      "source": "Sources/KeyboardShortcutSettings.swift:240",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-169",
+      "source_action": "diffViewerNextHunk",
+      "source": "Sources/KeyboardShortcutSettings.swift:240",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-170",
+      "source_action": "diffViewerPreviousHunk",
+      "source": "Sources/KeyboardShortcutSettings.swift:240",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    },
+    {
+      "id": "UX-ACTION-171",
+      "source_action": "diffViewerToggleViewed",
+      "source": "Sources/KeyboardShortcutSettings.swift:240",
+      "phase": "P5",
+      "status": "needs-behavior-audit",
+      "evidence": []
+    }
+  ]
+}

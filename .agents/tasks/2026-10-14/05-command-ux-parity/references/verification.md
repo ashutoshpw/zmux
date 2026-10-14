@@ -27,6 +27,15 @@ Lifecycle: needs-contract → planned → implemented-unverified → verified. D
 and platform-limited are open states. Never count a printed help line, parser acceptance,
 mock return or informative unavailable error as completed command behavior.
 
+## UI parity is a separate completion dimension
+
+The 428-entry CLI inventory is not a complete feature inventory. Reconcile the independent
+UI action inventory and `ux-parity.md` against menus, context menus, command palette,
+shortcuts, gestures, terminal-engine bindings and stateful recovery flows. Every exposed
+entrypoint needs an enable/focus/lifecycle contract and evidence. Include ⇧⌘T, Recently
+Closed, batch-close cancellation, focus history and missing-container restore in native
+acceptance; validating only create/split misses the core lifecycle.
+
 ## Required acceptance layers
 
 1. **Contract coverage:** compare registry keys/aliases/options to the frozen inventory and

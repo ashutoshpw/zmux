@@ -4,6 +4,11 @@
 - **Updated:** 2026-10-14
 
 ## Notes
+- User clarified that ⌘T is an example: full interaction parity is required, including reopening
+  closed terminal tabs. Added separate UI inventory, broad UX gap matrix and explicit P1
+  ⇧⌘T/Recently Closed, workspace/window recovery, close-other and focus-history contracts.
+- Static source confirms general closed-item recovery despite a legacy browser-named action.
+  Menu/context/gesture audit is still open; CLI coverage is not a product-parity completion gate.
 - User requested a new agent-task covering all CLI commands, ⌘T terminals, embedded browser,
   sidebar collapse and notification/attention behavior. This change is planning only.
 - Read-only source review confirms WebKit browser hosting, per-pane surfaces, ⌘T, sidebar
