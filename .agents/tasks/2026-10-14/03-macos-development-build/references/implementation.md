@@ -37,3 +37,10 @@ need their own checks; successful packaging alone is not proof of those behavior
 - Track successful signaling, never signal the same group twice, and poll/reap already-exited
   leaders. Treat EPERM as benign only when the owned child is independently observed exited.
 - Explicit worker cleanup reports errors through terminal state, rather than only a Drop log.
+
+### Native compiler gate
+- Foundation jobs on Linux/macOS and native workflow Rust checks passed at `46e04a7`.
+- Both Rust macOS targets compiled; Swift failed because the macOS 15 SDK's legacy
+  NSTextInputClient protocol is nonisolated while the view is MainActor-isolated.
+- Use the compiler-supported preconcurrency protocol conformance and retain MainActor
+  isolation/runtime preconditions. Strict concurrency and warnings-as-errors remain enabled.

@@ -1,7 +1,9 @@
 import AppKit
 
 @MainActor
-final class TerminalView: NSView, NSTextInputClient {
+// The macOS 15 SDK's legacy input protocol lacks actor annotations. AppKit calls it
+// on the UI thread; preserve MainActor isolation and runtime checking at this boundary.
+final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     let pane: Pane
     var onInput: ((String) -> Void)?
     var onResize: ((Int, Int) -> Void)?
@@ -160,6 +162,7 @@ final class TerminalView: NSView, NSTextInputClient {
         interpretKeyEvents([event])
     }
     func insertText(_ string: Any, replacementRange: NSRange) {
+        MainActor.preconditionIsolated()
         unmarkText()
         let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
         if !text.isEmpty { onInput?(text) }
@@ -169,6 +172,7 @@ final class TerminalView: NSView, NSTextInputClient {
         if let command = commands[NSStringFromSelector(selector)] { onInput?(command) }
     }
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        MainActor.preconditionIsolated()
         let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
         marked = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.labelColor, .underlineStyle: NSUnderlineStyle.single.rawValue])
         markedSelection = selectedRange; needsDisplay = true
