@@ -382,11 +382,11 @@ fn default_socket_path() -> Result<PathBuf, CliError> {
         let home = env::var_os("HOME")
             .map(PathBuf::from)
             .ok_or_else(|| CliError("HOME is unset; pass --socket <ABSOLUTE_PATH>".into()))?;
-        return Ok(home
+        Ok(home
             .join("Library")
             .join("Application Support")
             .join("zmux")
-            .join("control.sock"));
+            .join("control.sock"))
     }
     #[cfg(not(target_os = "macos"))]
     {
