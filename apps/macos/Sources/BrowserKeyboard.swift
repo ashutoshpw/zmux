@@ -10,7 +10,13 @@ final class BrowserKeyboardEvents {
     private var sequence: UInt32 = 0
     private let source = CGEventSource(stateID: .privateState)
     private(set) var asynchronousCommandWResends: UInt64 = 0
+    private(set) var unownedKeyGeneration: UInt64 = 0
     var directDeliveryDepth = 0
+    func observeUnowned(_ event: NSEvent) {
+        guard !owns(event), [.keyDown, .keyUp, .flagsChanged].contains(event.type) else { return }
+        // Saturation disables acknowledgment rather than permitting an ABA match.
+        if unownedKeyGeneration < UInt64.max { unownedKeyGeneration += 1 }
+    }
     func owns(_ event: NSEvent) -> Bool {
         guard let cg = event.cgEvent else { return false }
         let tag = cg.getIntegerValueField(.eventSourceUserData)
@@ -57,6 +63,7 @@ final class BrowserInputApplication: NSApplication {
     let browserKeyboardEvents = BrowserKeyboardEvents()
     override func sendEvent(_ event: NSEvent) {
         if browserKeyboardEvents.contain(event, applicationDispatch: true) { return }
+        browserKeyboardEvents.observeUnowned(event)
         super.sendEvent(event)
     }
 }
@@ -81,18 +88,22 @@ final class BrowserKeyboardWebView: WKWebView {
     }
     override func keyDown(with event: NSEvent) {
         if directDepth == 0, events?.contain(event) == true { return }
+        events?.observeUnowned(event)
         super.keyDown(with: event)
     }
     override func keyUp(with event: NSEvent) {
         if directDepth == 0, events?.contain(event) == true { return }
+        events?.observeUnowned(event)
         super.keyUp(with: event)
     }
     override func flagsChanged(with event: NSEvent) {
         if directDepth == 0, events?.contain(event) == true { return }
+        events?.observeUnowned(event)
         super.flagsChanged(with: event)
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if directDepth == 0, events?.contain(event) == true { return true }
+        events?.observeUnowned(event)
         return super.performKeyEquivalent(with: event)
     }
 }
@@ -104,6 +115,17 @@ struct BrowserNativeKey {
     private static let shiftedSymbols = ["1":"!","2":"@","3":"#","4":"$","5":"%","6":"^","7":"&","8":"*","9":"(","0":")","-":"_","=":"+","[":"{","]":"}","\\":"|",";":":","'":"\"",",":"<",".":">","/":"?","`":"~"]
     static func shifted(_ characters: String) -> String {
         shiftedSymbols[characters] ?? characters.uppercased()
+    }
+    func observedKey(flags: CGEventFlags) -> String {
+        if modifier == .maskShift { return "Shift" }
+        if modifier == .maskControl { return "Control" }
+        if modifier == .maskAlternate { return "Alt" }
+        if modifier == .maskCommand { return "Meta" }
+        let named: [CGKeyCode: String] = [36:"Enter",76:"Enter",48:"Tab",53:"Escape",51:"Backspace",117:"Delete",123:"ArrowLeft",124:"ArrowRight",125:"ArrowDown",126:"ArrowUp",115:"Home",119:"End",116:"PageUp",121:"PageDown"]
+        if let name = named[code] { return name }
+        if let scalar = characters.unicodeScalars.first, characters.unicodeScalars.count == 1,
+           (0xf704...0xf717).contains(scalar.value) { return "F\(scalar.value - 0xf703)" }
+        return flags.contains(.maskShift) && characters.count == 1 && characters.first?.isASCII == true ? Self.shifted(characters) : characters
     }
     static func requiresUnavailableNativeMapping(_ token: String) -> Bool {
         ["CapsLock", "NumLock", "ScrollLock", "Insert", "PrintScreen", "Pause", "ContextMenu", "Clear", "Fn", "Help", "Cancel", "Print", "Select", "Execute", "Undo", "Redo", "Cut", "Copy", "Paste", "Find", "Again", "Props", "AltGraph", "FnLock", "Hyper", "Super", "Symbol", "SymbolLock", "Unidentified"].contains(token)
@@ -142,6 +164,27 @@ struct BrowserNativeKey {
     }
 }
 
+/// Prepared before the asynchronous observer is armed. Delivery remains atomic
+/// on MainActor and commits held state only after its native events are sent.
+@MainActor
+final class BrowserKeyboardDelivery {
+    struct Expected: Encodable {
+        let type, key: String
+        let shift, control, alt, meta: Bool
+    }
+    let expected: [Expected]
+    private let events: [NSEvent]
+    private let commit: () -> Void
+    init(events: [NSEvent], expected: [Expected], commit: @escaping () -> Void) {
+        self.events = events; self.expected = expected; self.commit = commit
+    }
+    func deliver(on view: BrowserKeyboardWebView, willDeliver: () throws -> Void) throws {
+        try willDeliver()
+        for event in events { try view.deliver(event) }
+        commit()
+    }
+}
+
 /// One host owns at most 64 held native keys. State never follows a replacement
 /// host or document, and native creation/delivery failure never selects fallback.
 @MainActor
@@ -150,7 +193,7 @@ final class BrowserKeyboardState {
     var flags: CGEventFlags { held.values.reduce(CGEventFlags()) { $0.union($1.modifier) } }
     var modifiers: [String: Bool] { ["shift": flags.contains(.maskShift), "control": flags.contains(.maskControl), "alt": flags.contains(.maskAlternate), "meta": flags.contains(.maskCommand)] }
     func clear() { held.removeAll() }
-    func execute(_ operation: BrowserKeyboardOperation, key: BrowserNativeKey, on view: BrowserKeyboardWebView, willDeliver: () throws -> Void) throws {
+    func prepare(_ operation: BrowserKeyboardOperation, key: BrowserNativeKey) throws -> BrowserKeyboardDelivery {
         guard let events = (NSApp as? BrowserInputApplication)?.browserKeyboardEvents else {
             throw BridgeFailure(message: "Native browser input containment is unavailable")
         }
@@ -164,16 +207,20 @@ final class BrowserKeyboardState {
             guard held[key.code] == nil else { throw BridgeFailure(message: "Release this held key before pressing it") }
         }
         let nextFlags = next.values.reduce(CGEventFlags()) { $0.union($1.modifier) }
-        if operation == .press {
-            let down = try events.event(key, down: true, flags: flags.union(key.modifier))
-            let up = try events.event(key, down: false, flags: flags)
-            try willDeliver()
-            try view.deliver(down); try view.deliver(up)
-        } else {
-            let event = try events.event(key, down: operation == .down, flags: nextFlags, repeated: operation == .down && held[key.code] != nil)
-            try willDeliver()
-            try view.deliver(event)
-            held = next
+        var prepared: [NSEvent] = []
+        var expected: [BrowserKeyboardDelivery.Expected] = []
+        func append(down: Bool, flags: CGEventFlags, repeated: Bool = false) throws {
+            prepared.append(try events.event(key, down: down, flags: flags, repeated: repeated))
+            expected.append(.init(type: down ? "keydown" : "keyup", key: key.observedKey(flags: flags),
+                                  shift: flags.contains(.maskShift), control: flags.contains(.maskControl),
+                                  alt: flags.contains(.maskAlternate), meta: flags.contains(.maskCommand)))
         }
+        if operation == .press {
+            try append(down: true, flags: flags.union(key.modifier))
+            try append(down: false, flags: flags)
+        } else {
+            try append(down: operation == .down, flags: nextFlags, repeated: operation == .down && held[key.code] != nil)
+        }
+        return BrowserKeyboardDelivery(events: prepared, expected: expected) { self.held = next }
     }
 }

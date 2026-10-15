@@ -88,6 +88,41 @@ replay, synthetic event, default compensation or production behavior change.
 Native keyboard acceptance remains pending; the separate diagnostic relaunch's
 non-key-window sidebar drag failure is not the original failure.
 
+Run 38823748479 at `52736fcc3f5f9a813c5162354fe8f2496f168780` established the
+ordering race: the native press snapshot retained `First fixture`, while one
+subsequent actual DOM read showed `abx`, caret3 and trusted `keydown:x`/`keyup:x`.
+The app was active, the unrelated key window was retained and the target remained
+detached. Delivery/default insertion occurred; the snapshot overtook it.
+
+The repair prepares native events, then arms one isolated-world observer bound to
+the host/document operation token before sending them. It requires the prepared
+trusted key phase/key/modifier sequence. The final event posts a MessageChannel
+task, so acknowledgment follows the event dispatch task and its synchronous
+defaults. Native receipt/snapshot JavaScript awaits that acknowledgment. No fixed
+delay, polling, replay, synthetic trusted event or default compensation is used.
+Arming and observation share one charged physical callback slot; the original
+absolute deadline, current-owner/process/readiness check and mutation boundary
+remain. A logical timeout cannot release a pending physical keyboard slot.
+
+App, window and browser-view keyboard entrypoints count unowned native events.
+The captured counter must remain unchanged through acknowledgment, excluding
+physical keyboard interference from a successful receipt; saturation fails closed.
+Owned tagged resends are excluded. A dispatched operation with failed/ambiguous
+observation poisons that document's keyboard admission until navigation or owner
+replacement, preventing a late prior key from acknowledging a later operation.
+The isolated observer has one bounded sequence, listener pair, deadline and port
+pair; page capture suppression yields failure, never assumed success.
+
+The existing strict native snapshot/default/phase assertions remain. Native
+receipts now require observed-event acknowledgment, including modifier-only
+Shift down/up; the original exact cross-request trusted Shift sequence remains.
+A new real native suppression journey requires uncertain failure, refusal of a
+later same-document key, and recovery by reload. The real Chromium DOM suite
+passes148 cases, including untrusted-event and token/replacement rejection. These
+portable cases establish observer trust/identity negatives, not WebKit input or
+post-default timing. Strict Swift typing and the same packaged native regression
+remain required before keyboard acceptance.
+
 # B02a browser automation bridge
 
 ## B02g type, select and pixel scroll (2026-10-15)

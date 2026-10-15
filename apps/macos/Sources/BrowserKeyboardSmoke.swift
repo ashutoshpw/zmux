@@ -19,7 +19,7 @@ enum BrowserKeyboardSmoke {
     }
     private struct Envelope<T: Decodable>: Decodable { let value: T }
     private struct Reply: Decodable {
-        struct Value: Decodable { let dispatched: Bool; let input: String; let nativeDefaults: Bool? }
+        struct Value: Decodable { let dispatched: Bool; let input: String; let nativeDefaults: Bool?; let nativeEventObserved: Bool? }
         let value: Value
         let surfaceId: UInt64
         let hostId: UUID
@@ -88,6 +88,7 @@ enum BrowserKeyboardSmoke {
                 let reply = try decode(Reply.self, await cli(["browser", operation, "--key", token] + target + (after ? ["--snapshot-after"] : []), false))
                 guard reply.value.dispatched, reply.value.input == (synthetic ? "synthetic" : "native"),
                       !synthetic || reply.value.nativeDefaults == false,
+                      synthetic || reply.value.nativeEventObserved == true,
                       reply.contentWorld == (synthetic ? "isolated" : "native"), reply.hostId == host,
                       reply.surfaceId == id, reply.documentGeneration == generation,
                       !after || reply.snapshot != nil else {
@@ -124,6 +125,17 @@ enum BrowserKeyboardSmoke {
             _ = try await cli(["browser", "eval", "document.getElementById('entry').addEventListener('keydown',event=>event.preventDefault(),{once:true});null"] + target, false)
             try await action("press", "x")
             _ = try await check({ $0.value == "ab" && $0.events.allSatisfy(\.trusted) }, "Canceled native default was forced or downgraded")
+            try await setup()
+            _ = try await cli(["browser", "eval", "window.addEventListener('keydown',event=>event.stopImmediatePropagation(),{capture:true,once:true});null"] + target, false)
+            let suppressed = String(decoding: try await cli(["--timeout", "2000", "browser", "press", "x"] + target, true), as: UTF8.self)
+            guard suppressed.contains("native_input_unacknowledged"), suppressed.contains("outcome may be unknown") else {
+                throw BridgeFailure(message: "Suppressed native acknowledgment fabricated success or lost mutation uncertainty: " + suppressed)
+            }
+            let poisoned = String(decoding: try await cli(["browser", "press", "x"] + target, true), as: UTF8.self)
+            guard poisoned.contains("native_keyboard_state_unknown") else {
+                throw BridgeFailure(message: "Unacknowledged native input admitted another key in the same document: " + poisoned)
+            }
+            _ = try await cli(["browser", "reload"] + target, false)
             try await setup()
             try await action("press", "x")
             try await action("press", "Backspace")
