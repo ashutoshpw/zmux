@@ -15,6 +15,14 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private var generation: UInt64?
     private var automationOwner: BrowserOwner?
     private var emitAutomation: (@MainActor (BrowserHostEvent) -> Void)?
+    private struct PendingDownload {
+        // Retain the exact policy object until WebKit converts it; object IDs alone
+        // could otherwise be reused by another navigation.
+        let policy: AnyObject
+        let token: BrowserDownloadToken
+        let expiry: Task<Void, Never>
+    }
+    private var pendingDownloads: [ObjectIdentifier: PendingDownload] = [:]
     private var closed = false
     private var processTerminated = false
     private var currentNavigation: WKNavigation?
@@ -136,6 +144,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             return
         }
         if let current = automationOwner {
+            cancelPendingDownloads()
+            owner?.cancelBrowserDownloads(host: hostID)
             cancelOperations(code: "host_replaced", message: "Browser runtime owner changed")
             emitAutomation?(.detach(owner: current))
         }
@@ -196,13 +206,17 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     func close() {
         guard !closed else { return }
         closed = true
+        cancelPendingDownloads()
+        owner?.cancelBrowserDownloads(host: hostID)
         invalidateTitleObservation()
         titleEvents.continuation.finish(); titleTask?.cancel(); titleTask = nil
         cancelOperations(code: "host_closed", message: "Browser surface was closed")
         if let current = automationOwner { emitAutomation?(.detach(owner: current)) }
         automationOwner = nil
         currentNavigation = nil
-        webView.stopLoading(); webView.navigationDelegate = nil; webView.removeFromSuperview()
+        webView.stopLoading()
+        if pendingDownloads.isEmpty { webView.navigationDelegate = nil }
+        webView.removeFromSuperview()
     }
     /// Starts exactly once; asynchronous WebKit callbacks cannot replay a timed-out operation.
     func executeAutomation(_ request: NativeBrowserRequest) {
@@ -466,7 +480,11 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private func showError(_ message: String) { status.stringValue = message; status.textColor = .systemRed }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard !closed else { return .cancel }
-        if navigationAction.shouldPerformDownload { showError("Downloads are not available in this development build"); return .cancel }
+        if navigationAction.shouldPerformDownload {
+            guard let url = navigationAction.request.url, Self.allowedDownload(url),
+                  await reserveDownload(policy: navigationAction, filename: url.lastPathComponent) else { return .cancel }
+            return .download
+        }
         guard let url = navigationAction.request.url, Self.allowed(url) else { showError("This link type is not supported"); return .cancel }
         if navigationAction.targetFrame == nil {
             if let pane = owner?.snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.surfaces.contains(where: { $0.id == surfaceID }) }) {
@@ -478,8 +496,67 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
         guard !closed else { return .cancel }
-        guard navigationResponse.canShowMIMEType else { showError("Downloads are not available in this development build"); return .cancel }
+        let response = navigationResponse.response
+        let attachment = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?
+            .split(separator: ";", maxSplits: 1).first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "attachment"
+        if !navigationResponse.canShowMIMEType || attachment {
+            guard let url = response.url, Self.allowedDownload(url),
+                  await reserveDownload(policy: navigationResponse, filename: response.suggestedFilename ?? url.lastPathComponent) else { return .cancel }
+            return .download
+        }
         return .allow
+    }
+    private static func allowedDownload(_ url: URL) -> Bool {
+        allowed(url) && ["https", "http"].contains(url.scheme?.lowercased() ?? "")
+    }
+    private func reserveDownload(policy: AnyObject, filename: String) async -> Bool {
+        guard !closed, pendingDownloads.count < 4, let captured = automationOwner, let owner else {
+            showError("Download owner or capacity is unavailable."); return false
+        }
+        do {
+            let token = try await owner.reserveBrowserDownload(origin: captured, profile: profileID, webView: webView, conversionOwner: self, filename: filename)
+            // Capture precedes admission. A document/host change while Rust validates
+            // cannot silently assign this conversion to the replacement page.
+            guard !closed, !processTerminated, automationOwner == captured else {
+                owner.abandonBrowserDownload(token); return false
+            }
+            let key = ObjectIdentifier(policy)
+            let expiry = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                guard let self, let pending = self.pendingDownloads[key] else { return }
+                self.owner?.cancelBrowserDownloadConversion(pending.token)
+                self.showError("WebKit did not deliver the download conversion.")
+            }
+            pendingDownloads[key] = PendingDownload(policy: policy, token: token, expiry: expiry)
+            for id in Array(operations.keys) where operations[id]?.request.action.isNavigation == true {
+                failOperation(id, code: "navigation_became_download", message: "Navigation became a download; observe it through browser download list or wait.", outcomeUnknown: false)
+            }
+            currentNavigation = nil
+            status.stringValue = "Download started"; status.textColor = ZmuxPalette.subdued
+            return true
+        } catch { showError(error.localizedDescription); return false }
+    }
+    private func adoptDownload(_ download: WKDownload, policy: AnyObject) {
+        guard let pending = pendingDownloads.removeValue(forKey: ObjectIdentifier(policy)) else {
+            download.cancel { _ in }; showError("An unowned download was refused."); return
+        }
+        pending.expiry.cancel()
+        owner?.adoptBrowserDownload(download, token: pending.token, webView: webView)
+        if closed && pendingDownloads.isEmpty { webView.navigationDelegate = nil }
+    }
+    private func cancelPendingDownloads() {
+        for pending in pendingDownloads.values {
+            pending.expiry.cancel()
+            owner?.cancelBrowserDownloadConversion(pending.token)
+        }
+        // Retain exact policy objects and the navigation delegate until didBecome.
+        // A close/timeout cannot pretend the not-yet-delivered object is gone.
+    }
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        adoptDownload(download, policy: navigationAction)
+    }
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        adoptDownload(download, policy: navigationResponse)
     }
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         guard !closed else { return }
@@ -517,6 +594,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !closed else { return }
         processTerminated = true
+        cancelPendingDownloads()
+        owner?.cancelBrowserDownloads(host: hostID)
         advanceDocument(causedBy: nil)
         showError("Page stopped unexpectedly. Reload to recover.")
     }

@@ -791,7 +791,7 @@ impl BrowserRuntime {
         self.reconcile(model, now);
         Ok(action)
     }
-    fn check_owner(&self, owner: &BrowserOwner) -> Result<(), BrowserError> {
+    pub(crate) fn check_owner(&self, owner: &BrowserOwner) -> Result<(), BrowserError> {
         if owner.epoch != self.epoch || self.hosts.get(&owner.surface_id) != Some(owner) {
             return Err(BrowserError::StaleOwner);
         }

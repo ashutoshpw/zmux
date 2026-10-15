@@ -33,6 +33,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Check Swift fixture cleanup boundary
         run: scripts/check-swift-fixture-cleanup
+      - name: Verify native browser download file ownership
+        run: scripts/check-browser-download-files
       - name: Install pinned Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Install isolated tmux fixture dependency

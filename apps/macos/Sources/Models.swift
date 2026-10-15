@@ -137,6 +137,8 @@ struct BrowserProfileState: Decodable, Sendable {
     let error: String?
 }
 struct DesktopSnapshot: Decodable, Sendable {
+    let downloadEpoch: UUID
+    let downloads: [BrowserDownloadRecord]
     let browserProfiles: BrowserProfileState
     let nativeNotifications: NativeNotificationSnapshot
     let browserEpoch: UUID

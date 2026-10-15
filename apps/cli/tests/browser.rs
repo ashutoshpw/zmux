@@ -1125,3 +1125,194 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
     );
     drop(running);
 }
+
+#[test]
+fn download_cli_observes_real_paths_uses_native_events_and_shares_read_policy() {
+    use zmux_desktop_runtime::{
+        browser::{BrowserHostEvent, BrowserOwner},
+        downloads::{DownloadToken, NativeDownload},
+    };
+    let fixture = Fixture::new();
+    let (socket, desktop, server) = fixture.desktop();
+    let browser = value(&socket, &fixture.0, &["browser", "open", "about:blank"]);
+    let surface = browser["focused_surface_uuid"].as_str().unwrap();
+    let snap = desktop.snapshot().unwrap();
+    let selected = snap.model.workspaces[0].root.panes()[0].selected();
+    let owner = BrowserOwner {
+        epoch: snap.browser_epoch,
+        identity_namespace: snap.model.identity_namespace,
+        surface_id: selected.id,
+        host_id: "a1111111-1111-4111-8111-111111111111".parse().unwrap(),
+        document_generation: 1,
+        model_navigation: selected.navigation,
+    };
+    desktop
+        .browser_host_event(BrowserHostEvent::Attach {
+            epoch: owner.epoch,
+            surface_id: owner.surface_id,
+            host_id: owner.host_id,
+            document_generation: 1,
+            model_navigation: owner.model_navigation,
+        })
+        .unwrap();
+    let token = DownloadToken {
+        epoch: snap.download_epoch,
+        host_id: owner.host_id,
+        download_id: "a2222222-1111-4111-8111-111111111111".parse().unwrap(),
+    };
+    desktop
+        .native_download(NativeDownload::Begin {
+            owner,
+            token: token.clone(),
+            filename: "public.bin".into(),
+        })
+        .unwrap();
+    desktop
+        .native_download(NativeDownload::Destination {
+            token: token.clone(),
+            filename: "public.bin".into(),
+        })
+        .unwrap();
+    desktop
+        .native_download(NativeDownload::Finalizing {
+            token: token.clone(),
+        })
+        .unwrap();
+    desktop
+        .native_download(NativeDownload::Saved {
+            token: token.clone(),
+            path: "/public.bin".into(),
+            bytes: 9,
+            cleanup_complete: true,
+            message: None,
+        })
+        .unwrap();
+    server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let path = fixture.0.join("observed");
+    fs::write(&path, b"independent bytes").unwrap();
+    let observed = value(
+        &socket,
+        &fixture.0,
+        &[
+            "browser",
+            "download",
+            "--surface",
+            surface,
+            "--path",
+            path.to_str().unwrap(),
+            "--timeout=1",
+        ],
+    );
+    assert_eq!(observed["downloaded"], true);
+    assert_eq!(observed["path"], path.to_str().unwrap());
+    let list = value(
+        &socket,
+        &fixture.0,
+        &[
+            "browser",
+            "--surface",
+            surface,
+            "download",
+            "ls",
+            "--limit=1",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        value(&socket, &fixture.0, &["browser", "download", "list"])["count"],
+        1
+    );
+    assert_eq!(
+        value(
+            &socket,
+            &fixture.0,
+            &["browser", surface, "download", "list"]
+        )["count"],
+        1
+    );
+    assert_eq!(
+        list["downloads"][0]["download_id"],
+        token.download_id.to_string()
+    );
+    assert!(list["downloads"][0]["path_exists"].is_null());
+    let event = value(
+        &socket,
+        &fixture.0,
+        &["browser", "download", "wait", "--tab", surface],
+    );
+    assert_eq!(
+        event["download"]["download_id"],
+        token.download_id.to_string()
+    );
+    let timed_out = invoke(
+        &socket,
+        &fixture.0,
+        &[
+            "browser",
+            "download",
+            "wait",
+            "--surface",
+            surface,
+            "--timeout-ms=1",
+        ],
+    );
+    assert!(!timed_out.status.success());
+    assert!(String::from_utf8_lossy(&timed_out.stderr).contains("timeout"));
+    assert_eq!(
+        value(
+            &socket,
+            &fixture.0,
+            &["browser", "download", "list", "--surface", surface]
+        )["count"],
+        1
+    );
+    let cancel = invoke(
+        &socket,
+        &fixture.0,
+        &[
+            "browser",
+            "download",
+            "cancel",
+            "--surface",
+            surface,
+            &token.download_id.to_string(),
+        ],
+    );
+    assert!(!cancel.status.success());
+    assert!(String::from_utf8_lossy(&cancel.stderr).contains("read-only"));
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(2)).unwrap();
+}
+
+#[test]
+fn download_cli_rejects_conflicting_flags_before_connecting() {
+    let fixture = Fixture::new();
+    let socket = fixture.0.join("absent.sock");
+    let surface = "11111111-1111-4111-8111-111111111111";
+    for tail in [
+        vec!["list", "--limit=0"],
+        vec!["list", "--limit=26"],
+        vec!["list", "--limit=2", "--limit=3"],
+        vec!["wait", "--timeout=NaN"],
+        vec!["wait", "--timeout=inf"],
+        vec!["wait", "--timeout=1", "--timeout-ms=2"],
+        vec!["wait", "--timeout-ms=1.2"],
+        vec!["wait", "--path=a", "b"],
+        vec!["wait", "--path=a", "--path=b"],
+        vec!["list", "--path=a"],
+        vec!["cancel", "not-a-uuid"],
+        vec!["wait", "--unknown"],
+    ] {
+        let mut args = vec!["browser", "download"];
+        args.extend(tail);
+        args.extend(["--surface", surface]);
+        let output = invoke(&socket, &fixture.0, &args);
+        assert!(!output.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("No such file"),
+            "Grammar reached socket: {args:?}"
+        );
+    }
+}

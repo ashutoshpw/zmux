@@ -145,8 +145,62 @@ actor NativeBridge {
         }
         return try await admission.value
     }
+    func cancelBrowserDownload(_ record: BrowserDownloadRecord) async throws {
+        try await send(["command": "downloads", "request": ["scope": ["surface": record.origin.surfaceUuid.uuidString.lowercased()], "action": ["operation": "cancel", "download_id": record.downloadId.uuidString.lowercased()]]])
+    }
     func pasteFiles(surface: UInt64, paths: [String]) async throws {
         try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface, "paths": paths]])
+    }
+    /// Native-only download acknowledgements. Tokens are chosen before admission,
+    /// so an uncertain response can be correlated with authoritative snapshots.
+    func browserDownload(_ command: NativeDownloadCommand) async throws {
+        guard handle != 0 else { throw NativeDownloadFailure(message: "Desktop is closed", outcomeUnknown: false) }
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(command)
+        guard data.count <= 16_384 else { throw NativeDownloadFailure(message: "Download request exceeds its native transport bound", outcomeUnknown: false) }
+        let desktop = handle
+        let acknowledgement = Task<Void, Error>.detached(priority: .userInitiated) {
+            let result = data.withUnsafeBytes { bytes in
+                zmux_desktop_download(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else {
+                throw NativeDownloadFailure(message: "Download acknowledgement is unavailable; its token was retained for reconciliation", outcomeUnknown: true)
+            }
+            struct Response: Decodable {
+                struct Failure: Decodable { let message: String }
+                let ok: Bool
+                let outcomeUnknown: Bool?
+                let error: Failure?
+                let result: DownloadResult?
+            }
+            struct DownloadResult: Decodable {
+                let epoch: UUID?
+                let downloadId: UUID?
+                let hostId: UUID?
+                let accepted: Bool?
+            }
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let response: Response
+            do { response = try decoder.decode(Response.self, from: Self.consume(result.value)) }
+            catch { throw NativeDownloadFailure(message: "Download acknowledgement could not be read; its token was retained", outcomeUnknown: true) }
+            guard response.ok else {
+                throw NativeDownloadFailure(message: response.error?.message ?? "Download command failed", outcomeUnknown: response.outcomeUnknown ?? true)
+            }
+            guard let receipt = response.result else {
+                throw NativeDownloadFailure(message: "Download acknowledgement omitted its result", outcomeUnknown: true)
+            }
+            if command.operation == "begin" {
+                guard let token = command.token, receipt.epoch == token.epoch,
+                      receipt.downloadId == token.downloadId, receipt.hostId == token.hostId else {
+                    throw NativeDownloadFailure(message: "Download admission returned another owner token", outcomeUnknown: true)
+                }
+            } else if receipt.accepted != true {
+                throw NativeDownloadFailure(message: "Download lifecycle acknowledgement is invalid", outcomeUnknown: true)
+            }
+        }
+        try await acknowledgement.value
     }
     /// Wait for the attributable executor receipt on a separate worker. Actor reentrancy
     /// keeps normal input and snapshot polling flowing while this call awaits admission.

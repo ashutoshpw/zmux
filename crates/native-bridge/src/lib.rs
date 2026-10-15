@@ -512,6 +512,38 @@ pub unsafe extern "C" fn zmux_desktop_profile_add(
     })
 }
 
+/// Trusted native download channel, excluded from socket and generic JSON dispatch.
+///
+/// # Safety
+/// Storage must remain readable for length bytes. Call off the UI thread; a lost
+/// acknowledgement must be correlated through its token, never replayed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_download(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_REQUEST_BYTES || request.is_null() {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: caller guarantees checked bounded storage remains readable.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let request =
+            serde_json::from_slice::<zmux_desktop_runtime::downloads::NativeDownload>(bytes)
+                .map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        let reply = match desktop.native_download(request) {
+            Ok(result) => json!({"ok": true, "result": result}),
+            Err(error) => {
+                json!({"ok": false, "error": {"message": error.to_string()}, "outcome_unknown": matches!(error, DesktopError::Timeout | DesktopError::Closed)})
+            }
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
 /// Drain trusted native browser work. May wait for executor acknowledgement; call off UI.
 /// A failed call must not be replayed automatically: delivery may have occurred.
 #[unsafe(no_mangle)]
