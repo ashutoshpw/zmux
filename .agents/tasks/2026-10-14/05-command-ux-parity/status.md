@@ -5,9 +5,10 @@
 
 ## Delivered slices
 
-- R01c implemented, final fresh review passed: private authenticated terminal channels; bounded regular
+- R01c committed/pushed (`d7db8fe`), final fresh review passed: private authenticated terminal channels; bounded regular
   file uploads, progress/cancel and origin-bound insertion; native file drop/Finder paste.
-  Current local checks pass with 78 Rust tests plus C ABI. Raw clipboard images, directories,
+  Local checks passed with 78 Rust tests plus C ABI. Hosted macOS exposed a Darwin poll
+  incompatibility (`-1` descriptors); repair and exact-SHA validation are in progress. Raw clipboard images, directories,
   two-host/physical/native acceptance and full R01/V01 remain open.
   See [receipt](references/r01-file-transfers.md).
 
@@ -96,7 +97,7 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 
 ## Next action
 
-Commit/push the reviewed R01c transfer slice and verify exact-SHA Linux/macOS/native checks. Then implement raw clipboard image preparation and
+Repair R01c Darwin polling, review/push and verify exact-SHA Linux/macOS/native checks. Then implement raw clipboard image preparation and
 cleanup, directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 

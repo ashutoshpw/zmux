@@ -72,6 +72,16 @@ The catalog finding is repaired: `paste-files` uses the shared targeted-command 
 Task next actions are updated. A final fresh read-only review returned `ship` with no
 material findings. Exact-SHA native validation remains pending.
 
+## Hosted Darwin repair
+
+At `d7db8fe`, Linux Foundation checks passed but macOS runs `38715393808` and
+`38715393792` failed the real upload with `Illegal fd value -1`. The filedescriptor crate
+uses select(2) on Darwin and rejects POSIX-poll-style disabled placeholders. The repair
+constructs a bounded vector containing only active stdout/stderr/input descriptors.
+The same full real SSH journey provides the hosted red/green acceptance; it is not skipped.
+Fresh focused repair review returned `ship` with no findings. Exact-SHA hosted verification
+is pending after push.
+
 ## Remaining gates
 
 Exact-SHA Linux/macOS tests and native compile/smoke; physical

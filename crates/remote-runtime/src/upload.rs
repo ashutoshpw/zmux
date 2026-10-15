@@ -414,34 +414,32 @@ fn upload_one(
                     .ok_or_else(|| UploadError("remote upload acknowledgement is missing".into()));
             }
         }
-        let mut fds = [
-            pollfd {
-                fd: if eof_out {
-                    -1
-                } else {
-                    stdout.as_raw_file_descriptor()
-                },
-                events: if eof_out { 0 } else { POLLIN },
+        // filedescriptor uses select(2) on macOS; unlike POSIX poll it rejects -1
+        // placeholders. Submit only live descriptors on every platform.
+        let mut fds = Vec::with_capacity(3);
+        if !eof_out {
+            fds.push(pollfd {
+                fd: stdout.as_raw_file_descriptor(),
+                events: POLLIN,
                 revents: 0,
-            },
-            pollfd {
-                fd: if eof_err {
-                    -1
-                } else {
-                    stderr.as_raw_file_descriptor()
-                },
-                events: if eof_err { 0 } else { POLLIN },
+            });
+        }
+        if !eof_err {
+            fds.push(pollfd {
+                fd: stderr.as_raw_file_descriptor(),
+                events: POLLIN,
                 revents: 0,
-            },
-            pollfd {
-                fd: writer
-                    .as_ref()
-                    .map(AsRawFileDescriptor::as_raw_file_descriptor)
-                    .unwrap_or(-1),
-                events: if pending.is_empty() { 0 } else { POLLOUT },
+            });
+        }
+        if let Some(writer) = &writer
+            && !pending.is_empty()
+        {
+            fds.push(pollfd {
+                fd: writer.as_raw_file_descriptor(),
+                events: POLLOUT,
                 revents: 0,
-            },
-        ];
+            });
+        }
         // Bound cancellation latency even when a server stops consuming input.
         if let Err(error) = poll(&mut fds, Some(Duration::from_millis(10)))
             && !matches!(&error, filedescriptor::Error::Poll(e) if e.kind() == io::ErrorKind::Interrupted)
