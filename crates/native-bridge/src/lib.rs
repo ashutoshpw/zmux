@@ -561,7 +561,8 @@ pub unsafe extern "C" fn zmux_desktop_notification_action(
     length: usize,
 ) -> ZmuxResult {
     guard(|| {
-        if request.is_null() || length == 0 || length > 16_384 {
+        // A 4095-byte reply can expand sixfold when JSON escapes control bytes.
+        if request.is_null() || length == 0 || length > 32_768 {
             return Err(INVALID_ARGUMENT);
         }
         // SAFETY: caller provides bounded readable storage for the duration of this call.

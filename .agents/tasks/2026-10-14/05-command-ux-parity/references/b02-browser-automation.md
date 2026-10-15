@@ -100,3 +100,14 @@ never-selected viewport reads, CSP isolated fallback and no replay after a CSP-s
 user exception, and terminal input while a rooted evaluation remains pending.
 B02 advanced browser commands and full V01 remain open; this artifact is not the
 requested full-parity handoff.
+
+## Browser title observation gap found in native artifact
+
+At c9db69c, the AppKit header/tab retained Second fixture while its address was /csp
+and the separate WebKit PNG showed CSP fixture. Header/tab both refresh from the Rust
+surface title, ruling out separate stale drawing caches. BrowserView publishes title
+only in didFinish; later title changes are not observed. Dynamic document.title changes
+therefore have no owner update. The exact late-title ordering of the CSP load is not
+instrumented and remains unproven. Repair should observe title changes with bounded,
+lifecycle-fenced native publication and verify model/header/tab against final WK title;
+an arbitrary capture sleep would not repair the missing observation owner. No fix yet.

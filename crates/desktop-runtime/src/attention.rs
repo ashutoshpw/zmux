@@ -83,6 +83,8 @@ pub struct NotificationContent {
     pub body: String,
     #[serde(default)]
     pub desktop: Option<bool>,
+    #[serde(default)]
+    pub reply: bool,
 }
 /// Creation and selection intent, before session ownership is captured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -220,6 +222,8 @@ pub struct Notification {
     pub subtitle: String,
     pub body: String,
     pub desktop: Option<bool>,
+    pub reply_enabled: bool,
+    pub reply_state: NotificationReplyState,
     pub source: String,
     pub timestamp_ms: u64,
     pub read: bool,
@@ -236,6 +240,7 @@ pub struct NativeNotificationRequest {
     pub title: String,
     pub subtitle: String,
     pub body: String,
+    pub reply_enabled: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct NativeNotificationSnapshot {
@@ -266,11 +271,65 @@ pub enum NativeNotificationEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NativeAttentionAction {
-    Event { event: NativeNotificationEvent },
-    Open { target: NotificationTarget },
-    OpenInbox { target: NotificationTarget },
-    Dismiss { target: NotificationTarget },
+    Event {
+        event: NativeNotificationEvent,
+    },
+    Open {
+        target: NotificationTarget,
+    },
+    OpenInbox {
+        target: NotificationTarget,
+    },
+    Dismiss {
+        target: NotificationTarget,
+    },
     JumpToUnread,
+    Reply {
+        target: NotificationTarget,
+        text: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationReplyState {
+    Disabled,
+    Ready,
+    Pending,
+    Complete,
+    Empty,
+    NotWritten,
+    Partial,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationReplyOutcome {
+    Complete,
+    Empty,
+    NotWritten,
+    Partial,
+    Unknown,
+}
+impl From<NotificationReplyOutcome> for NotificationReplyState {
+    fn from(outcome: NotificationReplyOutcome) -> Self {
+        match outcome {
+            NotificationReplyOutcome::Complete => Self::Complete,
+            NotificationReplyOutcome::Empty => Self::Empty,
+            NotificationReplyOutcome::NotWritten => Self::NotWritten,
+            NotificationReplyOutcome::Partial => Self::Partial,
+            NotificationReplyOutcome::Unknown => Self::Unknown,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct NotificationReply {
+    pub target: NotificationTarget,
+    pub outcome: NotificationReplyOutcome,
+    pub bytes_written: usize,
+    pub total_bytes: usize,
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -288,6 +347,14 @@ pub enum AttentionError {
         "notification target is not a live workspace or surface in an initialized identity namespace"
     )]
     InvalidOwner,
+    #[error(
+        "notification reply requires an explicitly opted-in terminal with an exact live session"
+    )]
+    ReplyNotAllowed,
+    #[error("notification reply generation was already consumed")]
+    ReplyConsumed,
+    #[error("notification reply exceeds 4095 UTF-8 bytes plus its submit character")]
+    ReplyTextTooLarge,
     #[error("notification identity space exhausted")]
     Exhausted,
     #[error("notification generation, owner or epoch is stale")]
@@ -306,6 +373,9 @@ impl AttentionError {
         match self {
             Self::EmptyTitle => "invalid_notification_title",
             Self::InvalidOwner => "invalid_notification_owner",
+            Self::ReplyNotAllowed => "invalid_notification_reply_target",
+            Self::ReplyConsumed => "notification_reply_consumed",
+            Self::ReplyTextTooLarge => "notification_reply_too_large",
             Self::Exhausted => "notification_ids_exhausted",
             Self::StaleTarget => "stale_notification_target",
             Self::StaleAuthorization => "stale_notification_authorization",
@@ -328,6 +398,8 @@ pub enum AttentionCommand {
         body: String,
         #[serde(default)]
         desktop: Option<bool>,
+        #[serde(default)]
+        reply: bool,
     },
     Read {
         id: NotificationSelector,
@@ -586,6 +658,17 @@ impl Attention {
             notification_id: 0,
             destination,
         };
+        if content.reply
+            && !matches!(
+                destination,
+                NotificationDestination::Surface {
+                    session_id: Some(_),
+                    ..
+                }
+            )
+        {
+            return Err(AttentionError::ReplyNotAllowed);
+        }
         self.insert(workspace_id, source, content, read, target)
     }
     fn insert(
@@ -621,6 +704,11 @@ impl Attention {
                 && last.subtitle == subtitle
                 && last.body == body
                 && last.desktop == content.desktop
+                && last.reply_enabled == content.reply
+                && matches!(
+                    last.reply_state,
+                    NotificationReplyState::Disabled | NotificationReplyState::Ready
+                )
                 && same_origin(last.target.as_ref(), Some(&target))
                 && timestamp_ms.saturating_sub(last.timestamp_ms) < 1000
         }) {
@@ -657,6 +745,12 @@ impl Attention {
             subtitle,
             body,
             desktop: content.desktop,
+            reply_enabled: content.reply,
+            reply_state: if content.reply {
+                NotificationReplyState::Ready
+            } else {
+                NotificationReplyState::Disabled
+            },
             source,
             timestamp_ms,
             read,
@@ -678,6 +772,63 @@ impl Attention {
             .find(|n| n.id == id)
             .ok_or_else(|| format!("notification {id} does not exist"))?;
         acknowledge(item);
+        Ok(())
+    }
+    pub fn claim_reply(
+        &mut self,
+        model: &Snapshot,
+        target: &NotificationTarget,
+    ) -> Result<SessionId, AttentionError> {
+        self.native_inbox_target(model, target)?;
+        let item = self.native_item(target)?;
+        if !item.reply_enabled {
+            return Err(AttentionError::ReplyNotAllowed);
+        }
+        if item.reply_state != NotificationReplyState::Ready {
+            return Err(AttentionError::ReplyConsumed);
+        }
+        if item.read {
+            return Err(AttentionError::StaleTarget);
+        }
+        let NotificationDestination::Surface {
+            session_id: Some(session_id),
+            ..
+        } = target.destination
+        else {
+            return Err(AttentionError::ReplyNotAllowed);
+        };
+        let item = self
+            .items
+            .iter_mut()
+            .find(|item| item.id == target.notification_id)
+            .expect("reply owner validated");
+        item.reply_state = NotificationReplyState::Pending;
+        item.delivery.suppress("reply_consumed");
+        Ok(session_id)
+    }
+    /// Finalize the consumed generation, but acknowledge only an exact still-live
+    /// owner after every byte was accepted by its original session's local PTY.
+    pub fn finish_reply(
+        &mut self,
+        model: &Snapshot,
+        reply: &NotificationReply,
+    ) -> Result<(), AttentionError> {
+        let owner = self.native_inbox_target(model, &reply.target);
+        if let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| item.target.as_ref() == Some(&reply.target))
+        {
+            if item.reply_state != NotificationReplyState::Pending {
+                return Err(AttentionError::ReplyConsumed);
+            }
+            item.reply_state = reply.outcome.into();
+        }
+        owner?;
+        if reply.outcome == NotificationReplyOutcome::Complete {
+            self.read(reply.target.notification_id)
+                .map_err(|_| AttentionError::StaleTarget)?;
+        }
         Ok(())
     }
     pub fn reconcile(&mut self, model: &Snapshot) -> bool {
@@ -737,6 +888,7 @@ impl Attention {
                         title: item.title.clone(),
                         subtitle: item.subtitle.clone(),
                         body: item.body.clone(),
+                        reply_enabled: item.reply_enabled,
                     })
                 })
                 .collect(),

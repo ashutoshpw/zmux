@@ -210,7 +210,8 @@ actor NativeBridge {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let data = try encoder.encode(action)
-        guard data.count <= 16_384 else { throw BridgeFailure(message: "Notification action exceeds native transport limit") }
+        // A bounded 4095-byte reply can expand sixfold under JSON escaping.
+        guard data.count <= 32_768 else { throw BridgeFailure(message: "Notification action exceeds native transport limit") }
         let desktop = handle
         return try await Task.detached(priority: .userInitiated) {
             let result = data.withUnsafeBytes { bytes in

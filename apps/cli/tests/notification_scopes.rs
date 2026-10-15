@@ -189,6 +189,57 @@ fn notify_defaults_and_content_options_reach_real_attention_owner() {
 }
 
 #[test]
+fn reply_opt_in_is_explicit_and_reaches_the_exact_terminal_owner() {
+    let app = App::new();
+    let (workspace, _, surface) = create(&app, "reply owner");
+    app.run(&[
+        "notify",
+        "--surface",
+        &surface,
+        "--title",
+        "reply enabled",
+        "--reply",
+        "--desktop",
+        "false",
+    ]);
+    let list = app.run(&["list-notifications"]);
+    let row = list["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["title"] == "reply enabled")
+        .unwrap();
+    assert_eq!(row["reply_enabled"], true);
+    assert_eq!(row["reply_state"], "ready");
+    assert_eq!(row["surface_id"].as_u64().unwrap().to_string(), surface);
+    app.run(&["notify", "--surface", &surface, "--title", "ordinary"]);
+    let list = app.run(&["list-notifications"]);
+    assert_eq!(
+        list["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["title"] == "ordinary")
+            .unwrap()["reply_enabled"],
+        false
+    );
+    let before = ids(&list);
+    let rejected = app.output(
+        &[
+            "notify",
+            "--workspace",
+            &workspace,
+            "--reply",
+            "--title",
+            "no terminal evidence",
+        ],
+        None,
+    );
+    assert!(!rejected.status.success());
+    assert_eq!(ids(&app.run(&["list-notifications"])), before);
+}
+
+#[test]
 fn explicit_workspace_keeps_same_workspace_terminal_caller_provenance() {
     let app = App::new();
     let (workspace, pane, original) = create(&app, "caller owner");
@@ -431,6 +482,9 @@ fn notification_selector_conflicts_fail_before_socket_use() {
         vec!["mark-notification-read", "--id", "not-a-uuid"],
         vec!["dismiss-notification", "--id", "notification:"],
         vec!["jump-to-unread", "--workspace", "1"],
+        vec!["notify", "--reply", "--reply"],
+        vec!["notify", "--clear", "--reply"],
+        vec!["notify", "--reply", "false"],
         vec!["notify", "--desktop", "yes"],
         vec!["notify", "--title", "a", "--title", "b"],
         vec!["notify", "--clear", "--body", "conflict"],

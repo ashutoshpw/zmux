@@ -144,7 +144,7 @@ establish the repair. Actual banners/reply behavior remain separate open gates.
    callback values, bounded UTF-8 text including terminator, and exact result handling.
    Empty/failure fallback must not resend input or falsely acknowledge delivery.
 
-Phase1 is authorized and in progress; subsequent integration is not yet implemented.
+All three phases are now implemented; evidence and remaining native gates follow.
 
 ## Hosted acceptance of N01a-d integration
 
@@ -168,3 +168,38 @@ FIFO delivery receipts, expired queued writes remaining absent after reader resu
 and active backpressure/deadline/shutdown results. The deadline case failed before
 repair by returning Complete after expiry. Panic fallback is source-reviewed rather
 than fault-injected. No desktop/native reply support is claimed by this phase.
+
+Phase1 hosted follow-up: `6cea10a` passes Foundation38741118473 and macOS38741118480,
+including real-PTY receipt tests on Darwin, universal compilation and packaged smoke.
+This validates the session primitive across both hosts; reply UI/core integration
+remains the next separate gate.
+
+## N01e integrated reply acceptance
+
+The CLI now admits explicit terminal-only `notify --reply`; the Rust owner claims
+each exact notification generation once and polls up to eight write receipts without
+blocking the workspace executor. Rust trims bounded UTF-8 text and appends one CR.
+Complete local PTY writes acknowledge read without changing focus. Only Empty or
+NotWritten may use a separately validated exact-target open fallback. Partial,
+unknown and expired responses never resend input or acknowledge read. Consumed
+generations withdraw native delivery rather than rescheduling a changed banner.
+
+The native adapter exposes a text-input category without foreground activation and
+validates exact-target, bounded byte-count receipts. The packaged smoke exercises
+the real Swift bridge and PTY with surrounding whitespace, verifies canonical byte
+counts and terminal output, and checks read state and preserved background focus.
+Visible OS banner interaction remains a separate acceptance gate.
+
+Parent `scripts/check` passes 180 Rust tests, formatting, strict Clippy, notices and
+C ABI capacity/ownership checks. CLI opt-in failed before parser support; runtime
+opt-in and canonical trimming have recorded red/green owner evidence. Hosted
+compilation and packaged reply acceptance remain pending for this integrated slice.
+
+Fresh review identified expired completion slots retained while a PTY receipt remained
+empty. The owner now releases those slots as Unknown at the response deadline;
+late input cannot trigger a second completion or acknowledgement. This exceptional
+worker-stall path is source-reviewed; real PTY deadline/backpressure tests remain
+the behavioral coverage, without introducing a thread-stall test seam.
+
+Fresh independent review accepted the expiry repair with no remaining source blockers.
+Parent full checks pass again after that repair.

@@ -5,16 +5,19 @@
 
 ## Active implementation
 
-- User requires continued implementation through full V01 and a GitHub Actions macOS
-  artifact; phase completion is not task completion. New implementation/review delegates
-  use requested `gpt-6.1-sol` at high effort. Runtime model telemetry is unavailable.
-- Working changes: source-baseline regular-file symlink transfers and explicit nonrecursive
-  directory refusal; shared directional split/navigation and bounded focus history.
-  CLI/native integration and original split restoration are implemented; parent full checks
-  pass (98 Rust tests plus C ABI). Navigation review passed; remote-image harness review
-  found file-publication and SSH-child cleanup races, repaired with atomic publication and
-  owned-process-tree cleanup. Fresh repair review passed. Native Actions execution is
-  pending; V01 remains open.
+- Full V01 and its GitHub Actions macOS artifact remain the objective; subset builds
+  are diagnostic only. Delegation uses the requested gpt-6.1-sol model.
+- N01a-d notification integration and the callback-isolation crash repair passed
+  real macOS packaged checks at c9db69c. Session write receipts also pass Linux/Darwin
+  checks and native packaging at6cea10a.
+- N01e terminal reply opt-in, asynchronous receipt polling and native text actions are
+  implemented and pass 180 Rust tests plus full local checks and fresh review. Hosted
+  reply acceptance remains pending. Replies must not acknowledge queue admission as delivery,
+  replay uncertain writes, borrow mutable focus, or recreate consumed OS banners.
+- Local Docker cloud is healthy on3530; public hostname did not resolve at last check.
+  The user owns tunnel setup. VM/relay/email and full cloud parity remain open.
+- A browser title observation gap was found in inspected native artifacts; repair is
+  queued after replies. Other package/acceptance gaps stay tracked below and in V01.
 
 ## Delivered slices
 

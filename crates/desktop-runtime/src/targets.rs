@@ -38,6 +38,8 @@ pub enum TargetOperation {
         body: String,
         #[serde(default)]
         desktop: Option<bool>,
+        #[serde(default)]
+        reply: bool,
     },
     Notifications {
         action: crate::attention::NotificationAction,

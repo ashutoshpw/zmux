@@ -5,6 +5,7 @@ pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
 pub mod persistence;
+mod replies;
 pub mod sessions;
 pub mod targets;
 pub mod transfers;
@@ -207,6 +208,7 @@ struct Envelope {
     request: Request,
     acknowledgement: Option<SyncSender<Execution>>,
     authorization: Option<control_policy::ControlAdmission>,
+    reply_deadline: Option<Instant>,
 }
 
 pub(crate) struct Execution {
@@ -219,6 +221,7 @@ pub(crate) struct Execution {
     pub session_operation_id: Option<u64>,
     pub notification_mutation: Option<NotificationMutation>,
     pub notification_navigation: Option<NotificationNavigation>,
+    pub notification_reply: Option<attention::NotificationReply>,
     pub browser_operation_id: Option<u64>,
     pub browser_dispatch: Option<BrowserDispatchBatch>,
 }
@@ -243,6 +246,7 @@ pub struct NativeNotificationExecution {
     pub focused_workspace_id: Option<zmux_workspace_core::WorkspaceId>,
     pub focused_surface_id: Option<SurfaceId>,
     pub navigation: Option<NotificationNavigation>,
+    pub reply: Option<attention::NotificationReply>,
 }
 
 impl Desktop {
@@ -306,6 +310,8 @@ impl Desktop {
                     attention,
                     notification_mutation: None,
                     notification_navigation: None,
+                    notification_reply: None,
+                    pending_replies: Vec::new(),
                     transfers: Vec::new(),
                     next_transfer_id: 1,
                     app_active: false,
@@ -342,6 +348,7 @@ impl Desktop {
             request,
             acknowledgement: None,
             authorization: None,
+            reply_deadline: None,
         })
     }
 
@@ -357,6 +364,7 @@ impl Desktop {
             request,
             acknowledgement: Some(sender),
             authorization: Some(authorization),
+            reply_deadline: None,
         })?;
         receiver.recv_timeout(timeout).map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
@@ -406,6 +414,7 @@ impl Desktop {
             request,
             acknowledgement: Some(sender),
             authorization: None,
+            reply_deadline: None,
         })
         .map_err(|error| TransferExecutionError {
             error,
@@ -470,7 +479,7 @@ impl Desktop {
             NativeAttentionAction::Open { .. }
             | NativeAttentionAction::OpenInbox { .. }
             | NativeAttentionAction::JumpToUnread => true,
-            NativeAttentionAction::Dismiss { .. } => false,
+            NativeAttentionAction::Dismiss { .. } | NativeAttentionAction::Reply { .. } => false,
             NativeAttentionAction::Event { .. } => {
                 return Err(DesktopError::Failure(
                     "use native_notification_event for notification observations".into(),
@@ -480,11 +489,10 @@ impl Desktop {
         let execution =
             self.execute_native(Command::NativeAttention { action }, NATIVE_COMMAND_TIMEOUT)?;
         execution.result?;
-        let opens = opens
-            && execution
-                .notification_navigation
-                .as_ref()
-                .is_none_or(|navigation| navigation.opened);
+        let opens = execution
+            .notification_navigation
+            .as_ref()
+            .map_or(opens, |navigation| navigation.opened);
         let focused = opens
             .then(|| {
                 execution
@@ -509,6 +517,7 @@ impl Desktop {
                     .map(|pane| pane.selected_surface)
             }),
             navigation: execution.notification_navigation,
+            reply: execution.notification_reply,
         })
     }
     fn execute_native(
@@ -523,10 +532,18 @@ impl Desktop {
         };
         self.validate(&request)?;
         let (sender, receiver) = mpsc::sync_channel(1);
+        let reply_deadline = matches!(
+            &request.payload,
+            Command::NativeAttention {
+                action: NativeAttentionAction::Reply { .. }
+            }
+        )
+        .then(|| Instant::now() + replies::REPLY_WRITE_TIMEOUT);
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
             authorization: None,
+            reply_deadline,
         })?;
         receiver.recv_timeout(timeout).map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
@@ -700,6 +717,8 @@ struct Worker {
     attention: Attention,
     notification_mutation: Option<NotificationMutation>,
     notification_navigation: Option<NotificationNavigation>,
+    notification_reply: Option<attention::NotificationReply>,
+    pending_replies: Vec<replies::PendingReply>,
     transfers: Vec<TransferSlot>,
     next_transfer_id: u64,
     app_active: bool,
@@ -813,6 +832,7 @@ impl Worker {
             dirty |= self.poll_sessions();
             dirty |= self.attention.reconcile(&self.model.snapshot());
             dirty |= self.poll_transfers();
+            dirty |= self.poll_replies();
             self.retired.retain_mut(|session| {
                 if !session.is_finished() {
                     return true;
@@ -828,6 +848,7 @@ impl Worker {
         }
         self.browser
             .reset("desktop shutdown cancelled browser operations");
+        self.cancel_replies();
         self.attention
             .reset_native("desktop shutdown cancelled native notifications");
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -885,16 +906,18 @@ impl Worker {
     }
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
+        let mut acknowledgement = envelope.acknowledgement;
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
         self.session_operation_id = None;
         self.notification_mutation = None;
         self.notification_navigation = None;
+        self.notification_reply = None;
         self.browser_operation_id = None;
         self.browser_dispatch = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
-        let previous_model = if envelope.acknowledgement.is_some()
+        let previous_model = if acknowledgement.is_some()
             && matches!(
                 &request.payload,
                 Command::Action { .. } | Command::Targeted { .. }
@@ -910,7 +933,12 @@ impl Worker {
             .transpose();
         let result = match guard {
             Err(error) => Err(error.into()),
-            Ok(_guard) => self.execute_command(request.payload),
+            Ok(_guard) => match request.payload {
+                Command::NativeAttention {
+                    action: NativeAttentionAction::Reply { target, text },
+                } => self.admit_reply(target, text, envelope.reply_deadline, &mut acknowledgement),
+                command => self.execute_command(command),
+            },
         };
         self.last_error = result.as_ref().err().map(ToString::to_string);
         let snapshot = self.publish(false);
@@ -958,12 +986,13 @@ impl Worker {
                 (workspaces, panes, surfaces)
             })
             .unwrap_or_default();
-        if let Some(sender) = envelope.acknowledgement {
+        if let Some(sender) = acknowledgement {
             let _ = sender.try_send(Execution {
                 result,
                 session_operation_id: self.session_operation_id,
                 notification_mutation: self.notification_mutation.take(),
                 notification_navigation: self.notification_navigation.take(),
+                notification_reply: self.notification_reply.take(),
                 browser_operation_id: self.browser_operation_id,
                 browser_dispatch: self.browser_dispatch.take(),
                 created_uploads: snapshot
@@ -1105,6 +1134,7 @@ impl Worker {
                 subtitle,
                 body,
                 desktop,
+                reply,
             } => {
                 let address =
                     targets::notification_address(&model, &request.scope, &request.caller)?;
@@ -1115,6 +1145,7 @@ impl Worker {
                         subtitle,
                         body,
                         desktop,
+                        reply,
                     },
                 )
             }
@@ -1276,6 +1307,7 @@ impl Worker {
                 subtitle,
                 body,
                 desktop,
+                reply,
             } => {
                 self.notify_notification(
                     NotificationAddress::Surface(surface_id),
@@ -1284,6 +1316,7 @@ impl Worker {
                         subtitle,
                         body,
                         desktop,
+                        reply,
                     },
                 )?;
             }
@@ -1439,6 +1472,11 @@ impl Worker {
                 self.attention.native_dismiss(&target)?;
             }
             NativeAttentionAction::JumpToUnread => self.jump_to_unread()?,
+            NativeAttentionAction::Reply { .. } => {
+                return Err(DesktopError::Failure(
+                    "notification replies require an acknowledged native envelope".into(),
+                ));
+            }
         }
         Ok(())
     }

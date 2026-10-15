@@ -19,6 +19,7 @@ fn content(title: &str) -> NotificationContent {
         subtitle: "Agent".into(),
         body: "Ready for review".into(),
         desktop: None,
+        reply: false,
     }
 }
 fn authorize(
@@ -48,6 +49,71 @@ fn create(
         .notify_owned(&store.snapshot(), surface, "cli", &content(title), false)
         .unwrap();
     attention.find(id).unwrap().target.clone().unwrap()
+}
+
+#[test]
+fn reply_opt_in_requires_a_terminal_session_and_claiming_once_withdraws_native_delivery() {
+    let (mut store, terminal) = fixture();
+    let workspace = store.snapshot().workspaces[0].clone();
+    store
+        .apply(Action::CreateBrowser {
+            pane_id: workspace.focused_pane,
+            url: "https://example.org".into(),
+            focus: true,
+        })
+        .unwrap();
+    let browser = store.snapshot().workspaces[0].root.panes()[0].selected_surface;
+    let mut attention = Attention::default();
+    let mut reply = content("Explicit reply");
+    reply.reply = true;
+    for address in [
+        NotificationAddress::Workspace(workspace.id),
+        NotificationAddress::Surface(browser),
+    ] {
+        assert!(matches!(
+            attention.notify_owned(&store.snapshot(), address, "cli", &reply, false),
+            Err(AttentionError::ReplyNotAllowed)
+        ));
+        assert_eq!(attention.cursor(), 0);
+    }
+    let ordinary = create(&mut attention, &store, terminal, "No reply opt-in");
+    assert!(matches!(
+        attention.claim_reply(&store.snapshot(), &ordinary),
+        Err(AttentionError::ReplyNotAllowed)
+    ));
+    let id = attention
+        .notify_owned(&store.snapshot(), terminal, "cli", &reply, false)
+        .unwrap();
+    let target = attention.find(id).unwrap().target.clone().unwrap();
+    let before = attention.native_snapshot(&store.snapshot());
+    assert!(
+        before
+            .desired
+            .iter()
+            .find(|request| request.target == target)
+            .unwrap()
+            .reply_enabled
+    );
+    assert_eq!(
+        attention.claim_reply(&store.snapshot(), &target).unwrap(),
+        target.destination.session_id().unwrap()
+    );
+    assert!(!attention.find(id).unwrap().read);
+    assert_eq!(
+        attention.find(id).unwrap().reply_state,
+        NotificationReplyState::Pending
+    );
+    assert!(
+        !attention
+            .native_snapshot(&store.snapshot())
+            .desired
+            .iter()
+            .any(|request| request.target == target)
+    );
+    assert!(matches!(
+        attention.claim_reply(&store.snapshot(), &target),
+        Err(AttentionError::ReplyConsumed)
+    ));
 }
 
 #[test]
@@ -642,6 +708,7 @@ fn desired_native_snapshot_and_payloads_are_bounded_by_the_inbox_owner() {
         subtitle: "s".repeat(200),
         body: "b".repeat(3000),
         desktop: Some(true),
+        reply: false,
     };
     let id = attention
         .notify_owned(&store.snapshot(), surface, "cli", &payload, false)
