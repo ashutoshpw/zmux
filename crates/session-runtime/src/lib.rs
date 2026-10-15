@@ -4,6 +4,8 @@
 #[cfg(not(unix))]
 compile_error!("The initial Zmux PTY prototype supports Linux and macOS only");
 
+pub mod child;
+
 use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, POLLOUT, poll, pollfd};
 use nix::{
     errno::Errno,
@@ -260,15 +262,9 @@ impl ProcessGuard {
         if self.reaped {
             return Ok(true);
         }
-        if self
-            .child
-            .try_wait()
-            .map_err(|e| SessionError::Failure(format!("poll canceled PTY process: {e}")))?
-            .is_some()
-        {
-            self.reaped = true;
-        }
-        Ok(self.reaped)
+        child::observe_child(self.pid, false)
+            .map(|status| status.is_some())
+            .map_err(|e| SessionError::Failure(format!("observe canceled PTY process: {e}")))
     }
     fn signal(&mut self) -> Result<(), SessionError> {
         if self.signaled || self.poll_exit()? {
@@ -582,8 +578,8 @@ struct StartupReady {
 
 // Field order is intentional: release both master descriptors before ProcessGuard waits.
 struct Worker {
-    master: Box<dyn MasterPty + Send>,
-    io: FileDescriptor,
+    master: Option<Box<dyn MasterPty + Send>>,
+    io: Option<FileDescriptor>,
     wake: UnixStream,
     process: ProcessGuard,
     terminal: Terminal,
@@ -691,8 +687,8 @@ impl Worker {
             })),
         });
         let worker = Self {
-            master: pair.master,
-            io,
+            master: Some(pair.master),
+            io: Some(io),
             wake: wake_rx,
             process,
             terminal,
@@ -722,6 +718,11 @@ impl Worker {
             let state = self.run()?;
             if state == State::Exited {
                 self.finish_inputs(InputWriteFailure::SessionExited);
+                // History retains only terminal state. Retire transport and the
+                // physically owned child before publishing completed history.
+                drop(self.io.take());
+                drop(self.master.take());
+                self.process.stop()?;
                 self.shared.exited.store(true, Ordering::Release);
                 self.publish(state, None);
                 self.review_history()?;
@@ -799,6 +800,8 @@ impl Worker {
                 .take();
             if let Some(size) = size {
                 self.master
+                    .as_ref()
+                    .expect("active PTY master")
                     .resize(pty_size(size))
                     .map_err(|e| SessionError::Failure(format!("resize PTY: {e}")))?;
                 self.terminal
@@ -818,7 +821,12 @@ impl Worker {
                 self.pending_deadline = None;
             }
             if !self.pending.is_empty() {
-                match self.io.write(&self.pending[self.written..]) {
+                match self
+                    .io
+                    .as_mut()
+                    .expect("active PTY I/O")
+                    .write(&self.pending[self.written..])
+                {
                     Ok(0) => {
                         return Err(SessionError::Failure(
                             "PTY input write returned zero bytes".into(),
@@ -844,7 +852,7 @@ impl Worker {
             let mut buffer = [0; IO_CHUNK_BYTES];
             if !self.eof {
                 for _ in 0..READ_QUANTA {
-                    match self.io.read(&mut buffer) {
+                    match self.io.as_mut().expect("active PTY I/O").read(&mut buffer) {
                         Ok(0) => {
                             self.eof = true;
                             break;
@@ -868,18 +876,22 @@ impl Worker {
                     }
                 }
             }
-            if !self.process.reaped
-                && let Some(status) = self
-                    .process
-                    .child
-                    .try_wait()
-                    .map_err(|e| SessionError::Failure(format!("poll PTY process: {e}")))?
+            if self.exit_seen.is_none()
+                && let Some(status) = child::observe_child(self.process.pid, false)
+                    .map_err(|e| SessionError::Failure(format!("observe PTY process: {e}")))?
             {
-                self.process.reaped = true;
-                self.exit_code = Some(status.exit_code());
+                self.exit_code = Some(match status {
+                    child::ExitObservation::Exited(code) => code as u32,
+                    child::ExitObservation::Signaled(_) => 1,
+                    _ => {
+                        return Err(SessionError::Failure(
+                            "unexpected PTY stop observation".into(),
+                        ));
+                    }
+                });
                 self.exit_seen = Some(Instant::now());
             }
-            if self.process.reaped && self.eof {
+            if self.exit_seen.is_some() && self.eof {
                 return Ok(State::Exited);
             }
             if self.exit_seen.is_some_and(|t| t.elapsed() >= DRAIN_TIMEOUT) {
@@ -899,7 +911,10 @@ impl Worker {
                     fd: if self.eof {
                         self.wake.as_raw_file_descriptor()
                     } else {
-                        self.io.as_raw_file_descriptor()
+                        self.io
+                            .as_ref()
+                            .expect("active PTY I/O")
+                            .as_raw_file_descriptor()
                     },
                     events: if self.eof { 0 } else { POLLIN }
                         | if self.pending.is_empty() { 0 } else { POLLOUT },

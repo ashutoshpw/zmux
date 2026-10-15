@@ -1,232 +1,196 @@
-# Proposed headless zellij owner and macOS proof
+# Foreground zellij owner and native acceptance
 
-2026-10-15. Design only; no production owner, transport or CLI source is implemented.
-The [version-conformance record](r03-local-zellij-conformance.md) owns the actual
-pinned Linux evidence. This proposal requires review and the native proof below.
+2026-10-15. The approved foreground owner is implemented and passes focused Linux
+checks. Production Rust macOS acceptance remains pending. The passed public-API C
+fixture is recorded in [version conformance](r03-local-zellij-conformance.md).
 
-## Recommendation
+## Scope and public consumer
 
-Build an independently authored headless owner around a private per-record backend
-namespace/cache and a private per-attachment Unix socket broker. Use the installed,
-explicitly supported zellij 0.43.0 executable; do not bundle/import upstream code or
-assets. Keep the existing tmux identity/launch contract separate.
+The actual CLI owns `local-zellij start NAME --headless [--cwd PATH] [--command TEXT]`,
+`attach --headless --id UUID`, `list`, and `status --id UUID`. Start reserves a fresh
+owner once and enters the same foreground attachment path used by later attach.
+Unsupported detached, GUI, adoption and close/prune forms reject before owner setup.
+Status reports `identity_present` or `uncertain`, never semantic attachment or
+protocol liveness. No background service, arbitrary socket import or global PID signal.
 
-The broker gives the product both peer descriptors. It can verify the actual owned
-CLI child and actual reserved server using public socket credential APIs, without
-cross-process socket-table inspection or private Darwin kernel layouts. It forwards
-ordered bytes and never redirects an established connection to a replacement server.
-This is additional transport ownership, with real memory/process/shutdown costs.
-Linux feasibility alone does not establish portable readiness.
+Use the explicitly selected installed Zellij0.43.0 executable. Product execution
+checks its canonical executable path and exact bounded version output. The separate
+host gate downloads and verifies the pinned official no-web archive and binary;
+product execution does not claim checksum verification of a user's installed binary.
+No Zellij implementation, plugin, asset or binary is imported into product source.
 
-The first delivered slice would cover detached start, typed registry listing/status,
-interactive headless attach, explicit owner close, and stale-record cleanup preview/
-prune. GUI creation/reuse/reopen/model migration and managed caller attribution follow
-only after the headless contract passes on macOS. An interactive headless attach has
-the child's terminal/exit contract; it must not emit an early JSON “attached” receipt.
+## Reservation and actual workload bootstrap
 
-## Upstream receipts and transport findings
+A private mode0700 profile contains a mode0600 bounded atomic registry: at most64
+records and128KiB, with a bounded OS lock. A fresh UUID reservation precedes one
+creation attempt. Persisted states are `reserved`, `starting`, `bound`, `uncertain`.
+Any uncertainty after possible execution retains the reservation and forbids replay.
+No automatic retry, adoption, stale-record prune or owner termination is implemented.
 
-The current official [CLI action documentation](https://zellij.dev/documentation/cli-actions#list-clients)
-describes `list-clients` stdout as client ID, focused pane ID and running program.
-That page is current documentation, not a frozen 0.43.0 specification. Pinned source
-confirms the same fields in `SessionLayoutMetadata::list_clients_metadata`.
+Each record derives its short private runtime from the UUID under the canonical
+system temp directory (`z<UUIDsimple>`), with isolated socket/config/cache directories.
+Zellij appends `s/0.43.0/zmux-<full UUID>`. Paths are bounded below the portable Unix
+socket limit. Private type/mode/UID, root/socket device+inode, exact config, no prefix
+shadow, no symlink/resurrection layout and bounded cache walk are revalidated.
+Attach never creates missing runtime storage. Missing storage is uncertainty.
+Private reads use O_NOFOLLOW|O_NONBLOCK before requiring a regular single-link private
+file, so a replaced FIFO cannot block before type validation.
 
-`Action::ListClients` routes through screen, plugin metadata and PTY metadata before
-`ServerInstruction::Log` sends `ServerToClientMsg::Log` to the requesting CLI socket.
-`cli_client::individual_messages_client` prints that Log to stdout. It does **not**
-deliver the table into the user's terminal pane. The same receive loop also ends on
-`UnblockInputThread`; the server broadcasts that message across clients. This is a
-source-backed way for an unrelated unblock to race the asynchronous Log. Empty
-stdout is not a successful client inventory. Neither the table nor `ClientAttributes`
-contains an OS PID, owned-child nonce or per-PTY acknowledgement.
+The transient bootstrap descriptor contains actual starter identity, current CLI
+path, random64hex challenge, cwd/shell and bounded optional command. It is never
+saved in durable registry metadata. The transient layout starts the actual production
+`zmux __local-zellij-supervisor DESCRIPTOR`, not a fixture wrapper or shell ACK.
+The layout includes only internal paths, explicitly restricted to UTF-8 without
+control characters and escaped for quotes/backslashes. Startup text remains JSON.
+The ordinary tab template contains only `pane`, without the supervisor/start command.
 
-`ConnStatus`/`Connected` is an internal server-liveness exchange used by the public
-listing CLI. It is not an acknowledgement of a particular terminal attachment.
-The first slice should invoke the supported CLI through the fenced broker rather
-than reproduce the versioned internal MessagePack schema. A sole-name, empty-cache
-inspection namespace prevents an exited cache from turning a successful human
-listing into a false live result. False negatives may be retried as inspection within
-one deadline; creation is never replayed.
+1. The supervisor connects to the private bootstrap listener, verifies the actual
+   starter socket identity, sends its one-use challenge and waits.
+2. The starter independently obtains the connected supervisor's kernel PID/UID and
+   full identity. It requires the current CLI executable.
+3. The starter connects to the new backend and independently reads its kernel peer
+   identity. It requires the pinned Zellij path and kernel-observed supervisor PPID
+   equal to that exact server PID, including a fresh full identity comparison.
+4. The starting binding and namespace/socket inodes are persisted. Pending foreground
+   cancellation is checked before sending `spawn_once`.
+5. The supervisor spawns the requested workload once with inherited terminal IO.
+   The starter independently reads its full identity and direct PPID/UID, persists
+   `bound`, then sends `committed`. Startup JSON/layout/socket are removed.
+6. The supervisor retains and finally reaps that physical workload. A bootstrap
+   disconnect after spawn does not kill or replay it, even if commit became uncertain.
 
-Pinned IPC transport inspection covered both sides and the locked dependency:
+The registry stores name/UUID/state and full observed process identities, including
+executable paths as identity evidence. It stores no startup shell text, environment,
+credentials or arbitrary socket path. Future GUI identities must remain descriptors.
+Fast-exiting or exec-changing workloads can produce truthful startup/attach uncertainty;
+identity equality is not silently weakened to PID or same UID.
 
-- `IpcSenderWithContext::send` writes MessagePack `(message, ErrorContext)` through
-  `BufWriter<LocalSocketStream>`; the receiver decodes through `BufReader`.
-- Client `connect_to_server` opens that stream and duplicates its local descriptor
-  for reading/writing. Server `new_client` performs the corresponding local duplicate.
-  A local `dup` is not descriptor transfer to the other process.
-- `interprocess` 1.2.1 was downloaded only under the task's temporary directory and
-  checked against the pinned Cargo checksum
-  `81f2533f3be42fffe3b5e63b71aeca416c1c3bc33e4e27be018521e76b1f38fb`.
-  Its invoked `Read::read`/`Write::write` paths use byte reads/writes. The dependency
-  also offers ancillary APIs, but the inspected zellij IPC call paths do not invoke
-  them or send descriptor-bearing messages.
-- The inspected terminal IPC path does not call `peer_pid`, credential lookup or
-  peer-PID authorization. The upstream server will see the broker as its socket
-  peer; that does not change an observed authorization contract for this pin.
-  Revalidate this on version upgrades and on the selected macOS release binary.
-- Client `connect_to_server` retries failed connects forever. Product deadlines and
-  physical child ownership are mandatory; an absent socket cannot be delegated to
-  an unbounded direct exec.
+## Identity and physical child lifecycle
 
-There is no established supported CLI receipt tying an OS PTY child to an attachment.
-The broker supplies an exact **transport peer binding**. A future GUI “attached”
-receipt needs a separate semantic condition: for example, a bounded, reviewed
-observer of an actual AttachClient/Render exchange, or an upstream supported receipt.
-Byte counts, elapsed time, subprocess existence, a ConnStatus connection, or the
-number of preflight connections are insufficient substitutes. That observer would
-be a deliberate versioned protocol dependency and is outside this headless proposal.
+`crates/session-runtime/src/child.rs` owns shared process identities and fixed-child
+pre-reap observation. Identity includes PID, UID, PPID, start sec/usec or Linux ticks,
+boot UUID and executable path. It double-samples process fields around executable
+lookup and rejects changed/malformed observations. Linux uses bounded public `/proc`.
+Darwin uses reviewed safe wrappers over public proc/sysctl APIs. Connected peer
+identity always comes from the actual descriptor, never an expected substituted PID.
 
-## Identity, files and reservations
+`rustix` fixed P_PID waitid with EXITED|NOHANG|NOWAIT retains physical child ownership;
+STOPPED/CONTINUED are requested for job control. ECHILD remains an error. Rustix does
+not expose a returned si_pid accessor here, so no kernel-returned-PID receipt is
+invented. The exact P_PID request and retained Child are the ownership binding.
+Existing Session polling shares this observation. Final PTY/IO drop and reap happen
+before entering history review, fixing the independently reproduced history zombie.
 
-Use a distinct `LocalZellijIdentity`: logical UUID, full generated session name and
-reserved server process identity. A platform process identity includes the PID,
-process start identity and boot identity. Socket device/inode and namespace ownership
-are additional fences, not a claimed zellij server-incarnation marker.
+The foreground CLI owns the actual inherited terminal, saves termios/group, creates
+one child process group and transfers the foreground TTY through safe APIs. It never
+consumes terminal input. Signal-hook polling handles TERM/HUP/INT/WINCH/TSTP/CONT;
+TSTP restores the caller terminal before stopping itself, then resumes/reassigns the
+owned client. Startup cancellation is polled during version/launcher capture, before
+workload authorization, and before attachment. Cancellation deadlines escalate only
+the retained physical client group. No adopted server/workload is signaled.
 
-The profile registry stores the display name, logical identity, short namespace slot,
-state and confirmed process binding. It never stores startup shell text, executable
-paths, environment variables, app credentials or an arbitrary socket path. Derive
-paths from validated installation configuration and a constrained random slot.
-If later GUI state persists an identity, it must remain a pure descriptor.
+## Opaque broker and truthful exit receipts
 
-Separate durable configuration from a short private runtime root. Zellij adds both
-its version directory and full session name; nesting two full UUIDs under a long HOME
-path is not portable. Allocate a user-owned mode-0700 short runtime profile directory
-with an unpredictable installation token, then a constrained random per-record slot.
-Validate each ancestor/entry, UID, mode, symlink policy and socket length before spawn.
-Record and revalidate directory ownership/inode when cleaning up. Never glob-delete
-another installation or user session. Missing runtime storage after reboot is stale
-state, not an instruction to recreate the workload.
+One worker owns each attachment's private Unix listener, at most4 simultaneous
+connections and64KiB per direction per connection. It waits for the parent-published
+exact child identity before admission. A wrong actual PID/UID is denied before
+backend connect; every backend descriptor must match the reserved full server identity.
+After validation the connected descriptor is retained, without retry/retargeting.
+Nonblocking reads/writes preserve ordering and partial writes; full queues apply
+backpressure. Half-close and reverse-close drain are bounded. Workers are joined
+before the one final client reap, including early failure/drop paths. Cleanup checks
+root, nested directory and broker socket inodes before deleting its own namespace.
 
-Every record gets its own backend socket base and cache. Every attach/helper gets
-another empty private client namespace/cache containing only the exact broker socket
-name. Unexpected sockets, serialized layouts or namespace substitutions fail closed.
-Full UUID names remain necessary; upstream prefix matching is not an exact-ID fence.
+Rejected upstream bytes retain count, SHA256, errno and the cancellation phase read
+before the physical send attempt. Contents are opaque and never interpreted or logged.
+Only explicitly requested cancellation, actual client exit0, joined workers, no pending
+input and independently preserved original server/supervisor/workload can permit that
+precise benign terminal outcome. No unknown bytes are claimed delivered. Natural
+workload exit with rejected input remains an unknown failure even with client exit0.
+The final transport receipt reports actual child exit, cancellation, preservation,
+joined workers and accounting. It is not an early semantic `attached` receipt.
 
-Reserve the logical UUID/slot in a locked, bounded, mode-0600 atomic registry **before**
-starting the owner. States distinguish reserved, live, uncertain, stale and closing.
-After launcher success, capture the kernel peer PID and public process identity of
-the sole new backend and confirm server liveness through an owned CLI helper. Commit
-that binding before returning success. A crash, timeout or save failure after possible
-creation retains an uncertain outcome and never retries startup. Do not silently
-adopt an owner merely because a provisional name exists.
+Pinned0.43.0 source shows list-clients metadata contains client/pane/program, not OS
+PID or an owned-child acknowledgement. ConnStatus/Connected is server liveness, not
+terminal attachment. The ordinary upstream human listing can also mutate stale
+sockets and has asynchronous empty-output races. No helper listing advances product
+state. Short-lived administrative helpers are unsupported on Darwin: LOCAL_PEERPID
+can disappear after disconnect while the child remains unreaped. Never normalize
+missing credentials, copy private kernel layouts or infer the expected peer PID.
+The inspected pinned IPC byte path uses read/write and local dup, with no descriptor
+passing or peer-PID-sensitive authorization. Revalidate on upgrades.
 
-Use explicit false serialization settings on creation for this pinned version and
-isolate cache regardless. Treat any existing resurrection layout as unsafe, including
-while an owner looks live. Attach never uses create/background-create/force-run flags.
-Version/config precedence controls from the conformance record must be retained.
-The initial owned configuration/template policy must be explicit; preserving arbitrary
-user theme/layout settings is a separate compatibility decision.
+## Dependencies and provenance
 
-For an explicit startup command, create a bounded private transient KDL launch file
-with an actual KDL writer, then remove it after the backend has parsed it. It is not
-durable session metadata. Plain new-tab templates must not reference that command or
-its removed file. Test a later ordinary tab as well as detach/reattach for startup-once
-behavior; a root command pane must not accidentally become the default tab template.
+Workspace `unsafe_code = "forbid"` remains intact. Reviewed exact dependencies:
 
-## Broker and child lifecycle
+- `rustix = 1.1.5`, process feature: safe Apple NOWAIT waitid, fixed P_PID.
+- `darwin-libproc = 0.2.0`, MIT OR Apache-2.0: task_all_info rejects any count other
+  than exact232-byte structure size; public pbsd exposes PID/UID/PPID/start sec/usec.
+  Bounded pid_path preserves non-UTF8 PathBuf. The old experimental crate needs
+  native SDK/runtime acceptance. Its memchr~2.3 conflicts with vte's^2.7.4. The
+  approved minimal vendor patch changes only that manifest requirement to^2.3;
+  source/FFI/exact-size checks remain unchanged. `vendor/darwin-libproc/UPSTREAM.md`
+  and original licenses retain provenance. Sole upstream memchr use retains its API.
+- `sysctl = 0.7.1`, MIT: only safe typed Ctl::new("kern.bootsessionuuid").value()
+  String, validated as nonnil UUID. Never generic value_as<T>. The fixed Apple key
+  is bounded; this does not approve arbitrary kernel-length allocation elsewhere.
+- `signal-hook = 0.4.5`, MIT OR Apache-2.0, defaults disabled, iterator only: bounded
+  signal slots/self-pipe, safe polling and unregister/drop, no extra signal thread.
+- `sha2 = 0.10.9`, MIT OR Apache-2.0: streaming Digest for opaque loss, no asm feature.
 
-Before launching the child, bind the exact broker socket in its private versioned
-client directory. The broker may hold a bounded accepted connection until the parent
-publishes the owned child's PID/start identity. It must forward no bytes before that
-binding exists. Reject every other PID/UID before opening a backend connection.
+Reviewed archives under `/tmp/zmux-r03-safe-api-20261015`:
+darwin-libproc `cc629b7cf42586fee31dae31f9ab73fa5ff5f0170016aa61be5fcbc12a90c516`;
+darwin-libproc-sys `ef0aa083b94c54aa4cfd9bbfd37856714c139d1dc511af80270558c7ba3b4816`;
+sysctl `cca424247104946a59dacd27eaad296223b7feec3d168a6dd04585183091eb0b`;
+signal-hook `b29ffa27d3d59a049bb328258de100f8012848d1b08d444e08bbc02ac468435e`;
+sha2 `a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283`.
+License inventory now includes vendored path packages; notices were regenerated.
 
-For each accepted connection, connect to the exact reserved backend path, inspect
-peer PID/UID on that connected descriptor, and compare its current process/start/boot
-identity with the record. Once validated, retain that descriptor; replacement of the
-pathname must never cause a retry/retarget of the established stream. On mismatch,
-close both ends and fail. A preflight connection is subject to the same policy.
+## Executed Linux checks and remaining gates
 
-Use one bounded nonblocking relay owner per interactive child, with at most four
-simultaneous connections and 64 KiB per direction per connection as an initial budget.
-Stop reading when the opposite buffer is full. Preserve byte ordering, partial writes,
-half-close delivery and backpressure. A reset/broken pipe from a terminating peer is
-an explicit normal closure state; credential failures, unexpected I/O and deadline
-errors retain context. The exact budget remains subject to the real workload tests.
+The real production CLI owner test uses the checksum-pinned executable and actual
+portable-pty terminal. It proves kernel server→supervisor→workload lineage, workload
+input, resize, startup count1, INT/TERM/HUP detach, TSTP/CONT restoration/resumed input,
+status and multiple attachments to the same identities, and actual termios restoration.
+It rejects changed config, resurrection layout, prefix shadow, replaced backend inode
+and missing runtime at public attach; every denial preserves the original workload.
+Queued TERM during a real registry Flock wait cannot authorize a workload.
 
-The GUI's future `Session` resource or headless CLI supervisor owns the listener,
-connections, buffers, child handle and physical relay worker. Track them until joined/
-reaped. Cancellation of an attachment closes only its transport/client, preserving
-the durable backend. Release pending-launch credit only after resources move to a
-tracked live/retired owner. No detached per-connection threads or unbounded queues.
+Always-on CLI tests reject unsupported grammar, changed bootstrap starter and an
+unauthorized spawn instruction on real sockets. Broker-owner real socket tests prove
+wrong-child rejection before upstream connect, changed-backend rejection before input,
+forced64KiB backpressure, ordered1MiB half-close drain, actual EPIPE rejection and
+published SHA256 vector with pre-send cancellation phase. These use no Zellij protocol
+mock and add no test-only production exports.
 
-Headless attach inherits the user's actual terminal stdin/stdout and launches an
-owned child in the appropriate foreground job-control context; no extra PTY proxy or
-terminal byte parsing is necessary. The supervisor retains termios for restoration,
-does not consume terminal input, and returns the child's exit outcome. Specify signal
-handling so SIGINT, HUP, TERM, TSTP/CONT and resize reach the child without accidentally
-ending the durable server. The parent retains the unreaped Child handle through all
-cleanup; it must not signal a global PID after losing physical child ownership.
+Shared child2 plus lifecycle14 tests passed independent review. The history zombie
+regression has intended red/green logs `/tmp/zmux-r03-history-reap-{red,green}-20261015.log`.
+A production supervisor FIFO regression likewise failed before O_NONBLOCK and passed
+afterward: `/tmp/zmux-r03-fifo-{red,green}-20261015.log`. Independent public list
+verification reproduced the FIFO hang and then refused it in0.023s after repair.
 
-Owner close is separate from attachment cancellation. Run the exact `kill-session`
-operation through a fenced helper/broker connection, then wait for the original server
-identity to exit before deleting its isolated cache/registry record. Exit 0 from a
-CLI helper alone is insufficient. `delete-session --force` performs upstream inventory
-and cache work, so it is not the identity fence. If the verified server cannot finish
-close within the deadline, retain a closing/uncertain record and report the failure.
-Do not fall back to a PID-only signal on macOS or delete a live owner's socket as if
-that terminated its process. Platform-specific stronger process handles can be a
-separate reviewed capability; they are not required to justify unsafe fallback.
+`.github/workflows/local-zellij-owner.yml` is a separate manually dispatched Linux/
+macOS15 production gate. `run-owner.py` reuses the checksum-pinned download helper and
+runs production shared-child, broker and actual CLI tests, rather than recreating an
+owner in Python. Artifacts retain source SHA, host/toolchain, download hashes, pins,
+notices and bounded test logs. Native production Rust compile/runtime acceptance is
+pending; a cross-build or the earlier C fixture does not replace it.
 
-## Linux transport feasibility receipt
+The real SIGINT regression failed before adding its pre-send cancellation phase and
+deadline, then passed through the common INT/TERM/HUP owner path:
+`/tmp/zmux-r03-sigint-{red,green}-20261015.log`.
 
-`/tmp/zmux-zj-0430-v7bhuqvn/broker-probe.py` exercised an original temporary broker
-against the pinned real binary. It forwarded opaque bytes, validated both peer PIDs
-and start identities on broker-owned descriptors, and accepted three child connections
-for upstream preflight plus terminal attachment. Actual PTY input wrote the original
-shell PID; client TERM left that shell alive with startup count one. A same-UID,
-different-PID connection was rejected before forwarding. All relay workers ended;
-normal reset/pipe closure was recorded explicitly and the final run had no unexpected
-errors. `broker-results.json` retains the result.
+Still open: native production runtime gate; client-crash/deadline variants;
+later ordinary-tab startup-once proof; broader resource/load and all platform coverage.
+Host-test failures kill only their physical frontend; isolated fixture workloads are
+finite with a20-second read timeout. The Cargo watchdog does not prove daemon cleanup,
+and hosted runner cleanup is not a product close receipt. Generic close/prune requires
+its own supported retained authenticated path and original server/workload termination
+proof. GUI semantic attachment, migration/reopen and detached start are later slices.
 
-An earlier probe's upstream inventory cleanup timed out; its exact remaining task
-server was identified and terminated through a Linux pidfd. This is additional evidence
-against relying on human listing/CLI exit status for physical cleanup. The successful
-final probe uses bounded exact close plus identity-bound fixture cleanup; no user
-sessions/configuration were changed. This temporary Linux transport is not production
-code and does not establish macOS support, saturation behavior or GUI readiness.
-
-## Isolated macOS proof plan
-
-Use a separate, explicitly dispatched conformance workflow on an available macOS
-runner. Download the matching official 0.43.0 no-web archive and published checksum,
-verify both archive/binary hashes, record host architecture/macOS/SDK/source SHA, and
-retain its upstream MIT notice. Use only short task-owned temporary directories and
-processes. Do not launch, kill or modify the user's cmux/zmux app. A build for another
-architecture is not runtime proof for that architecture.
-
-First compile a small standalone probe against the runner's public SDK headers:
-`<sys/socket.h>`, `<sys/un.h>`, `<unistd.h>`, and the public process inspection headers.
-For broker-owned connected sockets, verify `getpeereid` and
-`getsockopt(SOL_LOCAL, LOCAL_PEERPID)` return the known child/backend PIDs and UID.
-`LOCAL_PEERPID` is declared in Apple's public Unix socket header; this is a candidate
-supported API, not an assertion of tested runner behavior. Unsupported/missing PID
-credentials must fail closed. Read process start/boot identity through public APIs
-with SDK-declared types; do not copy kernel-private layouts or inspect kernel pointers.
-
-Then run the real zellij/broker matrix:
-
-1. Verify peer PID after daemonization, private modes, both backend/proxy socket lengths,
-   and process identity across close/reuse. Reject a wrong same-UID child and a replaced
-   backend; keep any unrelated fixture intact.
-2. Prove live PTY input/output through the opaque broker, unchanged shell PID/count
-   across two clients, config `quit` overridden to detach, resize reaching the real
-   foreground shell, and no descriptor passing/peer-PID-sensitive upstream behavior.
-3. Reproduce the independent real serialized-layout control, ordinary revival when
-   guards are bypassed, cache refusal without creation, absent exact socket and prefix
-   shadow refusal. A false config and false CLI flag must still suppress serialization.
-4. Stall each direction/peer, force partial writes and disconnect during preflight/
-   attachment. Verify fixed buffers/connection caps, prompt cancellation, fully joined
-   workers, reaped child, no owner loss and no socket cleanup outside owned inodes.
-5. Exercise foreground job control and termios restoration for normal detach, SIGINT,
-   TERM/HUP, TSTP/CONT, child crash and deadline cleanup. Verify actual `stty size` after
-   resize. No source-level signal forwarding check substitutes for a real terminal.
-6. Explicit close must end the original server/foreground fixture shell. A stuck helper
-   or server must retain a truthful failed/uncertain receipt. Collect process/socket
-   state before and after; leave no task-owned daemon behind.
-
-Retain bounded logs, structured receipts, executable/license hashes, process identities,
-socket credentials and termios/size observations as artifacts. A host-native pass is
-the gate for that host; additional macOS/architecture coverage remains named explicitly.
-After this proof and design review, authorize the production headless implementation.
+Passed C fixture run38787914932 on ARM64 macOS15.7.9/SDK15.5 at
+11258fead00c71dc24652280504b82def45307b9, receipt SHA256
+3622aac43d58720ee17c3b629d5c13d6bcc4968816afcb02e35c1e3d1c294461,
+proves its documented live-peer/TERM/retained-Quit fixture only. It does not establish
+production foreground job control, safe Rust wrappers, registry policy or GUI parity.

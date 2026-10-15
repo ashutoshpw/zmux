@@ -14,6 +14,14 @@ serde_json.workspace = true
 socket2.workspace = true
 nix = { workspace = true, features = ["poll"] }
 zmux-remote-runtime.workspace = true
+uuid.workspace = true
+
+[features]
+local-zellij-conformance = []
+
+[dev-dependencies]
+portable-pty.workspace = true
+filedescriptor.workspace = true
 
 [lints]
 workspace = true

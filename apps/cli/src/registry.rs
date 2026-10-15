@@ -40,6 +40,14 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "local-zellij",
+        "remote",
+        false,
+        false,
+        "local-zellij start NAME --headless [--cwd PATH] [--command SHELL_TEXT] | attach --headless --id UUID | list | status --id UUID",
+        "Run one supported local Zellij0.43.0 owner through an exact process-bound foreground client. Requires terminal stdin/stdout and a committed private reservation. Start is never replayed after uncertainty; attach never creates or adopts. List/status report process identity presence, not semantic attachment or protocol liveness. Automatic close/prune, detached start and GUI attachment are unavailable."
+    ),
+    command!(
         "reorder-workspace",
         "navigate",
         false,

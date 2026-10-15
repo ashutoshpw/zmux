@@ -1,7 +1,9 @@
 # Local zellij version conformance
 
-2026-10-15. Read-only product research and task-owned executable/process probes
-authorized after R02b; no production zellij owner or GUI integration implemented.
+2026-10-15. Product research and task-owned executable/process probes authorized
+after R02b. The narrowed production foreground owner is now implemented with passing
+focused Linux gates; see [owner design and status](r03-local-zellij-owner-design.md).
+Production Rust macOS acceptance and GUI integration remain open.
 
 ## Pin and provenance
 
@@ -562,6 +564,36 @@ Focused receipts and SHA256:
 
 Full Linux and exact-source Darwin remain pending for this waiter revision; focused
 Linux controls do not establish Darwin behavior or product parity.
+
+### Exact-source Darwin fixture pass
+
+GitHub run `38787914932` passed at
+`11258fead00c71dc24652280504b82def45307b9` on ARM64 macOS15.7.9 with SDK15.5.
+The artifact's run.py SHA256 is
+`7ff02fccfa2fa6db01157eb0f6ff7bf7275cca1c0235ccb7c132ad89df8f7f46`,
+matching the short-read waiter source. Downloaded receipt:
+`/tmp/zmux-zellij-hosted-38787914932/local-zellij-public-peer-macos-ARM64-11258fead00c71dc24652280504b82def45307b9/_temp/local-zellij-feasibility/receipt.json`
+(SHA256 `3622aac43d58720ee17c3b629d5c13d6bcc4968816afcb02e35c1e3d1c294461`).
+
+The actual PTY regression queued1022 bytes to observed backpressure, drained262162
+output bytes while retaining65536, and ended after TERM only with exact unreaped
+CLD_EXITED/status0 and reaped0 in0.565s. Credential owned ACK and unrelated exact-PID
+rejection/EOF passed. Raw half-close delivered all262144 ordered bytes; live-backend
+and unconfirmed-cancel negative controls denied their invalid terminal proofs.
+
+Both real Zellij clients ended on TERM with independently observed child0 and retained
+the same original shell/startup count. Each reports59 opaque rejected bytes under the
+proved attachment-cancel outcome; those bytes are explicitly undelivered. The retained
+authenticated terminal Quit ended the original server, shell and wrapper, observed its
+own clean child0, joined workers, and retained the analogous59-byte owner-exit outcome.
+Cleanup has no errors and scratch removal follows verified owner exit. Failed exec
+still records stage-specific127 and confirms descriptor/worker/namespace cleanup.
+
+This settles the exact Python/C fixture gate on this host. Short-lived administrative
+helpers remain unsupported; GUI semantic attachment is `not_tested`. Full production
+registry/resurrection guards, saturation, inherited TTY job control, safe Rust APIs
+and a supported general owner-close path remain separate gates. No full R03/F01/V01
+or macOS product parity follows from this pass.
 
 Independent parent full Linux validation passes final short-read waiter source:
 `/tmp/zmux-zellij-short-read-parent-20261015/receipt.json`; log

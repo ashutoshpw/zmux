@@ -23,6 +23,7 @@ use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod browser;
 mod browser_download;
 mod local_multiplexer;
+mod local_zellij;
 mod registry;
 mod session;
 mod ssh;
@@ -63,6 +64,7 @@ struct ClientOptions {
 enum Parsed {
     Offline(Offline),
     LocalMultiplexer(local_multiplexer::Invocation),
+    LocalZellij(local_zellij::Invocation),
     LocalTmuxApp(ControlCommand),
     App(ControlCommand),
     Browser(ControlCommand, Option<Duration>),
@@ -156,6 +158,7 @@ fn run() -> Result<u8, Box<dyn Error>> {
             Ok(0)
         }
         Parsed::LocalMultiplexer(invocation) => local_multiplexer::run(invocation),
+        Parsed::LocalZellij(invocation) => local_zellij::run(invocation),
         Parsed::LocalTmuxApp(command) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(
@@ -239,6 +242,22 @@ fn parse(
         .and_then(|value| value.to_str())
         .map(|name| registry::find(name).map_or(name, |spec| spec.name));
     let tail = &args[(index + 1).min(args.len())..];
+    if command == Some("local-zellij") {
+        return Ok((local_zellij::parse(tail)?, socket, timeout, password));
+    }
+    if command == Some("__local-zellij-supervisor") {
+        if tail.len() != 1 {
+            return Err(CliError("invalid internal supervisor descriptor".into()));
+        }
+        return Ok((
+            Parsed::LocalZellij(local_zellij::Invocation::Supervisor(PathBuf::from(
+                &tail[0],
+            ))),
+            socket,
+            timeout,
+            password,
+        ));
+    }
     if let Some(command @ ("local-tmux" | "tmux")) = command {
         return Ok((
             local_multiplexer::parse(command, tail)?,

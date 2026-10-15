@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- R03 foreground local-zellij start/attach/list/status now uses kernel-verified
+  ownership, a retained workload supervisor and shared child lifetime management.
+  Independent Linux24 checks include real detach/reattach, input/resize and signal
+  handling. FIFO blocking and SIGINT cancellation have red/green repairs. Parent
+  combined fullcheck passes280 tests plus standard checks. Native production
+  workflow is pending; ordinary native tabs and broader lifecycle parity remain.
+
 - Reopen diagnostics now retain bounded public status/persistence/profile reads
   and the generated fixture session/allocator JSON, including failure artifacts.
   Isolated fullcheck271 and focused capture/receipt probes pass. This adds evidence

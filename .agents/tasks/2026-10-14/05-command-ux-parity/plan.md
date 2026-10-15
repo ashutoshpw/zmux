@@ -52,8 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.
-- [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — pinned MIT 0.43.0 lifecycle, exact-peer and resurrection/prefix guard evidence; production owner design remains next.
-- [R03 headless owner design](references/r03-local-zellij-owner-design.md) — proposed peer-fenced broker, headless ownership and isolated public-API macOS proof gates; no owner implementation.
+- [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — pinned MIT 0.43.0 lifecycle and passed public-API Darwin fixture; separate production native gate pending.
+- [R03 headless owner design](references/r03-local-zellij-owner-design.md) — implemented foreground consumer, shared child lifecycle, peer-fenced broker, Linux evidence and remaining native gates.
 
 - [B01 browser downloads](references/b01-browser-downloads.md) — independent native resource owner, list/wait contract, safe publication and pending native acceptance.
 - [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.

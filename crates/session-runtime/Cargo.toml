@@ -10,12 +10,15 @@ repository.workspace = true
 portable-pty.workspace = true
 filedescriptor.workspace = true
 nix.workspace = true
+rustix.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 zmux-terminal-adapter.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 socket2.workspace = true
+darwin-libproc = "=0.2.0"
+sysctl = "=0.7.1"
 
 [lints]
 workspace = true
