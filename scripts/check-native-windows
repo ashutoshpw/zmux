@@ -57,6 +57,11 @@ def main():
             print(f"Native window phase {phase} failed; profile retained at {directory}. No second app was launched.")
             raise
         if phase == "close":
+            if not prepared_path.is_file():
+                for path in [stdout, stderr]:
+                    if path.exists():
+                        print(path.read_text(errors="replace"))
+                raise RuntimeError("The native close journey produced no preparation receipt; no second app was launched")
             prepared = json.loads(prepared_path.read_text())
             assert prepared["sourceSHA"] == metadata["source_sha"]
             for key in ["noFocus", "independentResize", "nativeInput", "nativeClose", "emptyWindow", "cliClose"]:
