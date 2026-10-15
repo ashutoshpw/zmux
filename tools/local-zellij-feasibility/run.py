@@ -647,12 +647,18 @@ class TerminalClient:
         return wait_until(check, label, 15)
 
     def wait_for_exit(self, label, timeout):
-        def exited():
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             # A terminating client can still be blocked writing final terminal
-            # output. Drain it while retaining the same bounded exit deadline.
+            # output. Short PTY reads must not incur a polling sleep per chunk.
+            previous_bytes = self.output_bytes_seen
             self.pump(answer_queries=False)
-            return child_exited(self.process)
-        return wait_until(exited, label, timeout)
+            if child_exited(self.process):
+                return True
+            if self.output_bytes_seen == previous_bytes:
+                # EOF can remain readable before exit becomes observable.
+                time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+        raise RuntimeError("Deadline: " + label)
 
     def close(self, preserve_owner=None):
         if self.closed:

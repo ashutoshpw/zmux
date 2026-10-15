@@ -85,7 +85,10 @@ window. Exit0 requires no reply; any ESC response exits3. The owner drains outpu
 without answering queries during its existing bounded TERM/KILL waits, retaining
 only64 KiB of logs. Readiness still answers queries. Exit waiting and the post-Quit
 drain are read-only so response writes cannot stall them. The regression implements
-no Zellij protocol. Requested signals, unreaped waitid PID/code/status, reaped exit
+no Zellij protocol. Exit waiting checks its deadline after each bounded read and
+continues immediately when bytes arrive, so short PTY reads do not incur a polling
+sleep per chunk. A no-progress pause prevents readable EOF from causing a busy loop.
+Requested signals, unreaped waitid PID/code/status, reaped exit
 code and bounded PTY output remain visible even on failure. No environment dump is
 collected, and failed/nonzero children remain failures.
 
