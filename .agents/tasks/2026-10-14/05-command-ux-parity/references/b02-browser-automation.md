@@ -1,3 +1,79 @@
+# B02 native keyboard candidate (2026-10-15)
+
+CMD-253/254/255 now have an original bounded local counterpart: browser press
+(alias key), keydown and keyup, accepting one --key KEY or positional KEY plus
+shared target options and --snapshot-after. The untrimmed token preserves literal
+space, is limited to 128 UTF-8 bytes and rejects empty/NUL values. One shared
+Keyboard wire action carries press/down/up; Rust denies read-only admission and
+retains owner/document/deadline and submit-once/no-replay fencing. Frozen discovery
+marks only local counterpart, with compatibility explicitly unverified.
+
+Behavioral baseline is pinned cmux 3ba653b9e5afb11d0bc578031142950d6136697e,
+its public docs/cli-contract.md browser keyboard row and the prior keyboard audit.
+No implementation, tests or assets were imported or translated. The original
+mapping uses public AppKit/CoreGraphics key events and standard ANSI virtual-key
+positions: printable ASCII, Enter/Return, Tab, Escape, Backspace/Delete, arrow/
+Home/End/Page keys, Space aliases, F1-F20, NumpadEnter and Shift/Control/Alt/Meta
+left/right names (with Option/Command aliases). A literal uppercase or shifted
+symbol keeps its explicit Unicode characters with currently held flags; it does
+not implicitly hold Shift. Held Shift transforms ordinary letter/digit/punctuation
+characters using the explicit ANSI mapping. Unimplemented known native names,
+including lock/Insert/PrintScreen/Pause/ContextMenu/Clear/Fn, other Numpad keys and
+F21-F35, fail native_key_unavailable. Full reference mapping parity remains open.
+
+The exact BrowserView owns at most 64 held keys and serializes admitted keyboard
+operations until their observation ends. A press prepares both native halves
+before emitting either. Down/up preserve host-local modifier state; repeated down
+is marked as repeat, and press on an already held code fails explicitly. All
+prepared events pass a current owner/process/readiness and absolute deadline
+check immediately before mutation begins; rejection sends no native event. All
+native delivery goes straight to its WKWebView subclass without changing app/tab
+selection, key window or first responder. A process-owned application subclass
+contains tagged WebKit resends before app menus; tags remain recognizable for the
+process lifetime with a bounded counter/nonce rather than expiring unsafe tags.
+Ordinary user input is untouched. No global event posting, private WebKit API or
+production activation is used. Owner/document/process replacement and close clear
+held bookkeeping; no old-document key is replayed into a replacement.
+
+Mapped native creation/delivery failure never falls back. Only opaque unknown
+tokens retain the baseline page-event compatibility branch, with receipt
+input:synthetic/native_defaults:false and isolated content world. It emits
+synthetic keyboard phases without text/property/default compensation. Native
+receipts identify input:native/content_world:native and establish dispatch, not
+page default success or completed navigation. Snapshot-after observes the same
+operation and cannot replay it. A dispatched observation timeout remains uncertain.
+
+The standalone native experiment passed normal (non-debugger) run38802980621 at
+0101763 on arm64/macOS15.7.9: all16 visible/detached cases, trusted key/default
+behavior, unchanged unrelated responder/text, window-nil detached hosting, and
+actual asynchronous Command-W resends intercepted in BOTH modes. Its report is
+c96d5db85acb9566af7f488d10ae902924e7237300d89590dbbc1d8d52f9b588.
+That is feasibility evidence only. The initial activation request could not take
+focus; exact-self Launch Services activation corrected setup. An inherited actor
+completion then trapped on launchservices.open-queue; LLDB38801277458 proved the
+executor assertion and an explicit Sendable completion boundary repaired it.
+Production keyboard commands never perform that harness activation.
+
+Test authoring boundaries are distinct: the public CLI wire table protects literal
+key bytes/aliases; actual socket policy denies read-only requests and refuses
+portable fake native success; runtime owns admission bounds, normalization,
+dispatched timeout uncertainty, navigation invalidation and no replay. The same
+CLI regression first failed unknown subcommand press; runtime first failed unknown
+Keyboard variant. Real DOM tests cover opaque untrusted events, unchanged values,
+phase delivery and snapshot observations only. They do not fake native success.
+
+BrowserKeyboardSmoke is authored through the actual packaged CLI on a never-selected
+host. It requires native text/caret/Space/Enter defaults and trusted phases,
+prevents a native default to ensure it is not forced/downgraded, checks literal
+symbol semantics, separated down/up, exact cross-request ShiftDown/XDown/XUp/
+ShiftUp/xDown/xUp ordering, real production async Command-W containment, explicit
+opaque fallback, unavailable native-key failure, document reset and replacement
+host with no transferred held state. It checks host/document identity plus exact
+native responder and canonical selection retention. The packaged report now
+requires browser_keyboard. Strict Swift6 and packaged native execution of this
+production candidate remain pending. IME/physical input, inactive app delivery,
+full mapping and modifier lifecycle acceptance are not claimed. Native callback-pool saturation after expired page promises is guarded before keyboard delivery and every downstream observation rejection preserves mutation uncertainty; its actual WebKit saturation journey remains an additional native gate.
+
 # B02a browser automation bridge
 
 ## B02g type, select and pixel scroll (2026-10-15)

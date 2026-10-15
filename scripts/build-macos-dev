@@ -82,7 +82,7 @@ info = {"CFBundleExecutable":"zmux-app", "CFBundleIdentifier":deployment["bundle
         "LSApplicationCategoryType":"public.app-category.developer-tools",
         "CFBundleURLTypes":[{"CFBundleURLName":"zmux cloud sign-in", "CFBundleURLSchemes":["zmux-dev"]}],
         "NSAppTransportSecurity":{"NSAllowsArbitraryLoadsInWebContent":True},
-        "NSPrincipalClass":"NSApplication", "NSHighResolutionCapable":True, "ZmuxSourceSHA":sha,
+        "NSPrincipalClass":"ZmuxBrowserInputApplication", "NSHighResolutionCapable":True, "ZmuxSourceSHA":sha,
         "ZmuxCloudOrigin":deployment["cloud_origin"]}
 with (bundle / "Contents/Info.plist").open("wb") as file:
     plistlib.dump(info,file)

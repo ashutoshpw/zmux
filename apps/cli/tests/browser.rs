@@ -281,6 +281,13 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
             "scroll deltas",
         ),
         (vec!["browser", "scroll", "--selector", ""], "nonempty"),
+        (vec!["browser", "press"], "exactly one"),
+        (vec!["browser", "press", "a", "b"], "exactly one"),
+        (vec!["browser", "keydown", "a", "--key", "b"], "exactly one"),
+        (
+            vec!["browser", "keyup", "--selector", "#entry", "x"],
+            "unknown browser keyup option",
+        ),
         (vec!["browser", "fill"], "requires a selector"),
         (
             vec!["browser", "fill", "#entry", "--text"],
@@ -607,6 +614,10 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
     let fixture = Fixture::new();
     let script = " \n({text: 'quoted \\\" text', value: -1})\n ";
     for (index, (args, expected)) in [
+        (vec!["press", "--key", " ", "--snapshot-after"], json!({"action":"keyboard","operation":"press","key":" ","snapshot_after":true})),
+        (vec!["key", "Enter"], json!({"action":"keyboard","operation":"press","key":"Enter","snapshot_after":false})),
+        (vec!["keydown", "Shift"], json!({"action":"keyboard","operation":"down","key":"Shift","snapshot_after":false})),
+        (vec!["keyup", "--key", "Shift"], json!({"action":"keyboard","operation":"up","key":"Shift","snapshot_after":false})),
         (vec!["zoom", "in"], json!({"action":"zoom","operation":{"kind":"in"}})),
         (vec!["zoom", "out"], json!({"action":"zoom","operation":{"kind":"out"}})),
         (vec!["zoom", "reset"], json!({"action":"zoom","operation":{"kind":"reset"}})),
@@ -695,6 +706,9 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
     let browser = value(&socket, &fixture.0, &["browser", "open", "about:blank"]);
     let surface = browser["focused_surface_uuid"].as_str().unwrap();
     for args in [
+        vec!["browser", "press", " ", "--surface", surface],
+        vec!["browser", "keydown", "Shift", "--surface", surface],
+        vec!["browser", "keyup", "Shift", "--surface", surface],
         vec!["browser", "get", "title", "--surface", surface],
         vec![
             "browser",
@@ -751,6 +765,9 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
         .unwrap();
     for args in [
+        vec!["browser", "press", "Enter", "--surface", surface],
+        vec!["browser", "keydown", "Shift", "--surface", surface],
+        vec!["browser", "keyup", "Shift", "--surface", surface],
         vec![
             "browser",
             "eval",

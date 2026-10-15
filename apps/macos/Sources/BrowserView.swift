@@ -9,7 +9,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private(set) var documentGeneration: UInt64 = 1
     var onAutomationAction: (@MainActor (BrowserAction) -> Void)?
     private weak var owner: (any BrowserCommandOwner)?
-    let webView: WKWebView
+    let webView: BrowserKeyboardWebView
+    private let keyboard = BrowserKeyboardState()
     private enum FocusDestination { case address, document }
     private var focusDestination = FocusDestination.document
     private var addressSelection: NSRange?
@@ -52,6 +53,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         var waitTask: Task<Void, Never>?
         var isolatedEval = false
         var mutationStarted = false
+        var nativeKeyboard = false
     }
     private var operations: [UInt64: PendingAutomation] = [:]
     // A timed-out page promise cannot be cancelled by WebKit. Keep its actual
@@ -69,7 +71,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         self.owner = owner
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = BrowserKeyboardWebView(frame: .zero, configuration: configuration)
         super.init(color: ZmuxPalette.chrome)
         webView.navigationDelegate = self
         webView.underPageBackgroundColor = ZmuxPalette.terminal
@@ -193,6 +195,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             return
         }
         if let current = automationOwner {
+            keyboard.clear()
             cancelPendingDownloads()
             owner?.cancelBrowserDownloads(host: hostID)
             cancelOperations(code: "host_replaced", message: "Browser runtime owner changed")
@@ -255,6 +258,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     func close() {
         guard !closed else { return }
         closed = true
+        keyboard.clear()
         cancelPendingDownloads()
         owner?.cancelBrowserDownloads(host: hostID)
         invalidateTitleObservation()
@@ -278,6 +282,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             return
         }
         lastOperationID = request.operationId
+        if request.action.isKeyboard, operations.values.contains(where: { $0.request.action.isKeyboard }) {
+            emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "keyboard_busy", message: "Another keyboard operation is still being observed", outcomeUnknown: false)))
+            return
+        }
         guard operations.count < 8, request.timeoutMs > 0, request.timeoutMs <= 30_000 else {
             emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "host_busy", message: "Browser operation capacity or timeout limit exceeded", outcomeUnknown: false)))
             return
@@ -302,8 +310,60 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             else { failOperation(id, code: "document_loading", message: "Document is loading; wait for navigation completion", outcomeUnknown: false) }
         } else if case .eval = request.action {
             preflightEval(id)
+        } else if case .keyboard(let operation, let key, _) = request.action {
+            executeKeyboard(id, operation: operation, key: key)
         } else {
             runJavaScript(id, action: request.action)
+        }
+    }
+    private func executeKeyboard(_ id: UInt64, operation: BrowserKeyboardOperation, key: String) {
+        guard let pending = operations[id], beforeDeadline(id, pending), documentReady else {
+            failOperation(id, code: "document_loading", message: "Browser document is not ready for keyboard input", outcomeUnknown: false)
+            return
+        }
+        guard let native = BrowserNativeKey.resolve(key) else {
+            guard !BrowserNativeKey.requiresUnavailableNativeMapping(key) else {
+                failOperation(id, code: "native_key_unavailable", message: "This named key has no implemented native mapping", outcomeUnknown: false)
+                return
+            }
+            runJavaScript(id, action: pending.request.action)
+            return
+        }
+        // Expired JavaScript operations can still own physical callbacks. Do
+        // not send a key when its required observation cannot even be admitted.
+        guard !javaScriptInFlight.contains(id), javaScriptInFlight.count < 8 else {
+            failOperation(id, code: "host_busy", message: "Browser keyboard observation capacity is unavailable", outcomeUnknown: false)
+            return
+        }
+        do {
+            // After this boundary the native operation is never replayed, even if
+            // its following observation or snapshot misses the deadline.
+            try keyboard.execute(operation, key: native, on: webView) {
+                guard let current = self.operations[id] else {
+                    throw BridgeFailure(message: "Browser keyboard operation ended before delivery")
+                }
+                guard !self.closed, self.automationOwner == current.owner else {
+                    self.failOperation(id, code: "document_changed", message: "Browser owner or document changed before keyboard delivery", outcomeUnknown: false)
+                    throw BridgeFailure(message: "Browser keyboard owner changed before delivery")
+                }
+                guard !self.processTerminated else {
+                    self.failOperation(id, code: "web_process_terminated", message: "Web content process stopped before keyboard delivery", outcomeUnknown: false)
+                    throw BridgeFailure(message: "Browser content process stopped before delivery")
+                }
+                guard self.documentReady, !self.webView.isLoading else {
+                    self.failOperation(id, code: "document_loading", message: "Browser document is not ready for keyboard delivery", outcomeUnknown: false)
+                    throw BridgeFailure(message: "Browser document is not ready for delivery")
+                }
+                guard self.beforeDeadline(id, current) else {
+                    throw BridgeFailure(message: "Browser keyboard deadline elapsed before delivery")
+                }
+                self.operations[id]?.mutationStarted = true
+            }
+            operations[id]?.nativeKeyboard = true
+            runJavaScript(id, action: pending.request.action)
+        } catch {
+            guard let current = operations[id] else { return }
+            failOperation(id, code: "native_input_failed", message: error.localizedDescription, outcomeUnknown: current.mutationStarted)
         }
     }
     private func executeZoom(_ id: UInt64, operation: BrowserZoom) {
@@ -346,6 +406,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         currentNavigation = navigation
     }
     private func advanceDocument(causedBy operationID: UInt64?, previousOwner: BrowserOwner? = nil) {
+        // Never replay a previous document's held keys into its replacement.
+        keyboard.clear()
         invalidateTitleObservation()
         guard let previous = previousOwner ?? automationOwner else {
             if documentGeneration < UInt64.max { documentGeneration += 1 }
@@ -395,6 +457,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             }
         }
         else if case .zoom = operation.request.action { fields["content_world"] = .string("native") }
+        else if operation.nativeKeyboard { fields["content_world"] = .string("native") }
         else { fields["content_world"] = .string("isolated") }
         let result = BrowserJSON.object(fields)
         do {
@@ -411,7 +474,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         guard let operation = operations[id] else { return }
         guard beforeDeadline(id, operation) else { return }
         guard !javaScriptInFlight.contains(id), javaScriptInFlight.count < 8 else {
-            failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: false)
+            failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: operation.mutationStarted || operation.request.action.isNavigation)
             return
         }
         let expectedOwner = operation.owner
@@ -449,22 +512,22 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         guard let operation = operations[id] else { return }
         guard beforeDeadline(id, operation) else { return }
         guard !javaScriptInFlight.contains(id), javaScriptInFlight.count < 8 else {
-            failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: false)
+            failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: operation.mutationStarted || operation.request.action.isNavigation)
             return
         }
-        struct Input: Encodable { let action: BrowserAction; let hostId: String; let documentGeneration: String }
+        struct Input: Encodable { let action: BrowserAction; let hostId: String; let documentGeneration: String; let nativeKeyboard: Bool; let keyboardModifiers: [String: Bool] }
         let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
         let payload: String
         do {
-            payload = String(decoding: try encoder.encode(Input(action: action, hostId: hostID.uuidString.lowercased(), documentGeneration: String(operation.owner.documentGeneration))), as: UTF8.self)
-        } catch { failOperation(id, code: "invalid_argument", message: error.localizedDescription, outcomeUnknown: false); return }
+            payload = String(decoding: try encoder.encode(Input(action: action, hostId: hostID.uuidString.lowercased(), documentGeneration: String(operation.owner.documentGeneration), nativeKeyboard: operation.nativeKeyboard, keyboardModifiers: keyboard.modifiers)), as: UTF8.self)
+        } catch { failOperation(id, code: "invalid_argument", message: error.localizedDescription, outcomeUnknown: operation.mutationStarted || operation.request.action.isNavigation); return }
         let world: WKContentWorld
         if case .eval = action {
             world = operation.isolatedEval ? BrowserAutomationScript.isolatedWorld : .page
             operations[id]?.mutationStarted = true
         } else { world = BrowserAutomationScript.isolatedWorld }
         switch action {
-        case .fill, .type, .select, .scroll, .click, .interact: operations[id]?.mutationStarted = true
+        case .fill, .type, .select, .scroll, .click, .interact, .keyboard: operations[id]?.mutationStarted = true
         default: break
         }
         javaScriptInFlight.insert(id)

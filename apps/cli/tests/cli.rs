@@ -257,7 +257,8 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
     assert_eq!(frozen["behavioral_parity_verified"], false);
     let entries = frozen["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 428);
-    for spelling in ["new-window", "browser press"] {
+    {
+        let spelling = "new-window";
         let row = entries
             .iter()
             .find(|row| row["reference_command"] == spelling)
@@ -275,6 +276,9 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
         ("CMD-250", "browser scroll-into-view"),
         ("CMD-251", "browser type"),
         ("CMD-252", "browser fill"),
+        ("CMD-253", "browser press"),
+        ("CMD-254", "browser keydown"),
+        ("CMD-255", "browser keyup"),
         ("CMD-256", "browser select"),
         ("CMD-257", "browser scroll"),
     ] {
