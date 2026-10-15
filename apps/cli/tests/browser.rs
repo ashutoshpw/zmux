@@ -3,12 +3,15 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixListener},
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -87,6 +90,77 @@ fn value(socket: &Path, root: &Path, args: &[&str]) -> Value {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+/// Forward the public wire protocol to the real runtime. Delay admission, or
+/// withhold a real status response, without manufacturing execution receipts.
+struct BrowserSocketDelay {
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+impl BrowserSocketDelay {
+    fn new(root: &Path, upstream: PathBuf, admission_delay: Duration, stall_status: bool) -> Self {
+        let path = root.join("delayed.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                let (mut client, _) = match listener.accept() {
+                    Ok(connection) => connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(2));
+                        continue;
+                    }
+                    Err(error) => panic!("delayed socket accept: {error}"),
+                };
+                client
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut length = [0; 4];
+                client.read_exact(&mut length).unwrap();
+                let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+                client.read_exact(&mut bytes).unwrap();
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                if request["command"]["method"] == "browser" {
+                    thread::sleep(admission_delay);
+                }
+                let mut upstream = UnixStream::connect(&upstream).unwrap();
+                upstream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                upstream.write_all(&length).unwrap();
+                upstream.write_all(&bytes).unwrap();
+                upstream.read_exact(&mut length).unwrap();
+                let mut response = vec![0; u32::from_be_bytes(length) as usize];
+                upstream.read_exact(&mut response).unwrap();
+                if stall_status && request["command"]["method"] == "browser_status" {
+                    while !worker_stop.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                } else {
+                    // The pre-fix CLI may hit its deadline and close first.
+                    let _ = client
+                        .write_all(&length)
+                        .and_then(|()| client.write_all(&response));
+                }
+            }
+        });
+        Self {
+            path,
+            stop,
+            worker: Some(worker),
+        }
+    }
+}
+impl Drop for BrowserSocketDelay {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.worker.take().unwrap().join().unwrap();
+        fs::remove_file(&self.path).unwrap();
+    }
 }
 
 #[test]
@@ -459,59 +533,80 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
             .unwrap(),
         )
         .unwrap();
-    let count = snapshot.browser_operations.len();
-    let cli_socket = socket.clone();
-    let cli_root = fixture.0.clone();
-    let cli_surface = surface.to_owned();
-    let cli = thread::spawn(move || {
-        invoke(
-            &cli_socket,
-            &cli_root,
-            &[
-                "--timeout",
-                "2000",
-                "browser",
-                "eval",
-                "--surface",
-                &cli_surface,
-                "document.body.textContent = 'never executed'",
-            ],
-        )
-    });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        if desktop.snapshot().unwrap().browser_operations.len() > count {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "browser operation was not admitted"
+    for stall_status in [false, true] {
+        // Admission latency must not consume all of the receipt observation
+        // budget. The negative control withholds status replies: the CLI must
+        // then stop at its original deadline without inventing a host timeout.
+        let proxy = BrowserSocketDelay::new(
+            &fixture.0,
+            socket.clone(),
+            Duration::from_millis(300),
+            stall_status,
         );
-        thread::sleep(Duration::from_millis(5));
+        let count = desktop.snapshot().unwrap().browser_operations.len();
+        let cli_socket = proxy.path.clone();
+        let cli_root = fixture.0.clone();
+        let cli_surface = surface.to_owned();
+        let started = Instant::now();
+        let cli = thread::spawn(move || {
+            invoke(
+                &cli_socket,
+                &cli_root,
+                &[
+                    "--timeout",
+                    "2000",
+                    "browser",
+                    "eval",
+                    "--surface",
+                    &cli_surface,
+                    "document.body.textContent = 'never executed'",
+                ],
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if desktop.snapshot().unwrap().browser_operations.len() > count {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "browser operation was not admitted"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Receipt polling must leave the listener free for unrelated control requests.
+        assert!(value(&socket, &fixture.0, &["status"])["workspace_count"].is_u64());
+        let output = cli.join().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        if stall_status {
+            assert!(!error.contains("browser_timeout"), "{error}");
+            assert!(error.contains("waiting for zmux"), "{error}");
+            assert!(error.contains("not retried"), "{error}");
+            assert!(
+                started.elapsed() < Duration::from_millis(2500),
+                "CLI extended its total deadline"
+            );
+        } else {
+            assert!(error.contains("browser_timeout"), "{error}");
+        }
+        let after = desktop.snapshot().unwrap();
+        assert_eq!(
+            after.browser_operations.len(),
+            count + 1,
+            "CLI retried admission"
+        );
+        assert!(
+            desktop
+                .browser_drain_requests(Duration::from_secs(1))
+                .unwrap()
+                .requests
+                .is_empty(),
+            "expired evaluation remained executable"
+        );
+        drop(proxy);
     }
-    // Receipt polling must leave the listener free for unrelated control requests.
-    assert!(value(&socket, &fixture.0, &["status"])["workspace_count"].is_u64());
-    let output = cli.join().unwrap();
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("browser_timeout"),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let after = desktop.snapshot().unwrap();
-    assert_eq!(
-        after.browser_operations.len(),
-        count + 1,
-        "CLI retried admission"
-    );
-    assert!(
-        desktop
-            .browser_drain_requests(Duration::from_secs(1))
-            .unwrap()
-            .requests
-            .is_empty(),
-        "expired evaluation remained executable"
-    );
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();
 }

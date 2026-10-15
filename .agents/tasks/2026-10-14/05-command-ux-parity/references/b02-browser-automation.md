@@ -79,3 +79,15 @@ workflows and full audited options remain open until implemented and verified.
 
 The undefined compatibility marker retains the observed wire spelling, independently
 implemented. DOMRect and Promise results are normalized without copying upstream code.
+
+## Receipt observation repair
+
+- Hosted `c9fb697` failed the portable pending-eval check on Darwin: socket receipt
+  read exhausted the client's deadline. A real-runtime forwarding regression with
+  300 ms admission delay reproduced the failure locally before the fix.
+- CLI now reserves a bounded proportional window for admission and receipt observation
+  within the existing timeout. The regression passes; a stalled-status negative control
+  returns uncertainty, never fabricates a runtime timeout, and proves one admission.
+- Parent full checks and fresh narrow review pass. Hosted validation remains pending.
+  The shared socket transport still has per-I/O timeout semantics; trickled replies
+  require a separate absolute-deadline repair before claiming a hard wall-clock bound.

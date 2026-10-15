@@ -265,10 +265,17 @@ pub(super) fn run(
     let deadline = Instant::now() + options.timeout;
     if let ControlCommand::Browser { request } = &mut command {
         let budget = deadline.saturating_duration_since(Instant::now());
-        // Leave room to retrieve a terminal receipt when native execution times out.
-        let headroom = Duration::from_millis(100).min(budget / 5);
+        // The runtime execution clock starts at admission, after socket and
+        // executor latency. Reserve time inside the original client deadline
+        // for that admission and for observing the terminal receipt. A fixed
+        // 100 ms reserve can expire before the runtime even starts its clock.
+        // Short commands split their budget; longer commands reserve at most
+        // one second for receipt observation rather than extending --timeout.
+        let receipt_budget = (budget / 3)
+            .clamp(Duration::from_millis(250), Duration::from_secs(1))
+            .min(budget / 2);
         request.timeout_ms = budget
-            .saturating_sub(headroom)
+            .saturating_sub(receipt_budget)
             .as_millis()
             .clamp(1, u128::from(MAX_OPERATION_TIMEOUT_MS)) as u64;
     }
