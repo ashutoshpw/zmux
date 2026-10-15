@@ -815,7 +815,15 @@ dependencies = [
  "socket2",
  "sysctl",
  "thiserror 2.0.21",
+ "zmux-session-test-support",
  "zmux-terminal-adapter",
+]
+
+[[package]]
+name = "zmux-session-test-support"
+version = "0.1.0"
+dependencies = [
+ "nix",
 ]
 
 [[package]]

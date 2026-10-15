@@ -23,5 +23,8 @@ socket2.workspace = true
 darwin-libproc = "=0.2.0"
 sysctl = "=0.7.1"
 
+[dev-dependencies]
+zmux-session-test-support = { path = "test-support" }
+
 [lints]
 workspace = true

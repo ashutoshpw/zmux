@@ -64,14 +64,9 @@ fn wait_file(path: &Path) {
 fn actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies() {
     const CHILD: &str = "ZMUX_CLEANUP_OUTCOME_CHILD";
     if std::env::var_os(CHILD).is_none() {
-        // Isolate SIGCHLD disposition in an owned subprocess. SIG_IGN survives
-        // exec and makes the kernel actually auto-reap its eventual PTY child.
-        let mut child = std::process::Command::new("python3")
-            .args([
-                "-c",
-                "import os,signal,sys;signal.signal(signal.SIGCHLD,signal.SIG_IGN);os.execv(sys.argv[1],sys.argv[1:])",
-            ])
-            .arg(std::env::current_exe().unwrap())
+        // Install the actual kernel auto-reap policy only inside this owned
+        // exact-test subprocess, after exec. SIG_IGN alone is insufficient on Darwin.
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
                 "actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies",
@@ -101,8 +96,10 @@ fn actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
         return;
     }
+    zmux_session_test_support::install_no_child_wait_in_isolated_fixture().unwrap();
     for policy in [
         ShutdownPolicy::Kill,
         ShutdownPolicy::Graceful {
@@ -136,6 +133,15 @@ fn actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies
             );
             thread::sleep(Duration::from_millis(5));
         }
+        let observation = observe_child(session.process_id(), true);
+        assert!(
+            matches!(observation, Err(ref error) if error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32)),
+            "kernel auto-reap did not create the intended real cleanup fault: {observation:?}"
+        );
+        eprintln!(
+            "isolated cleanup fixture actual kernel ECHILD: policy={policy:?}; child={}",
+            session.process_id()
+        );
         let first = session.shutdown(Duration::ZERO).unwrap_err().to_string();
         assert!(first.contains("PTY cleanup failed:"), "{first}");
         let repeated = session.shutdown(Duration::ZERO).unwrap_err().to_string();
