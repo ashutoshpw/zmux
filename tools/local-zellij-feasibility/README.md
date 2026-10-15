@@ -51,15 +51,23 @@ The actual boundary checks are:
   ordered bytes remain opaque. Real terminal input independently writes the original
   shell PID. Same-UID unrelated input is rejected before a backend connection opens.
 - Client TERM preserves the original server/shell identities and startup count one.
-  Relay workers join before child reaping, and explicit owner close goes through a
-  fenced helper connection. The original daemon must exit; helper exit 0 is not the
-  cleanup assertion. No global PID-only kill fallback exists on Darwin.
+  Relay workers join before child reaping. Explicit owner close uses a third retained
+  PTY client, confirms real terminal readiness and the original shell PID, then sends
+  the fixture's explicit Ctrl+q Quit binding over its already authenticated transport.
+  The original daemon must exit; client exit 0 is not the cleanup assertion. No
+  global PID-only kill fallback exists on Darwin.
 
-Peer credentials and live process inspection are separate APIs. A short-lived
-`kill-session` child can exit after writing while its socket data remains buffered;
-its executable path may already be unavailable. The retained unreaped Child prevents
-that PID from being reused, so its kernel PID/UID still authenticates the helper.
-The non-child durable backend always requires its reserved full process identity.
+Peer credentials and live process inspection are separate APIs. On Darwin,
+`LOCAL_PEERPID` becomes unavailable after the peer disconnects, even while its child
+PID remains unreaped. The short-lived real `kill-session` helper can exit before
+broker authorization and is therefore unsupported by this Darwin transport design.
+Missing credentials always fail; the fixture never substitutes the expected PID or
+trusts a same-UID path. Retained interactive clients keep their connection alive
+through authentication. Cleanup uses the explicit Quit binding of the only active
+client, which terminates the pinned server; this establishes that long-lived shutdown
+path only. A production short-lived administrative command requires a separately
+supported owner transport. The non-child durable backend always requires its
+reserved full process identity.
 
 The C PTY launcher acquires a controlling terminal before exec. Python uses no
 pre-exec callback or fork from the broker's threads. The headless owner's future

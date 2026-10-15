@@ -581,12 +581,21 @@ def relay_half_close_fixture(api, root, environment, observations):
         listener.settimeout(5)
         proxy = Path(tempfile.mkdtemp(prefix="zjr-", dir="/tmp")).resolve()
         broker = Broker(api, proxy, backend, api.process(os.getpid()), environment)
+        release = root / "raw-transport-release"
         # This is raw socket traffic, not a substitute zellij implementation.
-        code = ("import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); "
-                "s.connect(sys.argv[1]); s.shutdown(socket.SHUT_RD); "
-                "s.sendall(bytes(range(256))*1024); s.shutdown(socket.SHUT_WR); s.close()")
+        # Retain the connected peer until delivery is independently observed;
+        # do not depend on kernel buffer size to keep Darwin credentials alive.
+        code = ("import pathlib,socket,sys,time\n"
+                "s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n"
+                "s.connect(sys.argv[1]); s.shutdown(socket.SHUT_RD)\n"
+                "s.sendall(bytes(range(256))*1024); s.shutdown(socket.SHUT_WR)\n"
+                "deadline=time.monotonic()+5\n"
+                "while not pathlib.Path(sys.argv[2]).is_file():\n"
+                " if time.monotonic() >= deadline: raise RuntimeError('raw sink did not release peer')\n"
+                " time.sleep(0.01)\n"
+                "s.close()\n")
         interpreter = api.process(os.getpid())["executable"]
-        child = subprocess.Popen([interpreter, "-c", code, str(broker.path)], env=broker.environment,
+        child = subprocess.Popen([interpreter, "-c", code, str(broker.path), str(release)], env=broker.environment,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, start_new_session=True)
         broker.bind_child(child)
@@ -598,6 +607,7 @@ def relay_half_close_fixture(api, root, environment, observations):
                 received += len(data)
                 require(received <= 4 * LIMIT, "Raw transport input exceeded its bound")
                 digest.update(data)
+        release.write_text("sink observed end of input\n")
         wait_until(lambda: child_exited(child), "raw transport child exit", 5)
     finally:
         try:
@@ -718,7 +728,8 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
     backend = root / "s/0.43.0" / name
     require(len(os.fsencode(backend)) < 100, "Backend socket path exceeds portable bound")
     config = root / "config/config.kdl"
-    config.write_text('on_force_close "quit"\nsession_serialization false\nshow_release_notes false\nshow_startup_tips false\ndefault_shell "/bin/sh"\n')
+    config.write_text('on_force_close "quit"\nsession_serialization false\nshow_release_notes false\nshow_startup_tips false\ndefault_shell "/bin/sh"\n'
+                      'keybinds clear-defaults=true {\n normal {\n  bind "Ctrl q" { Quit; }\n }\n}\n')
     layout = root / "layout.kdl"
     # All fixture arguments are generated paths. JSON strings here contain no
     # arbitrary user shell/KDL input and use the compatible basic string subset.
@@ -795,8 +806,9 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
                 broker.close()
             except Exception as error:
                 errors.append("broker cleanup: " + repr(error))
-        # A helper's owned broker pins close to the original connected server.
-        # No global PID kill fallback exists on Darwin.
+        # A retained PTY client keeps credentials available through authorization.
+        # Darwin cannot return LOCAL_PEERPID after a short helper disconnects.
+        # No global PID kill fallback or unauthenticated transport is allowed.
         if server is not None:
             def original_gone():
                 try:
@@ -809,42 +821,58 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
             try:
                 close_root = Path(tempfile.mkdtemp(prefix="zjc-", dir="/tmp")).resolve()
                 closer = Broker(api, close_root, backend, server, environment)
-                helper = subprocess.Popen([str(binary), "kill-session", name], env=closer.environment,
-                                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.DEVNULL, start_new_session=True)
-                closer.bind_child(helper)
-                wait_until(lambda: child_exited(helper), "exact close helper", 5)
-                # Keep the helper unreaped and broker forwarding until the owner
-                # actually exits; CLI exit 0 may precede buffered command delivery.
-                wait_until(original_gone, "original daemon exit through exact close", 12)
-                status = os.waitid(os.P_PID, helper.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                helper = TerminalClient(pty_wrapper, binary, config, name, closer)
+                helper.until(lambda: b"ZMUX_ZELLIJ_FEASIBILITY_READY" in helper.output,
+                             "close client real terminal readiness")
+                actual_child = api.process(helper.process.pid)
+                require(os.path.samefile(actual_child["executable"], binary), "Close client did not exec pinned zellij")
+                acknowledgment = root / "close-input"
+                text = "printf '%s' \"$$\" > " + str(acknowledgment) + "; printf '\\nCLOSE_INPUT_CONFIRMED\\n'\r"
+                os.write(helper.master, text.encode())
+                helper.until(acknowledgment.is_file, "close client original shell acknowledgement")
+                require(acknowledgment.read_text() == str(owner["shell_pid"]), "Close input reached a different shell")
+                require(same_process(api.process(server["pid"]), server), "Original server changed before Quit")
+                require(not child_exited(helper.process), "Close client exited before Quit")
+                require(any(record["client"]["pid"] == helper.process.pid
+                            and same_process(record["server"], server) and record["forwarded_to_server"] > 0
+                            for record in closer.records), "Close client has no authenticated live owner transport")
+                observations["close_control"] = {"method": "retained_authenticated_terminal_quit",
+                                                  "client": actual_child, "shell_pid": owner["shell_pid"],
+                                                  "original_shell_acknowledged": True, "ready_before_quit": True}
+                # Explicit fixture-only normal-mode binding. Unlike detach, Quit
+                # ends this pin's server when the last active client leaves.
+                require(os.write(helper.master, b"\x11") == 1, "Quit input was not accepted by the PTY")
+                observations["close_control"]["quit_input_written"] = True
+                def close_completed():
+                    helper.pump()
+                    return original_gone()
+                wait_until(close_completed, "original daemon exit through authenticated Quit", 12)
+                wait_until(lambda: child_exited(helper.process), "close terminal child exit", 5)
+                status = os.waitid(os.P_PID, helper.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
                 require(status is not None and status.si_code == os.CLD_EXITED and status.si_status == 0,
-                        "Exact close helper failed")
+                        "Authenticated Quit client failed")
             except Exception as error:
                 errors.append("owner close: " + repr(error))
             finally:
-                if helper is not None and helper.returncode is None:
+                if helper is not None:
                     try:
-                        if not child_exited(helper):
-                            os.kill(helper.pid, signal.SIGKILL)
+                        helper.close()
                     except Exception as error:
-                        errors.append("close helper stop: " + repr(error))
+                        errors.append("close client cleanup: " + repr(error))
                 if closer is not None:
                     try:
                         closer.close()
                     except Exception as error:
                         errors.append("close broker cleanup: " + repr(error))
                 if helper is not None:
-                    try:
-                        helper.wait(timeout=3)
-                    except Exception as error:
-                        errors.append("close helper reap: " + repr(error))
+                    (output / "pty-close.log").write_bytes(helper.output)
             try:
                 wait_until(original_gone, "original daemon exit", 12)
             except Exception as error:
                 errors.append("physical owner cleanup: " + repr(error))
             observations["close_helper"] = {
-                "exit_code": helper.returncode if helper is not None else None,
+                "method": "retained_authenticated_terminal_quit",
+                "exit_code": helper.process.returncode if helper is not None and helper.process is not None else None,
                 "records": closer.records if closer is not None else [],
                 "rejected": closer.rejected if closer is not None else [],
                 "errors": closer.errors if closer is not None else [],

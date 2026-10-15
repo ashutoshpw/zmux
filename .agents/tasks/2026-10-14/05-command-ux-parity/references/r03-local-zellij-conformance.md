@@ -219,3 +219,59 @@ Parent independent source review and complete pinned Linux run pass at
 clients and original daemon exit confirmed. Author full run and old-relay negative
 control also pass for their intended outcomes. Darwin cause/repair still requires
 exact-source hosted execution.
+
+
+### Darwin disconnected-peer limit and retained close design
+
+Hosted run `38778452032` at `c33ec40` passed public credential/process checks,
+exec-ENOENT status127 with an empty PTY diagnostic, the262144-byte directional
+regression, and both actual terminal attachments with same-shell input, unrelated
+peer rejection, TERM detachment and durable owner preservation. Cleanup still
+failed: after the real `kill-session` helper exited, its second connection could no
+longer provide a Darwin peer PID (`ENOTCONN`). Only its initial ConnStatus exchange
+was authorized. The original daemon remained live; that run is not a cleanup pass.
+
+An unreaped child reserves its PID but does not keep its disconnected Unix peer
+queryable. Apple's public XNU `uipc_usrreq.c` requires a connected peer for
+`LOCAL_PEERPID` and `LOCAL_PEERTOKEN`; this source observation explains the API
+boundary but does not replace host execution. References:
+<https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_usrreq.c>,
+<https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/un.h>.
+
+The fixture now closes through a third retained real PTY client. It waits for real
+terminal readiness, verifies the pinned client executable, confirms input reached
+the original shell PID and rechecks the original backend identity. Only then does
+it send its explicit fixture-configured Ctrl+q Quit binding over the authenticated
+live transport. The pinned Zellij implementation exits the server after its last
+active client quits. All existing client TERM/durability cases remain. Physical
+original-daemon exit, child reaping and joined workers remain required; no PID-only
+kill or missing-credential fallback exists.
+
+Short-lived `kill-session` through this Darwin broker is explicitly unsupported.
+A future production administrative path needs a different supported lifetime or
+owner transport; the retained Quit fixture cannot establish that missing path.
+
+
+The final complete Linux run of the retained-close implementation passes at
+`/tmp/zmux-zellij-retained-quit-final-20261015/receipt.json` (SHA256
+`af95a15357d2e515cb68a7856fda7f956c4a1354277b57404c4b3743a7025a04`).
+All seven harness input hashes match the source freeze. The third retained client
+reported original-shell acknowledgement, readiness before Quit, exact client image,
+zero upstream discard/pending bytes, exit0 and actual original-daemon exit. Both
+existing TERM/durable-session cases and the directional/failed-exec checks passed;
+scratch was removed after verified cleanup. The raw regression now retains its
+connected child until the independent sink observes complete input, avoiding any
+assumption about kernel buffer capacity keeping peer credentials available.
+
+Restoring the pre-repair global relay-close behavior in a private source copy still
+fails that raw regression with a child BrokenPipe,0/262144 sink bytes and no broker
+I/O error. Receipt: `/tmp/zmux-zellij-retained-negative-20261015/receipt.json`.
+Python syntax and scoped whitespace checks pass. These Linux results do not
+establish Darwin close behavior; exact-source hosted execution remains required.
+
+Parent independent full Linux rerun passes at
+`/tmp/zmux-zellij-retained-parent-20261015/receipt.json`; independent source review
+found no blocking lifetime/cleanup issue and verified all seven harness hashes.
+Full `scripts/check` passed in a HEAD-plus-this-slice isolated snapshot with a
+fresh Cargo target (`/tmp/zmux-zellij-retained-parent-check.log`). Retained-client
+Darwin execution remains pending.
