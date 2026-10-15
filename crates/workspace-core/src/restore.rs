@@ -339,7 +339,7 @@ impl SessionDocument {
         if self.workspaces.len() > MAX_WORKSPACES {
             return Err(invalid("workspace limit exceeded"));
         }
-        if self.workspaces.is_empty() != self.focused_workspace.is_none()
+        if (self.version < 4 && self.workspaces.is_empty() != self.focused_workspace.is_none())
             || self
                 .focused_workspace
                 .is_some_and(|id| !self.workspaces.iter().any(|w| w.id == id))

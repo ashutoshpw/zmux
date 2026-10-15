@@ -5,6 +5,12 @@
 
 ## Active implementation
 
+- T03 two-window creation/focus/close, per-window rendering/attention and last-close
+  save/reopen slice passes independent full portable checks and native source review.
+  Packaged macOS execution remains required; moves/groups/canvas and full parity
+  remain incomplete. Native3438565 failed an existing deadline-fixture ENOTCONN
+  assertion; repaired without changing timeout or no-replay behavior.
+
 - Local Docker service refreshed at `58a882b`: private backup, persistent migration002
   and expiry index verified, bounded cleanup codes0/tokens0, health/readiness200.
   Post-health `bunx path-to-port` confirms3530; tunnel/public auth and VM/relay/email

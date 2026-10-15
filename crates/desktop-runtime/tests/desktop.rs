@@ -1,3 +1,5 @@
+#[path = "support/window_host.rs"]
+mod window_host;
 use std::{
     sync::{Arc, Barrier},
     thread,
@@ -631,6 +633,7 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         },
     );
     wait(&desktop, |s| s.control_frames.len() == 2 && ready(s));
+    window_host::observe_key(&desktop);
     send(
         &desktop,
         2,
@@ -846,6 +849,7 @@ fn selecting_and_reactivating_acknowledges_only_the_focused_surface() {
         );
     }
     wait(&desktop, |s| s.last_request_id == 3);
+    window_host::observe_key(&desktop);
     send(
         &desktop,
         4,

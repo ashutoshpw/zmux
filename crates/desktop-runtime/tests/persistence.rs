@@ -255,7 +255,7 @@ fn legacy_window_and_sessions_share_durable_generations_even_without_terminals()
 #[test]
 fn unsupported_window_topology_is_rejected_before_durable_reservation() {
     let directory = Directory::new();
-    let path = directory.0.join("two-windows.json");
+    let path = directory.0.join("three-windows.json");
     let mut wire = serde_json::to_value(document()).unwrap();
     wire["window_layout"]["windows"]
         .as_array_mut()
@@ -263,7 +263,11 @@ fn unsupported_window_topology_is_rejected_before_durable_reservation() {
         .push(serde_json::json!({
             "id": 99, "workspace_ids": [], "selected_workspace": null
         }));
-    wire["next_id"] = serde_json::json!(100);
+    wire["window_layout"]["windows"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"id":100,"workspace_ids":[],"selected_workspace":null}));
+    wire["next_id"] = serde_json::json!(101);
     let source = serde_json::to_vec(&wire).unwrap();
     write_private(&path, &source);
     let worker = directory.worker();

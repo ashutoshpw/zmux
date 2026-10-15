@@ -46,6 +46,7 @@ fn target_identity_survives_reorder_and_move_but_closed_surface_does_not_retarge
         (second.id, second.focused_pane, surface)
     );
     let inherited = CallerContext {
+        window: None,
         local_tmux: None,
         workspace: Some(
             model
@@ -94,11 +95,13 @@ fn scoped_targets_and_position_indices_reject_wrong_kind_and_cross_owner_without
     let workspace: TargetRef = format!("workspace:{}", first.id.0).parse().unwrap();
     let pane: TargetRef = format!("pane:{}", first.focused_pane.0).parse().unwrap();
     let caller = CallerContext {
+        window: None,
         local_tmux: None,
         workspace: Some(format!("workspace:{}", second.id.0).parse().unwrap()),
         surface: None,
     };
     let scope = TargetScope {
+        window: None,
         workspace: Some(workspace.clone()),
         pane: Some("index:1".parse().unwrap()),
         surface: Some("index:1".parse().unwrap()),
@@ -146,6 +149,7 @@ fn scoped_targets_and_position_indices_reject_wrong_kind_and_cross_owner_without
         ));
     }
     let foreign = TargetScope {
+        window: None,
         workspace: Some(workspace),
         pane: Some(format!("pane:{}", second.focused_pane.0).parse().unwrap()),
         surface: None,
@@ -160,7 +164,15 @@ fn scoped_targets_and_position_indices_reject_wrong_kind_and_cross_owner_without
         "resolution failures do not modify topology or focus"
     );
     for invalid in [
-        "", "0", "pane:0", "index:0", "+1", "-1", "window:1", "pane:abc", "1:2:3",
+        "",
+        "0",
+        "pane:0",
+        "index:0",
+        "+1",
+        "-1",
+        "window:abc",
+        "pane:abc",
+        "1:2:3",
     ] {
         assert!(
             invalid.parse::<TargetRef>().is_err(),

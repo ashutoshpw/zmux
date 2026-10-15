@@ -1,5 +1,7 @@
 //! Stable object addressing and ownership checks. Resolution uses one immutable model revision.
-use crate::{Action, Axis, Direction, Navigation, PaneId, Snapshot, SurfaceId, WorkspaceId};
+use crate::{
+    Action, Axis, Direction, Navigation, PaneId, Snapshot, SurfaceId, WindowId, WorkspaceId,
+};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -8,6 +10,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
+    Window,
     Workspace,
     Pane,
     Surface,
@@ -15,6 +18,7 @@ pub enum TargetKind {
 impl fmt::Display for TargetKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::Window => "window",
             Self::Workspace => "workspace",
             Self::Pane => "pane",
             Self::Surface => "surface",
@@ -47,6 +51,7 @@ impl TargetRef {
         if let Some((prefix, id)) = self.0.split_once(':') {
             let id = positive(id)?;
             return match prefix {
+                "window" => Ok(Selector::Id(Some(TargetKind::Window), id)),
                 "workspace" => Ok(Selector::Id(Some(TargetKind::Workspace), id)),
                 "pane" => Ok(Selector::Id(Some(TargetKind::Pane), id)),
                 "surface" | "tab" => Ok(Selector::Id(Some(TargetKind::Surface), id)),
@@ -123,9 +128,34 @@ pub struct ObjectIdentity {
     pub reference: String,
     pub index: usize,
     pub workspace_id: WorkspaceId,
+    pub window_id: WindowId,
     pub pane_id: Option<PaneId>,
 }
 impl Snapshot {
+    pub fn resolve_window(&self, handle: &TargetRef) -> Result<WindowId, TargetError> {
+        let selector = handle.selector()?;
+        if let Selector::Id(Some(actual), _) = selector
+            && actual != TargetKind::Window
+        {
+            return Err(TargetError::WrongKind {
+                expected: TargetKind::Window,
+                actual,
+            });
+        }
+        self.windows
+            .iter()
+            .enumerate()
+            .find(|(index, window)| match selector {
+                Selector::Id(_, id) => window.id.0 == id,
+                Selector::Uuid(uuid) => self.object_uuid(TargetKind::Window, window.id.0) == uuid,
+                Selector::Index(id) => u64::try_from(index + 1).ok() == Some(id),
+            })
+            .map(|(_, window)| window.id)
+            .ok_or_else(|| TargetError::NotFound {
+                kind: TargetKind::Window,
+                target: handle.to_string(),
+            })
+    }
     pub fn object_uuid(&self, kind: TargetKind, id: u64) -> Uuid {
         Uuid::new_v5(&self.identity_namespace, format!("{kind}:{id}").as_bytes())
     }
@@ -175,6 +205,12 @@ impl Snapshot {
             reference: format!("{kind}:{id}"),
             index,
             workspace_id,
+            window_id: self
+                .windows
+                .iter()
+                .find(|window| window.workspace_ids.contains(&workspace_id))
+                .expect("canonical workspace owner")
+                .id,
             pane_id,
         }
     }
@@ -229,6 +265,7 @@ impl Snapshot {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetScope {
+    pub window: Option<TargetRef>,
     pub workspace: Option<TargetRef>,
     pub pane: Option<TargetRef>,
     pub surface: Option<TargetRef>,
@@ -236,6 +273,7 @@ pub struct TargetScope {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CallerContext {
+    pub window: Option<TargetRef>,
     #[serde(default)]
     pub local_tmux: Option<zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity>,
     pub workspace: Option<TargetRef>,
@@ -267,6 +305,7 @@ impl CallerContext {
             return Err(TargetError::LocalTmuxCaller("has multiple app surfaces"));
         }
         Ok(Self {
+            window: None,
             local_tmux: None,
             workspace: Some(
                 model
@@ -285,22 +324,77 @@ impl CallerContext {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ResolvedTarget {
+    pub window: WindowId,
     pub workspace: WorkspaceId,
     pub pane: PaneId,
     pub surface: SurfaceId,
 }
 impl TargetScope {
+    /// Window roots are valid even with no selected workspace/pane/surface.
+    pub fn resolve_window(
+        &self,
+        model: &Snapshot,
+        caller: &CallerContext,
+    ) -> Result<WindowId, TargetError> {
+        if self.workspace.is_some() || self.pane.is_some() || self.surface.is_some() {
+            return self.resolve(model, caller).map(|target| target.window);
+        }
+        if let Some(window) = &self.window {
+            return model.resolve_window(window);
+        }
+        let caller = caller.bind_local_tmux(model)?;
+        if caller.surface.is_some() || caller.workspace.is_some() {
+            return self.resolve(model, &caller).map(|target| target.window);
+        }
+        if let Some(window) = &caller.window
+            && let Ok(window) = model.resolve_window(window)
+        {
+            return Ok(window);
+        }
+        model
+            .focused_window
+            .ok_or(TargetError::NoFocus(TargetKind::Window))
+    }
     pub fn resolve(
         &self,
         model: &Snapshot,
         caller: &CallerContext,
     ) -> Result<ResolvedTarget, TargetError> {
         let explicit = self.workspace.is_some() || self.pane.is_some() || self.surface.is_some();
+        let mut constrained_window = self
+            .window
+            .as_ref()
+            .map(|handle| model.resolve_window(handle))
+            .transpose()?;
         let caller = if explicit {
             caller.clone()
         } else {
             caller.bind_local_tmux(model)?
         };
+        if constrained_window.is_none()
+            && !explicit
+            && caller.workspace.is_none()
+            && caller.surface.is_none()
+        {
+            constrained_window = caller
+                .window
+                .as_ref()
+                .and_then(|handle| model.resolve_window(handle).ok());
+        }
+        let default_workspace = constrained_window
+            .and_then(|window| {
+                model
+                    .windows
+                    .iter()
+                    .find(|w| w.id == window)
+                    .and_then(|w| w.selected_workspace)
+            })
+            .or_else(|| {
+                constrained_window
+                    .is_none()
+                    .then_some(model.focused_workspace)
+                    .flatten()
+            });
         let workspace_ref = self.workspace.as_ref().or_else(|| {
             (!explicit && caller.surface.is_none())
                 .then_some(caller.workspace.as_ref())
@@ -320,7 +414,7 @@ impl TargetScope {
         let mut pane = None;
         if let Some(handle) = &self.pane {
             let enclosing = if handle.is_index()? {
-                workspace.or(model.focused_workspace)
+                workspace.or(default_workspace)
             } else {
                 workspace
             };
@@ -333,7 +427,7 @@ impl TargetScope {
             let mut enclosing_pane = pane;
             let mut enclosing_workspace = workspace;
             if handle.is_index()? {
-                enclosing_workspace = workspace.or(model.focused_workspace);
+                enclosing_workspace = workspace.or(default_workspace);
                 enclosing_pane = pane.or_else(|| {
                     model
                         .workspaces
@@ -353,7 +447,21 @@ impl TargetScope {
             surface = Some(SurfaceId(object.id));
         }
         let workspace = workspace
-            .or(model.focused_workspace)
+            .or_else(|| {
+                constrained_window.and_then(|window| {
+                    model
+                        .windows
+                        .iter()
+                        .find(|w| w.id == window)
+                        .and_then(|w| w.selected_workspace)
+                })
+            })
+            .or_else(|| {
+                constrained_window
+                    .is_none()
+                    .then_some(model.focused_workspace)
+                    .flatten()
+            })
             .ok_or(TargetError::NoFocus(TargetKind::Workspace))?;
         let owner = model
             .workspaces
@@ -367,7 +475,19 @@ impl TargetScope {
             .into_iter()
             .find(|p| p.id == pane)
             .ok_or(TargetError::NoFocus(TargetKind::Pane))?;
+        let window = model
+            .windows
+            .iter()
+            .find(|window| window.workspace_ids.contains(&workspace))
+            .ok_or(TargetError::NoFocus(TargetKind::Window))?
+            .id;
+        if constrained_window.is_some_and(|expected| expected != window) {
+            return Err(TargetError::ScopeMismatch {
+                kind: TargetKind::Window,
+            });
+        }
         Ok(ResolvedTarget {
+            window,
             workspace,
             pane,
             surface: surface.unwrap_or(pane_object.selected_surface),

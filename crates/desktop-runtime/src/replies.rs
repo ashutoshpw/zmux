@@ -257,6 +257,7 @@ fn reply_execution(
         created_uploads: Vec::new(),
         profile_operation_id: None,
         download_result: None,
+        window_result: None,
         tmux_operation_id: None,
         session_operation_id: None,
         browser_operation_id: None,

@@ -512,6 +512,37 @@ pub unsafe extern "C" fn zmux_desktop_profile_add(
     })
 }
 
+/// Trusted native window completion/key observations, excluded from generic dispatch.
+///
+/// # Safety
+/// Request storage remains readable for length bytes; call off the UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_window_event(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_REQUEST_BYTES || request.is_null() {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: the caller retains this checked bounded readable storage.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let event =
+            serde_json::from_slice::<zmux_desktop_runtime::windows::NativeWindowEvent>(bytes)
+                .map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        let reply = match desktop.native_window_event(event) {
+            Ok(result) => json!({"ok":true,"result":result}),
+            Err(error) => {
+                json!({"ok":false,"error":{"message":error.to_string()},"outcome_unknown":matches!(error,DesktopError::Timeout|DesktopError::Closed)})
+            }
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
 /// Trusted native download channel, excluded from socket and generic JSON dispatch.
 ///
 /// # Safety

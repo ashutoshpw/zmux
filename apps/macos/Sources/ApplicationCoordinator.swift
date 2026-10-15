@@ -2,6 +2,11 @@ import AppKit
 import WebKit
 
 enum UICommand: Sendable {
+    case window(String, UInt64?, Bool?)
+    case windowEvent(NativeWindowEvent)
+    case workspaceCreate(UInt64, String)
+    case windowHistory(UInt64, String)
+    case windowReopen(UInt64, UInt64?)
     case action(String, UInt64?, String?, String?, UInt64?)
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
@@ -23,7 +28,16 @@ enum UICommand: Sendable {
 final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private(set) var snapshot: DesktopSnapshot?
     private(set) var mainWindowHosts: [MainWindowIdentity: MainWindowHost] = [:]
-    private(set) lazy var mainWindowHost = MainWindowHost(coordinator: self)
+    private lazy var initialWindowHost = MainWindowHost(coordinator: self)
+    private var initialHostClaimed = false
+    private var windowEpoch: UUID?
+    private var windowTasks: [UUID: Task<Void, Never>] = [:]
+    var mainWindowHost: MainWindowHost {
+        if let key = NSApp.keyWindow, let host = mainWindowHosts.values.first(where: { $0.window === key }) { return host }
+        if let snapshot, let id = snapshot.model.focusedWindow,
+           let host = mainWindowHosts[MainWindowIdentity(namespace: snapshot.model.identityNamespace, windowId: id)] { return host }
+        return initialWindowHost
+    }
     private var startRequested = false
     private var shutdownTask: Task<Void, Error>?
     let bridge = NativeBridge()
@@ -39,8 +53,12 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 guard let self else { throw BridgeFailure(message: "Desktop is closed") }
                 return try await self.bridge.notificationAction(action)
             },
-            activate: { [weak self] in
-                self?.mainWindowHost.window.makeKeyAndOrderFront(nil)
+            activate: { [weak self] receipt in
+                guard let self, let snapshot = self.snapshot, let id = receipt.focusedWindowId,
+                      let target = receipt.navigation?.target,
+                      target.identityNamespace == snapshot.model.identityNamespace,
+                      let host = self.mainWindowHosts[MainWindowIdentity(namespace: target.identityNamespace, windowId: id)] else { return }
+                host.installMenus(); host.window.makeKeyAndOrderFront(nil)
                 NSApp.activate()
             },
             reportError: { [weak self] message in self?.reportError(message) }
@@ -98,6 +116,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 guard let self, !Task.isCancelled else { break }
                 do {
                     switch command {
+                    case .window(let operation, let window, let focus): try await self.bridge.window(operation, window: window, focus: focus)
+                    case .windowEvent(let event): try await self.bridge.windowEvent(event)
+                    case .workspaceCreate(let window, let name): try await self.bridge.action("create_workspace_in_window", title: name, window: window)
+                    case .windowHistory(let window, let direction): try await self.bridge.action("navigate_focus_in_window", direction: direction, window: window)
+                    case .windowReopen(let window, let id): try await self.bridge.action("reopen_closed_in_window", closed: id, window: window)
                     case .action(let action, let pane, let axis, let title, let workspace):
                         try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
                     case .surface(let action, let surface, let pane, let index, let closed):
@@ -157,6 +180,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 }
             }
         }
+        mainWindowHost.installMenus()
         mainWindowHost.window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         appActive(NSApp.isActive)
@@ -166,16 +190,23 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
+        windowTasks.values.forEach { $0.cancel() }
+        windowTasks.removeAll()
         browsers.values.forEach { $0.close() }
         browsers.removeAll()
-        try await browserDownloads.shutdown()
+        var cleanupFailure: (any Error)?
+        do { try await browserDownloads.shutdown() } catch { cleanupFailure = error }
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
-        mainWindowHost.finishPresentation()
+        for host in mainWindowHosts.values { host.finishPresentation() }
         await imagePastes.stopAccepting()
-        try await bridge.close()
+        // Native download cleanup must not prevent the sole Desktop from saving
+        // and stopping its sessions. Preserve the first error after every owner
+        // has received its bounded cleanup opportunity.
+        do { try await bridge.close() } catch { if cleanupFailure == nil { cleanupFailure = error } }
         await imagePastes.desktopClosed()
+        if let cleanupFailure { throw cleanupFailure }
     }
 
     func shutdown() async throws {
@@ -199,14 +230,27 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     }
     func reportError(_ message: String) { mainWindowHost.showError(message) }
     func appActive(_ active: Bool) {
-        enqueue(.attention("app_active", nil, nil, active && mainWindowHost.window.isKeyWindow))
+        enqueue(.attention("app_active", nil, nil, active))
         if active { notificationDelivery.refreshPermission() }
     }
 
     private func reconcile(_ snapshot: DesktopSnapshot) throws {
+        guard shutdownTask == nil else { return }
         // Validate canonical ownership before touching native registries. The
-        // singleton policy remains closed until native lifecycle is implemented.
-        let projection = try MainWindowProjection.singleton(snapshot)
+        // Reject inconsistent membership before touching any native presenter.
+        let projections = try MainWindowProjection.all(snapshot)
+        if windowEpoch != snapshot.windowEpoch {
+            for task in windowTasks.values { task.cancel() }
+            windowTasks.removeAll()
+            for host in mainWindowHosts.values { host.closeAuthorized() }
+            mainWindowHosts.removeAll()
+            if windowEpoch != nil {
+                initialWindowHost.closeAuthorized()
+                initialWindowHost = MainWindowHost(coordinator: self)
+                initialHostClaimed = false
+            }
+            windowEpoch = snapshot.windowEpoch
+        }
         self.snapshot = snapshot
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
@@ -257,16 +301,91 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         imagePastes.update(snapshot)
         notificationDelivery.update(snapshot.nativeNotifications)
-        mainWindowHosts.removeAll(keepingCapacity: true)
-        if let projection { mainWindowHosts[projection.identity] = mainWindowHost }
-        let change = mainWindowHost.present(projection?.snapshot ?? snapshot, identity: projection?.identity)
-        // Layout creates/reparents the borrowed views before their first frame;
-        // responder reconciliation follows content updates, as in the singleton UI.
-        for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
-        for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
-            browsers[surface.id]?.update(surface)
+        // Detach every changed old hierarchy before attaching any new hierarchy.
+        // A shared surface/session view can belong to at most one native parent.
+        for (identity, host) in mainWindowHosts {
+            if let projection = projections.first(where: { $0.identity == identity }) { host.detachLayoutIfNeeded(projection.snapshot, identity: identity) }
+            else { host.detachContent() }
         }
-        mainWindowHost.completePresentation(selectionChanged: change.selectionChanged, layoutChanged: change.layoutChanged)
+        var changes: [(MainWindowHost, Bool, Bool)] = []
+        for projection in projections {
+            guard let host = mainWindowHosts[projection.identity] else { continue }
+            let change = host.present(projection.snapshot, identity: projection.identity)
+            changes.append((host, change.selectionChanged, change.layoutChanged))
+            if let token = host.nativeToken, snapshot.windowHosts.contains(token) { host.nativeReady = true }
+        }
+        for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
+        for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" { browsers[surface.id]?.update(surface) }
+        for (host, selection, layout) in changes { host.completePresentation(selectionChanged: selection, layoutChanged: layout) }
+        let pending = Set(snapshot.windowRequests.map(\.operationId))
+        windowTasks = windowTasks.filter { pending.contains($0.key) }
+        for request in snapshot.windowRequests where windowTasks[request.operationId] == nil {
+            windowTasks[request.operationId] = Task { [weak self] in
+                guard let self else { return }
+                do { try await self.performWindowRequest(request) }
+                catch let failure as NativeWindowPreflightFailure {
+                    do {
+                        try await self.bridge.windowEvent(NativeWindowEvent(event: "failed", operationId: request.operationId, epoch: request.epoch, message: failure.message))
+                    } catch { self.reportError("Native window failure acknowledgement uncertain: " + error.localizedDescription) }
+                } catch { self.reportError("Native window acknowledgement retained without replay: " + error.localizedDescription) }
+            }
+        }
+    }
+
+    func windowKeyChanged(_ host: MainWindowHost, key: Bool) {
+        if key { host.installMenus() }
+        guard host.nativeReady, let token = host.nativeToken else { return }
+        enqueue(.windowEvent(NativeWindowEvent(event: "key", token: token, key: key)))
+    }
+
+    private func performWindowRequest(_ request: NativeWindowRequest) async throws {
+        guard !Task.isCancelled, shutdownTask == nil, let snapshot, request.epoch == snapshot.windowEpoch, request.identityNamespace == snapshot.model.identityNamespace else { return }
+        let identity = MainWindowIdentity(namespace: request.identityNamespace, windowId: request.windowId)
+        switch request.kind {
+        case "open":
+            guard snapshot.model.windows.contains(where: { $0.id == request.windowId }) else {
+                try await bridge.windowEvent(NativeWindowEvent(event: "failed", operationId: request.operationId, epoch: request.epoch, message: "Window closed before native materialization"))
+                return
+            }
+            let host: MainWindowHost
+            if let existing = mainWindowHosts[identity] { host = existing }
+            else {
+                guard mainWindowHosts.count < 2 else { throw NativeWindowPreflightFailure(message: "Native main-window capacity is full") }
+                if !initialHostClaimed { host = initialWindowHost; initialHostClaimed = true }
+                else { host = MainWindowHost(coordinator: self) }
+                let token = WindowHostToken(epoch: request.epoch, identityNamespace: request.identityNamespace, windowId: request.windowId, hostId: UUID())
+                host.bind(token, windowUUID: request.windowUuid, inheritLegacy: mainWindowHosts.isEmpty)
+                mainWindowHosts[identity] = host
+            }
+            try reconcile(snapshot)
+            if request.focus { host.installMenus(); host.window.makeKeyAndOrderFront(nil); NSApp.activate() }
+            else if let key = NSApp.keyWindow, key !== host.window {
+                host.window.order(.below, relativeTo: key.windowNumber)
+            } else { host.window.orderFront(nil) }
+            guard let token = host.nativeToken else { throw BridgeFailure(message: "Native window token is unavailable") }
+            try await bridge.windowEvent(NativeWindowEvent(event: "complete", token: token, operationId: request.operationId))
+            host.nativeReady = true
+            if host.window.isKeyWindow { try await bridge.windowEvent(NativeWindowEvent(event: "key", token: token, key: true)) }
+        case "focus":
+            guard let host = mainWindowHosts[identity], let token = host.nativeToken, request.hostId == token.hostId else { throw NativeWindowPreflightFailure(message: "Focus target is not the admitted native host") }
+            host.installMenus(); host.window.makeKeyAndOrderFront(nil); NSApp.activate()
+            try await bridge.windowEvent(NativeWindowEvent(event: "complete", token: token, operationId: request.operationId))
+        case "close":
+            let host = mainWindowHosts[identity]
+            let token = host?.nativeToken ?? WindowHostToken(epoch: request.epoch, identityNamespace: request.identityNamespace, windowId: request.windowId, hostId: UUID())
+            guard request.hostId == nil || request.hostId == token.hostId else { throw NativeWindowPreflightFailure(message: "Closure target is not the admitted native host") }
+            host?.detachContent(); host?.closeAuthorized()
+            mainWindowHosts.removeValue(forKey: identity)
+            try await bridge.windowEvent(NativeWindowEvent(event: "complete", token: token, operationId: request.operationId))
+        case "terminate":
+            let token = mainWindowHosts[identity]?.nativeToken ?? WindowHostToken(epoch: request.epoch, identityNamespace: request.identityNamespace, windowId: request.windowId, hostId: UUID())
+            guard request.hostId == nil || request.hostId == token.hostId else { throw NativeWindowPreflightFailure(message: "Last close target is not the admitted native host") }
+            // Acknowledge only the termination request. The unchanged model is saved
+            // by the same Cmd-Q path; this does not claim successful persistence.
+            try await bridge.windowEvent(NativeWindowEvent(event: "complete", token: token, operationId: request.operationId))
+            if !Task.isCancelled { NSApp.terminate(nil) }
+        default: throw NativeWindowPreflightFailure(message: "Unsupported native window request")
+        }
     }
 
     private func recoverBrowserHostEvents() async {

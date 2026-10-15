@@ -49,6 +49,13 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    Windows {
+        request: crate::windows::WindowRequest,
+    },
+    WindowStatus {
+        epoch: uuid::Uuid,
+        operation_id: uuid::Uuid,
+    },
     LocalTmux {
         request: crate::local_tmux::Request,
     },
@@ -562,6 +569,31 @@ fn dispatch(
     admission: &ControlAdmission,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::Windows {
+            request: window_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Windows {
+                request: window_request,
+            },
+        ),
+        ControlCommand::WindowStatus {
+            epoch,
+            operation_id,
+        } => {
+            let snapshot = current_snapshot(desktop)?;
+            snapshot
+                .window_operations
+                .iter()
+                .find(|receipt| receipt.epoch == epoch && receipt.operation_id == operation_id)
+                .map(|receipt| json!(receipt))
+                .ok_or((
+                    "window_operation_not_found",
+                    "window operation expired or belongs to another runtime".into(),
+                ))
+        }
         ControlCommand::LocalTmux {
             request: tmux_request,
         } => mutate(
@@ -704,6 +736,8 @@ fn dispatch(
                     .validate_revision(&snapshot.model)
                     .map_err(|e| (e.code(), e.to_string()))?;
                 if matches!(target_request.operation, TargetOperation::ListPanes)
+                    && target_request.scope.window.is_none()
+                    && target_request.caller.window.is_none()
                     && target_request.scope.workspace.is_none()
                     && target_request.scope.pane.is_none()
                     && target_request.scope.surface.is_none()
@@ -795,7 +829,9 @@ fn dispatch(
             let snapshot = current_snapshot(desktop)?;
             Ok(json!({
                 "revision": snapshot.revision,
+                "focused_window": snapshot.model.focused_window,
                 "focused_workspace": snapshot.model.focused_workspace,
+                "windows": snapshot.model.windows,
                 "workspaces": snapshot.model.workspaces,
                 "identity_namespace": snapshot.model.identity_namespace,
                 "model_revision": snapshot.model.revision,
@@ -878,18 +914,27 @@ fn list_surfaces(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'stati
         .model
         .workspaces
         .iter()
-        .flat_map(|w| w.root.panes())
-        .find(|p| p.id == pane_id)
+        .find_map(|w| {
+            w.root
+                .panes()
+                .into_iter()
+                .find(|p| p.id == pane_id)
+                .map(|pane| (w, pane))
+        })
         .ok_or_else(|| ("unknown_pane", format!("pane {} does not exist", pane_id.0)))?;
+    let (workspace, pane) = pane;
+    let window = owning_window(&snapshot.model, workspace.id);
     let surfaces: Vec<_> = pane.surfaces.iter().map(|surface| {
                 let frame = surface.session_id.and_then(|id| frame_for(snapshot, id));
-                json!({"surface_id": surface.id, "surface_uuid": snapshot.model.object_uuid(TargetKind::Surface, surface.id.0), "surface_ref": format!("surface:{}", surface.id.0), "session_id": surface.session_id, "title": surface.title,
+                json!({"window_id":window, "window_uuid":snapshot.model.object_uuid(TargetKind::Window, window.0), "workspace_id":workspace.id, "pane_id":pane_id, "surface_id": surface.id, "surface_uuid": snapshot.model.object_uuid(TargetKind::Surface, surface.id.0), "surface_ref": format!("surface:{}", surface.id.0), "session_id": surface.session_id, "title": surface.title,
                     "cwd": surface.cwd, "remote": surface.remote, "kind": surface.kind, "url": surface.url, "browser_profile_id": surface.browser_profile_id, "selected": pane.selected_surface == surface.id,
                     "process_id": frame.and_then(|f| f.process_id), "starting": surface.session_id.is_some() && frame.is_none_or(|f| f.starting),
                     "state": frame.and_then(|f| f.snapshot.as_ref()).map(|s| state_name(s.state)),
                     "failure": frame.and_then(|f| f.failure.clone())})
             }).collect();
-    Ok(json!({"revision": snapshot.revision, "pane_id": pane_id, "surfaces": surfaces}))
+    Ok(
+        json!({"revision": snapshot.revision, "window_id":window, "window_uuid":snapshot.model.object_uuid(TargetKind::Window, window.0), "workspace_id":workspace.id, "pane_id": pane_id, "surfaces": surfaces}),
+    )
 }
 
 fn current_snapshot(desktop: &Desktop) -> Result<Arc<Snapshot>, (&'static str, String)> {
@@ -939,6 +984,9 @@ fn mutate(
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(window) = execution.window_result {
+        return Ok(window);
+    }
     if let Some(download) = execution.download_result {
         return Ok(download);
     }
@@ -1023,12 +1071,12 @@ fn mutate(
         "uploads": execution.snapshot.uploads,
         "created_workspaces": execution.created_workspaces.iter().filter_map(|id| execution.snapshot.model.workspaces.iter().find(|w| w.id == *id)).map(|w| {
             let pane = w.root.panes().into_iter().find(|pane| pane.id == w.focused_pane).expect("workspace focused pane exists");
-            json!({"workspace_id": w.id, "workspace_uuid": execution.snapshot.model.object_uuid(TargetKind::Workspace, w.id.0),
-                "pane_id": pane.id, "pane_uuid": execution.snapshot.model.object_uuid(TargetKind::Pane, pane.id.0),
-                "surface_id": pane.selected_surface, "surface_uuid": execution.snapshot.model.object_uuid(TargetKind::Surface, pane.selected_surface.0)})
+            object_receipt(model, w.id, pane.id, pane.selected_surface)
         }).collect::<Vec<_>>(),
         "created_panes": created_panes,
         "created_surfaces": created_surfaces,
+        "focused_window": model.focused_window,
+        "focused_window_uuid": model.focused_window.map(|id| model.object_uuid(TargetKind::Window, id.0)),
         "focused_surface": selected_surface,
         "focused_surface_uuid": selected_surface.map(|id| execution.snapshot.model.object_uuid(TargetKind::Surface, id.0)),
         "focused_workspace_uuid": workspace.map(|w| execution.snapshot.model.object_uuid(TargetKind::Workspace, w.id.0)),
@@ -1047,11 +1095,25 @@ fn object_receipt(
     pane: PaneId,
     surface: SurfaceId,
 ) -> Value {
+    let window = owning_window(model, workspace);
     json!({
+        "window_id": window, "window_uuid":model.object_uuid(TargetKind::Window, window.0),
         "workspace_id": workspace, "workspace_uuid": model.object_uuid(TargetKind::Workspace, workspace.0),
         "pane_id": pane, "pane_uuid": model.object_uuid(TargetKind::Pane, pane.0),
         "surface_id": surface, "surface_uuid": model.object_uuid(TargetKind::Surface, surface.0)
     })
+}
+
+fn owning_window(
+    model: &zmux_workspace_core::Snapshot,
+    workspace: WorkspaceId,
+) -> zmux_workspace_core::WindowId {
+    model
+        .windows
+        .iter()
+        .find(|window| window.workspace_ids.contains(&workspace))
+        .expect("canonical workspace owner")
+        .id
 }
 
 fn desktop_error(error: DesktopError) -> (&'static str, String) {
@@ -1092,6 +1154,8 @@ fn status(snapshot: &Snapshot) -> Value {
         .count();
     json!({
         "revision": snapshot.revision,
+        "window_count": snapshot.model.windows.len(),
+        "focused_window": snapshot.model.focused_window,
         "workspace_count": snapshot.model.workspaces.len(),
         "pane_count": pane_count,
         "running_sessions": running_sessions,
@@ -1128,7 +1192,10 @@ fn list_panes(
         .flat_map(|workspace| {
             workspace.root.panes().into_iter().map(|pane| {
                 let frame = pane.session_id().and_then(|id| frame_for(snapshot, id));
+                let window = owning_window(&snapshot.model, workspace.id);
                 json!({
+                    "window_id": window,
+                    "window_uuid": snapshot.model.object_uuid(TargetKind::Window, window.0),
                     "workspace_id": workspace.id,
                     "workspace_name": workspace.name,
                     "pane_id": pane.id,
@@ -1192,6 +1259,8 @@ fn read_screen_surface(
     })?;
     Ok(json!({
         "revision": snapshot.revision,
+        "window_id": owning_window(&snapshot.model, workspace.id),
+        "window_uuid": snapshot.model.object_uuid(TargetKind::Window, owning_window(&snapshot.model, workspace.id).0),
         "workspace_id": workspace.id,
         "workspace_name": workspace.name,
         "pane_id": pane.id,

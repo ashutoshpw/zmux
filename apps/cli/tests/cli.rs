@@ -458,7 +458,9 @@ fn socket_deadline_spans_fragmented_header_body_and_response_stages_without_repl
                     assert!(
                         matches!(
                             error.kind(),
-                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                            std::io::ErrorKind::BrokenPipe
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::NotConnected
                         ),
                         "{error}"
                     );
@@ -1378,8 +1380,14 @@ fn navigation_rejects_unsupported_or_ambiguous_options_before_connecting() {
             "do not repeat",
         ),
         (
-            vec!["next-workspace", "--window", "window:1"],
-            "unknown next-workspace option",
+            vec![
+                "next-workspace",
+                "--window",
+                "window:1",
+                "--window",
+                "window:2",
+            ],
+            "repeated --window selector",
         ),
         (
             vec!["next-tab", "--focus", "true"],

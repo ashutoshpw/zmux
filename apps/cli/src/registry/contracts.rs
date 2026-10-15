@@ -114,6 +114,7 @@ fn contract(
 }
 fn target_arguments() -> Vec<Argument> {
     vec![
+        option("window", &["--window"], ValueKind::Target),
         option("workspace", &["--workspace"], ValueKind::Target),
         option("pane", &["--pane"], ValueKind::Target),
         option("surface", &["--surface", "--tab"], ValueKind::Target),
@@ -232,6 +233,7 @@ fn definitions() -> Vec<Contract> {
         };
         let arguments = if scope == "--workspace" {
             vec![
+                option("window", &["--window"], ValueKind::Target),
                 option("workspace", &["--workspace"], ValueKind::Target),
                 option(
                     "expected_model_revision",

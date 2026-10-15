@@ -78,8 +78,9 @@ actor NativeBridge {
         revision = snapshot.revision
         return snapshot
     }
-    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil) async throws {
+    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil, window: UInt64? = nil) async throws {
         var action: [String: Any] = ["action": name]
+        if let window { action["window_id"] = window }
         if let pane { action["pane_id"] = pane }
         if let axis { action["axis"] = axis }
         if let title { action["name"] = title }
@@ -147,6 +148,34 @@ actor NativeBridge {
     }
     func cancelBrowserDownload(_ record: BrowserDownloadRecord) async throws {
         try await send(["command": "downloads", "request": ["scope": ["surface": record.origin.surfaceUuid.uuidString.lowercased()], "action": ["operation": "cancel", "download_id": record.downloadId.uuidString.lowercased()]]])
+    }
+    func window(_ operation: String, window: UInt64? = nil, focus: Bool? = nil) async throws {
+        var scope: [String: Any] = [:]
+        if let window { scope["window"] = "window:" + String(window) }
+        var action: [String: Any] = ["operation": operation]
+        if let focus { action["focus"] = focus }
+        try await send(["command": "windows", "request": ["scope": scope, "action": action]])
+    }
+    func windowEvent(_ event: NativeWindowEvent) async throws {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(event)
+        guard data.count <= 16_384 else { throw BridgeFailure(message: "Native window event exceeds its transport bound") }
+        let desktop = handle
+        let work = Task<Void, Error>.detached {
+            let result = data.withUnsafeBytes { bytes in zmux_desktop_window_event(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count) }
+            guard result.status == 0 else { throw BridgeFailure(message: "Native window acknowledgement is unavailable; the event was not replayed") }
+            struct Response: Decodable {
+                struct Failure: Decodable { let message: String }
+                struct Accepted: Decodable { let accepted: Bool }
+                let ok: Bool
+                let error: Failure?
+                let result: Accepted?
+            }
+            let response = try JSONDecoder().decode(Response.self, from: Self.consume(result.value))
+            guard response.ok, response.result?.accepted == true else { throw BridgeFailure(message: response.error?.message ?? "Native window event was rejected") }
+        }
+        try await work.value
     }
     func pasteFiles(surface: UInt64, paths: [String]) async throws {
         try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface, "paths": paths]])

@@ -12,6 +12,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     private unowned let coordinator: ApplicationCoordinator
     private(set) var identity: MainWindowIdentity?
+    private(set) var nativeToken: WindowHostToken?
+    var nativeReady = false
+    private var authorizedClose = false
     private var bridge: NativeBridge { coordinator.bridge }
     private var browserDownloads: BrowserDownloads { coordinator.browserDownloads }
     private var notificationDelivery: NotificationDelivery { coordinator.notificationDelivery }
@@ -21,7 +24,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     var browserViewportSize: NSSize { canvas.bounds.size }
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
-    private let sidebarLayout = SidebarLayout()
+    private var sidebarLayout = SidebarLayout()
+    private var sidebarWidthKey = "sidebarWidth"
+    private var sidebarCollapsedKey = "sidebarCollapsed"
     private let sidebarDivider = SidebarDividerView()
     private var sidebarWidth: NSLayoutConstraint?
     private var sidebarPanelWidth: NSLayoutConstraint?
@@ -76,7 +81,34 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         window.backgroundColor = ZmuxPalette.window
         window.center()
         buildLayout()
-        buildMenus()
+    }
+
+    func bind(_ token: WindowHostToken, windowUUID: UUID, inheritLegacy: Bool) {
+        nativeToken = token
+        let uuid = token.identityNamespace.uuidString.lowercased() + "." + windowUUID.uuidString.lowercased()
+        sidebarWidthKey = "window." + uuid + ".sidebarWidth"
+        sidebarCollapsedKey = "window." + uuid + ".sidebarCollapsed"
+        sidebarLayout = SidebarLayout(key: sidebarWidthKey, inheritLegacy: inheritLegacy)
+        let saved = UserDefaults.standard.object(forKey: sidebarCollapsedKey) as? Bool
+        sidebarCollapsed = saved ?? (inheritLegacy && UserDefaults.standard.bool(forKey: "sidebarCollapsed"))
+        applySidebarLayout()
+    }
+    func installMenus() { buildMenus() }
+    func closeAuthorized() { authorizedClose = true; nativeReady = false; window.close(); finishPresentation() }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard !authorizedClose else { return true }
+        if let identity { coordinator.enqueue(.window("close", identity.windowId, nil)) }
+        return false
+    }
+    func detachLayoutIfNeeded(_ snapshot: DesktopSnapshot, identity: MainWindowIdentity) {
+        guard layoutKey != (snapshot.workspace?.root.key ?? "empty") || self.identity != identity || self.snapshot?.browserEpoch != snapshot.browserEpoch else { return }
+        canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
+        layoutKey = ""
+        didSetInitialTerminalFocus = false
+    }
+    func detachContent() {
+        canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
+        layoutKey = ""
     }
 
     func finishPresentation() {
@@ -245,7 +277,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     @objc func toggleSidebar() {
         sidebarCollapsed.toggle()
-        UserDefaults.standard.set(sidebarCollapsed, forKey: "sidebarCollapsed")
+        UserDefaults.standard.set(sidebarCollapsed, forKey: sidebarCollapsedKey)
         if sidebarCollapsed, let responder = window.firstResponder as? NSView,
            responder === sidebarDivider || responder.isDescendant(of: sidebarPanel) {
             // A hidden sidebar cannot keep keyboard focus. Preserve content
@@ -275,8 +307,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     func appActive(_ active: Bool) {
         coordinator.appActive(active)
     }
-    func windowDidBecomeKey(_ notification: Notification) { appActive(NSApp.isActive) }
-    func windowDidResignKey(_ notification: Notification) { appActive(false) }
+    func windowDidBecomeKey(_ notification: Notification) { coordinator.windowKeyChanged(self, key: true) }
+    func windowDidResignKey(_ notification: Notification) { coordinator.windowKeyChanged(self, key: false) }
 
     private func makeIconButton(symbol: String, label: String, action: Selector) -> IconButton {
         let button = IconButton(symbol: symbol, label: label, target: self, action: action)
@@ -299,6 +331,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         menu.addItem(workspaceItem)
         let workspaceMenu = NSMenu(title: "Workspace")
         let items: [(String, Selector, String)] = [
+            ("New Window", #selector(newMainWindow), ""),
+            ("Close Window", #selector(closeMainWindow), ""),
             ("New Workspace", #selector(newWorkspace), "n"),
             ("New Terminal Tab", #selector(newTerminal), "t"),
             ("New Browser Tab", #selector(newBrowser), ""),
@@ -684,9 +718,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     @objc func newWorkspace() {
+        guard let identity else { showError("Window startup is still pending"); return }
         workspaceCount += 1
-        enqueue(.action("create_workspace", nil, nil, "Workspace \(workspaceCount)", nil))
+        enqueue(.workspaceCreate(identity.windowId, "Workspace \(workspaceCount)"))
     }
+    @objc private func newMainWindow() { enqueue(.window("new", nil, true)) }
+    @objc private func closeMainWindow() { if let identity { enqueue(.window("close", identity.windowId, nil)) } }
 
     private var focusedPane: Pane? {
         snapshot?.workspace?.root.panes.first { $0.id == snapshot?.workspace?.focusedPane }
@@ -753,10 +790,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         if let pane = focusedPane { newTerminalInPane(pane.id) } else { newWorkspace() }
     }
     @objc func closeTab() { if let pane = focusedPane { closeTerminalTab(pane.selectedSurface) } }
-    @objc func reopenClosed() { enqueue(.surface("reopen_closed", nil, nil, nil, nil)) }
+    @objc func reopenClosed() { if let identity { enqueue(.windowReopen(identity.windowId, nil)) } }
     @objc private func reopenHistoryItem(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? NSNumber else { return }
-        enqueue(.surface("reopen_closed", nil, nil, nil, id.uint64Value))
+        if let identity { enqueue(.windowReopen(identity.windowId, id.uint64Value)) }
     }
     @objc func nextTab() { navigateTab("next") }
     @objc func previousTab() { navigateTab("previous") }
@@ -788,8 +825,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         enqueue(.navigation("focus_pane_direction", direction, pane.id, nil, nil, nil))
     }
     // Focus history spans the desktop model; never attach the current pane/workspace as a scope.
-    @objc func focusBack() { enqueue(.navigation("navigate_focus", "back", nil, nil, nil, nil)) }
-    @objc func focusForward() { enqueue(.navigation("navigate_focus", "forward", nil, nil, nil, nil)) }
+    @objc func focusBack() { if let identity { enqueue(.windowHistory(identity.windowId, "back")) } }
+    @objc func focusForward() { if let identity { enqueue(.windowHistory(identity.windowId, "forward")) } }
     @objc func renameTab() {
         if let surface = focusedPane?.selected { renameTerminalTab(surface.id) }
     }
@@ -977,8 +1014,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             label.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
         }
         for item in snapshot.notifications.reversed() {
-            let available = item.target?.isAvailable(in: snapshot) ?? false
-            let workspaceName = snapshot.model.workspaces.first { $0.id == item.workspaceId }?.name
+            let available = item.target?.isAvailable(in: coordinator.snapshot ?? snapshot) ?? false
+            let workspaceName = (coordinator.snapshot ?? snapshot).model.workspaces.first { $0.id == item.workspaceId }?.name
             let row = NotificationRowView(item: item, workspaceName: workspaceName, available: available, owner: self)
             list.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
@@ -997,7 +1034,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     private var canJumpToUnread: Bool {
         guard let snapshot else { return false }
-        return snapshot.notifications.contains { !$0.read && ($0.target?.isAvailable(in: snapshot) ?? false) }
+        return snapshot.notifications.contains { !$0.read && ($0.target?.isAvailable(in: coordinator.snapshot ?? snapshot) ?? false) }
     }
     @objc private func jumpToUnread() { notificationDelivery.jumpToUnread() }
     private func setNotificationActionsVisible(_ visible: Bool) {
@@ -1124,8 +1161,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         do {
             let wasCollapsed = sidebarCollapsed
             let savedSidebarWidth = sidebarLayout.preferredWidth
-            let savedWidthPreference = UserDefaults.standard.object(forKey: "sidebarWidth")
-            let savedVisibilityPreference = UserDefaults.standard.object(forKey: "sidebarCollapsed")
+            let savedWidthPreference = UserDefaults.standard.object(forKey: sidebarWidthKey)
+            let savedVisibilityPreference = UserDefaults.standard.object(forKey: sidebarCollapsedKey)
             let savedWindowFrame = window.frame
             let savedResponder = window.firstResponder
             let savedWorkspace = snapshot?.model.focusedWorkspace
@@ -1135,10 +1172,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 window.setFrame(savedWindowFrame, display: true)
                 sidebarLayout.resize(to: savedSidebarWidth, availableWidth: .greatestFiniteMagnitude)
                 sidebarCollapsed = wasCollapsed
-                if let savedWidthPreference { UserDefaults.standard.set(savedWidthPreference, forKey: "sidebarWidth") }
-                else { UserDefaults.standard.removeObject(forKey: "sidebarWidth") }
-                if let savedVisibilityPreference { UserDefaults.standard.set(savedVisibilityPreference, forKey: "sidebarCollapsed") }
-                else { UserDefaults.standard.removeObject(forKey: "sidebarCollapsed") }
+                if let savedWidthPreference { UserDefaults.standard.set(savedWidthPreference, forKey: sidebarWidthKey) }
+                else { UserDefaults.standard.removeObject(forKey: sidebarWidthKey) }
+                if let savedVisibilityPreference { UserDefaults.standard.set(savedVisibilityPreference, forKey: sidebarCollapsedKey) }
+                else { UserDefaults.standard.removeObject(forKey: sidebarCollapsedKey) }
                 applySidebarLayout()
                 window.makeFirstResponder(savedResponder)
             }
@@ -1476,7 +1513,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
 
-    private func nativeCLI(_ arguments: [String], expectFailure: Bool = false, timeout: Int = 5000, externalCaller: Bool = false) async throws -> Data {
+    func nativeCLI(_ arguments: [String], expectFailure: Bool = false, timeout: Int = 5000, externalCaller: Bool = false) async throws -> Data {
         let executable = Bundle.main.resourceURL!.appendingPathComponent("bin/zmux")
         return try await Task.detached {
             let process = Process()
@@ -1484,7 +1521,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             process.arguments = ["--timeout", String(timeout)] + arguments
             if externalCaller {
                 var environment = ProcessInfo.processInfo.environment
-                for key in ["ZMUX_WORKSPACE_ID", "ZMUX_SURFACE_ID", "ZMUX_TAB_ID"] {
+                for key in ["ZMUX_WINDOW_ID", "ZMUX_WORKSPACE_ID", "ZMUX_SURFACE_ID", "ZMUX_TAB_ID"] {
                     environment.removeValue(forKey: key)
                 }
                 process.environment = environment
@@ -2321,11 +2358,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try await NotificationPermissionSmoke.validate()
                 }
                 let storage: NativeDesktopStorage
-                if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
+                if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                } else if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
                 } else { storage = .applicationSupport }
                 try await coordinator.start(storage: storage)
+                if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                    do {
+                        try await WindowLifecycleSmoke.run(coordinator: coordinator, report: report, phase: CommandLine.arguments[index + 3])
+                        try await coordinator.shutdown()
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native window lifecycle failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Native window cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
@@ -2342,7 +2395,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") { exit(1) }
+                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") {
+                    do { try await coordinator.shutdown() } catch {
+                        FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
+                    }
+                    exit(1)
+                }
                 let alert = NSAlert()
                 alert.messageText = "Unable to start zmux"
                 alert.informativeText = error.localizedDescription
@@ -2355,7 +2413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) { coordinator?.appActive(true) }
     func applicationDidResignActive(_ notification: Notification) { coordinator?.appActive(false) }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let coordinator else { return .terminateNow }
@@ -2364,6 +2422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             do { try await coordinator.shutdown() } catch {
                 FileHandle.standardError.write(Data("zmux shutdown: \(error)\n".utf8))
+                if CommandLine.arguments.contains("--window-lifecycle-smoke") { exit(1) }
                 // Teardown has already stopped sessions. Do not offer a misleading
                 // Cancel/Retry that would return the user to a dead desktop.
                 let alert = NSAlert()

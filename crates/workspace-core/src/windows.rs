@@ -1,10 +1,10 @@
 //! Canonical main-window membership. Native lifecycle actions remain unavailable
 //! until the shared host coordinator can materialize more than one window.
-use crate::{ActionError, WindowId, WorkspaceId, WorkspaceStore};
+use crate::{Action, ActionError, Effect, WindowId, WorkspaceId, WorkspaceStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-pub const MAX_WINDOWS: usize = 1;
+pub const MAX_WINDOWS: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +56,72 @@ pub(crate) fn validate_layout(
 }
 
 impl WorkspaceStore {
+    pub(crate) fn focus_window(&mut self, id: WindowId) -> Result<(), ActionError> {
+        if !self.state.windows.iter().any(|window| window.id == id) {
+            return Err(ActionError::InvalidOperation(
+                "window does not exist".into(),
+            ));
+        }
+        self.state.focused_window = Some(id);
+        self.project_window_focus();
+        Ok(())
+    }
+
+    pub(crate) fn create_window(
+        &mut self,
+        focus: bool,
+        effects: &mut Vec<Effect>,
+    ) -> Result<(), ActionError> {
+        if self.state.windows.len() >= MAX_WINDOWS {
+            return Err(ActionError::Capacity {
+                resource: "windows",
+                limit: MAX_WINDOWS,
+            });
+        }
+        let prior = self.state.focused_window;
+        let id = WindowId(self.reserve(1)?);
+        self.state.windows.push(Window {
+            id,
+            workspace_ids: Vec::new(),
+            selected_workspace: None,
+        });
+        self.state.focused_window = Some(id);
+        self.create_workspace("Workspace".into(), None, true, effects)?;
+        if !focus && prior.is_some() {
+            self.state.focused_window = prior;
+        }
+        self.project_window_focus();
+        Ok(())
+    }
+
+    pub(crate) fn close_window(
+        &mut self,
+        id: WindowId,
+        effects: &mut Vec<Effect>,
+    ) -> Result<(), ActionError> {
+        let window = self
+            .state
+            .windows
+            .iter()
+            .find(|window| window.id == id)
+            .ok_or_else(|| ActionError::InvalidOperation("window does not exist".into()))?
+            .clone();
+        if self.state.windows.len() == 1 {
+            return Err(ActionError::InvalidOperation(
+                "last window close requires application save and termination".into(),
+            ));
+        }
+        for workspace_id in window.workspace_ids {
+            self.surface_action(Action::CloseWorkspace { workspace_id }, effects)?;
+        }
+        self.state.windows.retain(|window| window.id != id);
+        if self.state.focused_window == Some(id) {
+            self.state.focused_window = self.state.windows.first().map(|window| window.id);
+        }
+        self.project_window_focus();
+        Ok(())
+    }
+
     fn ensure_window(&mut self) -> Result<(), ActionError> {
         if self.state.windows.is_empty() {
             let id = WindowId(self.reserve(1)?);
@@ -75,7 +141,12 @@ impl WorkspaceStore {
         focus: bool,
     ) -> Result<(), ActionError> {
         self.ensure_window()?;
-        let window = &mut self.state.windows[0];
+        let window = self
+            .state
+            .windows
+            .iter_mut()
+            .find(|window| Some(window.id) == self.state.focused_window)
+            .expect("focused window exists");
         window.workspace_ids.push(id);
         if focus || window.selected_workspace.is_none() {
             window.selected_workspace = Some(id);
@@ -103,10 +174,18 @@ impl WorkspaceStore {
             .iter_mut()
             .find(|window| window.workspace_ids.contains(&id))
             .expect("removed workspace has an owning window");
-        window.workspace_ids.retain(|existing| *existing != id);
+        let index = window
+            .workspace_ids
+            .iter()
+            .position(|existing| *existing == id)
+            .expect("owned workspace");
+        window.workspace_ids.remove(index);
         if window.selected_workspace == Some(id) {
-            // Preserve the existing singleton close-selection behavior.
-            window.selected_workspace = window.workspace_ids.last().copied();
+            window.selected_workspace = window
+                .workspace_ids
+                .get(index)
+                .copied()
+                .or_else(|| window.workspace_ids.last().copied());
         }
         self.project_window_focus();
     }

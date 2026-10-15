@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Verify last-main-window save/reopen using one isolated packaged app at a time."""
+from pathlib import Path
+import json
+import platform
+import subprocess
+import tempfile
+
+
+def validate_saved(profile, prepared, prepared_path):
+    path = profile / "session.json"
+    saved = json.loads(path.read_text())
+    assert saved["version"] == 4, saved
+    assert saved["identity_namespace"].lower() == prepared["namespace"].lower()
+    layout = saved["window_layout"]
+    assert layout["focused_window"] == prepared["window"]
+    assert layout["windows"] == [{
+        "id": prepared["window"], "workspace_ids": [prepared["workspace"]],
+        "selected_workspace": prepared["workspace"],
+    }], layout
+    assert saved["focused_workspace"] == prepared["workspace"]
+    assert len(saved["workspaces"]) == 1
+    workspace = saved["workspaces"][0]
+    assert workspace["id"] == prepared["workspace"]
+    pane = workspace["root"]["pane"]
+    assert pane["selected_surface"] == prepared["surface"]
+    assert pane["surfaces"][0]["id"] == prepared["surface"]
+    assert path.stat().st_mtime_ns >= prepared_path.stat().st_mtime_ns, "No final save after close preparation"
+
+
+def main():
+    if platform.system() != "Darwin":
+        raise SystemExit("Packaged native window acceptance requires macOS")
+    root = Path(__file__).resolve().parent.parent
+    dist = root / "dist"
+    bundle = dist / "zmux.app"
+    metadata = json.loads((dist / "build-info.json").read_text())
+    # Keep failure evidence and the owned profile; never remove storage while an
+    # app from a timed-out Launch Services invocation might still be using it.
+    directory = Path(tempfile.mkdtemp(prefix="zmw-", dir="/tmp")).resolve()
+    profile = directory / "profile"
+    prepared_path = directory / "prepared.json"
+    socket = directory / "control.sock"
+    print(f"Native window fixture: {directory}", flush=True)
+    for phase in ["close", "reopen"]:
+        stdout = directory / f"{phase}-stdout.log"
+        stderr = directory / f"{phase}-stderr.log"
+        command = ["/usr/bin/open", "-n", "-W", "--stdout", str(stdout), "--stderr", str(stderr),
+                   "--env", "ZMUX_SOCKET=" + str(socket), str(bundle), "--args",
+                   "--window-lifecycle-smoke", str(prepared_path), str(profile), phase]
+        try:
+            subprocess.run(command, check=True, timeout=150)
+        except Exception:
+            for path in [stdout, stderr]:
+                if path.exists():
+                    print(path.read_text(errors="replace"))
+            print(f"Native window phase {phase} failed; profile retained at {directory}. No second app was launched.")
+            raise
+        if phase == "close":
+            prepared = json.loads(prepared_path.read_text())
+            assert prepared["sourceSHA"] == metadata["source_sha"]
+            for key in ["noFocus", "independentResize", "nativeInput", "nativeClose", "emptyWindow", "cliClose"]:
+                assert prepared[key] is True, key
+            validate_saved(profile, prepared, prepared_path)
+    reopened = json.loads(Path(str(prepared_path) + ".reopened.json").read_text())
+    assert reopened["source_sha"] == metadata["source_sha"]
+    for key in ["success", "fresh_process", "native_input"]:
+        assert reopened[key] is True, key
+    evidence = {"success": True, "source_sha": metadata["source_sha"], "prepared": prepared,
+                "last_close_saved": True, "reopened": reopened, "fixture_directory": str(directory),
+                "native_close_before_open_race": "separate portable real-owner gate"}
+    (dist / "native-windows.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    print(json.dumps(evidence, indent=2))
+
+
+if __name__ == "__main__":
+    main()

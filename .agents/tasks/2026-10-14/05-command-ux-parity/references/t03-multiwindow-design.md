@@ -358,3 +358,92 @@ Parent independent source review and full `scripts/check` passed against frozen
 snapshot `/tmp/zmux-coordinator-parent-verify-dnkj0s2o` with a fresh private Cargo
 target; log `/tmp/zmux-coordinator-parent-check.log`. Native compilation and packaged
 smoke remain required before native acceptance.
+
+## Two-window vertical slice, 2026-10-15
+
+This original MIT implementation supersedes the singleton capacity restriction
+above. It is a bounded two-main-window slice, not complete command parity or
+native acceptance. One Desktop/coordinator continues to own every PTY, browser,
+download, notification and control socket. Canonical window membership, selected
+workspace, closed-item origin and navigation history live in Rust. A focused empty
+window is valid even while its sibling has workspaces; v4 persistence preserves it.
+
+The public CLI now exposes list/current/new/focus/close window operations and hard
+`--window` constraints on object routes. Window roots resolve without requiring a
+workspace/pane/surface. Valid ambient window hints apply only without an object
+caller; surface/workspace callers derive their canonical current owner. Object
+receipts, pane/surface lists and read-screen include owning window IDs/UUIDs.
+Global list-panes optimization is unavailable with explicit or ambient window scope.
+
+Native mutation admission returns an epoch, operation UUID and exact window
+identity. CLI waits under one absolute deadline for that exact native receipt and
+never replays a mutation. The runtime retains at most two physical host credits
+and 32 operation receipts. A 30-second native timeout marks the receipt failed or
+unknown without freeing a possibly live host. Exact close acknowledgement releases
+that window's credit and drains older pending operations; late opens cannot revive
+it. Failed materialization stays visible in list-windows with an explicit close or
+quit/reopen recovery instruction. No automatic materialization retry occurs.
+
+AppKit registers presenters by namespace/window identity and uses trusted native
+host tokens. Known pre-effect failures send explicit Failed events; uncertain ABI
+acknowledgements retain the operation without replay. Global detach precedes every
+new attachment, frames cover the union of every window's selected terminal tabs,
+and each host retains its own responder/menu/sidebar context. No-focus creation
+orders the sibling below the current key window. Attention visibility requires an
+observed trusted key-main-window owner as well as app activity. Native window close
+and CLI close share the runtime route. Last-main-window close retains its logical
+layout and enters the ordinary application termination/save path, including while
+auxiliary windows are open. Shutdown still reaches Desktop save/session cleanup if
+native download cleanup fails.
+
+Portable evidence:
+
+- The initial core regression failed on unsupported `create_window`, then passed
+  with atomic/no-focus creation and ownership-preserving close; exact red command
+  and log are `/tmp/zmux-t03-two-window-red.log` (an earlier zero-test invocation
+  is not red evidence).
+- Runtime owner tests use two real PTYs, exercise empty-key-window frame visibility,
+  forged/stale host tokens, exact acknowledgement/capacity, and 40 consecutive
+  close-before-open-ack generations with bounded retention.
+- Real filesystem/PTY persistence tests round-trip a focused empty second window,
+  retain the terminal owner's topology on last-close acknowledgement, inspect the
+  actual saved document and reopen a fresh runtime shell.
+- The actual C ABI test proves response-buffer capacity precedes host mutation and
+  rejects stale host generations; native-event forging is unavailable over socket
+  commands.
+- Full `scripts/check` passed with private target
+  `/tmp/zmux-t03-two-window-check-target`; log
+  `/tmp/zmux-t03-two-window-check.log`. This covers workspace tests, strict Clippy,
+  notice inventory and real C ABI checks. CLI failed-open recovery tests are part
+  of this combined run.
+
+Native source and acceptance instrumentation are present but have not compiled or
+executed on this Linux host. `scripts/check-native-windows` launches the packaged
+app through Launch Services with a fresh private persistent profile and socket.
+Its close phase checks native no-focus/responder retention, independent resize,
+window-targeted AppKit key events, native sibling close, empty-window root routing,
+local workspace recreation and exact CLI closure. It writes preparation evidence
+before last-main-window close with an auxiliary window open. The external runner
+then inspects the actual post-exit v4 session file, requires a final write after
+preparation, relaunches the same profile and verifies exact logical identity with a
+fresh native terminal and input. Failures retain their logs/profile, and timeouts
+do not trigger a second app launch or remove possibly live storage. The runner is
+invoked after packaged validation and before save-panel driver setup and the broad
+smoke in `scripts/check-macos-app`, so browser/Accessibility failures cannot prevent
+independent window evidence. A window failure stops execution before another app
+launch.
+
+Universal Swift compilation and successful packaged execution of both existing
+smoke and this lifecycle journey remain required before native acceptance. The
+native close-before-open race is not claimed by that journey; its deterministic
+40-generation proof is at the actual portable runtime owner. Physical keyboard,
+IME, VoiceOver, measured two-window resource behavior, external-app focus and
+injected native persistence failure remain separate acceptance gates.
+
+Parent independent combined snapshot passed full `scripts/check` with a fresh
+Cargo target (`/tmp/zmux-t03-parent-check.log`). Independent native source review
+found no blocking ownership/focus/lifecycle issue. No native execution is claimed.
+The combined check includes the existing socket deadline fixture repair: Darwin
+ENOTCONN is an expected disconnected-peer write result after timeout; ordinary
+success, absolute deadline and no mutation replay assertions remain intact. The
+first hosted evidence for this error is macOS run38781114605 at3438565.

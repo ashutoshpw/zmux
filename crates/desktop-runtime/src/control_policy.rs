@@ -223,6 +223,11 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
+        ControlCommand::WindowStatus { .. } => true,
+        ControlCommand::Windows { request } => matches!(
+            request.action,
+            crate::windows::WindowAction::List | crate::windows::WindowAction::Current
+        ),
         ControlCommand::DownloadWaitStatus { .. }
         | ControlCommand::LocalTmuxStatus { .. }
         | ControlCommand::BrowserProfilesStatus { .. }

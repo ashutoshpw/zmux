@@ -59,6 +59,7 @@ pub enum ClosedContent {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ClosedItem {
+    pub window_id: crate::WindowId,
     pub id: u64,
     pub title: String,
     pub workspace_id: WorkspaceId,
@@ -567,6 +568,13 @@ impl WorkspaceStore {
             ClosedContent::Workspace { .. } => {}
         }
         let item = ClosedItem {
+            window_id: self
+                .state
+                .windows
+                .iter()
+                .find(|window| window.workspace_ids.contains(&workspace.id))
+                .expect("canonical history owner")
+                .id,
             id,
             title,
             workspace_id: workspace.id,
@@ -665,6 +673,14 @@ impl WorkspaceStore {
         }
         let record = self.state.closed_items[index].clone();
         let prior_focus = self.focused();
+        if self
+            .state
+            .windows
+            .iter()
+            .any(|window| window.id == record.window_id)
+        {
+            self.focus_window(record.window_id)?;
+        }
         let prior_surfaces: Vec<_> = self
             .state
             .workspaces
@@ -952,8 +968,9 @@ impl WorkspaceStore {
     /// restore removes every provisional surface and leaves the descriptor available to retry.
     pub fn finish_restore(&mut self, session: SessionId, success: bool) -> Vec<Effect> {
         let prior = self.focused();
+        let prior_window = self.state.focused_window;
         let effects = self.finish_restore_inner(session, success);
-        self.record_focus(prior, false);
+        self.record_focus(prior, prior_window, false);
         effects
     }
 
