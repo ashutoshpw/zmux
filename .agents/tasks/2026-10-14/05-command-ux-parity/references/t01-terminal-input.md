@@ -88,3 +88,16 @@ matching working fixture helper boundaries. A first-step standalone Swift diagno
 reports whether the minimal nested form reproduces, then requires the extracted
 form to compile and await off-main deletion/error propagation. This probe cannot
 substitute for full App.swift compile or establish the compiler's root cause.
+
+Native1868dcc run38767602739 passed universal compilation with the extracted helper.
+Apple Swift6.1.2 (swiftlang-6.1.2.1.2) compiled and executed BOTH minimal probe shapes;
+the isolated nested form did not reproduce the large-App.swift diagnostic. The
+contextual refactor compiles, but the compiler root cause remains unestablished.
+The packaged run failed earlier in a browser-profile CLI fixture, so special-key
+runtime acceptance with the file-backed setup is still not established by this run.
+
+At d6d9cc8, native run38769334202 passed the full packaged journey including
+`terminal_special_keys`, `terminal_input_returns_live`, keyboard/wheel scrollback
+and `native_input`. This establishes hosted execution of the file-backed setup
+after the browser fixture selector-order repair; it does not explain the original
+intermittent multiline setup corruption or establish physical IME/keyboard parity.

@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Native d6d9cc8 run38769334202 and Foundation38769333991 passed. Downloaded
+  diagnostic archive/source/checksum and three images verified; profile manager,
+  terminal keys/scrolling and durable tmux reopen now have hosted native receipts.
+  Full V01 remains incomplete; no subset artifact is presented as final delivery.
+- F04 resource/effects run38769399834 passed Linux/macOS; all17 input hashes
+  verified against d6d9cc8. Single-owner composition is still under implementation.
+- B01 downloads, T03 singleton window schema/durable migration, F04 integrated
+  terminal ownership and R03 exact Zellij attachment design are active.
+
 - B01 native profile manager committedbf1a4b3 after parent full scripts/check,
   foreign ABI checks and independent review. Create/list/open use the shared catalog;
   native manager execution and rename/clear/delete remain open.

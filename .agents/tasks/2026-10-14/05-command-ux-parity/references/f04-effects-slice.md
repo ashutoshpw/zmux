@@ -136,3 +136,20 @@ storage are separate. Independent source review reports no remaining blocker wit
 the preceding proof limits. Nine existing real-process runner tests, strict C
 warnings, Rust formatting, Python syntax and scoped diff checks also pass. No Mac
 callback-effects execution is included; parent owns hosted workflow delivery.
+
+## Hosted acceptance
+
+GitHub Actions run `38769399834` at `d6d9cc8ef32110d0f58a741df900efa3e0cdc203`
+passed on Linux x86_64 and macOS 15.7.9 arm64. Parent downloaded both artifacts
+to `/tmp/zmux-f04-effects-hosted-38769399834` and verified all 17 harness hashes
+against that committed source. Both receipts are complete with no timed-out phases;
+the four deliberate resource/effects controls exit 101, and ordinary phases pass.
+
+Receipt SHA-256:
+- Linux: `6728f98d2e9e7df186d17eba82f28506f8c456e7b453bfde80449a94284ae826`
+- macOS: `353af9293e5ba87ac2ad404f0bc1479a9fbc1b6f64b470aff14ea8d0d8aaf76a`
+
+The raw library/probe compiled universally on macOS; resource/effects execution
+was host-arm64 only. These remain separate terminal owners, not integrated quota
+and callback acceptance. No application engine switch, real PTY reply round trip,
+metadata parity, or whole-app memory/performance claim follows from this receipt.

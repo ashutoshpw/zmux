@@ -54,3 +54,26 @@ This receipt verifies the P1/P2/P3a first slices, not whole phases or complete c
 Corrective source history: f6b60bf added scrolling/attention; 70cd3b6 removed an unused Swift
 binding rejected by warnings-as-errors. All 45 workspace tests and the C ABI checks pass
 locally and in the accepted macOS run. Physical trackpad feel remains a manual gate.
+
+## Diagnostic acceptance at d6d9cc8 (2026-10-15)
+
+macOS Actions run `38769334202` passed universal compilation and packaged native
+execution at `d6d9cc8ef32110d0f58a741df900efa3e0cdc203`; Foundation run
+`38769333991` also passed. Parent downloaded the artifact to
+`/tmp/zmux-native-archive-38769334202`, matched build/smoke source IDs, checked ZIP
+integrity and SHA-256 `836bb9ab3ad991c6dc7cbf535572c01c41a567d13fb12b91a4a77bd00d6c3aff`,
+and inspected the AppKit, WebKit and local-tmux images.
+
+All required smoke booleans pass, including browser profile menu/create/list/open,
+profile isolation/reopen, file-backed terminal special keys, wheel/keyboard
+scrollback and local tmux native close/reopen. The tmux image contains both initial
+and reopened input markers. The AppKit image shows the sidebar, terminal and split
+browser controls; WebContent is verified in its separate WebKit capture.
+
+WindowServer capture still returns status 1. Universal compilation does not prove
+Intel execution; signing remains ad-hoc and the build is not notarized. The native
+cloud callback fixture does not establish public sign-in. The locally hosted Docker
+service is healthy at `http://127.0.0.1:3530`, with public tunnel setup delegated to
+the user; VM, relay and email remain unavailable. This supersedes the old hosting
+selection notes above. Full V01 remains open; this archive is diagnostic evidence,
+not the requested full-parity artifact.
