@@ -5,6 +5,16 @@
 
 ## Active implementation
 
+- B01 native profile manager committedbf1a4b3 after parent full scripts/check,
+  foreign ABI checks and independent review. Create/list/open use the shared catalog;
+  native manager execution and rename/clear/delete remain open.
+- F04 isolated resource experiment committedf468782 and passed hosted38766300795
+  on Linux x86_64 and macOS15.7.9 arm64; all14 downloaded input hashes match the
+  commit. Mac raw universal compilation passed, but resource execution is arm64 only.
+  Exact history/allocation-denial checks do not prove whole-app RSS or engine parity.
+- Native528be92 andf4f99d3 both failed Swift nested async fixture cleanup compilation.
+  The extracted-helper candidate1868dcc passed its standalone Mac diagnostic;
+  full native38767602739 remains pending. Foundationf4f99d3 passed38765601911.
 - R02b app-bound tmux attachment, reuse, persistence/reopen and typed caller routing
   pass full parent scripts/check and independent real-tmux/schema review. Model5 and
   sessionv3 retain old session readers. Native acceptance and remote tmux remain open.

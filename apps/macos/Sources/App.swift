@@ -1600,6 +1600,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             return capture.terminationStatus
         }.value
         try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
+        try await LocalTmuxSmoke.validate(report: report.deletingLastPathComponent().appendingPathComponent("zmux-local-tmux-smoke.png"), cli: { try await self.nativeCLI($0, timeout: 15000, externalCaller: true) }, snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
         try await smokeTerminalSpecialKeys()
         let evidence: [String: Any] = [
             "success": true,
@@ -1616,6 +1617,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "browser_profiles_isolation_reopen": true,
             "browser_profile_menu": true,
             "browser_profile_management": true,
+            "local_tmux_cli_native_reopen": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
             "browser_title_observation": true,

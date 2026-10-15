@@ -12,11 +12,20 @@ use zmux_session_runtime::{Launch, Session, State};
 struct Fixture {
     root: PathBuf,
     binary: PathBuf,
+    verified_profile: std::sync::OnceLock<()>,
 }
 impl Fixture {
     fn new() -> Self {
         let root = PathBuf::from("/tmp").join(format!("zmc-{}", uuid_string()));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join(".config"))
+            .unwrap();
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(root.join(".config/zmux"))
+            .unwrap();
         let binary = std::env::split_paths(&std::env::var_os("PATH").unwrap())
             .map(|p| p.join("tmux"))
             .find(|p| p.is_file())
@@ -24,6 +33,7 @@ impl Fixture {
         Self {
             root: root.canonicalize().unwrap(),
             binary,
+            verified_profile: std::sync::OnceLock::new(),
         }
     }
     fn socket(&self) -> PathBuf {
@@ -31,7 +41,14 @@ impl Fixture {
     }
     fn environment(&self) -> Vec<(String, String)> {
         vec![
-            ("HOME".into(), self.root.to_str().unwrap().into()),
+            (
+                "ZMUX_LOCAL_TMUX_ROOT".into(),
+                self.root
+                    .join(".config/zmux/local-tmux")
+                    .to_str()
+                    .unwrap()
+                    .into(),
+            ),
             (
                 "ZMUX_LOCAL_TMUX_BIN".into(),
                 self.binary.to_str().unwrap().into(),
@@ -60,6 +77,7 @@ impl Fixture {
             .unwrap()
     }
     fn json(&self, args: &[&str]) -> Value {
+        self.verify_profile();
         let o = self.output(args);
         assert!(
             o.status.success(),
@@ -69,6 +87,7 @@ impl Fixture {
         serde_json::from_slice(&o.stdout).unwrap()
     }
     fn attach(&self, args: &[&str]) -> Session {
+        self.verify_profile();
         Session::spawn_with_environment(
             Launch {
                 program: env!("CARGO_BIN_EXE_zmux").into(),
@@ -79,6 +98,20 @@ impl Fixture {
             &self.environment(),
         )
         .unwrap()
+    }
+    fn verify_profile(&self) {
+        self.verified_profile.get_or_init(|| {
+            // Refuse to spawn any owner/client if a configuration regression
+            // silently selected the real user's default installation instead.
+            let output = self.output(&["local-tmux", "list"]);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let listing: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(listing["socket_path"], self.socket().to_str().unwrap());
+        });
     }
 }
 impl Drop for Fixture {
@@ -135,6 +168,12 @@ fn headless_cli_attaches_detaches_and_reattaches_the_same_live_shell_without_app
     ]);
     let id = created["session"]["id"].as_str().unwrap();
     assert_eq!(created["session"]["state"], "live");
+    assert!(
+        fs::symlink_metadata(f.socket())
+            .unwrap()
+            .file_type()
+            .is_socket()
+    );
     wait(|| pidfile.is_file());
     let pid = fs::read_to_string(&pidfile).unwrap();
     assert!(!pid.is_empty());
@@ -188,6 +227,19 @@ fn headless_cli_attaches_detaches_and_reattaches_the_same_live_shell_without_app
     second.send_input(command.as_bytes()).unwrap();
     wait(|| confirmation.is_file());
     assert_eq!(fs::read_to_string(confirmation).unwrap(), pid);
+    let child_status = f.root.join("owner-status");
+    let command = format!(
+        "'{}' local-tmux status --id {} > '{}.pending'; mv '{}.pending' '{}'\r",
+        env!("CARGO_BIN_EXE_zmux"),
+        id,
+        child_status.display(),
+        child_status.display(),
+        child_status.display()
+    );
+    second.send_input(command.as_bytes()).unwrap();
+    wait(|| child_status.is_file());
+    let child_status: Value = serde_json::from_slice(&fs::read(child_status).unwrap()).unwrap();
+    assert_eq!(child_status["session"]["id"], id);
     second.shutdown(Duration::from_secs(2)).unwrap();
     wait(|| {
         f.json(&["local-tmux", "status", "work"])["session"]["clients"]
@@ -239,14 +291,23 @@ fn offline_help_and_invalid_gui_options_alias_or_client_forms_do_not_open_app_or
         assert!(!error.contains("socket path must be absolute"));
         assert!(!error.contains("credential"));
         assert!(
-            !f.root.join(".config").exists(),
+            !f.root.join(".config/zmux/local-tmux").exists(),
             "profile touched for {args:?}"
         );
     }
     let o = f.output(&["tmux", "attach", "work", "--headless"]);
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("requires terminal stdin and stdout"));
-    assert!(!f.root.join(".config").exists());
+    assert!(!f.root.join(".config/zmux/local-tmux").exists());
+    let invalid_root = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .args(["local-tmux", "list"])
+        .envs(f.environment())
+        .env("ZMUX_LOCAL_TMUX_ROOT", "relative-profile")
+        .output()
+        .unwrap();
+    assert!(!invalid_root.status.success());
+    assert!(String::from_utf8_lossy(&invalid_root.stderr).contains("must be absolute paths"));
+    assert!(!f.root.join(".config/zmux/local-tmux").exists());
 }
 
 struct Gui {
@@ -256,6 +317,7 @@ struct Gui {
 }
 impl Gui {
     fn start(f: &Fixture) -> Self {
+        f.verify_profile();
         use zmux_desktop_runtime::{Desktop, DesktopOptions, Shell, local_tmux::Profile};
         let parent = f.root.join(".config/zmux");
         fs::create_dir_all(&parent).unwrap();

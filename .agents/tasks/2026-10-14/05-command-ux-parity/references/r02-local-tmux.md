@@ -264,3 +264,40 @@ introduced for that probe.
 Parent acceptance: frozen index snapshot on528be92 passed full `scripts/check`
 (Rust workspace tests, formatting, strict Clippy, notices and C ABI). Native packaged
 attachment/restore acceptance remains pending; portable tests do not close R02/V01.
+
+### Packaged native attachment acceptance
+
+The packaged smoke now invokes `LocalTmuxSmoke` through the real bundled CLI and
+mounted native terminal. It starts a unique owned session, compares the immutable
+owner identity and actual tmux client PID with the native frame's PTY process ID,
+and sends input through `TerminalView.insertText`. A shell-written PID file and
+exact output line independently confirm that native input reached the durable shell.
+The attach alias must reuse the exact surface without creating another client.
+Closing the client must leave the owner live with no clients. Reopen must create a
+different app PTY client, preserve the shell PID and startup count of one, and accept
+fresh native input. The reopened terminal produces `zmux-local-tmux-smoke.png`.
+Successful explicit close must remove the exact managed owner from public listing.
+This adds the required `local_tmux_cli_native_reopen` receipt; it does not yet prove
+app restart or whole-workspace restore through AppKit.
+
+`ZMUX_LOCAL_TMUX_ROOT` is a supported installation configuration shared by the app
+and CLI. It selects an absolute private profile with an existing user-owned parent;
+the same profile/lock/socket validation applies as to the default installation.
+It remains distinct from the server-exported caller-only `ZMUX_LOCAL_TMUX_PROFILE`.
+Ordinary PTYs retain ROOT/BIN as user configuration, and owned shells receive their
+actual ROOT so descendant lifecycle commands address the same installation.
+
+The macOS harness uses a short private temporary parent, passes ROOT/BIN through
+Launch Services `open --env`, and never changes HOME. Public listing's `socket_path`
+must equal the expected private socket before either portable/native fixture creates
+an owner or client. Native acceptance repeats this check inside the app. Cleanup
+only closes the unique logical owner and terminates a server on the exclusively
+owned fixture socket after failure. Native evidence and screenshot are uploaded by
+the existing macOS workflow.
+
+Local checks: all eight public CLI/tmux tests passed with the fixture switched from
+HOME replacement to ROOT, including actual lifecycle CLI execution inside the
+durable shell. Relative ROOT is rejected before profile creation. Strict Clippy
+for CLI/remote-runtime, formatting, Python compilation and `git diff --check` passed.
+Swift compilation and actual packaged execution require the hosted macOS lane;
+this Linux edit adds no native-pass claim.

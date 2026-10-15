@@ -58,6 +58,7 @@ jobs:
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png
             dist/zmux-browser-smoke.png
+            dist/zmux-local-tmux-smoke.png
           if-no-files-found: error
           retention-days: 14
       - name: Upload diagnostics on failure
@@ -72,6 +73,7 @@ jobs:
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png
             dist/zmux-browser-smoke.png
+            dist/zmux-local-tmux-smoke.png
           if-no-files-found: ignore
           retention-days: 7
       - name: Build receipt
