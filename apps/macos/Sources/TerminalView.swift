@@ -212,19 +212,15 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
         if hasMarkedText() { interpretKeyEvents([event]); return }
         selection = nil
-        let arrows: [UInt16: String] = [123:"D",124:"C",125:"B",126:"A"]
-        if let direction = arrows[event.keyCode] {
-            var modifier = 1
-            if event.modifierFlags.contains(.shift) { modifier += 1 }
-            if event.modifierFlags.contains(.option) { modifier += 2 }
-            if event.modifierFlags.contains(.control) { modifier += 4 }
-            onInput?(modifier > 1 ? "\u{1b}[1;\(modifier)\(direction)" : "\u{1b}\(viewport?.applicationCursor == true ? "O" : "[")\(direction)")
+        if let sequence = TerminalKeyEncoder.sequence(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                                      applicationCursor: viewport?.applicationCursor == true) {
+            onInput?(sequence)
             return
         }
         if event.modifierFlags.contains(.control), let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first, scalar.value < 128 {
             onInput?(String(UnicodeScalar(scalar.value & 31)!)); return
         }
-        let sequences: [UInt16:String] = [36:"\r",76:"\r",51:"\u{7f}",53:"\u{1b}",115:"\u{1b}[H",119:"\u{1b}[F",116:"\u{1b}[5~",121:"\u{1b}[6~",117:"\u{1b}[3~"]
+        let sequences: [UInt16:String] = [36:"\r",76:"\r",51:"\u{7f}",53:"\u{1b}"]
         if event.keyCode == 48 { onInput?(event.modifierFlags.contains(.shift) ? "\u{1b}[Z" : "\t"); return }
         if let sequence = sequences[event.keyCode] { onInput?(sequence); return }
         interpretKeyEvents([event])
