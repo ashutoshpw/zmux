@@ -23,7 +23,7 @@ impl Fixture {
         let root = PathBuf::from("/tmp").join(format!("zp{}-{nonce:x}", std::process::id()));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-        Self(root)
+        Self(root.canonicalize().unwrap())
     }
 }
 impl Drop for Fixture {
@@ -184,7 +184,11 @@ fn session_cli_reports_real_export_save_and_restore_completion() {
         {
             break;
         }
-        assert!(Instant::now() < deadline, "initial shell did not start");
+        assert!(
+            Instant::now() < deadline,
+            "initial shell did not start: {}",
+            serde_json::to_string(&*snapshot).unwrap()
+        );
         thread::sleep(Duration::from_millis(10));
     }
     let initial = json(&socket, &["list-workspaces"], &fixture.0);

@@ -560,12 +560,23 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
     let source = store.session_document().unwrap();
     directory.write(&serde_json::to_vec(&source).unwrap());
     let desktop = directory.desktop();
-    wait(&desktop, ready);
+    let initial = wait(&desktop, ready);
     let mut request_id = 0;
-    // Each pair allocates one browser ID and retires that temporary surface. Batched
-    // commands cross the actual worker's 4096-ID boundary without launching PTYs.
-    for start in (0..4200).step_by(16) {
-        for _ in start..(start + 16).min(4200) {
+    let mut revision = initial.model.revision;
+    let mut allocations = 0;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    // Each pair allocates one browser ID and retires that temporary surface. A
+    // durable refill can lag behind admission under filesystem load. Revision
+    // guards prevent a rejected create from closing the original browser, and
+    // only committed pairs count toward crossing the real 4096-ID boundary.
+    while allocations < 4200 {
+        assert!(
+            Instant::now() < deadline,
+            "durable allocator refill did not recover"
+        );
+        let batch = (4200 - allocations).min(16);
+        let mut expected = revision;
+        for _ in 0..batch {
             for action in [
                 TargetAction::CreateBrowser {
                     url: "https://example.org/temporary".into(),
@@ -578,20 +589,40 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
                     request_id,
                     Command::Targeted {
                         request: TargetRequest {
+                            expected_model_revision: Some(expected),
                             operation: TargetOperation::Action { action },
                             ..Default::default()
                         },
                     },
                 );
+                expected += 1;
             }
         }
         let snapshot = wait(&desktop, |s| s.last_request_id == request_id);
-        assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        let committed = snapshot.model.revision - revision;
+        assert_eq!(
+            committed % 2,
+            0,
+            "temporary browser must be closed in the same guarded pair"
+        );
+        assert!(committed <= batch * 2);
+        assert!(
+            snapshot.persistence.error.is_none(),
+            "{:?}",
+            snapshot.persistence.error
+        );
         assert_eq!(snapshot.model.workspaces.len(), 1);
         assert_eq!(
             snapshot.model.workspaces[0].root.panes()[0].surfaces.len(),
             1
         );
+        allocations += committed / 2;
+        revision = snapshot.model.revision;
+        if committed < batch * 2 {
+            thread::sleep(Duration::from_millis(3));
+        } else {
+            assert!(snapshot.last_error.is_none(), "{:?}", snapshot.last_error);
+        }
     }
     desktop.shutdown(Duration::from_secs(5)).unwrap();
     let saved: zmux_workspace_core::SessionDocument =
