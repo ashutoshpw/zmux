@@ -386,13 +386,15 @@
       ],
       "exit_gate": "Slow consumers cannot stall UI; event gaps are explicit; metadata is target-scoped; exact-byte/exit/focus contracts verified; source-baseline unsupported tmux placeholders return honest failures, not fake success.",
       "implemented_slices": [
-        "A01a bounded workspace status/progress/log CLI and native activity inspector (035a285); native execution pending"
+        "A01a bounded workspace status/progress/log CLI and native activity inspector; native subset accepted at 5f5005e in macOS 38753451286",
+        "A01b bounded published current inspection with exact identities, local child lifecycle, metadata/attention counts and explicit unknown task activity; portable owner/CLI verification only"
       ],
       "verification_receipts": [
-        "a01-workspace-metadata.md"
+        "a01-workspace-metadata.md",
+        "a01-current-inspection.md"
       ],
       "remaining_gates": [
-        "Native metadata rendering and packaged CLI acceptance",
+        "Native packaged current CLI acceptance; metadata presentation subset already accepted",
         "Events/cursors/replay, PR/todo metadata and rule/hook contracts",
         "tmux compatibility, inspection and process diagnostics",
         "Full baseline option and output compatibility"
@@ -1315,12 +1317,15 @@
       "feature": "Current work, topology, resource and surface-health inspection",
       "primary_package": "A01",
       "audit_status": "partial",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-terminal-ux.json#TOPO-027",
       "implementation_commits": [],
-      "verification_receipts": [],
+      "verification_receipts": [
+        "a01-current-inspection.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "A01b is a published local current subset only; native packaged execution, Cloud/tasks/resources and tree/top/memory/health plus full frozen compatibility remain open"
       ]
     },
     {

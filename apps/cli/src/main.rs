@@ -22,6 +22,7 @@ use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod browser;
 mod browser_download;
+mod inspection;
 mod local_multiplexer;
 mod local_zellij;
 mod registry;
@@ -382,6 +383,7 @@ fn parse(
             }
         }
         Some("status") => app_no_args("status", tail, ControlCommand::Status)?,
+        Some("current") => inspection::parse(tail)?,
         Some("list-workspaces") => {
             app_no_args("list-workspaces", tail, ControlCommand::ListWorkspaces)?
         }

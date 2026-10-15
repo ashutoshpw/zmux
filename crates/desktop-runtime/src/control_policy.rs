@@ -237,6 +237,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         | ControlCommand::SessionStatus { .. }
         | ControlCommand::ListUploads
         | ControlCommand::Status
+        | ControlCommand::Current { .. }
         | ControlCommand::Capabilities
         | ControlCommand::ListPaneSurfaces { .. }
         | ControlCommand::RecentlyClosed

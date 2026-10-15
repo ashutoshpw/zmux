@@ -52,6 +52,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 - [F04 native shutdown diagnostics](references/f04-native-shutdown-diagnostics.md) — raw Darwin child investigation and exact failing production shutdown evidence.
+- [A01 current inspection](references/a01-current-inspection.md) — bounded published snapshot facts, owner evidence and remaining inspection gates.
 - [Shared shutdown](references/s01-shared-shutdown.md) — one deadline, physical owner barriers and pending native lifecycle acceptance.
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.
 - [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — pinned MIT 0.43.0 lifecycle and passed public-API Darwin fixture; separate production native gate pending.

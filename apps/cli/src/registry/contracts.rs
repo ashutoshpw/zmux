@@ -133,6 +133,19 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    let mut current = contract(
+        "current",
+        &[],
+        vec![
+            option("limit", &["--limit"], ValueKind::Integer(1, 200)),
+            option("json", &["--json"], ValueKind::Flag),
+        ],
+        "current",
+    );
+    current.defaults = json!({"limit":100});
+    current.default_pointers.push(("limit", "/limit"));
+    current.limitations = "One cached app-wide publication; no target/caller filtering or mutation. Canonical surfaces bounded1..200; metadata and attention are counts, active tasks and browser activity unknown. Local child PID/lifecycle never proves remote work or liveness. Cloud/resources/transcripts/external repositories and historical text/schema compatibility remain unresolved.";
+    result.push(current);
     let mut surface_order = contract(
         "reorder-surface",
         &["surface:1", "--index", "0"],

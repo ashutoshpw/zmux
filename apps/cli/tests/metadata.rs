@@ -99,6 +99,192 @@ fn id(v: &Value, key: &str) -> String {
     v[key].as_u64().unwrap().to_string()
 }
 #[test]
+fn current_inspects_hidden_tabs_with_exact_owners_without_inventing_active_work() {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
+    let a = App::new();
+    let initial = a.run(&["list-workspaces"]);
+    let w = id(&initial, "focused_workspace");
+    let pane = initial["workspaces"][0]["root"]["pane"]["id"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let hidden = initial["workspaces"][0]["root"]["pane"]["selected_surface"]
+        .as_u64()
+        .unwrap();
+    a.run(&["new-surface", &pane]);
+    a.run(&["set-status", "build", "compiling", "--workspace", &w]);
+    a.run(&["set-progress", "0.5", "--workspace", &w]);
+    a.run(&["log", "private log text", "--workspace", &w]);
+    a.run(&[
+        "notify",
+        "--workspace",
+        &w,
+        "--desktop",
+        "false",
+        "--title",
+        "Observation",
+    ]);
+    a.run(&[
+        "notify",
+        "--workspace",
+        &w,
+        "--surface",
+        &hidden.to_string(),
+        "--desktop",
+        "false",
+        "--title",
+        "Exact hidden owner",
+    ]);
+    let foreground = a.run(&["new-workspace", "foreground"]);
+    let session_id = initial["workspaces"][0]["root"]["pane"]["surfaces"][0]["session_id"]
+        .as_u64()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = desktop_snapshot::read_until(&a.desktop, deadline);
+        if snapshot.control_frames.iter().any(|frame| {
+            frame.session_id.0 == session_id
+                && frame
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.state == zmux_session_runtime::State::Running)
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "hidden session never published running"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let before = a.run(&["list-workspaces"]);
+    a.server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let report = a.call(&["current", "--json"], Some((&w, &hidden.to_string())));
+    assert_eq!(report["total_surfaces"], 3);
+    assert_eq!(report["returned_surfaces"], 3);
+    assert_eq!(report["truncated"], false);
+    assert_eq!(report["identity_namespace"], before["identity_namespace"]);
+    assert_eq!(report["model_revision"], before["model_revision"]);
+    assert_eq!(report["freshness"]["kind"], "cached_publication");
+    assert!(report["freshness"]["observed_at"].is_null());
+    let item = report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["surface"]["id"] == hidden)
+        .unwrap();
+    assert_eq!(item["workspace"]["id"].as_u64().unwrap().to_string(), w);
+    assert_eq!(item["pane"]["id"].as_u64().unwrap().to_string(), pane);
+    assert_eq!(item["selected"], false);
+    assert_eq!(item["logical_focus"], false);
+    assert_eq!(item["activity"]["state"], "unknown");
+    assert_eq!(item["session"]["evidence"], "desktop.control_frames");
+    assert_eq!(item["session"]["scope"], "local_session_child");
+    assert_eq!(item["session"]["state"], "running");
+    let identity = before["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|target| target["kind"] == "surface" && target["id"] == hidden)
+        .unwrap();
+    assert_eq!(item["surface"]["uuid"], identity["uuid"]);
+    assert_eq!(item["surface"]["reference"], identity["reference"]);
+    let metadata = &report["workspaces"][0]["metadata"];
+    assert_eq!(metadata["status_entries"], 1);
+    assert_eq!(metadata["progress_value"], 0.5);
+    assert_eq!(metadata["retained_logs"], 1);
+    assert_eq!(report["workspaces"][0]["unread_notifications"], 2);
+    assert_eq!(item["unread_notifications"], 1);
+    assert_eq!(report["workspaces"][1]["unread_notifications"], 0);
+    assert!(!report.to_string().contains("private log text"));
+    let limited = a.run(&["current", "--limit", "1"]);
+    assert_eq!(limited["total_surfaces"], 3);
+    assert_eq!(limited["returned_surfaces"], 1);
+    assert_eq!(limited["truncated"], true);
+    assert_eq!(
+        limited["items"][0]["surface"],
+        report["items"][0]["surface"]
+    );
+    let after = a.run(&["list-workspaces"]);
+    assert_eq!(after["model_revision"], before["model_revision"]);
+    assert_eq!(after["focused_workspace"], foreground["focused_workspace"]);
+    assert_eq!(after["workspaces"], before["workspaces"]);
+}
+#[test]
+fn current_keeps_browser_activity_unknown_and_validates_limits_at_the_wire_owner() {
+    use std::{
+        io::{Read, Write},
+        os::unix::net::UnixStream,
+    };
+    let a = App::new();
+    a.run(&["browser", "open", "https://example.test", "--no-focus"]);
+    let report = a.run(&["current", "--limit", "200"]);
+    let browser = report["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["kind"] == "browser")
+        .unwrap();
+    assert!(browser["session"].is_null());
+    assert!(browser["session_id"].is_null());
+    assert_eq!(browser["activity"]["state"], "unknown");
+    for args in [
+        vec!["current", "--limit", "0"],
+        vec!["current", "--limit", "201"],
+        vec!["current", "--limit", "-1"],
+        vec!["current", "--limit", "bad"],
+        vec!["current", "--limit"],
+        vec!["current", "--limit", "1", "--limit", "2"],
+        vec!["current", "--json", "--json"],
+        vec!["current", "--workspace", "1"],
+    ] {
+        let output = a.output(&args, None);
+        assert!(!output.status.success(), "{args:?}");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("unknown command"));
+    }
+    for (command, expected_limit) in [
+        (serde_json::json!({"method":"current"}), Some(100)),
+        (
+            serde_json::json!({"method":"current","limit":200}),
+            Some(200),
+        ),
+        (serde_json::json!({"method":"current","limit":0}), None),
+        (serde_json::json!({"method":"current","limit":201}), None),
+    ] {
+        let mut stream = UnixStream::connect(&a.socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let request = serde_json::to_vec(&serde_json::json!({
+            "version":2,"request_id":99,"command":command,
+        }))
+        .unwrap();
+        stream
+            .write_all(&(request.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&request).unwrap();
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let length = u32::from_be_bytes(length) as usize;
+        assert!(length <= zmux_desktop_runtime::control::MAX_CONTROL_RESPONSE_BYTES);
+        let mut bytes = vec![0; length];
+        stream.read_exact(&mut bytes).unwrap();
+        let response: Value = serde_json::from_slice(&bytes).unwrap();
+        if let Some(limit) = expected_limit {
+            assert_eq!(response["ok"], true, "{response}");
+            assert_eq!(response["result"]["limit"], limit);
+        } else {
+            assert_eq!(response["ok"], false);
+            assert_eq!(response["error"]["code"], "invalid_current_limit");
+        }
+    }
+}
+#[test]
 fn metadata_channels_target_the_caller_workspace_and_preserve_foreground_focus() {
     let a = App::new();
     let first = a.run(&["new-workspace", "metadata owner"]);

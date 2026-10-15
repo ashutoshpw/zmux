@@ -5,6 +5,27 @@
 
 ## Active implementation
 
+- A01b adds bounded app-wide `current` inspection from one published Desktop
+  snapshot: exact identities/revisions, hidden terminal local-child lifecycle,
+  metadata/attention counts and explicit unknown activity. Real CLI/control
+  red/green, all 19 focused/existing CLI cases, catalog probes and strict Clippy
+  pass. Cached lifecycle is not an active task or remote liveness. Native packaged
+  execution, Cloud/task/resource knowledge and full A01/TOPO-027 remain open.
+  See [current inspection](references/a01-current-inspection.md).
+
+- Optional Session38814746696 at `c9ec29b` is accepted for its four public ARM
+  Session cases plus four adapter cases. Independent artifact/source review verifies
+  both Apple executables, same-shim linkage and unchanged retained engine libraries;
+  Intel is compile/link/inspection only. Observed partial-input, exact reply ordering
+  and cleanup outcomes pass. The rare EPERM/ESRCH reap fallback was not observed;
+  all-group extinction, native-app/default/typed-input, minimum-OS execution and
+  performance acceptance are not established. See [F04](references/f04-session-engine.md).
+- Main `15e8600` includes the reviewed Save panel SDK compiler repair and early
+  both-target driver typecheck. Native38815234251 is the next packaged gate;
+  actual Save panel permission/UI behavior and browser keyboard remain pending.
+  Workspace metadata and other independent parity slices can proceed while those
+  runtime gates and separate Zellij packaging/notices work continue.
+
 - Native38813108591 at `f62a10c` passes the focused physical-storage regression,
   both strict Swift target checks, Rust/core/ABI and universal build. Its packaged
   close/save/reopen journey passes: exact identities, fresh process/native input,
