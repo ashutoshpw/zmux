@@ -84,6 +84,10 @@ configuration, ABI compatibility, native app linkage/execution, production
 Viewport/input conversion or named-Mac performance and memory workloads. Those
 remain separate gates. No running cmux application is touched.
 
+The separate [two-slice Darwin recipe](DARWIN_ARTIFACTS.md) adds manual retained
+artifact production and Mach-O deployment checks. Its hosted execution is pending;
+it does not change this Linux candidate or the frozen feasibility/PTY inputs.
+
 The focused suite has ten tests on the host retaining the exact candidate. Two
 acceptance tests use that real archive and actual producer receipt: scoped integrity
 acceptance passes, while an altered fixture with unresolved provenance rejects the

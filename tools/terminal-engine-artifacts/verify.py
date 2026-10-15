@@ -80,13 +80,13 @@ def object_target(data):
     raise Rejected("unsupported object format (thin/fat archives and bitcode are not accepted)")
 
 
-def inspect_archive(path, target):
-    """Read regular GNU/BSD ar in memory, never trusting stored member paths."""
-    data = read_bounded(path, MAX_ARCHIVE_BYTES)
+def archive_objects(data):
+    """Yield bounded regular GNU/BSD ar payloads; member paths are never opened."""
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise Rejected(f"archive exceeds {MAX_ARCHIVE_BYTES} bytes")
     if data[:8] != b"!<arch>\n":
         raise Rejected("expected a regular ar archive; thin/fat archives are not supported")
     offset, count, strings = 8, 0, b""
-    members = []
     names = set()
     while offset < len(data):
         count += 1
@@ -145,6 +145,14 @@ def inspect_archive(path, target):
         if not name or name in names:
             raise Rejected("empty or duplicate archive object name")
         names.add(name)
+        yield name, body
+
+
+def inspect_archive(path, target):
+    """Read regular ar in memory, never trusting stored member paths."""
+    data = read_bounded(path, MAX_ARCHIVE_BYTES)
+    members = []
+    for name, body in archive_objects(data):
         actual = object_target(body)
         if actual != TARGETS[target]:
             raise Rejected(f"object target mismatch: {name}: {actual}, requested {target}")
@@ -175,6 +183,21 @@ def verify_notices(root=HERE):
     return len(seen)
 
 
+def verify_notice_review(manifest, inventory_root=HERE):
+    """Validate the recorded factual coverage scope, separately from a binary."""
+    if manifest["unresolved_notice_provenance"]:
+        raise Rejected("unresolved runtime notice provenance: " + "; ".join(manifest["unresolved_notice_provenance"]))
+    review = manifest["notice_review"]
+    reviewed = json.loads(checked_file(inventory_root, review["path"], review["sha256"]))
+    if reviewed["artifact_sha256"] != manifest["artifact"]["sha256"] or not reviewed["gates"] or any(
+        gate["finding"] != "covered_for_observed_source" for gate in reviewed["gates"]
+    ):
+        raise Rejected("notice coverage review does not cover this artifact")
+    for name in ("notices.json", "upstream-inputs.json"):
+        checked_file(inventory_root, name, reviewed["reviewed_input_sha256"][name])
+    return reviewed
+
+
 def verify_candidate(library, producer, target, inventory_root=HERE):
     manifest = document(inventory_root / "candidate.json")
     if target != manifest["artifact"]["target"]:
@@ -195,16 +218,7 @@ def verify_candidate(library, producer, target, inventory_root=HERE):
     for name, expected in manifest["supporting_inventory_sha256"].items():
         checked_file(inventory_root, name, expected)
     count = verify_notices(inventory_root)
-    if manifest["unresolved_notice_provenance"]:
-        raise Rejected("unresolved runtime notice provenance: " + "; ".join(manifest["unresolved_notice_provenance"]))
-    review = manifest["notice_review"]
-    reviewed = json.loads(checked_file(inventory_root, review["path"], review["sha256"]))
-    if reviewed["artifact_sha256"] != inspected["sha256"] or not reviewed["gates"] or any(
-        gate["finding"] != "covered_for_observed_source" for gate in reviewed["gates"]
-    ):
-        raise Rejected("notice coverage review does not cover this artifact")
-    for name in ("notices.json", "upstream-inputs.json"):
-        checked_file(inventory_root, name, reviewed["reviewed_input_sha256"][name])
+    verify_notice_review(manifest, inventory_root)
     return {"state": "verified", "library": inspected, "notices": count,
             "claims": {"engine_selected": False, "app_linked": False,
                        "portable_abi_verified": False, "native_execution_verified": False}}

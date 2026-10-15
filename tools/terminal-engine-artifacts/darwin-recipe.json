@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "recipe_version": 1,
+  "xcode_version": "16.4",
+  "developer_dir": "/Applications/Xcode_16.4.app/Contents/Developer",
+  "sdk_version": "15.5",
+  "minimum_macos": "14.0",
+  "zig_version": "0.16.0",
+  "rust_version": "1.95.0",
+  "optimize": "ReleaseSafe",
+  "simd": false,
+  "vt_features": "-all,+render-state,+grid-introspection,+formatter,+input-encode",
+  "build_jobs": 2,
+  "targets": [
+    {"architecture": "arm64", "zig": "aarch64-macos.14.0", "rust": "aarch64-apple-darwin", "execute": true},
+    {"architecture": "x86_64", "zig": "x86_64-macos.14.0", "rust": "x86_64-apple-darwin", "execute": false}
+  ]
+}
