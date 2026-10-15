@@ -14,3 +14,11 @@ shortcut/IME ordering. Physical keyboard layouts and IME remain separate gates.
 
 F04 engine comparison and measured resource acceptance remain open. This slice
 adds no dependencies, changes no parser, and imports no reference implementation.
+
+The independent encoder now emits F1–F12 and modified cursor/tilde sequences.
+The existing native Command/history/marked-text guards execute first; ordinary
+text, control characters, Tab, Return, Backspace and Escape keep their routes.
+Fresh source review found no blocker. Parent full checks pass181 Rust tests plus
+formatting, strict Clippy, notices and C ABI; these do not compile Swift.
+The real PTY fixture protocol was exercised on Linux, while native event delivery
+and the pre-fix/post-fix byte comparison remain hosted macOS gates.
