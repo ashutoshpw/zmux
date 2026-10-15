@@ -350,12 +350,21 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
                     .failure
                     .as_deref()
                     .unwrap()
-                    .contains("terminal causal reply deadline")
+                    .contains("terminal causal reply deadline"),
+                "unexpected Session failure: {:?}",
+                failed.failure
             );
             session.shutdown(Duration::from_secs(3)).unwrap();
         }
         assert!(session.is_finished());
         let last = session.snapshot().unwrap();
+        assert!(
+            last.failure
+                .as_deref()
+                .is_none_or(|failure| !failure.contains("PTY cleanup failed:")),
+            "physical cleanup failed: {:?}",
+            last.failure
+        );
         assert_eq!(last.viewport.title, "published");
         assert_eq!(last.viewport.contents, "GOOD");
         let results: Vec<_> = receipts.iter_mut().map(receipt).collect();

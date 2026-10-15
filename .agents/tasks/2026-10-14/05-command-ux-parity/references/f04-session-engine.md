@@ -160,3 +160,24 @@ the exact per-case success lines. No production Session source or deadline chang
 All4 linked cases pass on Linux:13824 accepted bytes before cancellation/deadline,
 and16384 exact child-observed bytes before the reply on release. Focused8 policy
 tests and193-entry input gate pass. Darwin execution of this repair remains pending.
+
+Run `38812468146` at `a2e3d09bfbee326076dffe926ff472b5244d0aa3` executed
+three Session cases successfully, including the repaired release path: zero
+completed chunks before staging and exactly4096 child-observed user bytes before
+the reply. The deadline variant failed because its published failure did not
+retain the causal deadline text. The log separately reports process-group cleanup
+`EPERM`; source inspection shows cleanup overwrites the primary worker failure,
+then the guard retries cleanup during Drop. Artifact `12009411485`, ZIP SHA256
+`3e1187c11b1cfaa5c8e2b03376f1400cfa77a558984878a49d3b64763a2617b2`,
+retains the attempt. Intel was not reached and complete Session acceptance remains
+open. This is no longer the4096-byte fixture setup failure.
+
+The next narrow diagnostic repair preserves the primary failure and appends a
+separately labeled `PTY cleanup failed:` error. Unexpected process-group signal
+errors retain signal, physically owned child PID, observed group and nonreaping
+owned-child job/exit status. Signal/reap decisions remain unchanged: no permission
+error is suppressed and physical cleanup is not claimed successful. The public
+Session case explicitly rejects cleanup failure after shutdown, so retaining the
+deadline text cannot turn a cleanup failure into acceptance. Local default
+Session18 and linked4 cases pass; the actual Darwin cleanup cause remains pending
+the retained primary/error-state evidence.
