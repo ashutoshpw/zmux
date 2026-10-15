@@ -115,3 +115,16 @@ VM provisioning, relay/tunnel service, transactional email delivery, MFA, invite
 mail journeys, billing, hosting, DNS, TLS certificates, backups, observability, and a
 production deployment are not implemented by this slice. `/ready` reports VM, relay, and
 email capabilities as unavailable rather than presenting placeholder readiness.
+
+### Native credential transactions
+
+Code exchange, token revocation and expired credential cleanup share one transaction
+owner. Statements are limited to five seconds and lock waits to three seconds. Failed
+operations roll back; a failed rollback discards the physical pool client and retains
+both failures. Asynchronous connection errors stay owned through client release.
+These are per-statement server limits, not an overall network/request deadline.
+
+`test/transactions.test.ts` exercises actual PostgreSQL commit/rollback, statement
+cancellation and forced backend termination with a one-slot pool. It uses the same
+throwaway database required by the HTTP integration suite; never run these tests against
+a serving database.

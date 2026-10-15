@@ -1,4 +1,5 @@
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
+import { withTransaction } from "./db";
 import type { ZmuxAuth } from "./auth";
 import type { ControlPlaneConfig } from "./config";
 import { APP_CSS, APP_JS, appPage } from "./page";
@@ -145,9 +146,7 @@ async function exchangeAuthorizationCode(body: Record<string, unknown>, pool: Po
     throw new HttpError(400, "invalid_grant", "authorization code is invalid");
   }
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  const response = await withTransaction(pool, async (client) => {
     const result = await client.query<{
       userId: string;
       authSessionId: string;
@@ -170,8 +169,7 @@ async function exchangeAuthorizationCode(body: Record<string, unknown>, pool: Po
     const row = result.rows[0];
     if (!row || row.expired || !row.sessionActive || row.clientId !== clientId || row.redirectUri !== redirectUri || !verifyPkce(verifier, row.challenge)) {
       if (row?.expired || (row && !row.sessionActive)) await client.query("DELETE FROM native_authorization_code WHERE code_hash = $1", [hashOpaque(code)]);
-      await client.query("COMMIT");
-      throw new HttpError(400, "invalid_grant", "authorization code is invalid");
+      return null;
     }
 
     const accessToken = randomOpaque();
@@ -181,14 +179,10 @@ async function exchangeAuthorizationCode(body: Record<string, unknown>, pool: Po
        VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))`,
       [crypto.randomUUID(), hashOpaque(accessToken), row.userId, row.authSessionId, NATIVE_TOKEN_TTL_SECONDS],
     );
-    await client.query("COMMIT");
     return json({ access_token: accessToken, token_type: "Bearer", expires_in: NATIVE_TOKEN_TTL_SECONDS });
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
+  if (!response) throw new HttpError(400, "invalid_grant", "authorization code is invalid");
+  return response;
 }
 
 async function createAuthorizationCode(request: Request, url: URL, auth: ZmuxAuth, pool: Pool, config: ControlPlaneConfig): Promise<Response> {
@@ -227,21 +221,6 @@ async function createAuthorizationCode(request: Request, url: URL, auth: ZmuxAut
   callback.searchParams.set("code", code);
   callback.searchParams.set("state", state);
   return Response.redirect(callback, 302);
-}
-
-async function withTransaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await operation(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig) {
