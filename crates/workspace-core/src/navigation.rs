@@ -1,5 +1,7 @@
 //! Navigation changes selection only; live sessions remain owned by their original surfaces.
-use crate::{ActionError, Axis, PaneId, PaneTree, SurfaceId, WorkspaceId, WorkspaceStore};
+use crate::{
+    ActionError, Axis, PaneId, PaneTree, SurfaceId, WindowId, WorkspaceId, WorkspaceStore,
+};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_FOCUS_HISTORY: usize = 128;
@@ -71,57 +73,76 @@ impl WorkspaceStore {
         self.focused().map(|(_, _, surface)| surface)
     }
 
+    fn history(&self, window: WindowId) -> FocusHistory {
+        self.focus_history.get(&window).cloned().unwrap_or_default()
+    }
+    fn window_for_workspace(&self, id: WorkspaceId) -> Result<WindowId, ActionError> {
+        self.state
+            .windows
+            .iter()
+            .find(|window| window.workspace_ids.contains(&id))
+            .map(|window| window.id)
+            .ok_or_else(unavailable)
+    }
     pub(crate) fn record_focus(
         &mut self,
         prior: Option<(WorkspaceId, PaneId, SurfaceId)>,
+        prior_window: Option<WindowId>,
         history_navigation: bool,
     ) {
-        let live: Vec<_> = self
-            .state
-            .workspaces
-            .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| p.surfaces.iter().map(|s| s.id))
-            .collect();
-        self.focus_history.back.retain(|id| live.contains(id));
-        self.focus_history.forward.retain(|id| live.contains(id));
-        self.focus_history.recent.retain(|id| live.contains(id));
-        let live_panes: Vec<_> = self
-            .state
-            .workspaces
-            .iter()
-            .flat_map(|w| w.root.panes())
-            .map(|p| p.id)
-            .collect();
-        let live_workspaces: Vec<_> = self.state.workspaces.iter().map(|w| w.id).collect();
         self.focus_history
-            .recent_panes
-            .retain(|id| live_panes.contains(id));
-        self.focus_history
-            .recent_workspaces
-            .retain(|id| live_workspaces.contains(id));
+            .retain(|window, _| self.state.windows.iter().any(|live| live.id == *window));
+        for window in &self.state.windows {
+            let workspaces: Vec<_> = self
+                .state
+                .workspaces
+                .iter()
+                .filter(|w| window.workspace_ids.contains(&w.id))
+                .collect();
+            let live: Vec<_> = workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .flat_map(|p| p.surfaces.iter().map(|s| s.id))
+                .collect();
+            let panes: Vec<_> = workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .map(|p| p.id)
+                .collect();
+            let history = self.focus_history.entry(window.id).or_default();
+            history.back.retain(|id| live.contains(id));
+            history.forward.retain(|id| live.contains(id));
+            history.recent.retain(|id| live.contains(id));
+            history.recent_panes.retain(|id| panes.contains(id));
+            history
+                .recent_workspaces
+                .retain(|id| window.workspace_ids.contains(id));
+        }
         let current = self.focused();
-        if prior != current {
-            if !history_navigation {
-                if let Some((_, _, id)) = prior.filter(|(_, _, id)| live.contains(id)) {
-                    push_bounded(&mut self.focus_history.back, id);
-                }
-                self.focus_history.forward.clear();
+        if prior == current {
+            return;
+        }
+        let Some(window) = self.state.focused_window else {
+            return;
+        };
+        let prior = prior
+            .filter(|(workspace, _, _)| self.window_for_workspace(*workspace).ok() == Some(window));
+        let history = self.focus_history.entry(window).or_default();
+        if !history_navigation && prior_window == Some(window) {
+            if let Some((_, _, id)) = prior {
+                push_bounded(&mut history.back, id);
             }
-            if let Some((workspace, pane, surface)) = current {
-                self.focus_history
-                    .recent
-                    .retain(|previous| *previous != surface);
-                push_bounded(&mut self.focus_history.recent, surface);
-                self.focus_history
-                    .recent_panes
-                    .retain(|previous| *previous != pane);
-                push_bounded(&mut self.focus_history.recent_panes, pane);
-                self.focus_history
-                    .recent_workspaces
-                    .retain(|previous| *previous != workspace);
-                push_bounded(&mut self.focus_history.recent_workspaces, workspace);
-            }
+            history.forward.clear();
+        }
+        if let Some((workspace, pane, surface)) = current {
+            history.recent.retain(|previous| *previous != surface);
+            push_bounded(&mut history.recent, surface);
+            history.recent_panes.retain(|previous| *previous != pane);
+            push_bounded(&mut history.recent_panes, pane);
+            history
+                .recent_workspaces
+                .retain(|previous| *previous != workspace);
+            push_bounded(&mut history.recent_workspaces, workspace);
         }
     }
 
@@ -154,14 +175,20 @@ impl WorkspaceStore {
         id: WorkspaceId,
         direction: Navigation,
     ) -> Result<(), ActionError> {
-        let wi = self
+        let window = self.window_for_workspace(id)?;
+        let members = &self
             .state
-            .workspaces
+            .windows
             .iter()
-            .position(|w| w.id == id)
-            .ok_or(ActionError::UnknownWorkspace(id))?;
+            .find(|w| w.id == window)
+            .expect("owned window")
+            .workspace_ids;
+        let wi = members
+            .iter()
+            .position(|workspace| *workspace == id)
+            .ok_or_else(unavailable)?;
         let destination = if direction == Navigation::Last {
-            self.focus_history
+            self.history(window)
                 .recent_workspaces
                 .iter()
                 .rev()
@@ -169,7 +196,7 @@ impl WorkspaceStore {
                 .find(|workspace| *workspace != id)
                 .ok_or_else(unavailable)?
         } else {
-            self.state.workspaces[step(wi, self.state.workspaces.len(), direction)].id
+            members[step(wi, members.len(), direction)]
         };
         self.select_workspace(destination)
     }
@@ -180,8 +207,11 @@ impl WorkspaceStore {
         direction: Navigation,
     ) -> Result<(), ActionError> {
         let (_, pane_id, index) = self.location(id)?;
-        let destination = if direction == Navigation::Last {
-            self.focus_history
+        let destination =
+            if direction == Navigation::Last {
+                self.history(self.window_for_workspace(
+                    self.state.workspaces[self.workspace_index(pane_id)?].id,
+                )?)
                 .recent
                 .iter()
                 .rev()
@@ -190,10 +220,10 @@ impl WorkspaceStore {
                     (owner == pane_id && *surface != id).then_some(*surface)
                 })
                 .ok_or_else(unavailable)?
-        } else {
-            let pane = self.pane(pane_id)?;
-            pane.surfaces[step(index, pane.surfaces.len(), direction)].id
-        };
+            } else {
+                let pane = self.pane(pane_id)?;
+                pane.surfaces[step(index, pane.surfaces.len(), direction)].id
+            };
         self.select_surface(destination)
     }
 
@@ -205,7 +235,7 @@ impl WorkspaceStore {
         let wi = self.workspace_index(id)?;
         let panes = self.state.workspaces[wi].root.panes();
         let destination = if direction == Navigation::Last {
-            self.focus_history
+            self.history(self.window_for_workspace(self.state.workspaces[wi].id)?)
                 .recent_panes
                 .iter()
                 .rev()
@@ -228,19 +258,25 @@ impl WorkspaceStore {
         direction: FocusHistoryDirection,
     ) -> Result<(), ActionError> {
         let current = self.focused_surface();
+        let window = self.state.focused_window.ok_or_else(unavailable)?;
         loop {
+            let history = self.focus_history.entry(window).or_default();
             let candidate = match direction {
-                FocusHistoryDirection::Back => self.focus_history.back.pop(),
-                FocusHistoryDirection::Forward => self.focus_history.forward.pop(),
+                FocusHistoryDirection::Back => history.back.pop(),
+                FocusHistoryDirection::Forward => history.forward.pop(),
             }
             .ok_or_else(unavailable)?;
-            if Some(candidate) == current || self.location(candidate).is_err() {
+            let live = self.location(candidate).ok().and_then(|(wi, _, _)| {
+                self.window_for_workspace(self.state.workspaces[wi].id).ok()
+            }) == Some(window);
+            if Some(candidate) == current || !live {
                 continue;
             }
             if let Some(current) = current {
+                let history = self.focus_history.entry(window).or_default();
                 let destination = match direction {
-                    FocusHistoryDirection::Back => &mut self.focus_history.forward,
-                    FocusHistoryDirection::Forward => &mut self.focus_history.back,
+                    FocusHistoryDirection::Back => &mut history.forward,
+                    FocusHistoryDirection::Forward => &mut history.back,
                 };
                 push_bounded(destination, current);
             }

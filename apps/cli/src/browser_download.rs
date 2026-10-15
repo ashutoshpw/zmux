@@ -47,7 +47,8 @@ pub(super) fn parse(args: &[String]) -> Result<Parsed, CliError> {
         }
         let known = matches!(
             flag,
-            "--workspace"
+            "--window"
+                | "--workspace"
                 | "--pane"
                 | "--surface"
                 | "--tab"
@@ -74,6 +75,7 @@ pub(super) fn parse(args: &[String]) -> Result<Parsed, CliError> {
         };
         index += if inline.is_some() { 1 } else { 2 };
         let slot = match flag {
+            "--window" => Some(&mut scope.window),
             "--workspace" => Some(&mut scope.workspace),
             "--pane" => Some(&mut scope.pane),
             "--surface" | "--tab" => Some(&mut scope.surface),

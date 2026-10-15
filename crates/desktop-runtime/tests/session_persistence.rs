@@ -106,6 +106,110 @@ fn ready(snapshot: &Snapshot) -> bool {
 }
 
 #[test]
+fn empty_focused_window_roundtrip_and_last_close_save_retains_the_terminal_owner() {
+    use zmux_desktop_runtime::windows::{NativeWindowEvent, WindowAction, WindowRequest};
+    use zmux_workspace_core::targets::TargetScope;
+
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    let initial = wait(&desktop, ready);
+    send(
+        &desktop,
+        1,
+        Command::Windows {
+            request: WindowRequest {
+                action: WindowAction::New { focus: true },
+                scope: TargetScope::default(),
+                caller: Default::default(),
+                expected_model_revision: None,
+            },
+        },
+    );
+    let two = wait(&desktop, |s| {
+        s.last_request_id == 1 && s.pending_launches == 0
+    });
+    let empty_window = two.model.windows[1].id;
+    send(
+        &desktop,
+        2,
+        Command::Action {
+            action: Action::CloseWorkspace {
+                workspace_id: two.model.windows[1].selected_workspace.unwrap(),
+            },
+        },
+    );
+    let empty = wait(&desktop, |s| {
+        s.last_request_id == 2 && s.control_frames.len() == 1
+    });
+    assert_eq!(empty.model.focused_window, Some(empty_window));
+    assert_eq!(empty.model.focused_workspace, None);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+
+    let restarted = directory.desktop();
+    let restored = wait(&restarted, ready);
+    assert_eq!(restored.model.windows, empty.model.windows);
+    assert_eq!(restored.model.focused_window, Some(empty_window));
+    assert_eq!(restored.model.focused_workspace, None);
+    assert_eq!(
+        restored.model.identity_namespace,
+        initial.model.identity_namespace
+    );
+    let close = |window| Command::Windows {
+        request: WindowRequest {
+            scope: TargetScope {
+                window: Some(format!("window:{}", window).parse().unwrap()),
+                ..Default::default()
+            },
+            action: WindowAction::Close,
+            caller: Default::default(),
+            expected_model_revision: None,
+        },
+    };
+    send(&restarted, 1, close(empty_window.0));
+    wait(&restarted, |s| s.last_request_id == 1);
+    let retained_window = restored.model.windows[0].id;
+    send(&restarted, 2, close(retained_window.0));
+    let last = wait(&restarted, |s| s.last_request_id == 2);
+    assert_eq!(last.model.windows.len(), 1);
+    assert_eq!(last.model.workspaces.len(), 1);
+    assert_eq!(last.control_frames.len(), 1);
+    let termination = last
+        .window_requests
+        .iter()
+        .find(|r| r.kind == zmux_desktop_runtime::windows::WindowKind::Terminate)
+        .unwrap();
+    restarted
+        .native_window_event(NativeWindowEvent::Complete {
+            token: zmux_desktop_runtime::windows::WindowHostToken {
+                epoch: termination.epoch,
+                identity_namespace: termination.identity_namespace,
+                window_id: termination.window_id,
+                host_id: uuid::Uuid::new_v4(),
+            },
+            operation_id: termination.operation_id,
+        })
+        .unwrap();
+    restarted.shutdown(Duration::from_secs(5)).unwrap();
+    let disk: zmux_workspace_core::SessionDocument =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    assert_eq!(
+        disk.window_layout.as_ref().unwrap().windows,
+        last.model.windows
+    );
+    assert_eq!(disk.workspaces[0].id, last.model.workspaces[0].id);
+    let reopened = directory.desktop();
+    let live = wait(&reopened, ready);
+    assert_eq!(live.model.windows, last.model.windows);
+    assert_eq!(live.model.identity_namespace, last.model.identity_namespace);
+    assert_ne!(
+        live.control_frames[0].session_id,
+        last.control_frames[0].session_id
+    );
+    assert!(live.control_frames[0].process_id.is_some());
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
 fn startup_restores_topology_fresh_shells_and_shutdown_flushes_latest_committed_change() {
     let directory = Directory::new();
     let store = fixture();

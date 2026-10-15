@@ -73,6 +73,44 @@ pub(crate) fn notification_address(
     scope: &TargetScope,
     caller: &CallerContext,
 ) -> Result<crate::attention::NotificationAddress, TargetError> {
+    let address = notification_address_unchecked(model, scope, caller)?;
+    if let Some(window) = &scope.window {
+        let expected = model.resolve_window(window)?;
+        let workspace = match address {
+            crate::attention::NotificationAddress::Workspace(id) => id,
+            crate::attention::NotificationAddress::Surface(id) => {
+                model
+                    .workspaces
+                    .iter()
+                    .find(|w| {
+                        w.root
+                            .panes()
+                            .iter()
+                            .any(|p| p.surfaces.iter().any(|s| s.id == id))
+                    })
+                    .ok_or(TargetError::NoFocus(
+                        zmux_workspace_core::targets::TargetKind::Workspace,
+                    ))?
+                    .id
+            }
+        };
+        if !model
+            .windows
+            .iter()
+            .any(|window| window.id == expected && window.workspace_ids.contains(&workspace))
+        {
+            return Err(TargetError::ScopeMismatch {
+                kind: zmux_workspace_core::targets::TargetKind::Window,
+            });
+        }
+    }
+    Ok(address)
+}
+fn notification_address_unchecked(
+    model: &Snapshot,
+    scope: &TargetScope,
+    caller: &CallerContext,
+) -> Result<crate::attention::NotificationAddress, TargetError> {
     use crate::attention::NotificationAddress;
     if scope.surface.is_some() || scope.pane.is_some() {
         return scope
@@ -119,7 +157,7 @@ pub(crate) fn notification_address(
         return Err(error);
     }
     scope
-        .resolve(model, &CallerContext::default())
+        .resolve(model, caller)
         .map(|target| NotificationAddress::Workspace(target.workspace))
 }
 
@@ -136,10 +174,11 @@ pub(crate) fn metadata_workspace(
             .map(|t| t.workspace);
     }
     TargetScope {
+        window: scope.window.clone(),
         workspace: caller.workspace.clone(),
         surface: caller.surface.clone(),
         ..Default::default()
     }
-    .resolve(model, &CallerContext::default())
+    .resolve(model, caller)
     .map(|t| t.workspace)
 }

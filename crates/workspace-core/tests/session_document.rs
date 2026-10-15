@@ -110,7 +110,7 @@ fn document_restores_stable_topology_with_new_shells_and_private_browser_urls() 
 }
 
 #[test]
-fn version_four_requires_one_checked_window_and_canonical_ownership() {
+fn version_four_requires_bounded_checked_windows_and_canonical_ownership() {
     let wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
     let workspace = wire["workspaces"][0]["id"].clone();
     let mut cases = Vec::new();
@@ -132,7 +132,11 @@ fn version_four_requires_one_checked_window_and_canonical_ownership() {
         .push(json!({
             "id": 99, "workspace_ids": [], "selected_workspace": null
         }));
-    multiple["next_id"] = json!(100);
+    multiple["window_layout"]["windows"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":100,"workspace_ids":[],"selected_workspace":null}));
+    multiple["next_id"] = json!(101);
     cases.push(multiple);
     for (membership, selection) in [
         (json!([]), Value::Null),

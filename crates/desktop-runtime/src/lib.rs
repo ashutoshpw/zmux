@@ -14,6 +14,7 @@ mod replies;
 pub mod sessions;
 pub mod targets;
 pub mod transfers;
+pub mod windows;
 use attention::{
     Attention, AttentionCommand, DismissSelection, NativeAttentionAction, NativeNotificationEvent,
     NativeNotificationSnapshot, Notification, NotificationAction, NotificationAddress,
@@ -89,6 +90,13 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Windows {
+        request: windows::WindowRequest,
+    },
+    #[serde(skip)]
+    NativeWindow {
+        event: windows::NativeWindowEvent,
+    },
     LocalTmux {
         request: local_tmux::Request,
     },
@@ -210,6 +218,11 @@ pub struct Snapshot {
     pub local_tmux_operations: Vec<local_tmux::Receipt>,
     pub browser_epoch: uuid::Uuid,
     pub browser_operations: Vec<BrowserReceipt>,
+    pub window_epoch: uuid::Uuid,
+    pub window_requests: Vec<windows::NativeWindowRequest>,
+    pub window_hosts: Vec<windows::WindowHostToken>,
+    pub window_operations: Vec<windows::WindowReceipt>,
+    pub observed_key_window: Option<zmux_workspace_core::WindowId>,
     pub download_epoch: uuid::Uuid,
     pub downloads: Vec<downloads::DownloadRecord>,
     pub download_waits: Vec<downloads::WaitReceipt>,
@@ -257,6 +270,7 @@ pub(crate) struct Execution {
     pub browser_operation_id: Option<u64>,
     pub browser_dispatch: Option<BrowserDispatchBatch>,
     pub download_result: Option<serde_json::Value>,
+    pub window_result: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -281,6 +295,7 @@ pub struct ProfileAdmissionError {
 #[derive(Debug, Serialize)]
 pub struct NativeNotificationExecution {
     pub revision: u64,
+    pub focused_window_id: Option<zmux_workspace_core::WindowId>,
     /// Native presentation may activate its window only after confirmed Open.
     pub focused_workspace_id: Option<zmux_workspace_core::WorkspaceId>,
     pub focused_surface_id: Option<SurfaceId>,
@@ -330,6 +345,7 @@ impl Desktop {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
         let downloads = downloads::DownloadRuntime::default();
+        let windows = windows::WindowRuntime::default();
         let profiles = profiles::ProfileRuntime::start(profile_directory)?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let attention = Attention::default();
@@ -355,6 +371,11 @@ impl Desktop {
                 local_tmux_operations: Vec::new(),
                 browser_epoch: browser.epoch(),
                 browser_operations: Vec::new(),
+                window_epoch: windows.epoch,
+                window_requests: Vec::new(),
+                window_hosts: Vec::new(),
+                window_operations: Vec::new(),
+                observed_key_window: None,
                 download_epoch: downloads.epoch,
                 downloads: Vec::new(),
                 download_waits: Vec::new(),
@@ -379,6 +400,8 @@ impl Desktop {
                     model,
                     browser,
                     downloads,
+                    windows,
+                    window_result: None,
                     download_result: None,
                     profiles,
                     profile_operation_id: None,
@@ -519,6 +542,18 @@ impl Desktop {
         })
     }
 
+    pub fn native_window_event(
+        &self,
+        event: windows::NativeWindowEvent,
+    ) -> Result<serde_json::Value, DesktopError> {
+        let execution =
+            self.execute_native(Command::NativeWindow { event }, NATIVE_COMMAND_TIMEOUT)?;
+        execution.result?;
+        execution
+            .window_result
+            .ok_or_else(|| DesktopError::Failure("native window acknowledgement missing".into()))
+    }
+
     /// Trusted download lifecycle channel. Run off the UI thread and never replay
     /// a missing acknowledgement; admission/publication may already have happened.
     pub fn native_download(
@@ -637,6 +672,9 @@ impl Desktop {
             .flatten();
         Ok(NativeNotificationExecution {
             revision: execution.snapshot.revision,
+            focused_window_id: opens
+                .then_some(execution.snapshot.model.focused_window)
+                .flatten(),
             focused_workspace_id: focused.map(|workspace| workspace.id),
             focused_surface_id: focused.and_then(|workspace| {
                 workspace
@@ -810,6 +848,7 @@ fn notification_filter(
         });
     }
     let mut resolved_scope = TargetScope {
+        window: scope.window.clone(),
         workspace: scope.workspace.clone().or_else(|| caller.workspace.clone()),
         surface: scope.surface.clone(),
         ..Default::default()
@@ -851,6 +890,8 @@ struct Worker {
     model: WorkspaceStore,
     browser: BrowserRuntime,
     downloads: downloads::DownloadRuntime,
+    windows: windows::WindowRuntime,
+    window_result: Option<serde_json::Value>,
     download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
     browser_dispatch: Option<BrowserDispatchBatch>,
@@ -975,6 +1016,10 @@ impl Worker {
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
             dirty |= self.downloads.poll(&self.model.snapshot(), Instant::now());
+            match self.windows.reconcile(&self.model.snapshot()) {
+                Ok(changed) => dirty |= changed,
+                Err(error) => self.last_error = Some(error.to_string()),
+            }
             dirty |= self.profiles.poll();
             dirty |= self.poll_local_tmux();
             if !self.profiles.snapshot.loading {
@@ -1089,6 +1134,7 @@ impl Worker {
         self.browser_operation_id = None;
         self.browser_dispatch = None;
         self.download_result = None;
+        self.window_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if acknowledgement.is_some()
@@ -1173,6 +1219,7 @@ impl Worker {
                 browser_operation_id: self.browser_operation_id,
                 browser_dispatch: self.browser_dispatch.take(),
                 download_result: self.download_result.take(),
+                window_result: self.window_result.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -1187,6 +1234,28 @@ impl Worker {
         }
     }
     fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
+        if self.windows.terminating()
+            && !matches!(
+                &command,
+                Command::NativeWindow { .. }
+                    | Command::NativeAttention {
+                        action: NativeAttentionAction::Event { .. }
+                    }
+                    | Command::NativeDownload { .. }
+                    | Command::BrowserHost { .. }
+                    | Command::BrowserDrain
+                    | Command::Windows {
+                        request: windows::WindowRequest {
+                            action: windows::WindowAction::List | windows::WindowAction::Current,
+                            ..
+                        }
+                    }
+            )
+        {
+            return Err(DesktopError::Failure(
+                "application termination has already been requested".into(),
+            ));
+        }
         if self.session_transition_pending()
             && !matches!(
                 &command,
@@ -1195,6 +1264,7 @@ impl Worker {
                     | Command::BrowserHost { .. }
                     | Command::BrowserDrain
                     | Command::NativeDownload { .. }
+                    | Command::NativeWindow { .. }
                     | Command::NativeAttention { .. }
             )
         {
@@ -1203,6 +1273,9 @@ impl Worker {
             ));
         }
         match command {
+            command @ (Command::Windows { .. } | Command::NativeWindow { .. }) => {
+                self.execute_window_command(command)
+            }
             Command::LocalTmux { request } => self.local_tmux_command(request),
             Command::Downloads { request } => {
                 let model = self.model.snapshot();
@@ -1342,6 +1415,11 @@ impl Worker {
             )
             .into()),
             Command::Action { action } => {
+                if Self::window_action_is_private(&action) {
+                    return Err(DesktopError::Failure(
+                        "window lifecycle requires acknowledged window admission".into(),
+                    ));
+                }
                 let result = self.action(action);
                 if result.is_ok() {
                     self.acknowledge_focused();
@@ -1522,7 +1600,12 @@ impl Worker {
             && state
                 .workspaces
                 .iter()
-                .filter(|w| Some(w.id) == state.focused_workspace)
+                .filter(|w| {
+                    state.windows.iter().any(|window| {
+                        Some(window.id) == self.windows.observed_key
+                            && window.selected_workspace == Some(w.id)
+                    })
+                })
                 .flat_map(|w| {
                     w.root
                         .panes()
@@ -1534,7 +1617,11 @@ impl Worker {
     fn notification_is_visible(&self, address: NotificationAddress) -> bool {
         match address {
             NotificationAddress::Workspace(id) => {
-                self.app_active && self.model.snapshot().focused_workspace == Some(id)
+                self.app_active
+                    && self.model.snapshot().windows.iter().any(|window| {
+                        Some(window.id) == self.windows.observed_key
+                            && window.selected_workspace == Some(id)
+                    })
             }
             NotificationAddress::Surface(id) => self.surface_is_visible(id),
         }
@@ -1694,7 +1781,11 @@ impl Worker {
         use attention::AttentionError;
         self.attention.reconcile(model);
         let global = || -> Result<NotificationFilter, AttentionError> {
-            if scope.workspace.is_some() || scope.pane.is_some() || scope.surface.is_some() {
+            if scope.window.is_some()
+                || scope.workspace.is_some()
+                || scope.pane.is_some()
+                || scope.surface.is_some()
+            {
                 return Err(AttentionError::InvalidSelector(
                     "ID/global notification operations do not accept target selectors",
                 ));
@@ -1811,6 +1902,19 @@ impl Worker {
         candidate
     }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
+        let focus_requested = matches!(
+            &action,
+            Action::FocusWindow { .. }
+                | Action::FocusPane { .. }
+                | Action::SelectWorkspace { .. }
+                | Action::SelectSurface { .. }
+                | Action::NavigateWorkspace { .. }
+                | Action::NavigateSurface { .. }
+                | Action::NavigatePane { .. }
+                | Action::FocusPaneDirection { .. }
+                | Action::NavigateFocus { .. }
+                | Action::NavigateFocusInWindow { .. }
+        );
         // Capture observed metadata on a candidate so rejected actions leave the
         // authoritative topology and descriptor state unchanged.
         let mut candidate = self.model_with_session_metadata();
@@ -1850,6 +1954,17 @@ impl Worker {
         self.ensure_reserved(&candidate)?;
         self.model = candidate;
         self.effects(transition.effects);
+        if focus_requested
+            && let Some(window) = self.model.snapshot().focused_window
+            && self.windows.host(window).is_some()
+        {
+            self.windows.request(
+                &self.model.snapshot(),
+                window,
+                windows::WindowKind::Focus,
+                true,
+            )?;
+        }
         Ok(())
     }
     fn effects(&mut self, effects: Vec<Effect>) {
@@ -2098,6 +2213,9 @@ impl Worker {
     fn publish(&mut self, closed: bool) -> Arc<Snapshot> {
         self.browser
             .reconcile(&self.model.snapshot(), Instant::now());
+        if let Err(error) = self.windows.reconcile(&self.model.snapshot()) {
+            self.last_error = Some(error.to_string());
+        }
         self.revision += 1;
         let model = self.model.snapshot();
         self.attention.reconcile(&model);
@@ -2123,16 +2241,21 @@ impl Worker {
         let focused_sessions: Vec<_> = model
             .workspaces
             .iter()
-            .find(|workspace| Some(workspace.id) == model.focused_workspace)
-            .map(|workspace| {
+            .filter(|workspace| {
+                model
+                    .windows
+                    .iter()
+                    .any(|window| window.selected_workspace == Some(workspace.id))
+            })
+            .flat_map(|workspace| {
                 workspace
                     .root
                     .panes()
                     .into_iter()
                     .filter_map(|pane| pane.session_id())
-                    .collect()
+                    .collect::<Vec<_>>()
             })
-            .unwrap_or_default();
+            .collect();
         let frames = control_frames
             .iter()
             .filter(|frame| focused_sessions.contains(&frame.session_id))
@@ -2159,6 +2282,11 @@ impl Worker {
             local_tmux_operations: self.local_tmux.receipts.clone(),
             browser_epoch: self.browser.epoch(),
             browser_operations: self.browser.receipts(),
+            window_epoch: self.windows.epoch,
+            window_requests: self.windows.requests(),
+            window_hosts: self.windows.hosts(),
+            window_operations: self.windows.receipts(),
+            observed_key_window: self.windows.observed_key,
             download_epoch: self.downloads.epoch,
             downloads: self.downloads.records(),
             download_waits: self.downloads.wait_receipts(),

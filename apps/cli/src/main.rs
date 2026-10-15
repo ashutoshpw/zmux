@@ -27,6 +27,7 @@ mod registry;
 mod session;
 mod ssh;
 mod targets;
+mod windows;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -64,6 +65,7 @@ enum Parsed {
     Browser(ControlCommand, Option<Duration>),
     BrowserProfile(ControlCommand),
     BrowserDownload(ControlCommand, Option<Duration>),
+    Window(ControlCommand),
 }
 
 enum Offline {
@@ -116,6 +118,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
         Parsed::Offline(Offline::Doctor) => {
             let options = client_options(socket_override, timeout, password)?;
             doctor(&options)?;
+            Ok(0)
+        }
+        Parsed::Window(command) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&windows::run(&options, command)?)?
+            );
             Ok(0)
         }
         Parsed::App(command) => {
@@ -215,6 +225,20 @@ fn parse(
             timeout,
             password,
         ));
+    }
+    if let Some(
+        command @ ("list-windows" | "current-window" | "new-window" | "focus-window"
+        | "close-window"),
+    ) = command
+    {
+        let parsed = windows::parse(command, tail)?;
+        if !explicit_timeout
+            && let Parsed::Window(request) = &parsed
+            && windows::is_mutation(request)
+        {
+            timeout = windows::NATIVE_RECEIPT_BUDGET;
+        }
+        return Ok((parsed, socket, timeout, password));
     }
     if command == Some("browser") {
         let parsed = browser::parse(tail)?;

@@ -119,3 +119,154 @@ fn rejected_first_action_does_not_allocate_an_unhosted_window() {
         json!([])
     );
 }
+
+#[test]
+fn two_window_creation_is_atomic_no_focus_and_close_preserves_other_sessions() {
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    store
+        .apply(Action::CreateWorkspace {
+            name: "first".into(),
+        })
+        .unwrap();
+    let initial = store.snapshot();
+    let original = initial.windows[0].clone();
+    let original_session = initial.workspaces[0].root.panes()[0].session_id();
+    let create: Action =
+        serde_json::from_value(json!({"action":"create_window","focus":false})).unwrap();
+    let result = store.apply(create).unwrap();
+    assert_eq!(result.effects.len(), 1);
+    let two = store.snapshot();
+    assert_eq!(two.windows.len(), 2);
+    assert_eq!(two.focused_window, Some(original.id));
+    assert_eq!(two.focused_workspace, original.selected_workspace);
+    assert_eq!(
+        two.workspaces[0].root.panes()[0].session_id(),
+        original_session
+    );
+    let rejected = store.snapshot();
+    let next = store.next_identifier();
+    let create: Action =
+        serde_json::from_value(json!({"action":"create_window","focus":true})).unwrap();
+    assert!(store.apply(create).is_err());
+    assert_eq!(store.snapshot(), rejected);
+    assert_eq!(store.next_identifier(), next);
+    let close: Action =
+        serde_json::from_value(json!({"action":"close_window","window_id":two.windows[1].id}))
+            .unwrap();
+    let closed = store.apply(close).unwrap();
+    assert_eq!(closed.effects.len(), 1);
+    assert!(matches!(closed.effects[0], Effect::StopSession { .. }));
+    assert_eq!(store.snapshot().windows, vec![original.clone()]);
+    assert_eq!(
+        store.snapshot().workspaces[0].root.panes()[0].session_id(),
+        original_session
+    );
+    let close: Action =
+        serde_json::from_value(json!({"action":"close_window","window_id":original.id})).unwrap();
+    let before = store.snapshot();
+    assert!(
+        store.apply(close).is_err(),
+        "last native close must preserve the recoverable model"
+    );
+    assert_eq!(store.snapshot(), before);
+}
+
+#[test]
+fn window_scopes_resolve_empty_roots_and_fence_explicit_cross_window_objects() {
+    use zmux_workspace_core::targets::{CallerContext, TargetKind, TargetScope};
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    store
+        .apply(Action::CreateWorkspace {
+            name: "first".into(),
+        })
+        .unwrap();
+    store.apply(Action::CreateWindow { focus: false }).unwrap();
+    let model = store.snapshot();
+    let first = &model.workspaces[0];
+    let second = &model.workspaces[1];
+    let destination = model.windows[1].id;
+    let scope: TargetScope =
+        serde_json::from_value(json!({"window":format!("window:{}",destination.0)})).unwrap();
+    assert_eq!(
+        scope
+            .resolve(&model, &CallerContext::default())
+            .unwrap()
+            .workspace,
+        second.id
+    );
+    let mismatch: TargetScope = serde_json::from_value(json!({"window":format!("window:{}",destination.0),"surface":first.root.panes()[0].selected_surface.0.to_string()})).unwrap();
+    assert!(mismatch.resolve(&model, &CallerContext::default()).is_err());
+    let caller: CallerContext = serde_json::from_value(json!({"window":model.object_uuid(TargetKind::Window,model.windows[0].id.0),"surface":model.object_uuid(TargetKind::Surface,second.root.panes()[0].selected_surface.0)})).unwrap();
+    assert_eq!(
+        TargetScope::default()
+            .resolve_window(&model, &caller)
+            .unwrap(),
+        destination
+    );
+    store
+        .apply(Action::CloseWorkspace {
+            workspace_id: second.id,
+        })
+        .unwrap();
+    store
+        .apply(Action::FocusWindow {
+            window_id: destination,
+        })
+        .unwrap();
+    let empty = store.snapshot();
+    assert_eq!(empty.focused_workspace, None);
+    assert_eq!(
+        scope
+            .resolve_window(&empty, &CallerContext::default())
+            .unwrap(),
+        destination
+    );
+    assert!(scope.resolve(&empty, &CallerContext::default()).is_err());
+    // A focused empty window with a populated background window is a valid v4 desktop.
+    let document = store.session_document().unwrap();
+    document
+        .validate(zmux_workspace_core::RestoreLimits {
+            terminals: 8,
+            browsers: 4,
+        })
+        .unwrap();
+}
+
+#[test]
+fn workspace_navigation_and_focus_history_remain_within_the_owning_window() {
+    use zmux_workspace_core::Navigation;
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    store
+        .apply(Action::CreateWorkspace { name: "one".into() })
+        .unwrap();
+    let first_window = store.snapshot().windows[0].id;
+    store
+        .apply(Action::CreateWorkspace { name: "two".into() })
+        .unwrap();
+    let first_members = store.snapshot().windows[0].workspace_ids.clone();
+    store.apply(Action::CreateWindow { focus: true }).unwrap();
+    let other = store.snapshot().windows[1].selected_workspace.unwrap();
+    let transition = store
+        .apply(Action::NavigateWorkspace {
+            workspace_id: first_members[1],
+            direction: Navigation::Next,
+        })
+        .unwrap();
+    assert!(transition.effects.is_empty());
+    assert_eq!(store.snapshot().focused_window, Some(first_window));
+    assert_eq!(store.snapshot().focused_workspace, Some(first_members[0]));
+    store
+        .apply(Action::NavigateWorkspace {
+            workspace_id: first_members[0],
+            direction: Navigation::Last,
+        })
+        .unwrap();
+    assert_eq!(store.snapshot().focused_workspace, Some(first_members[1]));
+    store
+        .apply(Action::NavigateWorkspace {
+            workspace_id: other,
+            direction: Navigation::Next,
+        })
+        .unwrap();
+    assert_eq!(store.snapshot().focused_workspace, Some(other));
+}

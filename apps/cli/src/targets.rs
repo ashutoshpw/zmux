@@ -89,6 +89,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
             break;
         }
         let slot = match flag.as_str() {
+            "--window" => Some(&mut scope.window),
             "--workspace" => Some(&mut scope.workspace),
             "--pane" => Some(&mut scope.pane),
             "--surface" | "--tab" => Some(&mut scope.surface),
@@ -295,6 +296,7 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
     while cursor < args.len() {
         let flag = args[cursor].as_str();
         let slot = match flag {
+            "--window" => Some(&mut scope.window),
             "--workspace" => Some(&mut scope.workspace),
             "--surface" | "--tab" => Some(&mut scope.surface),
             "--pane" if command == "notify" => Some(&mut scope.pane),
@@ -377,7 +379,10 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
             }
         }
     }
-    let scoped = scope.workspace.is_some() || scope.surface.is_some() || scope.pane.is_some();
+    let scoped = scope.window.is_some()
+        || scope.workspace.is_some()
+        || scope.surface.is_some()
+        || scope.pane.is_some();
     let action = match command {
         "notify" if !clear => {
             return request(
@@ -476,7 +481,7 @@ fn explicit_notification_scope(
             ));
         }
         Ok(Some(NotificationScope::Surface))
-    } else if scope.workspace.is_some() {
+    } else if scope.workspace.is_some() || scope.window.is_some() {
         Ok(Some(NotificationScope::Workspace))
     } else {
         Ok(None)
@@ -514,7 +519,7 @@ fn extract_browser_focus(args: &mut Vec<String>) -> Result<bool, CliError> {
                 });
                 index += 2;
             }
-            "--workspace" | "--pane" | "--surface" | "--tab" | "--expect-revision" => {
+            "--window" | "--workspace" | "--pane" | "--surface" | "--tab" | "--expect-revision" => {
                 retained.push(args[index].clone());
                 index += 1;
                 if let Some(value) = args.get(index) {
@@ -570,6 +575,7 @@ fn request(
             }
         } else {
             CallerContext {
+                window: None,
                 local_tmux: None,
                 workspace: None,
                 surface: match environment_target("ZMUX_SURFACE_ID")? {
@@ -597,6 +603,9 @@ pub(super) fn caller(scope: &TargetScope) -> Result<CallerContext, CliError> {
                 return Ok(caller);
             }
             CallerContext {
+                // Ambient window identity is only a hint. Surviving caller
+                // objects determine their actual window after moves.
+                window: environment_target("ZMUX_WINDOW_ID").ok().flatten(),
                 local_tmux: None,
                 workspace: environment_target("ZMUX_WORKSPACE_ID")?,
                 surface: match environment_target("ZMUX_SURFACE_ID")? {
@@ -631,6 +640,7 @@ fn managed_tmux_caller() -> Result<Option<CallerContext>, CliError> {
             ))
         })?;
     Ok(Some(CallerContext {
+        window: None,
         workspace: None,
         surface: None,
         local_tmux: Some(identity),
@@ -718,6 +728,7 @@ fn parse_navigation(command: &str, args: &[String]) -> Result<Parsed, CliError> 
             "select-workspace" | "next-workspace" | "previous-workspace" | "last-workspace"
         );
         let slot = match flag {
+            "--window" => Some(&mut scope.window),
             "--workspace" => Some(&mut scope.workspace),
             "--pane" if !workspace_only => Some(&mut scope.pane),
             "--surface" | "--tab" if !workspace_only => Some(&mut scope.surface),
@@ -890,7 +901,7 @@ fn parse_metadata(command: &str, args: &[String]) -> Result<Parsed, CliError> {
                 return Err(CliError(format!("repeated {flag}")));
             }
             let accepted = match flag {
-                "--workspace" | "--expect-revision" => true,
+                "--window" | "--workspace" | "--expect-revision" => true,
                 "--icon" | "--color" | "--priority" => command == "set-status",
                 "--label" => command == "set-progress",
                 "--level" | "--source" => command == "log",
@@ -901,6 +912,9 @@ fn parse_metadata(command: &str, args: &[String]) -> Result<Parsed, CliError> {
                 return Err(CliError(format!("unknown {command} option {flag}")));
             }
             let value = option_value(args, cursor, flag)?.to_owned();
+            if flag == "--window" {
+                scope.window = Some(target(&value)?);
+            }
             if flag == "--workspace" {
                 scope.workspace = Some(target(&value)?);
             }

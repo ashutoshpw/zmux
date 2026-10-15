@@ -478,6 +478,7 @@ fn targeted_navigation_uses_caller_or_explicit_scope_and_rejects_foreign_owners(
     let first = create(&mut store, "first");
     let second = create(&mut store, "second");
     let caller = CallerContext {
+        window: None,
         local_tmux: None,
         workspace: Some(format!("workspace:{}", first.id.0).parse().unwrap()),
         surface: None,
@@ -494,6 +495,7 @@ fn targeted_navigation_uses_caller_or_explicit_scope_and_rejects_foreign_owners(
     };
     assert_eq!(store.snapshot().focused_workspace, Some(second.id));
     let scope = TargetScope {
+        window: None,
         workspace: Some(format!("workspace:{}", first.id.0).parse().unwrap()),
         pane: Some("index:1".parse().unwrap()),
         surface: None,
@@ -519,6 +521,7 @@ fn targeted_navigation_uses_caller_or_explicit_scope_and_rejects_foreign_owners(
         first.focused_pane
     );
     let foreign = TargetScope {
+        window: None,
         workspace: scope.workspace.clone(),
         pane: Some(format!("pane:{}", second.focused_pane.0).parse().unwrap()),
         surface: None,

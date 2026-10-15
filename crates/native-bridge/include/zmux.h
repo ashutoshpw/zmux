@@ -53,6 +53,8 @@ ZmuxResult zmux_desktop_profile_add(uint64_t desktop, const uint8_t *name, size_
    off the UI thread. Missing acknowledgement must not replay admission/publication.
    Caller-generated fenced tokens correlate uncertain outcomes with later snapshots. */
 ZmuxResult zmux_desktop_download(uint64_t desktop, const uint8_t *request, size_t length);
+/* Trusted native window completion/key observations; token-fenced, never replayed. */
+ZmuxResult zmux_desktop_window_event(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted host-only browser channel. Drain reserves an owned buffer before removing
    work, may wait up to one second, and MUST run off the UI thread. Never replay a
    failed drain automatically. Events wait up to two seconds and MUST also run off the UI thread.

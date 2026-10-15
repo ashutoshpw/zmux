@@ -167,6 +167,7 @@ struct NativeNotificationSnapshot: Codable, Sendable {
 
 struct NativeNotificationExecution: Decodable, Sendable {
     let revision: UInt64
+    let focusedWindowId: UInt64?
     let focusedWorkspaceId: UInt64?
     let focusedSurfaceId: UInt64?
     let navigation: NotificationNavigation?
@@ -243,7 +244,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
     private let sendEvent: @MainActor (NativeNotificationEvent) async throws -> Void
     private let performAction: @MainActor (NativeAttentionAction) async throws -> NativeNotificationExecution
-    private let activate: @MainActor () -> Void
+    private let activate: @MainActor (NativeNotificationExecution) -> Void
     private let reportError: @MainActor (String) -> Void
     private var epoch: UUID?
     private var authorizationGeneration: UInt64 = 0
@@ -267,7 +268,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
 
     init(sendEvent: @escaping @MainActor (NativeNotificationEvent) async throws -> Void,
          performAction: @escaping @MainActor (NativeAttentionAction) async throws -> NativeNotificationExecution,
-         activate: @escaping @MainActor () -> Void,
+         activate: @escaping @MainActor (NativeNotificationExecution) -> Void,
          reportError: @escaping @MainActor (String) -> Void) {
         self.sendEvent = sendEvent; self.performAction = performAction
         self.activate = activate; self.reportError = reportError
@@ -400,7 +401,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             do {
                 let receipt = try await self.performAction(action)
                 guard !self.stopped, self.epoch == expectedEpoch, accepts(receipt) else { return }
-                self.activate()
+                self.activate(receipt)
             } catch { self.reportError("Notification target is unavailable: " + error.localizedDescription) }
         }
     }
@@ -577,7 +578,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
                     if let navigation = receipt.navigation, navigation.opened,
                        navigation.target == request.target,
                        navigation.notificationId == request.target.notificationId,
-                       request.target.matches(receipt) { activate() }
+                       request.target.matches(receipt) { activate(receipt) }
                     if reply.outcome == .notWritten { reportError("Notification reply was not written; no input was resent") }
                 case .partial, .unknown:
                     reportError("Notification reply may be incomplete; it will not be resent")
@@ -587,7 +588,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             } else {
                 let receipt = try await performAction(.open(target: request.target))
                 // Rust's exact token/session validation precedes every explicit activation.
-                if !stopped, epoch == request.target.epoch, request.target.matches(receipt) { activate() }
+                if !stopped, epoch == request.target.epoch, request.target.matches(receipt) { activate(receipt) }
             }
             remove([identifier])
         } catch {

@@ -74,7 +74,7 @@ indirect enum PaneTree: Decodable, Sendable {
     }
 }
 struct Workspace: Decodable, Sendable { let id: UInt64; let name: String; let focusedPane: UInt64; let root: PaneTree }
-struct ClosedItem: Decodable, Sendable { let id: UInt64; let title: String; let workspaceName: String; let restoring: Bool }
+struct ClosedItem: Decodable, Sendable { let windowId: UInt64; let id: UInt64; let title: String; let workspaceName: String; let restoring: Bool }
 struct DesktopWindow: Decodable, Sendable {
     let id: UInt64
     let workspaceIds: [UInt64]
@@ -146,6 +146,10 @@ struct BrowserProfileState: Decodable, Sendable {
     let error: String?
 }
 struct DesktopSnapshot: Decodable, Sendable {
+    let windowEpoch: UUID
+    let windowRequests: [NativeWindowRequest]
+    let windowHosts: [WindowHostToken]
+    let observedKeyWindow: UInt64?
     let downloadEpoch: UUID
     let downloads: [BrowserDownloadRecord]
     let browserProfiles: BrowserProfileState

@@ -1,0 +1,499 @@
+//! Public CLI against the real window owner; trusted native acknowledgements are
+//! driven at the production boundary. This does not execute or claim AppKit UI.
+use serde_json::Value;
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    process::{Child, Command, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+use zmux_desktop_runtime::{
+    Desktop, Shell,
+    control::ControlServer,
+    windows::{NativeWindowEvent, NativeWindowRequest, WindowHostToken, WindowKind},
+};
+static NEXT: AtomicU64 = AtomicU64::new(1);
+struct Fixture {
+    root: PathBuf,
+    socket: PathBuf,
+    desktop: Arc<Desktop>,
+    server: ControlServer,
+}
+impl Fixture {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "zw{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = root.canonicalize().unwrap();
+        let desktop = Arc::new(
+            Desktop::new(Shell {
+                program: "/bin/sh".into(),
+                args: vec!["-i".into()],
+                cwd: Some(root.clone()),
+            })
+            .unwrap(),
+        );
+        let socket = root.join("c");
+        let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+        let fixture = Self {
+            root,
+            socket,
+            desktop,
+            server,
+        };
+        let open = fixture.pending(WindowKind::Open);
+        fixture.acknowledge(&open);
+        fixture
+            .desktop
+            .native_window_event(NativeWindowEvent::Key {
+                token: fixture.token(&open),
+                key: true,
+            })
+            .unwrap();
+        fixture
+    }
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zmux"));
+        command
+            .arg("--socket")
+            .arg(&self.socket)
+            .args(args)
+            .stdin(Stdio::null());
+        for key in [
+            "ZMUX_WINDOW_ID",
+            "ZMUX_WORKSPACE_ID",
+            "ZMUX_SURFACE_ID",
+            "ZMUX_TAB_ID",
+            "ZMUX_LOCAL_TMUX",
+            "ZMUX_SOCKET_PASSWORD",
+            "ZMUX_SOCKET_PASSWORD_FILE",
+        ] {
+            command.env_remove(key);
+        }
+        command
+    }
+    fn spawn(&self, args: &[&str]) -> Child {
+        self.command(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    }
+    fn value(&self, args: &[&str]) -> Value {
+        value(self.command(args).output().unwrap())
+    }
+    fn pending(&self, kind: WindowKind) -> NativeWindowRequest {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(request) = self
+                .desktop
+                .snapshot()
+                .unwrap()
+                .window_requests
+                .iter()
+                .find(|r| r.kind == kind)
+                .cloned()
+            {
+                return request;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Window request was never admitted"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn token(&self, request: &NativeWindowRequest) -> WindowHostToken {
+        WindowHostToken {
+            epoch: request.epoch,
+            identity_namespace: request.identity_namespace,
+            window_id: request.window_id,
+            host_id: request.host_id.unwrap_or(request.operation_id),
+        }
+    }
+    fn acknowledge(&self, request: &NativeWindowRequest) {
+        self.desktop
+            .native_window_event(NativeWindowEvent::Complete {
+                token: self.token(request),
+                operation_id: request.operation_id,
+            })
+            .unwrap();
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.server.shutdown(Duration::from_secs(2)).unwrap();
+        self.desktop.shutdown(Duration::from_secs(2)).unwrap();
+        if let Err(error) = fs::remove_dir_all(&self.root) {
+            eprintln!("window fixture cleanup: {error}");
+        }
+    }
+}
+fn value(output: Output) -> Value {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+fn finish(mut child: Child) -> Output {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "Window CLI did not finish within its expected deadline: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn window_cli_waits_for_native_receipts_and_preserves_no_focus_and_exact_scope() {
+    let fixture = Fixture::new();
+    let initial = fixture.desktop.snapshot().unwrap();
+    let original = initial.model.focused_window.unwrap();
+    let root_surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
+    let mut new = fixture.spawn(&["new-window", "--no-focus"]);
+    let open = fixture.pending(WindowKind::Open);
+    assert_ne!(open.window_id, original);
+    assert!(!open.focus);
+    assert!(
+        new.try_wait().unwrap().is_none(),
+        "Logical creation was reported as native completion"
+    );
+    assert_eq!(
+        fixture.desktop.snapshot().unwrap().model.focused_window,
+        Some(original)
+    );
+    assert_eq!(
+        fixture.desktop.snapshot().unwrap().observed_key_window,
+        Some(original)
+    );
+    fixture.acknowledge(&open);
+    let created = value(finish(new));
+    assert_eq!(created["state"], "completed");
+    assert_eq!(created["kind"], "open");
+    assert_eq!(created["operation_id"], open.operation_id.to_string());
+    assert_eq!(created["window_uuid"], open.window_uuid.to_string());
+    let handle = open.window_uuid.to_string();
+    assert_eq!(
+        fixture.value(&["list-windows"])["windows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let current = value(
+        fixture
+            .command(&["current-window", "--window", &handle])
+            .env("ZMUX_SURFACE_ID", "surface:0")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(current["window_uuid"], handle);
+    let mismatch = fixture
+        .command(&["read-screen", "--window", &handle])
+        .env("ZMUX_SURFACE_ID", root_surface.0.to_string())
+        .env("ZMUX_WINDOW_ID", handle.clone())
+        .output()
+        .unwrap();
+    assert!(!mismatch.status.success());
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("scope_mismatch"));
+    let hinted = value(
+        fixture
+            .command(&["current-window"])
+            .env("ZMUX_WINDOW_ID", &handle)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(hinted["window_uuid"], handle);
+    let hinted = value(
+        fixture
+            .command(&["current-window"])
+            .env("ZMUX_SURFACE_ID", root_surface.0.to_string())
+            .env("ZMUX_WINDOW_ID", &handle)
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        hinted["window_id"], original.0,
+        "A stale window hint overrode the surviving caller object"
+    );
+    let browser = fixture.value(&["browser", "open", "--no-focus", "about:blank"]);
+    let browser_id = browser["created_surfaces"][0]["surface_id"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let original_workspace = initial.model.workspaces[0].id.0.to_string();
+    let original_surface = root_surface.0.to_string();
+    for args in [
+        vec![
+            "browser",
+            "--window",
+            handle.as_str(),
+            "get",
+            "title",
+            "--surface",
+            browser_id.as_str(),
+        ],
+        vec![
+            "browser",
+            "download",
+            "list",
+            "--window",
+            handle.as_str(),
+            "--surface",
+            browser_id.as_str(),
+        ],
+        vec![
+            "set-status",
+            "key",
+            "value",
+            "--window",
+            handle.as_str(),
+            "--workspace",
+            original_workspace.as_str(),
+        ],
+        vec![
+            "notify",
+            "--window",
+            handle.as_str(),
+            "--surface",
+            original_surface.as_str(),
+            "--title",
+            "Wrong window",
+        ],
+    ] {
+        let output = fixture.command(&args).output().unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("scope_mismatch"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let hinted = value(
+        fixture
+            .command(&["current-window"])
+            .env("ZMUX_SURFACE_ID", root_surface.0.to_string())
+            .env("ZMUX_WINDOW_ID", "window:999999")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(hinted["window_id"], original.0);
+    let hinted = value(
+        fixture
+            .command(&["current-window"])
+            .env("ZMUX_WINDOW_ID", "not-a-window-handle")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(hinted["window_id"], original.0);
+    let focus = fixture.spawn(&["focus-window", "--window", &handle]);
+    let request = fixture.pending(WindowKind::Focus);
+    fixture
+        .desktop
+        .native_window_event(NativeWindowEvent::Key {
+            token: fixture.token(&request),
+            key: true,
+        })
+        .unwrap();
+    fixture.acknowledge(&request);
+    assert_eq!(value(finish(focus))["window_uuid"], handle);
+    assert_eq!(fixture.value(&["current-window"])["window_uuid"], handle);
+    let close = fixture.spawn(&["close-window", "--window", &handle]);
+    let request = fixture.pending(WindowKind::Close);
+    fixture.acknowledge(&request);
+    assert_eq!(value(finish(close))["kind"], "close");
+    assert_eq!(
+        fixture.value(&["list-windows"])["windows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let close_last = fixture.spawn(&["close-window", "--window", &original.0.to_string()]);
+    let terminate = fixture.pending(WindowKind::Terminate);
+    fixture.acknowledge(&terminate);
+    assert_eq!(value(finish(close_last))["kind"], "terminate");
+    assert_eq!(
+        fixture.desktop.snapshot().unwrap().model.windows.len(),
+        1,
+        "A terminate acknowledgement is not proof of saved shutdown"
+    );
+    fixture
+        .server
+        .set_policy(
+            zmux_desktop_runtime::control_policy::ControlPolicy::same_user(
+                zmux_desktop_runtime::control_policy::ControlAccess::ReadOnly,
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.value(&["list-windows"])["windows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(fixture.value(&["current-window"])["window_id"], original.0);
+    let denied = fixture.command(&["new-window"]).output().unwrap();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    assert_eq!(fixture.desktop.snapshot().unwrap().model.windows.len(), 1);
+}
+
+#[test]
+fn accepted_window_mutation_times_out_without_replay_or_premature_success() {
+    let fixture = Fixture::new();
+    let create = fixture.spawn(&["--timeout", "120", "new-window"]);
+    let request = fixture.pending(WindowKind::Open);
+    assert!(request.focus, "new-window must request focus by default");
+    assert_eq!(
+        fixture.desktop.snapshot().unwrap().model.focused_window,
+        Some(request.window_id)
+    );
+    let output = finish(create);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains(&request.operation_id.to_string()), "{error}");
+    assert!(error.contains("not replayed"), "{error}");
+    let snapshot = fixture.desktop.snapshot().unwrap();
+    assert_eq!(snapshot.model.windows.len(), 2);
+    assert_eq!(
+        snapshot
+            .window_requests
+            .iter()
+            .filter(|r| r.kind == WindowKind::Open)
+            .count(),
+        1
+    );
+    fixture.acknowledge(&request);
+    assert_eq!(
+        fixture.value(&["list-windows"])["windows"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn failed_native_open_is_reported_and_explicit_close_allows_a_new_window() {
+    let fixture = Fixture::new();
+    let create = fixture.spawn(&["new-window", "--no-focus"]);
+    let open = fixture.pending(WindowKind::Open);
+    fixture
+        .desktop
+        .native_window_event(NativeWindowEvent::Failed {
+            epoch: open.epoch,
+            operation_id: open.operation_id,
+            message: "Native host creation failed".into(),
+        })
+        .unwrap();
+    let output = finish(create);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains(&open.operation_id.to_string()), "{error}");
+    assert!(error.contains("Native host creation failed"), "{error}");
+    let handle = open.window_uuid.to_string();
+    let listed = fixture.value(&["list-windows"]);
+    let failed = listed["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["window_uuid"] == handle)
+        .expect("A failed native open must retain its recoverable model row");
+    assert_eq!(failed["native_state"], "failed");
+    assert_eq!(failed["native_error"], "Native host creation failed");
+    assert!(failed["recovery"].as_str().unwrap().contains("Close"));
+    let snapshot = fixture.desktop.snapshot().unwrap();
+    assert_eq!(snapshot.model.windows.len(), 2);
+    assert!(
+        snapshot
+            .window_requests
+            .iter()
+            .all(|request| request.window_id != open.window_id),
+        "Native failure must not automatically replay its open operation"
+    );
+    let close = fixture.spawn(&["close-window", "--window", &handle]);
+    let request = fixture.pending(WindowKind::Close);
+    assert_eq!(request.window_id, open.window_id);
+    fixture.acknowledge(&request);
+    assert_eq!(value(finish(close))["kind"], "close");
+    assert!(
+        fixture.value(&["list-windows"])["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|window| window["window_uuid"] != handle)
+    );
+    let retry = fixture.spawn(&["new-window", "--no-focus"]);
+    let replacement = fixture.pending(WindowKind::Open);
+    assert_ne!(replacement.window_id, open.window_id);
+    fixture.acknowledge(&replacement);
+    assert_eq!(value(finish(retry))["state"], "completed");
+}
+
+#[test]
+fn window_grammar_and_help_fail_offline_before_connecting() {
+    let absent = Path::new("/missing-window-cli.sock");
+    for args in [
+        vec!["new-window", "--focus", "false"],
+        vec!["new-window", "--no-focus", "--no-focus"],
+        vec!["new-window", "--window", "1"],
+        vec!["focus-window"],
+        vec!["focus-window", "1"],
+        vec!["focus-window", "--window", "0"],
+        vec!["close-window", "--window", "1", "--window", "2"],
+        vec!["current-window", "--pane", "1"],
+        vec!["list-windows", "--window", "1"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .arg("--socket")
+            .arg(absent)
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("cannot connect"),
+            "Grammar reached socket: {args:?}"
+        );
+    }
+    for name in [
+        "list-windows",
+        "current-window",
+        "new-window",
+        "focus-window",
+        "close-window",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .args(["--socket", "relative-must-not-be-used", name, "--help"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

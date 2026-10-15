@@ -29,6 +29,15 @@ dist = root / "dist"
 bundle = dist / "zmux.app/Contents"
 info = plistlib.loads((bundle / "Info.plist").read_bytes())
 assert info["CFBundleName"] == "zmux"
+assert (bundle / "Resources/AppIcon.icns").stat().st_size > 1024
+for executable in [bundle / "Resources/bin/zmux", bundle / "MacOS/zmux-app"]:
+    help_text = subprocess.run([str(executable), "--help"], check=True, capture_output=True, text=True, timeout=15).stdout
+    for command in ["list-workspaces", "split-pane", "send-text", "read-screen"]:
+        assert command in help_text, (executable, command)
+# Run the independent fresh-profile window journey before save-panel driver
+# setup and the broad smoke. A failed/timed-out journey stops here, so native
+# fixture apps never overlap and browser/AX failures cannot erase this evidence.
+subprocess.run([str(root / "scripts/check-native-windows")], check=True)
 # This external fixture uses only public Accessibility input. It checks its own
 # authorization without prompting or changing TCC; missing trust fails the native
 # download acceptance gate rather than substituting a destination callback.
@@ -37,11 +46,7 @@ subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
                 str(root / "tools/native-fixtures/save-panel-driver.swift"),
                 "-framework", "AppKit", "-framework", "ApplicationServices",
                 "-o", str(dist / "native-save-panel-driver")], check=True, timeout=60)
-assert (bundle / "Resources/AppIcon.icns").stat().st_size > 1024
-for executable in [bundle / "Resources/bin/zmux", bundle / "MacOS/zmux-app"]:
-    help_text = subprocess.run([str(executable), "--help"], check=True, capture_output=True, text=True, timeout=15).stdout
-    for command in ["list-workspaces", "split-pane", "send-text", "read-screen"]:
-        assert command in help_text, (executable, command)
+
 report = dist / "native-smoke.json"
 if report.exists(): report.unlink()
 stdout = dist / "native-stdout.log"

@@ -199,6 +199,31 @@ impl Default for Snapshot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    CreateWindow {
+        #[serde(default = "default_focus")]
+        focus: bool,
+    },
+    FocusWindow {
+        window_id: WindowId,
+    },
+    CloseWindow {
+        window_id: WindowId,
+    },
+    CreateWorkspaceInWindow {
+        window_id: WindowId,
+        name: String,
+        #[serde(default = "default_focus")]
+        focus: bool,
+    },
+    NavigateFocusInWindow {
+        window_id: WindowId,
+        direction: FocusHistoryDirection,
+    },
+    ReopenClosedInWindow {
+        window_id: WindowId,
+        #[serde(default)]
+        closed_id: Option<u64>,
+    },
     CreateLocalTmuxSurface {
         pane_id: PaneId,
         identity: zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity,
@@ -355,7 +380,7 @@ pub struct WorkspaceStore {
     state: Snapshot,
     next_id: u64,
     pending_restores: Vec<PendingRestore>,
-    focus_history: navigation::FocusHistory,
+    focus_history: std::collections::HashMap<WindowId, navigation::FocusHistory>,
     restore_placements: std::collections::HashMap<u64, Vec<surfaces::SplitAnchor>>,
     restored_panes: std::collections::HashMap<PaneId, PaneId>,
     restored_workspaces: std::collections::HashMap<WorkspaceId, WorkspaceId>,
@@ -396,10 +421,14 @@ impl WorkspaceStore {
     pub fn apply(&mut self, action: Action) -> Result<Transition, ActionError> {
         let mut candidate = self.clone();
         let prior = candidate.focused();
-        let is_history_navigation = matches!(action, Action::NavigateFocus { .. });
+        let prior_window = candidate.state.focused_window;
+        let is_history_navigation = matches!(
+            action,
+            Action::NavigateFocus { .. } | Action::NavigateFocusInWindow { .. }
+        );
         let result = candidate.apply_inner(action)?;
         candidate.check_window_layout()?;
-        candidate.record_focus(prior, is_history_navigation);
+        candidate.record_focus(prior, prior_window, is_history_navigation);
         *self = candidate;
         Ok(result)
     }
@@ -412,6 +441,36 @@ impl WorkspaceStore {
             .ok_or(ActionError::Exhausted)?;
         let mut effects = Vec::new();
         match action {
+            Action::CreateWindow { focus } => self.create_window(focus, &mut effects)?,
+            Action::FocusWindow { window_id } => self.focus_window(window_id)?,
+            Action::CloseWindow { window_id } => self.close_window(window_id, &mut effects)?,
+            Action::CreateWorkspaceInWindow {
+                window_id,
+                name,
+                focus,
+            } => {
+                let prior = self.state.focused_window;
+                self.focus_window(window_id)?;
+                self.create_workspace(name, None, focus, &mut effects)?;
+                if !focus {
+                    self.state.focused_window = prior;
+                    self.project_window_focus();
+                }
+            }
+            Action::NavigateFocusInWindow {
+                window_id,
+                direction,
+            } => {
+                self.focus_window(window_id)?;
+                self.navigate_focus(direction)?;
+            }
+            Action::ReopenClosedInWindow {
+                window_id,
+                closed_id,
+            } => {
+                self.focus_window(window_id)?;
+                self.surface_action(Action::ReopenClosed { closed_id }, &mut effects)?;
+            }
             Action::CreateWorkspace { name } => {
                 self.create_workspace(name, None, true, &mut effects)?
             }

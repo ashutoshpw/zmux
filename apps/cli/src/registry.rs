@@ -40,6 +40,46 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "list-windows",
+        "inspect",
+        false,
+        true,
+        "list-windows",
+        "List canonical main windows, workspace membership, logical focus and observed native host/key state as JSON. Failed native opens retain their error and recovery guidance; they are never automatically retried. A logical record alone does not prove a native window exists."
+    ),
+    command!(
+        "current-window",
+        "inspect",
+        false,
+        true,
+        "current-window [--window HANDLE]",
+        "Resolve the caller's current window without changing focus, or inspect an explicit window root, including an empty window. Surviving caller objects determine ownership after moves; ZMUX_WINDOW_ID is only a fallback hint."
+    ),
+    command!(
+        "new-window",
+        "start",
+        false,
+        true,
+        "new-window [--no-focus]",
+        "Create a main window with an initial workspace and wait for its exact native acknowledgement. Focus defaults to true; --no-focus preserves current logical and native focus. JSON reports epoch, operation UUID and stable window identity. The default client budget is 35 seconds; an explicit global --timeout wins. A timeout never retries creation."
+    ),
+    command!(
+        "focus-window",
+        "navigate",
+        false,
+        true,
+        "focus-window --window HANDLE",
+        "Focus an explicit main window, including an empty window, and wait for its exact native receipt. Ambient caller targets are ignored. Native mutations default to a 35-second client budget and are never replayed after uncertainty."
+    ),
+    command!(
+        "close-window",
+        "start",
+        false,
+        true,
+        "close-window --window HANDLE",
+        "Close an explicit main window and wait for native acknowledgement. Closing the last main window requests application termination; a completed terminate receipt means termination was requested, not that session saving or process exit succeeded. An unavailable final reply remains an unknown outcome. The default client budget is 35 seconds; no automatic retry."
+    ),
+    command!(
         "local-tmux",
         "remote",
         false,
@@ -230,7 +270,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         targeted: true,
         socket: true,
         usage: "next-workspace [--workspace TARGET]",
-        description: "Select the next workspace in model order, wrapping at the end. next-window is an alias for workspace navigation; --window is unavailable.",
+        description: "Select the next workspace in model order, wrapping at the end. next-window remains an alias for workspace navigation; --window constrains workspace ownership.",
     },
     CommandSpec {
         name: "previous-workspace",
@@ -239,7 +279,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         targeted: true,
         socket: true,
         usage: "previous-workspace [--workspace TARGET]",
-        description: "Select the previous workspace in model order, wrapping at the beginning. previous-window is an alias for workspace navigation; --window is unavailable.",
+        description: "Select the previous workspace in model order, wrapping at the beginning. previous-window remains an alias for workspace navigation; --window constrains workspace ownership.",
     },
     CommandSpec {
         name: "last-workspace",
@@ -248,7 +288,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         targeted: true,
         socket: true,
         usage: "last-workspace [--workspace TARGET]",
-        description: "Select the most recently focused other workspace. Fails when no live history remains. last-window is an alias for workspace navigation; --window is unavailable.",
+        description: "Select the most recently focused other workspace. Fails when no live history remains. last-window remains an alias for workspace navigation; --window constrains workspace ownership.",
     },
     command!(
         "next-tab",
@@ -512,7 +552,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         true,
         "browser profiles list|add NAME\n       zmux browser download list|ls [--surface TARGET] [--limit 1..25]\n       zmux browser download [wait] [--surface TARGET] [--path PATH | PATH] [--timeout-ms N | --timeout SECONDS]\n       zmux browser download cancel [--surface TARGET] DOWNLOAD_UUID\n       zmux browser open [PANE] URL [--focus true|false|--no-focus] [--profile NAME_OR_UUID]\n       zmux browser navigate|goto [SURFACE] URL\n       zmux browser back|forward|reload [TARGET_OPTIONS] [--snapshot-after]\n       zmux browser get url|title [TARGET_OPTIONS]\n       zmux browser get text|html|value|count|box|styles [TARGET_OPTIONS] [--selector SELECTOR | SELECTOR] [--property NAME]\n       zmux browser get attr [TARGET_OPTIONS] [--selector SELECTOR | SELECTOR] [--attr NAME | NAME]\n       zmux browser is visible|enabled|checked SELECTOR [TARGET_OPTIONS]\n       zmux browser find role ROLE [--name TEXT] [--exact] [TARGET_OPTIONS]\n       zmux browser find text|label|placeholder|alt|title|testid TEXT [--exact] [TARGET_OPTIONS]\n       zmux browser find first|last --selector SELECTOR [TARGET_OPTIONS]\n       zmux browser find nth --index N --selector SELECTOR [TARGET_OPTIONS]\n       zmux browser wait --selector SELECTOR [--state STATE] [--timeout-ms N] [TARGET_OPTIONS]\n       zmux browser eval [TARGET_OPTIONS] SCRIPT\n       zmux browser eval [TARGET_OPTIONS] --script SCRIPT\n       zmux browser snapshot [TARGET_OPTIONS] [--interactive|-i] [--cursor] [--compact] [--max-depth DEPTH] [--selector SELECTOR]",
-        "Control an embedded browser through shared native WebKit execution. Downloads resolve their scoped/caller/current browser once: list is newest-first non-consuming history; no-path wait consumes one terminal event through a repeatable ticket; wait --path only observes a nonempty filesystem path and never chooses a save destination or proves download completion. Wait defaults to 10 seconds, clamps to 1..120000ms and never cancels physical work. Cancel is a mutation; read-only sockets permit list/wait. Native downloads ask for a new destination and refuse overwrite; blob/data downloads and resume remain unavailable. TARGET_OPTIONS: --workspace, --pane, --surface (or --tab), --expect-revision. Automation targets use named options; selector options may precede or follow positional arguments. Browser open/navigate retain the leading-selector and positional-target grammar. Browser open focuses by default; --focus false or --no-focus preserves workspace, pane and tab selection. Use created_surfaces to identify a browser created without focus; focused_* reports the retained selection. HTTP(S) and about:blank are allowed. Automation returns completed JSON results; the global --timeout bounds admission plus result polling. Admission is never retried. Read-only sockets allow get/is/find/wait/snapshot and deny eval/navigation. Eval runs in the page content world; built-in DOM reads use an isolated world. Eval scripts are limited to 8192 UTF-8 bytes, selectors to 2048, depth to 0–32 and results to 64 KiB. --property applies only to get styles. Snapshot is a bounded document tree with document-scoped element refs, not a screenshot. Native execution must be available; a portable desktop alone cannot execute DOM operations. Main-document semantic locators normalize whitespace; substring matches ignore case, while --exact requires case-sensitive equality. Role names use aria labels, associated HTML labels and common element text/attributes; this is not the complete platform accessibility tree. Hidden elements are discoverable. Semantic find requires exactly one match; first/last/nth select CSS/ref document order explicitly (nth 0–4095). Wait defaults to visible; states: attached, detached, visible, hidden, enabled, disabled, checked, unchecked. Missing CSS matches satisfy only hidden/detached; stale refs always fail. Selectors are strict for wait, which rejects ambiguity. --timeout-ms accepts 1–30000 and adds at most one second of receipt headroom unless an explicit global --timeout is stricter. Queries and selectors are bounded to 2048 UTF-8 bytes, enumeration to 4096 elements. TARGET_OPTIONS may also precede the verb. Convenience aliases: positional wait SELECTOR and get visible|enabled|checked. Explicit persistent profiles: profiles add NAME registers durable metadata; profiles list reports loading/errors and identities. --profile resolves an existing name or UUID; omitted profile keeps per-host private storage. Profile names are unique, case-sensitive, trimmed, at most 128 UTF-8 bytes and cannot be UUIDs. Persistent profiles share cookies/localStorage across their own tabs and retain identity on reopen/restore. Unknown profiles fail without fallback. Requires durable runtime state. Rename, clear, delete, data import, frames, shadow traversal, semantic input and screenshots remain unavailable."
+        "Control an embedded browser through shared native WebKit execution. Downloads resolve their scoped/caller/current browser once: list is newest-first non-consuming history; no-path wait consumes one terminal event through a repeatable ticket; wait --path only observes a nonempty filesystem path and never chooses a save destination or proves download completion. Wait defaults to 10 seconds, clamps to 1..120000ms and never cancels physical work. Cancel is a mutation; read-only sockets permit list/wait. Native downloads ask for a new destination and refuse overwrite; blob/data downloads and resume remain unavailable. TARGET_OPTIONS: --window, --workspace, --pane, --surface (or --tab), --expect-revision. Automation targets use named options; selector options may precede or follow positional arguments. Browser open/navigate retain the leading-selector and positional-target grammar. Browser open focuses by default; --focus false or --no-focus preserves workspace, pane and tab selection. Use created_surfaces to identify a browser created without focus; focused_* reports the retained selection. HTTP(S) and about:blank are allowed. Automation returns completed JSON results; the global --timeout bounds admission plus result polling. Admission is never retried. Read-only sockets allow get/is/find/wait/snapshot and deny eval/navigation. Eval runs in the page content world; built-in DOM reads use an isolated world. Eval scripts are limited to 8192 UTF-8 bytes, selectors to 2048, depth to 0–32 and results to 64 KiB. --property applies only to get styles. Snapshot is a bounded document tree with document-scoped element refs, not a screenshot. Native execution must be available; a portable desktop alone cannot execute DOM operations. Main-document semantic locators normalize whitespace; substring matches ignore case, while --exact requires case-sensitive equality. Role names use aria labels, associated HTML labels and common element text/attributes; this is not the complete platform accessibility tree. Hidden elements are discoverable. Semantic find requires exactly one match; first/last/nth select CSS/ref document order explicitly (nth 0–4095). Wait defaults to visible; states: attached, detached, visible, hidden, enabled, disabled, checked, unchecked. Missing CSS matches satisfy only hidden/detached; stale refs always fail. Selectors are strict for wait, which rejects ambiguity. --timeout-ms accepts 1–30000 and adds at most one second of receipt headroom unless an explicit global --timeout is stricter. Queries and selectors are bounded to 2048 UTF-8 bytes, enumeration to 4096 elements. TARGET_OPTIONS may also precede the verb. Convenience aliases: positional wait SELECTOR and get visible|enabled|checked. Explicit persistent profiles: profiles add NAME registers durable metadata; profiles list reports loading/errors and identities. --profile resolves an existing name or UUID; omitted profile keeps per-host private storage. Profile names are unique, case-sensitive, trimmed, at most 128 UTF-8 bytes and cannot be UUIDs. Persistent profiles share cookies/localStorage across their own tabs and retain identity on reopen/restore. Unknown profiles fail without fallback. Requires durable runtime state. Rename, clear, delete, data import, frames, shadow traversal, semantic input and screenshots remain unavailable."
     ),
     command!(
         "doctor",
@@ -584,8 +624,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
 ];
 
 const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client response deadline (50–30000 ms; checked after decoding; output rendering may finish later)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
-const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --workspace only.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  Explicit selectors override inherited caller defaults. Workspace metadata\n  uses ZMUX_WORKSPACE_ID with caller surface ownership checked, and allows\n  options after values; consult its command help. For other target commands,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Those surface callers follow tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
-const METADATA_TARGETS: &str = "Workspace metadata targets:\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Explicit --workspace overrides inherited caller defaults. Otherwise,\n  ZMUX_WORKSPACE_ID selects the workspace, and any ZMUX_SURFACE_ID\n  (or ZMUX_TAB_ID) must belong to it. A moved or mismatched caller fails.\n  Without a caller workspace, the caller surface or current focus applies.\n  Closed/stale targets fail. Pane/surface selector flags are unavailable.\n  Options may appear before or after values; -- preserves literal text.\n";
+const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, window:N/workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --window and --workspace.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  --window constrains an object's actual owner, including an inherited caller;\n  it never silently retargets an object to another window's selection. Explicit\n  workspace/pane/surface selectors override inherited object defaults.\n  ZMUX_WINDOW_ID is a hint only; malformed/stale hints are ignored. Workspace metadata\n  uses ZMUX_WORKSPACE_ID with caller surface ownership checked, and allows\n  options after values; consult its command help. For other target commands,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Those surface callers follow tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
+const METADATA_TARGETS: &str = "Workspace metadata targets:\n  --window is a hard ownership constraint for the resolved workspace.\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Explicit --workspace overrides inherited caller defaults. Otherwise,\n  ZMUX_WORKSPACE_ID selects the workspace, and any ZMUX_SURFACE_ID\n  (or ZMUX_TAB_ID) must belong to it. A moved or mismatched caller fails.\n  Without a caller workspace, the caller surface or current focus applies.\n  Closed/stale targets fail. Pane/surface selector flags are unavailable.\n  Options may appear before or after values; -- preserves literal text.\n";
 fn metadata_command(name: &str) -> bool {
     matches!(
         name,

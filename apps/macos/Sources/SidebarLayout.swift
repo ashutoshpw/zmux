@@ -8,11 +8,13 @@ final class SidebarLayout {
     static let maximumWidth: CGFloat = 480
     private static let minimumContentWidth: CGFloat = 400
     private let defaults: UserDefaults
+    private let key: String
     private(set) var preferredWidth: CGFloat
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, key: String = "sidebarWidth", inheritLegacy: Bool = true) {
         self.defaults = defaults
-        let saved = defaults.object(forKey: "sidebarWidth") as? NSNumber
+        self.key = key
+        let saved = (defaults.object(forKey: key) ?? (inheritLegacy ? defaults.object(forKey: "sidebarWidth") : nil)) as? NSNumber
         let width = saved.map { CGFloat($0.doubleValue) } ?? 224
         preferredWidth = width.isFinite ? min(Self.maximumWidth, max(Self.minimumWidth, width)) : 224
     }
@@ -24,7 +26,7 @@ final class SidebarLayout {
     func resize(to width: CGFloat, availableWidth: CGFloat) {
         guard width.isFinite else { return }
         preferredWidth = min(max(Self.minimumWidth, widthLimit(availableWidth)), max(Self.minimumWidth, width))
-        defaults.set(Double(preferredWidth), forKey: "sidebarWidth")
+        defaults.set(Double(preferredWidth), forKey: key)
     }
 
     private func widthLimit(_ availableWidth: CGFloat) -> CGFloat {

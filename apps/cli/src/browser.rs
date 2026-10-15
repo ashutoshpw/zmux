@@ -39,7 +39,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     while args.first().is_some_and(|flag| {
         matches!(
             flag.as_str(),
-            "--workspace" | "--pane" | "--surface" | "--tab" | "--expect-revision"
+            "--window" | "--workspace" | "--pane" | "--surface" | "--tab" | "--expect-revision"
         )
     }) {
         let flag = args[0].clone();
@@ -161,6 +161,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             break;
         }
         let target_slot = match flag {
+            "--window" => Some(&mut scope.window),
             "--workspace" => Some(&mut scope.workspace),
             "--pane" => Some(&mut scope.pane),
             "--surface" | "--tab" => Some(&mut scope.surface),
