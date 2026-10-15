@@ -57,6 +57,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [R03 headless owner design](references/r03-local-zellij-owner-design.md) — implemented foreground consumer, shared child lifecycle, peer-fenced broker, Linux evidence and remaining native gates.
 - [R03 native launch consumer](references/r03-native-launch.md) — explicit foreground PTY consumer, authenticated owner receipts, shared shutdown and remaining native identity gates.
 - [R03 stdin interruption repair](references/r03-zellij-eintr.md) — actual Darwin suspend failure, surgical MIT dependency patch and isolated source producer gates.
+- [R03 retained dependency package](references/r03-dependency-package.md) — accepted Linux/Darwin CLI owner evidence, embedded WASM/transitive license audit and explicit future package proposal.
 
 - [B01 browser downloads](references/b01-browser-downloads.md) — independent native resource owner, list/wait contract, safe publication and pending native acceptance.
 - [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.

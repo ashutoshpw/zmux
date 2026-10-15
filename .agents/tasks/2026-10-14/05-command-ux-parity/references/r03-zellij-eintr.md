@@ -1,6 +1,6 @@
 # Zellij stdin interruption repair
 
-2026-10-15. Isolated source producer validated on Linux; no product acquisition
+2026-10-15. Isolated producer and CLI owner validated on Linux and Darwin ARM64; no product acquisition
 pin, installed executable policy or app distribution change is established.
 
 ## Actual failure and boundary
@@ -97,8 +97,8 @@ Python syntax, manual two-host workflow YAML and repository notice checks pass.
 The independent manual `local-zellij-patched-owner.yml` workflow builds source and
 executes the unchanged owner gates on Linux and macos-15. It uploads immutable
 source inputs/receipts/logs/notices, excluding executables, and uses its own
-concurrency group so existing native runs are unaffected. Hosted source builds passed on Linux and Darwin; complete actual Darwin owner
-acceptance remains pending as detailed below. Acquisition pins remain
+concurrency group so existing native runs are unaffected. Hosted source builds and complete CLI owner acceptance passed on Linux and Darwin
+ARM64 as detailed below; native app integration remains separate. Acquisition pins remain
 unchanged; complete redistribution notices and native integration remain open.
 
 ### First hosted patched-source run
@@ -121,10 +121,46 @@ socket capacity; the actual production backend path was 97 bytes. The fixture
 now appends one byte to the same complete backend prefix, yielding 98 bytes,
 and asserts the existing portable socket budget before binding. The same real
 namespace-rejection assertion is retained; production socket policy and lifecycle
-behavior are unchanged. Full Darwin owner acceptance requires a hosted recheck.
+behavior are unchanged. At that point full Darwin owner acceptance required the hosted recheck below.
 
 The first artifact omitted its explicitly named hidden workflow file because of
 upload-artifact's default hidden-file filter. The upload step now enables hidden
 files within its existing explicit path allowlist, which includes only that
 workflow under a hidden directory and no broad hidden-file glob. This does not
 include compiled executables or alter the running hosted jobs.
+
+### Accepted patched-source owner rerun
+
+Run [38811822523](https://github.com/ashutoshpw/zmux/actions/runs/38811822523) passed
+both hosts at 0ffc1105da85b51568172cb7946665d67923ff1e. Linux X64 and macOS 15.7.9
+ARM64 each executed all 27 existing owner checks. Independent artifact verification
+confirmed the pinned source archive, upstream Cargo.lock, current producer/fixture/
+patch/shared-runner hashes, all retained phase log hashes, upstream license and
+15-file archived WASM inventory. The repaired upload now includes the exact
+workflow bytes. The producer and owner receipts bind the same tested binary hash.
+
+The actual foreground journey passes resize, suspend/resume and subsequent input,
+TERM/HUP detach, SIGINT cancellation, reattach, terminal restoration, namespace
+rejection and original server/supervisor/workload identities with startup count one.
+The former fixture-only path overflow is repaired without changing production
+socket or namespace policy.
+
+Combined receipt:
+`target/agent-validation/r03-hosted-38811822523/verified-receipt.json`, SHA256
+`e561705c13f20fada3eb5b6541807993e242942db57643629861e9d8f1eed7a4`.
+The read-only verifier and downloaded source/evidence artifacts are in that same
+directory. No compiled binary bytes were uploaded or downloaded.
+
+| Host | Tested binary SHA256 |
+| --- | --- |
+| Linux X64, glibc 2.39 | `51283563b1a4d48faa7ec4fedfcf71659fc8c87b7f2979dd484b41d4d18453d9` |
+| macOS 15.7.9 ARM64 | `a7a3355493177ac2094ffd569d0339e566bc234f96d03363bb5785619fc6f9f5` |
+
+The Darwin hash matches the previous source build; the Linux hash differs despite
+identical pinned source and Rust version. No reproducible-build claim follows.
+Future packages must retain the exact tested artifact and capture native toolchain,
+linkage and OS/ABI scope rather than assuming rebuild equivalence. No universal
+macOS, Intel Darwin, packaged native attachment, default acquisition or complete
+redistribution acceptance follows from this CLI gate. See the
+[dependency package audit](r03-dependency-package.md) for the next retained-artifact
+and notice work.
