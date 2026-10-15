@@ -56,6 +56,7 @@ jobs:
             dist/zmux-dev-universal-*.zip.sha256
             dist/build-info.json
             dist/native-smoke.json
+            dist/native-windows.json
             dist/native-resources.json
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png
@@ -71,6 +72,7 @@ jobs:
           path: |
             dist/native-*.log
             dist/native-smoke.json
+            dist/native-windows.json
             dist/native-resources.json
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png

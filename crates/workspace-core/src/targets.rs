@@ -498,6 +498,11 @@ impl TargetScope {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TargetAction {
+    MoveWorkspaceToWindow {
+        destination: TargetRef,
+        #[serde(default)]
+        focus: bool,
+    },
     RenameWorkspace {
         name: String,
     },
@@ -559,6 +564,12 @@ impl TargetAction {
     ) -> Result<Action, TargetError> {
         let target = scope.resolve(model, caller)?;
         Ok(match self {
+            Self::MoveWorkspaceToWindow { destination, focus } => Action::MoveWorkspaceToWindow {
+                workspace_id: target.workspace,
+                destination_window_id: model.resolve_window(&destination)?,
+                index: None,
+                focus,
+            },
             Self::RenameWorkspace { name } => Action::RenameWorkspace {
                 workspace_id: target.workspace,
                 name,

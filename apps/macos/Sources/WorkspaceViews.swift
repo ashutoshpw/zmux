@@ -720,6 +720,7 @@ final class PaneSplitView: BackgroundView {
     let geometryKey: String
     let vertical: Bool
     private(set) var fraction: CGFloat
+    var onFractionChanged: ((CGFloat) -> Void)?
     private let first: NSView
     private let second: NSView
     private let divider = PaneDividerView()
@@ -763,7 +764,9 @@ final class PaneSplitView: BackgroundView {
         setFraction((vertical ? point.x : point.y) / extent)
     }
     func setFraction(_ value: CGFloat) {
+        guard value.isFinite else { return }
         fraction = min(0.8, max(0.2, value))
+        onFractionChanged?(fraction)
         layoutPanes()
         needsLayout = true
         layoutSubtreeIfNeeded()

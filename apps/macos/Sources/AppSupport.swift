@@ -5,6 +5,10 @@ import Darwin
 enum AppStartup {
     /// Runs before AppKit and Rust workers start. CLI invocations never open a window.
     static func prepare() {
+        let windowFixture = CommandLine.arguments.contains("--window-lifecycle-smoke")
+        if windowFixture {
+            FileHandle.standardError.write(Data("Window lifecycle startup: prepare entered pid=\(ProcessInfo.processInfo.processIdentifier)\n".utf8))
+        }
         guard let resources = Bundle.main.resourceURL else { return }
         let cliDirectory = resources.appendingPathComponent("bin")
         var arguments = Array(CommandLine.arguments.dropFirst())
@@ -28,6 +32,9 @@ enum AppStartup {
             setenv("ZMUX_SOCKET", path, 1)
         }
         setenv("TERM_PROGRAM", "zmux", 1)
+        if windowFixture {
+            FileHandle.standardError.write(Data("Window lifecycle startup: prepare completed\n".utf8))
+        }
     }
 
     static func validateCloudCallbackContract() throws {

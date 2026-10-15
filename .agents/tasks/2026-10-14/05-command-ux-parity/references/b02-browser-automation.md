@@ -1,5 +1,48 @@
 # B02a browser automation bridge
 
+## B02c live page zoom candidate (2026-10-15)
+
+Frozen CMD-232–235 now have a local implementation: `browser zoom in|out|reset|FACTOR`
+with the existing target options, including the hard window constraint. One exact
+runtime owner admits the mutation, dispatches it once and fences its receipt with
+the existing epoch/host/document identity. Native menus call the same admitted
+action. Public `WKWebView.pageZoom` owns the actual state; no page JavaScript,
+private WebKit API or document-navigation counter is used for zoom.
+
+Explicit factors must be finite; native execution clamps them to 0.25–5.0,
+including negative/zero and oversized finite values. In/out change by 0.1 and
+clamp at those limits; reset selects 1. Reset to a configured default remains
+unresolved until settings support exists. Completion reports the actual native factor.
+Zoom is a mutation denied by read-only control access. Hidden targets retain tab,
+pane/workspace/window selection and document generation. The shared deadline and
+no-replay rules apply; a timed-out dispatched mutation has an unknown outcome.
+This is live-host state, without default-setting persistence, host-recreation
+restore or viewport/device emulation. BA-10 and full B02/V01 remain incomplete;
+historical compatibility rows and the F01 unverified boundary are unchanged. Four
+executable discovery leaves describe zoom grammar, bounds and native requirements;
+`commands --check` parses their probes without executing native mutations.
+
+The CLI wire regression first failed on the old parser with `unknown browser
+subcommand zoom`, then passed after implementation. Scoped Linux checks pass all
+9 CLI browser tests and 13 runtime browser tests, including finite boundary operands and NaN/infinity,
+read policy, missing native owner, once-only dispatch, deadline uncertainty and
+late-result rejection. These tests do not claim native zoom execution.
+
+A reference behavior review found the old local menu limits were narrower than
+the audited command: the reference accepts any finite factor and clamps to
+0.25–5.0. The existing CLI wire table was extended for 0.25, 5, negative/oversized
+finite factors and uppercase directions; it failed against the draft's range
+rejection and passes after repair. Native clamp checks also include zero and
+an extreme finite factor. No reference implementation code was imported.
+
+`BrowserZoomSmoke` is authored against the bundled CLI and actual WebKit hosts.
+It compares each receipt with `WKWebView.pageZoom`, checks explicit factors,
+menu-shared admission, step clamping, reset, invalid nonmutation and a never-selected
+hidden host while preserving the original host/document/selection. The App smoke
+calls this before the separately gated download fixture. Strict Swift compilation
+and exact-source packaged macOS execution remain required; no native pass is yet
+established for this candidate.
+
 ## Scope
 
 Implement bounded asynchronous browser requests and completion receipts between the Rust
@@ -303,3 +346,12 @@ cleanup in 20.93 seconds. The earlier diagnostic
 iteration also passed two simultaneous invocations and reported local Chrome 151's
 version and zero fixture GETs on its timeout; those results do not diagnose hosted
 Chrome 155. Fresh hosted execution remains a separate delivery gate.
+
+Final integrated portable verification: `scripts/check` passes in fresh snapshot
+`/tmp/zmux-move-zoom-integrated-jfol05gu` (255 Rust tests, formatting, strict
+Clippy, dependency notices and C ABI). All 35 captured production/native/script
+inputs match the working source after verification; log
+`/tmp/zmux-move-zoom-integrated-check.log`. Swift compilation and actual native
+execution remain separate hosted gates. The preceding `16cf61a` universal app
+compiled but its window close fixture timed out; new bounded phase traces retain
+evidence without another app launch or extending the timeout.

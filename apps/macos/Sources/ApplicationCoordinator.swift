@@ -5,6 +5,7 @@ enum UICommand: Sendable {
     case window(String, UInt64?, Bool?)
     case windowEvent(NativeWindowEvent)
     case workspaceCreate(UInt64, String)
+    case workspaceMove(UUID, UUID, Bool)
     case windowHistory(UInt64, String)
     case windowReopen(UInt64, UInt64?)
     case action(String, UInt64?, String?, String?, UInt64?)
@@ -41,6 +42,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private var startRequested = false
     private var shutdownTask: Task<Void, Error>?
     let bridge = NativeBridge()
+    let splitLayouts = WorkspaceSplitPreferences()
     lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
     lazy var notificationDelivery = makeNotificationDelivery()
     private func makeNotificationDelivery() -> NotificationDelivery {
@@ -93,7 +95,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         startRequested = true
         _ = mainWindowHost
+        WindowLifecycleSmoke.trace("coordinator before bridge.start")
         try await bridge.start(storage: storage)
+        WindowLifecycleSmoke.trace("coordinator after bridge.start")
         guard shutdownTask == nil else {
             throw BridgeFailure(message: "Application shutdown interrupted desktop startup.")
         }
@@ -118,6 +122,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                     switch command {
                     case .window(let operation, let window, let focus): try await self.bridge.window(operation, window: window, focus: focus)
                     case .windowEvent(let event): try await self.bridge.windowEvent(event)
+                    case .workspaceMove(let workspace, let destination, let focus): try await self.bridge.moveWorkspace(workspace, destination: destination, focus: focus)
                     case .workspaceCreate(let window, let name): try await self.bridge.action("create_workspace_in_window", title: name, window: window)
                     case .windowHistory(let window, let direction): try await self.bridge.action("navigate_focus_in_window", direction: direction, window: window)
                     case .windowReopen(let window, let id): try await self.bridge.action("reopen_closed_in_window", closed: id, window: window)
@@ -180,10 +185,12 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 }
             }
         }
+        WindowLifecycleSmoke.trace("coordinator loops scheduled; before initial window activation")
         mainWindowHost.installMenus()
         mainWindowHost.window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         appActive(NSApp.isActive)
+        WindowLifecycleSmoke.trace("coordinator initial activation completed")
     }
 
     private func performShutdown() async throws {
@@ -194,8 +201,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         windowTasks.removeAll()
         browsers.values.forEach { $0.close() }
         browsers.removeAll()
+        WindowLifecycleSmoke.trace("shutdown before native download cleanup")
         var cleanupFailure: (any Error)?
         do { try await browserDownloads.shutdown() } catch { cleanupFailure = error }
+        WindowLifecycleSmoke.trace("shutdown after native download cleanup")
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
@@ -204,7 +213,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         // Native download cleanup must not prevent the sole Desktop from saving
         // and stopping its sessions. Preserve the first error after every owner
         // has received its bounded cleanup opportunity.
+        WindowLifecycleSmoke.trace("shutdown before Desktop close/save")
         do { try await bridge.close() } catch { if cleanupFailure == nil { cleanupFailure = error } }
+        WindowLifecycleSmoke.trace("shutdown after Desktop close/save")
         await imagePastes.desktopClosed()
         if let cleanupFailure { throw cleanupFailure }
     }
@@ -228,7 +239,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             reportError("The application command queue is unavailable")
         }
     }
-    func reportError(_ message: String) { mainWindowHost.showError(message) }
+    func reportError(_ message: String) {
+        WindowLifecycleSmoke.trace("coordinator error: " + message)
+        mainWindowHost.showError(message)
+    }
     func appActive(_ active: Bool) {
         enqueue(.attention("app_active", nil, nil, active))
         if active { notificationDelivery.refreshPermission() }
@@ -238,6 +252,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         guard shutdownTask == nil else { return }
         // Validate canonical ownership before touching native registries. The
         // Reject inconsistent membership before touching any native presenter.
+        if self.snapshot == nil { WindowLifecycleSmoke.trace("first snapshot windows=\(snapshot.model.windows.count) requests=\(snapshot.windowRequests.count)") }
         let projections = try MainWindowProjection.all(snapshot)
         if windowEpoch != snapshot.windowEpoch {
             for task in windowTasks.values { task.cancel() }
@@ -252,6 +267,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             windowEpoch = snapshot.windowEpoch
         }
         self.snapshot = snapshot
+        try splitLayouts.reconcile(snapshot)
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
         let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
@@ -341,6 +357,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private func performWindowRequest(_ request: NativeWindowRequest) async throws {
         guard !Task.isCancelled, shutdownTask == nil, let snapshot, request.epoch == snapshot.windowEpoch, request.identityNamespace == snapshot.model.identityNamespace else { return }
         let identity = MainWindowIdentity(namespace: request.identityNamespace, windowId: request.windowId)
+        WindowLifecycleSmoke.trace("native request \(request.kind) window=\(request.windowId) operation=\(request.operationId)")
         switch request.kind {
         case "open":
             guard snapshot.model.windows.contains(where: { $0.id == request.windowId }) else {

@@ -74,6 +74,7 @@ fn client(socket: &Path, root: &Path) -> Command {
         .env("HOME", root)
         .env_remove("ZMUX_SOCKET_PASSWORD")
         .env_remove("ZMUX_SOCKET_PASSWORD_FILE")
+        .env_remove("ZMUX_WINDOW_ID")
         .env_remove("ZMUX_WORKSPACE_ID")
         .env_remove("ZMUX_SURFACE_ID")
         .env_remove("ZMUX_TAB_ID");
@@ -174,12 +175,27 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
         vec!["browser", "snapshot", "--help"],
         vec!["browser", "eval", "--help"],
         vec!["browser", "back", "--help"],
+        vec!["browser", "zoom", "--help"],
     ] {
         let output = invoke(socket, &fixture.0, &args);
         assert!(output.status.success(), "offline help failed: {args:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("--snapshot-after"));
     }
     for (args, reason) in [
+        (
+            vec!["browser", "zoom"],
+            "requires in, out, reset or one factor",
+        ),
+        (
+            vec!["browser", "zoom", "in", "2"],
+            "requires in, out, reset or one factor",
+        ),
+        (vec!["browser", "zoom", "NaN"], "must be finite"),
+        (vec!["browser", "zoom", "inf"], "must be finite"),
+        (
+            vec!["browser", "zoom", "in", "--snapshot-after"],
+            "unknown browser zoom option",
+        ),
         (
             vec!["browser", "open", "--focus"],
             "--focus requires true or false",
@@ -473,6 +489,15 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
     let fixture = Fixture::new();
     let script = " \n({text: 'quoted \\\" text', value: -1})\n ";
     for (index, (args, expected)) in [
+        (vec!["zoom", "in"], json!({"action":"zoom","operation":{"kind":"in"}})),
+        (vec!["zoom", "out"], json!({"action":"zoom","operation":{"kind":"out"}})),
+        (vec!["zoom", "reset"], json!({"action":"zoom","operation":{"kind":"reset"}})),
+        (vec!["zoom", "1.25"], json!({"action":"zoom","operation":{"kind":"set","factor":1.25}})),
+        (vec!["zoom", "0.25"], json!({"action":"zoom","operation":{"kind":"set","factor":0.25}})),
+        (vec!["zoom", "5"], json!({"action":"zoom","operation":{"kind":"set","factor":5.0}})),
+        (vec!["zoom", "-1"], json!({"action":"zoom","operation":{"kind":"set","factor":-1.0}})),
+        (vec!["zoom", "10"], json!({"action":"zoom","operation":{"kind":"set","factor":10.0}})),
+        (vec!["zoom", "IN"], json!({"action":"zoom","operation":{"kind":"in"}})),
         (vec!["find", "role", "button", "--name", "Continue", "--exact"], json!({"action":"find","locator":{"kind":"role","query":"button","name":"Continue","exact":true,"selector":null,"index":null}})),
         (vec!["find", "text", "--", "--literal"], json!({"action":"find","locator":{"kind":"text","query":"--literal","name":null,"exact":false,"selector":null,"index":null}})),
         (vec!["find", "nth", "--selector", "button", "--index", "2"], json!({"action":"find","locator":{"kind":"nth","query":null,"name":null,"exact":false,"selector":"button","index":2}})),
@@ -534,6 +559,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
             "document.title",
         ],
         vec!["browser", "snapshot", "--surface", surface],
+        vec!["browser", "zoom", "1.25", "--surface", surface],
     ] {
         let output = invoke(&socket, &fixture.0, &args);
         assert!(!output.status.success());
@@ -559,6 +585,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         vec!["browser", "back", "--surface", surface],
         vec!["browser", "forward", "--surface", surface],
         vec!["browser", "reload", "--surface", surface],
+        vec!["browser", "zoom", "in", "--surface", surface],
     ] {
         let output = invoke(&socket, &fixture.0, &args);
         assert!(!output.status.success());

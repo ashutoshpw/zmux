@@ -89,6 +89,7 @@ impl WorkspaceStore {
         prior: Option<(WorkspaceId, PaneId, SurfaceId)>,
         prior_window: Option<WindowId>,
         history_navigation: bool,
+        record_current: bool,
     ) {
         self.focus_history
             .retain(|window, _| self.state.windows.iter().any(|live| live.id == *window));
@@ -119,7 +120,7 @@ impl WorkspaceStore {
                 .retain(|id| window.workspace_ids.contains(id));
         }
         let current = self.focused();
-        if prior == current {
+        if !record_current || prior == current {
             return;
         }
         let Some(window) = self.state.focused_window else {

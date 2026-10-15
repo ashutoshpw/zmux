@@ -218,6 +218,7 @@ pub struct Snapshot {
     pub local_tmux_operations: Vec<local_tmux::Receipt>,
     pub browser_epoch: uuid::Uuid,
     pub browser_operations: Vec<BrowserReceipt>,
+    pub workspace_identities: Vec<zmux_workspace_core::targets::ObjectIdentity>,
     pub window_epoch: uuid::Uuid,
     pub window_requests: Vec<windows::NativeWindowRequest>,
     pub window_hosts: Vec<windows::WindowHostToken>,
@@ -371,6 +372,7 @@ impl Desktop {
                 local_tmux_operations: Vec::new(),
                 browser_epoch: browser.epoch(),
                 browser_operations: Vec::new(),
+                workspace_identities: Vec::new(),
                 window_epoch: windows.epoch,
                 window_requests: Vec::new(),
                 window_hosts: Vec::new(),
@@ -1902,6 +1904,36 @@ impl Worker {
         candidate
     }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
+        let move_context = if let Action::MoveWorkspaceToWindow {
+            workspace_id,
+            destination_window_id,
+            index,
+            focus,
+        } = &action
+        {
+            let model = self.model.snapshot();
+            let source = model
+                .windows
+                .iter()
+                .find(|w| w.workspace_ids.contains(workspace_id))
+                .ok_or_else(|| DesktopError::Failure("source workspace does not exist".into()))?
+                .id;
+            if !model.windows.iter().any(|w| w.id == *destination_window_id)
+                || self.windows.host(*destination_window_id).is_none()
+            {
+                return Err(DesktopError::Failure(
+                    "workspace move destination native host is not ready".into(),
+                ));
+            }
+            Some((
+                *workspace_id,
+                source,
+                *destination_window_id,
+                *focus && (source != *destination_window_id || index.is_some()),
+            ))
+        } else {
+            None
+        };
         let focus_requested = matches!(
             &action,
             Action::FocusWindow { .. }
@@ -1952,8 +1984,32 @@ impl Worker {
         }
         self.profiles.validate_model(&candidate.snapshot())?;
         self.ensure_reserved(&candidate)?;
+        let mut move_windows = None;
+        let native_focus = if let Some((_, _, destination, true)) = move_context {
+            let mut windows = self.windows.clone();
+            let receipt = windows.request_move_focus(&candidate.snapshot(), destination)?;
+            move_windows = Some(windows);
+            Some(receipt)
+        } else {
+            None
+        };
         self.model = candidate;
+        if let Some(windows) = move_windows {
+            self.windows = windows;
+        }
         self.effects(transition.effects);
+        if let Some((workspace, source, destination, focus)) = move_context {
+            let model = self.model.snapshot();
+            self.window_result = Some(serde_json::json!({
+                "state":"topology_committed", "workspace_id":workspace,
+                "workspace_uuid":model.object_uuid(zmux_workspace_core::targets::TargetKind::Workspace, workspace.0),
+                "source_window_id":source, "destination_window_id":destination,
+                "source_window_uuid":model.object_uuid(zmux_workspace_core::targets::TargetKind::Window, source.0),
+                "destination_window_uuid":model.object_uuid(zmux_workspace_core::targets::TargetKind::Window, destination.0),
+                "changed_window":source != destination, "focus_requested":focus,
+                "native_focus":native_focus, "model_revision":model.revision,
+            }));
+        }
         if focus_requested
             && let Some(window) = self.model.snapshot().focused_window
             && self.windows.host(window).is_some()
@@ -2262,8 +2318,14 @@ impl Worker {
             .cloned()
             .collect();
         let native_notifications = self.attention.native_snapshot(&model);
+        let workspace_identities = model
+            .target_catalog()
+            .into_iter()
+            .filter(|identity| identity.kind == zmux_workspace_core::targets::TargetKind::Workspace)
+            .collect();
         let published = Arc::new(Snapshot {
             revision: self.revision,
+            workspace_identities,
             model,
             frames,
             notifications: self.attention.items.clone(),

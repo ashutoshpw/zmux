@@ -621,6 +621,78 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
 }
 
 #[test]
+fn zoom_finite_validation_precedes_dispatch_and_expired_native_mutation_is_not_replayed() {
+    let (model, surface) = fixture();
+    let now = Instant::now();
+    let mut runtime = BrowserRuntime::default();
+    let owner = attach(&mut runtime, &model, surface, now);
+    for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(matches!(
+            runtime.admit(
+                &model.snapshot(),
+                request(
+                    &model,
+                    surface,
+                    BrowserAction::Zoom {
+                        operation: BrowserZoom::Set { factor }
+                    }
+                ),
+                now
+            ),
+            Err(BrowserError::Invalid(_))
+        ));
+    }
+    assert!(
+        runtime
+            .drain_requests(&model.snapshot(), now)
+            .requests
+            .is_empty()
+    );
+    let mut zoom = request(
+        &model,
+        surface,
+        BrowserAction::Zoom {
+            operation: BrowserZoom::Set { factor: 1.25 },
+        },
+    );
+    zoom.timeout_ms = 10;
+    let id = runtime.admit(&model.snapshot(), zoom, now).unwrap();
+    let batch = runtime.drain_requests(&model.snapshot(), now);
+    assert_eq!(batch.requests.len(), 1);
+    assert_eq!(batch.requests[0].owner, owner);
+    assert!(matches!(
+        batch.requests[0].action,
+        BrowserAction::Zoom {
+            operation: BrowserZoom::Set { factor: 1.25 }
+        }
+    ));
+    let expired = now + Duration::from_millis(10);
+    runtime.reconcile(&model.snapshot(), expired);
+    let receipt = runtime.receipt(id).unwrap();
+    assert_eq!(receipt.state, BrowserOperationState::Failed);
+    assert!(receipt.error.as_ref().unwrap().outcome_unknown);
+    assert!(
+        runtime
+            .drain_requests(&model.snapshot(), expired)
+            .requests
+            .is_empty()
+    );
+    assert!(matches!(
+        runtime.host_event(
+            &model.snapshot(),
+            BrowserHostEvent::Complete {
+                operation_id: id,
+                owner,
+                result: json!({"kind":"page_zoom","value":1.25})
+            },
+            expired
+        ),
+        Err(BrowserError::NotDispatched)
+    ));
+    assert!(runtime.receipt(id).unwrap().result.is_none());
+}
+
+#[test]
 fn native_result_and_retained_history_budgets_fail_or_evict_explicitly() {
     let (model, surface) = fixture();
     let now = Instant::now();

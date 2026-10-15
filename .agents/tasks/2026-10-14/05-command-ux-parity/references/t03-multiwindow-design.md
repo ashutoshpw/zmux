@@ -447,3 +447,119 @@ The combined check includes the existing socket deadline fixture repair: Darwin
 ENOTCONN is an expected disconnected-peer write result after timeout; ordinary
 success, absolute deadline and no mutation replay assertions remain intact. The
 first hosted evidence for this error is macOS run38781114605 at3438565.
+
+## Workspace move vertical slice, 2026-10-15
+
+Original MIT move implementation is present locally; native compilation/execution
+remains pending. It keeps the two-window bound and does not deliver groups, canvas,
+workspace undo-close or portable geometry export.
+
+`move-workspace-to-window --workspace HANDLE --window DESTINATION` now separates
+the source selector from its destination. Both resolve on one executor snapshot;
+`--expect-revision N` optionally fences a previously observed catalog. The CLI
+now defaults to no focus, matching the pinned reference CLI. `--focus true|false`
+is an explicit extension; `--no-focus` is an explicit false alias and conflicts
+with `--focus`. Native menu actions explicitly choose their desired focus mode.
+Offline help and the local command contract describe the same grammar.
+
+The core `MoveWorkspaceToWindow` action moves canonical ordered membership only,
+retaining every workspace, pane, surface, session and namespace identity. It emits
+no start/stop effects and consumes no identifiers. The selected source falls back
+to the next entry at the removed index or its predecessor, with no replacement
+shell in an empty source. No-focus preserves the logical/key window and populated
+destination selection; an empty destination selects the moved workspace. Histories
+prune moved content without inserting a destination focus event. Existing saved v4
+window membership/order/selection needs no new document format.
+
+The runtime preflights a live registered native destination for every entrypoint
+before topology commits. A focus move reserves a fresh, exact native focus operation
+on a candidate WindowRuntime before assigning the candidate model. Capacity or
+host-readiness failure therefore leaves topology unchanged. Move JSON reports
+`state: topology_committed`, exact workspace/source/destination IDs and UUIDs, model
+revision and an optional separate `native_focus` receipt. No-focus admission does
+not claim native projection is already drawn. A focus failure/timeout reports that
+topology already committed; neither CLI nor native code replays or rolls it back.
+CLI verifies the focus receipt belongs to the committed destination before waiting.
+
+Native menu targets carry stable workspace/window UUIDs through the queue, so stale
+numeric IDs cannot alias a replacement namespace. The coordinator retains existing
+TerminalView and BrowserView instances and detaches all changed hierarchies before
+attaching any new one. Each new host hierarchy rebinds terminal callbacks; source
+content releases its responder before views leave that NSWindow. Browser hosts,
+document generations, profile data stores and pending operations stay app-owned.
+Notification activation and new destination sheets derive current membership from
+the immutable originating workspace/surface rather than inherited window hints.
+
+Split ratios now belong to native workspace preferences, keyed by identity namespace
+and Rust-published stable workspace UUID. Divider changes persist bounded finite
+ratios; reconciliation prunes removed workspaces and split keys, and a namespace
+replacement removes the old active namespace's preferences. Ratios survive moves,
+closing the former host and app restart. This is native preference persistence,
+not portable session-export geometry; full T03 geometry remains open. Sidebar
+preferences continue to belong to each window.
+
+Same-window behavior remains an explicit unresolved parity item. Zmux's public
+move with no insertion index is a bounded selection-preserving no-op, including
+`--focus true`; it may advance the normal successful-action revision but emits no
+native focus request. Read-only inspection at pinned reference `3ba653b9` found
+entrypoint differences: the native AppDelegate helper focuses/selects the workspace
+when asked, while the V2 CLI path detaches/reattaches without a same-manager guard
+and defaults `focus` to false. Public docs only promise moving to a different
+window. No reference implementation was copied or translated. Documenting this
+bounded decision does not close same-window parity or full T03.
+
+Owner-boundary validation:
+
+- The new core behavioral regression failed on unknown `move_workspace_to_window`
+  before the action existed; `/tmp/zmux-t03-move-red.log`. It now covers selected
+  and background source workspaces, populated/empty destination, logical source/
+  destination focus, requested focus/no-focus, identity preservation, zero effects
+  and atomic invalid-destination rejection.
+- Real two-PTY runtime coverage rejects an unmaterialized destination before any
+  change, preserves PIDs/session IDs, accepts input from a surviving caller with a
+  stale window hint, reserves 32 distinct focus requests and rejects the next move
+  atomically when physical request capacity is full.
+- The actual CLI/socket journey covers default no-focus, distinct destination
+  grammar, inherited stale-window context, native focus success/failure, committed
+  topology after focus failure, stale revisions, invalid/conflicting grammar and
+  bounded same-window no-op behavior.
+- Actual filesystem/PTY save/restart coverage preserves moved membership and its
+  focused empty source, stable logical identities and fresh restored sessions.
+
+`WindowLifecycleSmoke` now prepares a terminal/browser split, moves the existing
+workspace to the other window without focus, activates a notification at its new
+owner, and moves it back through the native shared action. It checks the retained
+PTY PID, terminal/browser objects, WebKit host/document/data-store identity, a
+browser operation started before movement, metadata, input after former-host close,
+and a 0.63 split ratio both across hosts and after restart. The external runner
+inspects the real saved split topology. These are pending native acceptance checks,
+not executed evidence on Linux. Physical keyboard/IME/VoiceOver, download sheets
+already open at movement, portable geometry export, same-window parity, groups and
+canvas remain separate gates.
+
+The initial move `scripts/check` passed 253 tests, strict Clippy, notice inventory
+and real C ABI checks with private target `/tmp/zmux-t03-move-check-target`; log
+`/tmp/zmux-t03-move-check.log`. Final parent integration verification is still
+required after CLI default alignment, native diagnostics and the separately owned
+browser-zoom slice. The latest focused CLI window journey passes all five tests
+(`/tmp/zmux-t03-move-cli-final.log`), including default no-focus and explicit focus.
+No local Swift/macOS build is available.
+
+Earlier hosted T03 `16cf61a` timed out after 150 seconds in the close phase without
+a preparation receipt or stdout/stderr. Its cause remains unconfirmed; it does not
+establish native window or move acceptance. Gated diagnostics now identify startup
+before coordinator/presenter construction, bridge startup, first snapshot, native
+requests, fixture wait sites and shutdown/save stages. Stderr trace count and the
+private 64 KiB trace file are bounded. The runner copies bounded phase logs, trace,
+preparation evidence and a read-only process snapshot into retained `dist/native-`
+logs on timeout/failure. The deadline stays 150 seconds; no second app is launched,
+no process is signaled, and potentially live profile storage remains untouched.
+
+Final integrated portable verification: `scripts/check` passes in fresh snapshot
+`/tmp/zmux-move-zoom-integrated-jfol05gu` (255 Rust tests, formatting, strict
+Clippy, dependency notices and C ABI). All 35 captured production/native/script
+inputs match the working source after verification; log
+`/tmp/zmux-move-zoom-integrated-check.log`. Swift compilation and actual native
+execution remain separate hosted gates. The preceding `16cf61a` universal app
+compiled but its window close fixture timed out; new bounded phase traces retain
+evidence without another app launch or extending the timeout.

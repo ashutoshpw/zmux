@@ -40,23 +40,49 @@ struct BrowserLocator: Codable, Sendable {
     let index: UInt32?
 }
 
+enum BrowserZoom: Codable, Sendable {
+    case `in`, out, reset, set(factor: Double)
+    private enum CodingKeys: String, CodingKey { case kind, factor }
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .kind) {
+        case "in": self = .in
+        case "out": self = .out
+        case "reset": self = .reset
+        case "set": self = .set(factor: try c.decode(Double.self, forKey: .factor))
+        default: throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unsupported browser zoom")
+        }
+    }
+    func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .in: try c.encode("in", forKey: .kind)
+        case .out: try c.encode("out", forKey: .kind)
+        case .reset: try c.encode("reset", forKey: .kind)
+        case .set(let factor): try c.encode("set", forKey: .kind); try c.encode(factor, forKey: .factor)
+        }
+    }
+}
+
 enum BrowserAction: Codable, Sendable {
     case back(snapshotAfter: Bool)
     case forward(snapshotAfter: Bool)
     case reload(snapshotAfter: Bool)
+    case zoom(operation: BrowserZoom)
     case eval(script: String)
     case snapshot(options: BrowserSnapshotOptions)
     case get(kind: String, selector: String?, attribute: String?, property: String?)
     case find(locator: BrowserLocator)
     case wait(selector: String, state: String)
 
-    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state }
+    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .action) {
         case "back": self = .back(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "forward": self = .forward(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "reload": self = .reload(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
+        case "zoom": self = .zoom(operation: try c.decode(BrowserZoom.self, forKey: .operation))
         case "eval": self = .eval(script: try c.decode(String.self, forKey: .script))
         case "snapshot": self = .snapshot(options: try c.decodeIfPresent(BrowserSnapshotOptions.self, forKey: .options) ?? .init())
         case "find": self = .find(locator: try c.decode(BrowserLocator.self, forKey: .locator))
@@ -73,6 +99,7 @@ enum BrowserAction: Codable, Sendable {
             switch self { case .back: name = "back"; case .forward: name = "forward"; default: name = "reload" }
             try c.encode(name, forKey: .action); try c.encode(after, forKey: .snapshotAfter)
         case .eval(let script): try c.encode("eval", forKey: .action); try c.encode(script, forKey: .script)
+        case .zoom(let operation): try c.encode("zoom", forKey: .action); try c.encode(operation, forKey: .operation)
         case .snapshot(let options): try c.encode("snapshot", forKey: .action); try c.encode(options, forKey: .options)
         case .find(let locator): try c.encode("find", forKey: .action); try c.encode(locator, forKey: .locator)
         case .wait(let selector, let state):
@@ -84,7 +111,7 @@ enum BrowserAction: Codable, Sendable {
     }
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
-    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval: true; default: false } }
+    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom: true; default: false } }
     var isWait: Bool { if case .wait = self { return true }; return false }
 }
 

@@ -1,6 +1,109 @@
 use serde_json::{Value, json};
 use zmux_workspace_core::{Action, Effect, SessionId, WorkspaceStore};
 
+#[test]
+fn workspace_move_preserves_live_identity_and_respects_both_windows_selection() {
+    use zmux_workspace_core::WindowId;
+    for selected_source in [false, true] {
+        for empty_destination in [false, true] {
+            for focus in [false, true] {
+                for destination_focused in [false, true] {
+                    let mut store = WorkspaceStore::default();
+                    for name in ["first", "moving", "next"] {
+                        store
+                            .apply(Action::CreateWorkspace { name: name.into() })
+                            .unwrap();
+                    }
+                    let source = store.snapshot().windows[0].id;
+                    let moving = store.snapshot().workspaces[1].clone();
+                    let selected = store.snapshot().workspaces[usize::from(selected_source)].id;
+                    store
+                        .apply(Action::SelectWorkspace {
+                            workspace_id: selected,
+                        })
+                        .unwrap();
+                    store.apply(Action::CreateWindow { focus: false }).unwrap();
+                    let destination = store.snapshot().windows[1].id;
+                    let destination_selection = store.snapshot().windows[1].selected_workspace;
+                    if empty_destination {
+                        store
+                            .apply(Action::CloseWorkspace {
+                                workspace_id: destination_selection.unwrap(),
+                            })
+                            .unwrap();
+                    }
+                    if destination_focused {
+                        store
+                            .apply(Action::FocusWindow {
+                                window_id: destination,
+                            })
+                            .unwrap();
+                    }
+                    let before = store.snapshot();
+                    let next_id = store.next_identifier();
+                    let mut wire = json!({
+                        "action":"move_workspace_to_window", "workspace_id":moving.id,
+                        "destination_window_id":destination,
+                    });
+                    if focus {
+                        wire["focus"] = json!(true);
+                    }
+                    let action: Action =
+                        serde_json::from_value(wire).expect("shared move action must be available");
+                    assert!(store.apply(action).unwrap().effects.is_empty());
+                    let after = store.snapshot();
+                    assert_eq!(store.next_identifier(), next_id);
+                    assert_eq!(
+                        after.workspaces, before.workspaces,
+                        "move must not recreate any live object"
+                    );
+                    assert_eq!(
+                        after.windows[0].workspace_ids,
+                        vec![before.workspaces[0].id, before.workspaces[2].id]
+                    );
+                    assert_eq!(
+                        after.windows[0].selected_workspace,
+                        Some(if selected_source {
+                            before.workspaces[2].id
+                        } else {
+                            selected
+                        })
+                    );
+                    assert_eq!(after.windows[1].workspace_ids.last(), Some(&moving.id));
+                    assert_eq!(
+                        after.windows[1].selected_workspace,
+                        if focus || empty_destination {
+                            Some(moving.id)
+                        } else {
+                            destination_selection
+                        }
+                    );
+                    assert_eq!(
+                        after.focused_window,
+                        if focus {
+                            Some(destination)
+                        } else {
+                            before.focused_window
+                        }
+                    );
+                    let focused = after
+                        .windows
+                        .iter()
+                        .find(|w| Some(w.id) == after.focused_window)
+                        .unwrap();
+                    assert_eq!(after.focused_workspace, focused.selected_workspace);
+                    let valid = after.clone();
+                    let invalid: Action = serde_json::from_value(json!({"action":"move_workspace_to_window","workspace_id":moving.id,"destination_window_id":WindowId(u64::MAX),"focus":false})).unwrap();
+                    assert!(store.apply(invalid).is_err());
+                    assert_eq!(store.snapshot(), valid);
+                    assert_eq!(store.next_identifier(), next_id);
+                    assert!(after.windows.iter().any(|w| w.id == source));
+                }
+            }
+        }
+    }
+}
+
 fn window(store: &WorkspaceStore) -> Value {
     let snapshot = serde_json::to_value(store.snapshot()).unwrap();
     let windows = snapshot["windows"]

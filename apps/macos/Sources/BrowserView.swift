@@ -47,7 +47,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         var timer: Task<Void, Never>?
         var waitTask: Task<Void, Never>?
         var isolatedEval = false
-        var userScriptStarted = false
+        var mutationStarted = false
     }
     private var operations: [UInt64: PendingAutomation] = [:]
     // A timed-out page promise cannot be cancelled by WebKit. Keep its actual
@@ -119,8 +119,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             currentNavigation = webView.loadHTMLString("<!doctype html><title>New tab · zmux</title><style>body{margin:0;background:#1c1c1e;color:#ddd;font:14px -apple-system;display:grid;place-items:center;min-height:100vh}.hint{text-align:center}h1{font-size:26px;font-weight:500;letter-spacing:-1px}p{color:#888}</style><div class='hint'><h1>zmux</h1><p>Enter a URL above to get started.</p></div>", baseURL: nil)
         } else { currentNavigation = webView.load(URLRequest(url: url)) }
     }
-    func adjustZoom(_ delta: Double) { webView.pageZoom = min(3, max(0.5, webView.pageZoom + delta)) }
-    func resetZoom() { webView.pageZoom = 1 }
+    func requestZoom(_ operation: BrowserZoom) {
+        guard !closed else { return }
+        onAutomationAction?(.zoom(operation: operation))
+    }
     func findInPage() {
         let alert = NSAlert()
         alert.messageText = "Find in page"
@@ -239,13 +241,15 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         let timer = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(Int64(request.timeoutMs))) } catch { return }
             guard let self, let pending = self.operations[id] else { return }
-            self.failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: pending.request.action.isNavigation || pending.userScriptStarted)
+            self.failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: pending.request.action.isNavigation || pending.mutationStarted)
         }
         operations[id]?.timer = timer
         if request.action.isNavigation {
             startNavigation(id)
         } else if processTerminated {
             failOperation(id, code: "web_process_terminated", message: "Web content process stopped; reload to recover", outcomeUnknown: false)
+        } else if case .zoom(let operation) = request.action {
+            executeZoom(id, operation: operation)
         } else if webView.isLoading {
             if request.action.isWait { scheduleWait(id) }
             else { failOperation(id, code: "document_loading", message: "Document is loading; wait for navigation completion", outcomeUnknown: false) }
@@ -254,6 +258,23 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         } else {
             runJavaScript(id, action: request.action)
         }
+    }
+    private func executeZoom(_ id: UInt64, operation: BrowserZoom) {
+        guard let pending = operations[id], beforeDeadline(id, pending) else { return }
+        let candidate: Double
+        switch operation {
+        case .in: candidate = webView.pageZoom + 0.1
+        case .out: candidate = webView.pageZoom - 0.1
+        case .reset: candidate = 1
+        case .set(let value): candidate = value
+        }
+        guard candidate.isFinite else {
+            failOperation(id, code: "invalid_argument", message: "Browser zoom factor must be finite", outcomeUnknown: false)
+            return
+        }
+        operations[id]?.mutationStarted = true
+        webView.pageZoom = min(5, max(0.25, candidate))
+        completeOperation(id, value: .object(["kind": .string("page_zoom"), "value": .number(webView.pageZoom)]))
     }
     private func startNavigation(_ id: UInt64) {
         guard let operation = operations[id] else { return }
@@ -326,6 +347,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
                 fields["content_world_note"] = .string("Page CSP blocked dynamic evaluation. The script ran once in an isolated content world, which shares the DOM but cannot access page JavaScript globals.")
             }
         }
+        else if case .zoom = operation.request.action { fields["content_world"] = .string("native") }
         else { fields["content_world"] = .string("isolated") }
         let result = BrowserJSON.object(fields)
         do {
@@ -392,7 +414,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         let world: WKContentWorld
         if case .eval = action {
             world = operation.isolatedEval ? BrowserAutomationScript.isolatedWorld : .page
-            operations[id]?.userScriptStarted = true
+            operations[id]?.mutationStarted = true
         } else { world = BrowserAutomationScript.isolatedWorld }
         javaScriptInFlight.insert(id)
         webView.callAsyncJavaScript(BrowserAutomationScript.source, arguments: ["payload": payload], in: nil, in: world) { [weak self] result in
@@ -443,7 +465,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     }
     private func beforeDeadline(_ id: UInt64, _ operation: PendingAutomation) -> Bool {
         guard ContinuousClock().now < operation.deadline else {
-            failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: operation.request.action.isNavigation || operation.userScriptStarted)
+            failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: operation.request.action.isNavigation || operation.mutationStarted)
             return false
         }
         return true

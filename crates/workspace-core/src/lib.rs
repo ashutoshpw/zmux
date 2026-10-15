@@ -209,6 +209,14 @@ pub enum Action {
     CloseWindow {
         window_id: WindowId,
     },
+    MoveWorkspaceToWindow {
+        workspace_id: WorkspaceId,
+        destination_window_id: WindowId,
+        #[serde(default)]
+        index: Option<usize>,
+        #[serde(default)]
+        focus: bool,
+    },
     CreateWorkspaceInWindow {
         window_id: WindowId,
         name: String,
@@ -426,9 +434,10 @@ impl WorkspaceStore {
             action,
             Action::NavigateFocus { .. } | Action::NavigateFocusInWindow { .. }
         );
+        let record_current = !matches!(action, Action::MoveWorkspaceToWindow { focus: false, .. });
         let result = candidate.apply_inner(action)?;
         candidate.check_window_layout()?;
-        candidate.record_focus(prior, prior_window, is_history_navigation);
+        candidate.record_focus(prior, prior_window, is_history_navigation, record_current);
         *self = candidate;
         Ok(result)
     }
@@ -444,6 +453,14 @@ impl WorkspaceStore {
             Action::CreateWindow { focus } => self.create_window(focus, &mut effects)?,
             Action::FocusWindow { window_id } => self.focus_window(window_id)?,
             Action::CloseWindow { window_id } => self.close_window(window_id, &mut effects)?,
+            Action::MoveWorkspaceToWindow {
+                workspace_id,
+                destination_window_id,
+                index,
+                focus,
+            } => {
+                self.move_workspace_to_window(workspace_id, destination_window_id, index, focus)?;
+            }
             Action::CreateWorkspaceInWindow {
                 window_id,
                 name,

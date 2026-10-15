@@ -106,6 +106,104 @@ fn ready(snapshot: &Snapshot) -> bool {
 }
 
 #[test]
+fn moved_membership_and_empty_source_persist_without_replacing_live_sessions() {
+    use zmux_desktop_runtime::windows::{
+        NativeWindowEvent, WindowAction, WindowHostToken, WindowRequest,
+    };
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    let initial = wait(&desktop, ready);
+    let moving = initial.model.workspaces[0].clone();
+    send(
+        &desktop,
+        1,
+        Command::Windows {
+            request: WindowRequest {
+                scope: Default::default(),
+                caller: Default::default(),
+                expected_model_revision: None,
+                action: WindowAction::New { focus: false },
+            },
+        },
+    );
+    let two = wait(&desktop, |s| {
+        s.last_request_id == 1
+            && s.control_frames.len() == 2
+            && s.control_frames.iter().all(|f| f.snapshot.is_some())
+    });
+    for request in &two.window_requests {
+        desktop
+            .native_window_event(NativeWindowEvent::Complete {
+                token: WindowHostToken {
+                    epoch: request.epoch,
+                    identity_namespace: request.identity_namespace,
+                    window_id: request.window_id,
+                    host_id: uuid::Uuid::new_v4(),
+                },
+                operation_id: request.operation_id,
+            })
+            .unwrap();
+    }
+    send(
+        &desktop,
+        2,
+        Command::Action {
+            action: Action::MoveWorkspaceToWindow {
+                workspace_id: moving.id,
+                destination_window_id: two.model.windows[1].id,
+                index: None,
+                focus: false,
+            },
+        },
+    );
+    let moved = wait(&desktop, |s| s.last_request_id == 2);
+    assert!(moved.model.windows[0].workspace_ids.is_empty());
+    assert_eq!(
+        moved
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect::<Vec<_>>(),
+        two.control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect::<Vec<_>>()
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let document: zmux_workspace_core::SessionDocument =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    assert_eq!(
+        document.window_layout.as_ref().unwrap().windows,
+        moved.model.windows
+    );
+    let reopened = directory.desktop();
+    let restored = wait(&reopened, ready);
+    assert_eq!(restored.model.windows, moved.model.windows);
+    assert_eq!(restored.model.focused_window, moved.model.focused_window);
+    assert_eq!(restored.model.focused_workspace, None);
+    assert_eq!(
+        restored.model.identity_namespace,
+        moved.model.identity_namespace
+    );
+    let workspace = restored
+        .model
+        .workspaces
+        .iter()
+        .find(|w| w.id == moving.id)
+        .unwrap();
+    assert_eq!(workspace.root.panes()[0].id, moving.root.panes()[0].id);
+    assert_eq!(
+        workspace.root.panes()[0].selected_surface,
+        moving.root.panes()[0].selected_surface
+    );
+    assert_ne!(
+        workspace.root.panes()[0].session_id(),
+        moving.root.panes()[0].session_id()
+    );
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
 fn empty_focused_window_roundtrip_and_last_close_save_retains_the_terminal_owner() {
     use zmux_desktop_runtime::windows::{NativeWindowEvent, WindowAction, WindowRequest};
     use zmux_workspace_core::targets::TargetScope;

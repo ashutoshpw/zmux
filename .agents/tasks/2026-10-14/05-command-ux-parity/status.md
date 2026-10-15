@@ -5,6 +5,18 @@
 
 ## Active implementation
 
+- Integrated workspace moves, corrected browser zoom and bounded native lifecycle
+  diagnostics pass fresh `scripts/check`: 255 tests plus strict Clippy and C ABI.
+  CLI moves default to no focus; native geometry follows workspace UUIDs.
+  Zoom accepts finite factors and clamps to0.25–5. Same-window move semantics,
+  configured-default zoom reset and exact-source native execution remain open.
+- Hosted `16cf61a`: Foundation passes Linux/macOS; native universal build passes
+  but packaged window close times out150s with empty logs. New phase diagnostics
+  are prepared. Isolated PTY passes Linux, fails Darwin cleanup after reply/flood
+  success; direct-child cleanup repair passes independent focused Linux checks.
+  Zellij's real client-exit repair is being checked independently; an unrelated
+  credential fixture rejection/send race is now reproduced and being repaired.
+
 - Checkpoint `16cf61a` pushed: native lifecycle startup routing, process-group
   ownership cleanup, isolated kernel PTY acceptance and authenticated Zellij
   rejection fixture. Native `38784161310`, Foundation `38784161346`, and PTY
