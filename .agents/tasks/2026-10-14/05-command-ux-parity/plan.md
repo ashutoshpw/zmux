@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [N01a desktop notifications](references/n01-desktop-notifications.md) — native delivery ownership, exact actions and permission acceptance gates.
 - [B02a browser automation](references/b02-browser-automation.md) — asynchronous shared WebKit bridge, lifecycle fencing, owner assignments and acceptance.
 - [S01 session persistence](references/s01-session-persistence.md) — durable topology, transactional restore, identity reservations and remaining session gates.
 - [Local cloud](references/local-cloud.md) — Docker service, tunnel target, configuration isolation and verification limits.

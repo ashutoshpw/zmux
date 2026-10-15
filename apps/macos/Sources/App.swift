@@ -24,6 +24,21 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private(set) var snapshot: DesktopSnapshot?
 
     private let bridge = NativeBridge()
+    private lazy var notificationDelivery = NotificationDelivery(
+        sendEvent: { [weak self] event in
+            guard let self else { throw BridgeFailure(message: "Desktop is closed") }
+            try await self.bridge.notificationEvent(event)
+        },
+        performAction: { [weak self] action in
+            guard let self else { throw BridgeFailure(message: "Desktop is closed") }
+            return try await self.bridge.notificationAction(action)
+        },
+        activate: { [weak self] in
+            self?.window.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+        },
+        reportError: { [weak self] message in self?.showError(message) }
+    )
     private lazy var imagePastes = ClipboardImagePastes(bridge: bridge, reportError: { [weak self] message in
         self?.showError(message)
     }, statusChanged: { [weak self] in
@@ -181,6 +196,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         pollingTask?.cancel()
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
+        notificationDelivery.stop()
         await imagePastes.stopAccepting()
         try await bridge.close()
         await imagePastes.desktopClosed()
@@ -339,7 +355,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         if let terminal = focusedTerminal { window.makeFirstResponder(terminal) }
     }
 
-    func appActive(_ active: Bool) { enqueue(.attention("app_active", nil, nil, active && window.isKeyWindow)) }
+    func appActive(_ active: Bool) {
+        enqueue(.attention("app_active", nil, nil, active && window.isKeyWindow))
+        if active { notificationDelivery.refreshPermission() }
+    }
     func windowDidBecomeKey(_ notification: Notification) { appActive(NSApp.isActive) }
     func windowDidResignKey(_ notification: Notification) { appActive(false) }
 
@@ -370,6 +389,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
             ("Toggle Sidebar", #selector(toggleSidebar), "b"),
             ("Notifications", #selector(showNotifications), ""),
+            ("Enable Desktop Notifications…", #selector(enableDesktopNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),
             ("Split Down", #selector(splitDown), "D"),
             ("Split Left", #selector(splitLeft), ""),
@@ -494,6 +514,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         updateWorkspaceRows(snapshot)
         updateHeader(snapshot)
         updateNotifications(snapshot)
+        notificationDelivery.update(snapshot.nativeNotifications)
         updateTerminalLayoutIfNeeded(snapshot)
         let liveSplits = Set(snapshot.model.workspaces.flatMap { $0.root.splitKeys })
         splitFractions = splitFractions.filter { liveSplits.contains($0.key) }
@@ -984,18 +1005,22 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
         notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
         guard let list = notificationList else { return }
-        let key = snapshot.notifications.map { "\($0.id):\($0.read)" }.joined(separator: ",") + ":\(snapshot.model.revision):\(snapshot.notificationsDropped)"
+        let key = snapshot.notifications.map { "\($0.id):\($0.read)" }.joined(separator: ",") + ":\(snapshot.model.revision):\(snapshot.notificationsDropped):\(snapshot.nativeNotifications.epoch)"
         guard key != notificationKey else { return }
         notificationKey = key
         list.arrangedSubviews.forEach { list.removeArrangedSubview($0); $0.removeFromSuperview() }
-        let live = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.map { $0.id })
+        let live = snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
         if snapshot.notifications.isEmpty {
             let label = NSTextField(wrappingLabelWithString: "No notifications. Terminal bells and explicit notifications appear here.")
             label.textColor = ZmuxPalette.subdued; list.addArrangedSubview(label)
             label.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
         }
         for item in snapshot.notifications.reversed() {
-            let row = NotificationRowView(item: item, available: live.contains(item.surfaceId), owner: self)
+            let available = item.target.map { target in
+                target.epoch == snapshot.nativeNotifications.epoch && target.identityNamespace == snapshot.model.identityNamespace &&
+                    live.contains { $0.id == target.surfaceId && $0.sessionId == target.sessionId }
+            } ?? false
+            let row = NotificationRowView(item: item, available: available, owner: self)
             list.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
         }
@@ -1005,9 +1030,13 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
     }
     func openNotification(_ id: UInt64) {
-        enqueue(.attention("open", id, nil, nil))
-        window.makeKeyAndOrderFront(nil)
+        guard let target = snapshot?.notifications.first(where: { $0.id == id })?.target else {
+            showError("Notification target is no longer available")
+            return
+        }
+        notificationDelivery.openInbox(target)
     }
+    @objc private func enableDesktopNotifications() { notificationDelivery.enable() }
     func readNotification(_ id: UInt64) { enqueue(.attention("read", id, nil, nil)) }
     func dismissNotification(_ id: UInt64) { enqueue(.attention("dismiss", id, nil, nil)) }
     @objc private func clearNotifications() {
@@ -1299,6 +1328,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
         let evidence: [String: Any] = [
             "success": true,
+            "notification_permission_ordering": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
@@ -1584,6 +1614,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
         Task {
             do {
+                if CommandLine.arguments.contains("--smoke-test") {
+                    // This isolated context must release its control socket before the
+                    // normal app context starts; never create two owners for one path.
+                    try await NotificationPermissionSmoke.validate()
+                }
                 try await controller.start(persistent: !CommandLine.arguments.contains("--smoke-test"))
                 if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])

@@ -112,6 +112,13 @@ static void native_transfer_receipts_are_session_bound(void) {
     const uint8_t bad_event[] = "{}";
     assert(zmux_desktop_browser_event(desktop.value, bad_event, 300001) == ZMUX_INVALID_ARGUMENT);
     assert(zmux_desktop_browser_event(desktop.value, bad_event, sizeof bad_event - 1) == ZMUX_INVALID_ARGUMENT);
+    /* Foreign callback bytes must be rejected before parsing or executor admission. */
+    assert(zmux_desktop_notification_event(desktop.value, NULL, 1) == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_notification_event(desktop.value, bad_event, 16385) == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_notification_event(desktop.value, bad_event, sizeof bad_event - 1) == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_notification_action(desktop.value, NULL, 1).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_notification_action(desktop.value, bad_event, 16385).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_notification_action(desktop.value, bad_event, sizeof bad_event - 1).status == ZMUX_INVALID_ARGUMENT);
     uint64_t surface = 0;
     uint64_t session = 0;
     for (int attempt = 0; attempt < 500; attempt++) {

@@ -79,6 +79,7 @@ struct Model: Decodable, Sendable { let identityNamespace: UUID; let modelVersio
 struct AttentionNotification: Decodable, Sendable {
     let id: UInt64; let surfaceId: UInt64; let title: String; let body: String; let source: String
     let timestampMs: UInt64; let read: Bool
+    let target: NotificationTarget?
 }
 struct SessionPersistence: Decodable, Sendable {
     let enabled: Bool
@@ -89,6 +90,7 @@ struct SessionPersistence: Decodable, Sendable {
     let error: String?
 }
 struct DesktopSnapshot: Decodable, Sendable {
+    let nativeNotifications: NativeNotificationSnapshot
     let browserEpoch: UUID
     let browserPendingRequests: Int
     let persistence: SessionPersistence?

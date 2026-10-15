@@ -189,3 +189,14 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   `http://127.0.0.1:3530`. VM, relay and email remain unavailable.
 - N01a native desktop notification ownership, permissions and exact-token actions are
   being implemented. In-app inbox behavior already exists; OS banners are not yet proven.
+
+## N01a native attention integration
+
+- Browser followup at `50309f9` passed Foundation and real macOS universal/packaged
+  checks, including CSP/no-focus/pending-eval journeys. B02 advanced scope remains open.
+- Native attention now captures epoch/namespace/session, routes confirmed exact actions,
+  reconciles OS desires, and keeps denied permission separate from inbox access.
+- Reviews repaired dropped restrictive permission observations and unbounded inbox
+  action tasks. Native permission smoke runs its isolated runtime before the main app
+  context, avoiding two owners of the same socket. OS banners remain a separate gate.
+- Broader N01 CLI metadata, scoped operations and reply are not yet closed.

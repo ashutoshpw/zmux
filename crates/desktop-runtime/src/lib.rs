@@ -8,7 +8,10 @@ pub mod persistence;
 pub mod sessions;
 pub mod targets;
 pub mod transfers;
-use attention::{Attention, AttentionCommand, Notification};
+use attention::{
+    Attention, AttentionCommand, NativeAttentionAction, NativeNotificationEvent,
+    NativeNotificationSnapshot, Notification, NotificationContent,
+};
 use browser::{
     BrowserDispatchBatch, BrowserHostEvent, BrowserReceipt, BrowserRequest, BrowserRuntime,
 };
@@ -43,6 +46,7 @@ pub const MAX_BROWSERS: usize = 4;
 const MAX_COMMANDS: usize = 32;
 const UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 const TRANSFER_RECEIPT_TIMEOUT: Duration = Duration::from_secs(2);
+const NATIVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct Shell {
@@ -86,6 +90,10 @@ pub enum Command {
     },
     #[serde(skip)]
     BrowserDrain,
+    #[serde(skip)]
+    NativeAttention {
+        action: NativeAttentionAction,
+    },
     Session {
         action: sessions::SessionCommand,
     },
@@ -130,6 +138,8 @@ pub struct Request {
 #[derive(Debug, Error)]
 pub enum DesktopError {
     #[error("{0}")]
+    Attention(#[from] attention::AttentionError),
+    #[error("{0}")]
     Browser(#[from] browser::BrowserError),
     #[error("{0}")]
     Policy(#[from] control_policy::PolicyError),
@@ -165,6 +175,7 @@ pub struct Snapshot {
     pub frames: Vec<Frame>,
     pub notifications: Vec<Notification>,
     pub notifications_dropped: u64,
+    pub native_notifications: NativeNotificationSnapshot,
     pub uploads: Vec<TransferSnapshot>,
     pub persistence: sessions::PersistenceSnapshot,
     pub browser_epoch: uuid::Uuid,
@@ -220,6 +231,13 @@ pub struct TransferExecutionError {
     pub outcome_unknown: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub struct NativeNotificationExecution {
+    pub revision: u64,
+    /// Native presentation may activate its window only after confirmed Open.
+    pub focused_surface_id: Option<SurfaceId>,
+}
+
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
         Self::start(shell, None)
@@ -236,6 +254,7 @@ impl Desktop {
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
+        let attention = Attention::default();
         let persistence_snapshot = persistence
             .as_ref()
             .map(|p| p.snapshot.clone())
@@ -248,6 +267,7 @@ impl Desktop {
                 frames: Vec::new(),
                 notifications: Vec::new(),
                 notifications_dropped: 0,
+                native_notifications: attention.native_snapshot(&model.snapshot()),
                 uploads: Vec::new(),
                 persistence: persistence_snapshot,
                 browser_epoch: browser.epoch(),
@@ -275,7 +295,7 @@ impl Desktop {
                     persistence,
                     restoring: None,
                     session_operation_id: None,
-                    attention: Attention::default(),
+                    attention,
                     transfers: Vec::new(),
                     next_transfer_id: 1,
                     app_active: false,
@@ -404,7 +424,7 @@ impl Desktop {
         &self,
         timeout: Duration,
     ) -> Result<BrowserDispatchBatch, DesktopError> {
-        let execution = self.execute_native_browser(Command::BrowserDrain, timeout)?;
+        let execution = self.execute_native(Command::BrowserDrain, timeout)?;
         execution.result?;
         execution.browser_dispatch.ok_or_else(|| {
             DesktopError::Failure("native browser dispatch acknowledgement missing".into())
@@ -413,10 +433,48 @@ impl Desktop {
     /// Trusted host lifecycle/completion path, distinct from socket commands.
     /// This waits for executor acknowledgement and must run off the UI thread.
     pub fn browser_host_event(&self, event: BrowserHostEvent) -> Result<(), DesktopError> {
-        self.execute_native_browser(Command::BrowserHost { event }, Duration::from_secs(2))?
+        self.execute_native(Command::BrowserHost { event }, NATIVE_COMMAND_TIMEOUT)?
             .result
     }
-    fn execute_native_browser(
+    /// Trusted notification permission/delivery observations, excluded from JSON commands.
+    /// Waits for confirmed executor application; call off the native UI thread.
+    pub fn native_notification_event(
+        &self,
+        event: NativeNotificationEvent,
+    ) -> Result<(), DesktopError> {
+        self.execute_native(
+            Command::NativeAttention {
+                action: NativeAttentionAction::Event { event },
+            },
+            NATIVE_COMMAND_TIMEOUT,
+        )?
+        .result
+    }
+    /// Confirm exact notification ownership and selection/read before native activation.
+    /// A timeout has an unknown outcome and must not trigger activation or an automatic retry.
+    pub fn native_notification_action(
+        &self,
+        action: NativeAttentionAction,
+    ) -> Result<NativeNotificationExecution, DesktopError> {
+        let focused_surface_id = match &action {
+            NativeAttentionAction::Open { target }
+            | NativeAttentionAction::OpenInbox { target } => Some(target.surface_id),
+            NativeAttentionAction::Dismiss { .. } => None,
+            NativeAttentionAction::Event { .. } => {
+                return Err(DesktopError::Failure(
+                    "use native_notification_event for notification observations".into(),
+                ));
+            }
+        };
+        let execution =
+            self.execute_native(Command::NativeAttention { action }, NATIVE_COMMAND_TIMEOUT)?;
+        execution.result?;
+        Ok(NativeNotificationExecution {
+            revision: execution.snapshot.revision,
+            focused_surface_id,
+        })
+    }
+    fn execute_native(
         &self,
         payload: Command,
         timeout: Duration,
@@ -629,14 +687,18 @@ impl Worker {
                     .map(|s| s.id)
                 {
                     let read = self.surface_is_visible(surface_id);
-                    if let Err(error) = self.attention.notify(
+                    if let Err(error) = self.attention.notify_owned(
+                        &model,
                         surface_id,
                         &notice.source,
-                        &notice.title,
-                        &notice.body,
+                        &NotificationContent {
+                            title: notice.title.clone(),
+                            body: notice.body.clone(),
+                            ..Default::default()
+                        },
                         read,
                     ) {
-                        self.last_error = Some(error);
+                        self.last_error = Some(error.to_string());
                     }
                     dirty = true;
                 }
@@ -645,6 +707,7 @@ impl Worker {
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
             dirty |= self.poll_sessions();
+            dirty |= self.attention.reconcile(&self.model.snapshot());
             dirty |= self.poll_transfers();
             self.retired.retain_mut(|session| {
                 if !session.is_finished() {
@@ -661,6 +724,8 @@ impl Worker {
         }
         self.browser
             .reset("desktop shutdown cancelled browser operations");
+        self.attention
+            .reset_native("desktop shutdown cancelled native notifications");
         let deadline = Instant::now() + Duration::from_secs(3);
         self.shutdown_persistence(deadline);
         self.cancel_transfers();
@@ -814,6 +879,7 @@ impl Worker {
                     | Command::Attention { .. }
                     | Command::BrowserHost { .. }
                     | Command::BrowserDrain
+                    | Command::NativeAttention { .. }
             )
         {
             return Err(DesktopError::Failure(
@@ -840,12 +906,15 @@ impl Worker {
                 );
                 Ok(())
             }
+            Command::NativeAttention { action } => self.native_attention_action(action),
             Command::Session { action } => {
                 let restore = matches!(&action, sessions::SessionCommand::Restore { .. });
                 self.session_command(action)?;
                 if restore {
                     self.browser
                         .reset("session restore replaced native browser hosts");
+                    self.attention
+                        .reset_native("session restore replaced notification targets");
                 }
                 Ok(())
             }
@@ -958,11 +1027,16 @@ impl Worker {
     fn acknowledge_focused(&mut self) {
         // Capture existing IDs at the serialized mutation boundary. Future arrivals
         // are evaluated independently; hidden surfaces keep their unread state.
+        let model = self.model.snapshot();
         let ids: Vec<_> = self
             .attention
             .items
             .iter()
-            .filter(|n| !n.read && self.surface_is_visible(n.surface_id))
+            .filter(|n| {
+                !n.read
+                    && self.surface_is_visible(n.surface_id)
+                    && self.attention.open_target(&model, n.id).is_ok()
+            })
             .map(|n| n.id)
             .collect();
         for id in ids {
@@ -1004,13 +1078,19 @@ impl Worker {
                     {
                         return Err(format!("surface {} does not exist", surface_id.0));
                     }
-                    self.attention.notify(
-                        surface_id,
-                        "cli",
-                        &title,
-                        &body,
-                        self.surface_is_visible(surface_id),
-                    )?;
+                    self.attention
+                        .notify_owned(
+                            &state,
+                            surface_id,
+                            "cli",
+                            &NotificationContent {
+                                title,
+                                body,
+                                ..Default::default()
+                            },
+                            self.surface_is_visible(surface_id),
+                        )
+                        .map_err(|error| error.to_string())?;
                 }
                 AttentionCommand::Read { id } => self.attention.read(id)?,
                 AttentionCommand::Dismiss { id } => self.attention.dismiss(id)?,
@@ -1022,7 +1102,10 @@ impl Worker {
                     }
                 }
                 AttentionCommand::Open { id } => {
-                    let surface_id = self.attention.find(id)?.surface_id;
+                    let surface_id = self
+                        .attention
+                        .open_target(&self.model.snapshot(), id)
+                        .map_err(|error| error.to_string())?;
                     self.action(Action::SelectSurface { surface_id })
                         .map_err(|e| e.to_string())?;
                     self.attention.read(id)?;
@@ -1031,6 +1114,31 @@ impl Worker {
             Ok(())
         })();
         result.map_err(DesktopError::Failure)
+    }
+    fn native_attention_action(
+        &mut self,
+        action: NativeAttentionAction,
+    ) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        self.attention.reconcile(&model);
+        match action {
+            NativeAttentionAction::Event { event } => self.attention.native_event(&model, event)?,
+            NativeAttentionAction::Open { target } => {
+                let surface_id = self.attention.native_open_target(&model, &target)?;
+                self.action(Action::SelectSurface { surface_id })?;
+                self.attention.native_dismiss(&target)?;
+            }
+            NativeAttentionAction::OpenInbox { target } => {
+                let surface_id = self.attention.native_inbox_target(&model, &target)?;
+                self.action(Action::SelectSurface { surface_id })?;
+                self.attention.native_dismiss(&target)?;
+            }
+            NativeAttentionAction::Dismiss { target } => {
+                self.attention.native_open_target(&model, &target)?;
+                self.attention.native_dismiss(&target)?;
+            }
+        }
+        Ok(())
     }
     pub(crate) fn model_with_session_metadata(&self) -> WorkspaceStore {
         let mut candidate = self.model.clone();
@@ -1266,6 +1374,7 @@ impl Worker {
             .reconcile(&self.model.snapshot(), Instant::now());
         self.revision += 1;
         let model = self.model.snapshot();
+        self.attention.reconcile(&model);
         let control_frames: Vec<_> = model
             .workspaces
             .iter()
@@ -1302,12 +1411,14 @@ impl Worker {
             .filter(|frame| focused_sessions.contains(&frame.session_id))
             .cloned()
             .collect();
+        let native_notifications = self.attention.native_snapshot(&model);
         let published = Arc::new(Snapshot {
             revision: self.revision,
             model,
             frames,
             notifications: self.attention.items.clone(),
             notifications_dropped: self.attention.dropped,
+            native_notifications,
             uploads: self.transfer_snapshots(),
             persistence: self
                 .persistence

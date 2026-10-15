@@ -191,6 +191,37 @@ actor NativeBridge {
             return
         }
     }
+    func notificationEvent(_ event: NativeNotificationEvent) async throws {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(event)
+        guard data.count <= 16_384 else { throw BridgeFailure(message: "Notification event exceeds native transport limit") }
+        let desktop = handle
+        let status = await Task.detached(priority: .userInitiated) {
+            data.withUnsafeBytes { bytes in
+                zmux_desktop_notification_event(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+        }.value
+        guard status == 0 else { throw Self.failure(status) }
+    }
+    func notificationAction(_ action: NativeAttentionAction) async throws -> NativeNotificationExecution {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(action)
+        guard data.count <= 16_384 else { throw BridgeFailure(message: "Notification action exceeds native transport limit") }
+        let desktop = handle
+        return try await Task.detached(priority: .userInitiated) {
+            let result = data.withUnsafeBytes { bytes in
+                zmux_desktop_notification_action(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else { throw Self.failure(result.status) }
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try decoder.decode(NativeNotificationExecution.self, from: Self.consume(result.value))
+        }.value
+    }
     func browserAction(surface: UInt64, action: BrowserAction) async throws {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase

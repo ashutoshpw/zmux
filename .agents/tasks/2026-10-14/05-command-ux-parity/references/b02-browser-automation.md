@@ -91,3 +91,12 @@ implemented. DOMRect and Promise results are normalized without copying upstream
 - Parent full checks and fresh narrow review pass. Hosted validation remains pending.
   The shared socket transport still has per-I/O timeout semantics; trickled replies
   require a separate absolute-deadline repair before claiming a hard wall-clock bound.
+
+## Hosted followup evidence
+
+At `50309f9`, Foundation checks (`38731671194`) pass and macOS development run
+`38731671218` passed universal compilation and packaged browser smoke. This includes
+never-selected viewport reads, CSP isolated fallback and no replay after a CSP-shaped
+user exception, and terminal input while a rooted evaluation remains pending.
+B02 advanced browser commands and full V01 remain open; this artifact is not the
+requested full-parity handoff.
