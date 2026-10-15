@@ -1,5 +1,9 @@
 # Implementation phases and delivery gates
 
+The [audit-driven execution plan](gap-closure-plan.md) and [work packages](closure-work-packages.md)
+now define delivery order and commit slices. This file retains P0–P8 scope; it does not
+require sequential completion of whole phases before managed SSH/transfer work.
+
 This is a full parity program, not a help-text expansion. Every phase ends in a cohesive
 validated commit on main and updated receipts; user-facing phases publish a macOS Actions
 artifact. Keep implementation changes out of this planning task until implementation begins.
@@ -92,7 +96,8 @@ Owner: Rust attention/event state plus native chrome. Depends on P1 identities.
   surface suppression and app-inactive delivery. Acknowledge the exact visible notification
   generation; late arrivals stay unread. Moving tabs preserves unread ownership.
 - Wire notify/list/read/open/dismiss/clear, progress/status/log commands through the same
-  state. Native desktop notifications are optional; denied OS permission must leave the
+  state. Native desktop notification support is required; delivery is user-controlled and
+  denied OS permission must leave the
   in-app inbox fully functional. Sanitize content; notifications never execute commands.
 
 Exit: hidden tab attention lights workspace and inbox; foreground/idle/background cases
@@ -116,11 +121,13 @@ Owner: AppKit WebKit host with bounded Rust command/effect interface. Depends on
   injected scripts/styles, design/focus mode and react-grab behavior through original code.
 - Browser UI basics are P3a; automation/advanced features P3b. P3a is not browser parity.
   Investigate public API feasibility for Inspector console toggling and advanced modes;
-  record unsupported platform constraints as unresolved parity, not silent external-browser
+  match deliberate unsupported outcomes in the pinned baseline; new zmux-only
+  platform constraints remain unresolved parity, not silent external-browser
   fallbacks or falsely successful no-ops. No private WebKit KVC copied from cmux.
 - Untrusted pages cannot access the local command socket or native terminal actions.
   Separate page JS from privileged local automation; validate bridge origin/frame/surface,
-  file access and external URL schemes. Preserve TLS failures; never bypass certificate checks.
+  file access and external URL schemes. Preserve TLS failures. Any explicit trust exception needs consent, scoped policy and
+  revocation; never silently bypass certificate checks.
 
 Exit: native local-fixture browsing/navigation/forms/downloads/profile isolation succeeds;
 all browser leaves have behavioral evidence including cross-origin frame limitations,

@@ -14,6 +14,9 @@ Baseline: zmux `5642b48`; cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
 Implementation started with the shared surface model and native tab lifecycle. Original roadmap and PR #1 scope remain.
 
 ## Approach
+Execute the [gap-closure plan](references/gap-closure-plan.md): 26 packages, each with
+cohesive commit slices and acceptance gates; all 172 audited families have a primary owner.
+Start shared routing/registry/policy and the managed SSH/transfer journey.
 Use shared Rust window/workspace/pane/surface actions with a thin AppKit host and public
 WKWebView APIs. Implement independently under MIT; no copied GPL/BUSL code or assets.
 Track CLI contracts and UI/menu/context/shortcut/palette/gesture behavior in linked ledgers.
@@ -21,6 +24,7 @@ Help-only stubs and command coverage alone do not establish product parity.
 Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## Steps
+- [x] Derive audit-driven work packages, dependency order and full feature-to-package coverage.
 - [x] Review source and establish initial command/UX gap inventory.
 - [x] Complete broader source-family audit and reconcile initial command/shortcut ledgers.
 - [ ] P0: turn audited gaps into executable per-leaf/option contracts, shared registry and measured resource budgets.
@@ -46,6 +50,9 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Gap-closure execution plan](references/gap-closure-plan.md) — milestone order, first batch, integration, artifact gates and external dependencies.
+- [Work packages](references/closure-work-packages.md) — 26 concrete owners, dependencies, commit slices and exit gates.
+- [Closure tracker](references/closure-tracker.json) — all 172 audit families assigned; delivery status and evidence slots.
 - [Whole-product audit](references/full-parity-audit.md) — current source comparison, principal gaps, evidence boundaries and delivery sequence.
 - [CLI/shared contracts](references/audit-cli-contract.md) — grammar, targeting, authentication, output and lifecycle comparison.
 - [Terminal/topology audit](references/audit-terminal-ux.md) / [rows](references/audit-terminal-ux.json) — input, rendering, tabs/windows, restore, gestures and accessibility.

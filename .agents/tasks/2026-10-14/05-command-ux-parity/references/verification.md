@@ -104,3 +104,14 @@ current comparison; original discovery ledger status fields are retained as hist
   explicit quit lifecycle, repaired open-folder routing, and classified every discovered
   top-level candidate. Re-review returned `ship`, with no remaining material coverage,
   accuracy or status findings. Per-option/native/remote/production evidence remains open.
+
+
+## Gap-closure planning receipt — 2026-10-15
+
+- Derived 26 implementation packages and 73 proposed cohesive commit slices from audit
+  `554fd12`. These are planning boundaries, not delivered implementations or time estimates.
+- Validated that all 172 audit families are assigned exactly once to an existing primary
+  package; package IDs are unique, start dependencies form an acyclic graph, and relative
+  plan links resolve. Later integration/signing/deployed gates remain explicit in package exits.
+- `scripts/check` passed: 45 Rust tests, fmt, clippy, dependency notice inventory and C ABI
+  checks. No runtime changes or new native artifact were produced by this planning update.

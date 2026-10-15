@@ -5,6 +5,11 @@
 
 ## Delivered slices
 
+- Audit-driven closure plan prepared: 26 dependency-ordered packages cover all 172
+  audited families, with commit slices, verification/artifact gates and first SSH/transfer
+  delivery batch. See [execution plan](references/gap-closure-plan.md). Package execution
+  remains planned; this update changes no runtime behavior.
+
 - Broader whole-product source-family audit completed at cmux `3ba653b9` / zmux
   `69342a8`: CLI/global contracts, terminal/topology/native UX, browser/content/settings,
   agents/attention/automation/remote, cloud/platform/security/distribution. All 428 initial
@@ -49,6 +54,9 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
   All deployments must use GitHub Actions.
 
 ## Next action
+
+Follow F02a/F01a/F03a then R01a/R01b in the execution plan; run the F04 terminal-engine
+and Mac-budget evaluation alongside them. Preserve all existing working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based
 parity. Prioritize the managed SSH + remote file/image transfer journey and complete owner/
