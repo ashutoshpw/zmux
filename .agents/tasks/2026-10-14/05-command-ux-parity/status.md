@@ -5,6 +5,17 @@
 
 ## Active implementation
 
+- Browser downloads committed `0bda3f1`: independent portable full checks/review pass;
+  packaged Darwin file/WebKit acceptance remains pending. Zellij public-peer fixture
+  committed `4d09a03`: independent real Linux transport/cleanup rerun passes;
+  manual-only Darwin workflow awaits dispatch. Neither closes its full package.
+- Persistence repair `610e897` passes Foundation `38773695057` and 128 fresh
+  fixtures in diagnostic `38773735612`. Pre-fix also passed 128 attempts, so root
+  cause remains unproven. Native `38773694848` has passed Rust checks and is building.
+- Next active slices: shared native coordinator extraction, opt-in bounded terminal
+  metadata capture, and executable CLI compatibility contracts. Local Docker
+  `/health` and `/ready` on port 3530 remain healthy; VM/relay/email remain unavailable.
+
 - T03 singleton ownership committed8705dea and integrated terminal experiment
   committed93daf02; both pushed. Parent isolated full checks pass. Foundation
   38771928593 passes. macOS38771925429 fails before Swift compilation in the existing
