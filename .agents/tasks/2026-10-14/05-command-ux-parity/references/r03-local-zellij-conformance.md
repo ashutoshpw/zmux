@@ -275,3 +275,90 @@ found no blocking lifetime/cleanup issue and verified all seven harness hashes.
 Full `scripts/check` passed in a HEAD-plus-this-slice isolated snapshot with a
 fresh Cargo target (`/tmp/zmux-zellij-retained-parent-check.log`). Retained-client
 Darwin execution remains pending.
+
+
+### Actual Darwin Quit and scoped terminal transport outcomes
+
+Hosted `38779766351` at `58a882b` confirmed that the retained client reached the
+original shell, sent Quit, exited0 and the original daemon identity actually ended.
+The overall fixture still failed:59 opaque client bytes were queued when the backend
+rejected a write during that termination. Their semantic contents are unknown; this
+is not evidence of delivered cleanup messages. A subsequent real Linux run also
+caught59 rejected bytes during explicit TERM attachment cancellation while the
+original durable owner was preserved. Neither observation justifies ignoring active
+stream input loss.
+
+The broker now retains a typed rejection with errno, exact byte count/payload hash,
+forwarded/discarded/pending counters and the terminal phase captured before the send.
+Absent terminal proof, rejection still fails physical broker cleanup. Only an
+explicitly requested owner Quit may classify post-request rejections after the
+original full backend identity is gone and the owned child remains unreaped with
+exit0. Explicit attachment cancellation has a distinct outcome requiring clean
+unreaped child exit, the same original server and shell start identities, startup
+count one and preservation checked again after joined transport cleanup. A phase
+cannot be entered after prior failure, nor can later confirmation rewrite the phase
+of an earlier rejection. Other errors remain fatal. Classified input is still
+undeliverable and is never described as transmitted successfully.
+
+The shared real-socket fixture now requests each terminal phase without its required
+proof: live backend prevents owner-shutdown confirmation; missing clean child/shell
+proof prevents attachment-cancel confirmation. Both retain unconfirmed loss and fail
+broker cleanup before the expected negative result is recorded. The original
+reverse-close262144-byte ordered delivery regression remains strict with zero
+upstream discard. This changes cancellation/shutdown outcome semantics, not normal
+active-stream acceptance or any full-parity gate.
+
+
+Final complete Linux validation passes at
+`/tmp/zmux-zellij-terminal-classification-freeze-20261015/receipt.json` (SHA256
+`04b1c243d1c3db27f99128445184aa8890e20d886a112bd1d59b67a9a075b25d`).
+All seven harness hashes match the freeze. This run actually exercised59 rejected
+opaque bytes during successful original-owner Quit and retained their count/hash,
+phase and `owner_exited_with_undeliverable_input` classification. The original
+server exited, child0 stayed unreaped through confirmation, both TERM clients
+preserved the original server/shell/startup and scratch was removed. The raw delivery
+regression delivered262144 ordered bytes with zero upstream discard. Both new real
+socket rejection cases remained fatal without their operation-specific proofs.
+
+Private controls bypassed each confirmation proof independently. Both failed the
+real socket check with `Live backend input loss was reclassified as completed
+shutdown`, before starting any Zellij daemon. Receipts:
+`/tmp/zmux-zellij-owner-proof-freeze-20261015/receipt.json` (SHA256
+`b682ae674cba8d54595c123dbdf8689083a9a08a3ae824fad507726e1e3079d4`)
+and `/tmp/zmux-zellij-cancel-proof-freeze-20261015/receipt.json` (SHA256
+`a090059dd168df7448b7d16ab2695597eb43de971f71c97f0cbdf92b305cd35b`).
+These controls changed only private copies. Python syntax/scoped whitespace checks
+pass; exact-source Darwin validation of the classification remains required.
+
+
+### Original foreground exit gate
+
+Independent review found that earlier Quit receipts required the server and attached
+client to end but did not inspect the original shell or its foreground wrapper before
+scratch removal. The fixture now retains both full process identities at startup
+and waits at most five seconds after authenticated Quit for both original identities
+to disappear, before confirming terminal shutdown. The cleanup receipt separately
+records server/shell/wrapper exit and scratch removal requires all three plus no
+cleanup error. There is no adopted-PID signal or kill fallback. A still-queryable
+original identity remains a failure; bounded public ps diagnostics distinguish a
+visible zombie from a running process without silently declaring disappearance.
+The earlier parent classification run is predecessor evidence only.
+
+Final complete Linux validation passes at
+`/tmp/zmux-zellij-foreground-exit-final-20261015/receipt.json` (SHA256
+`88b69865e34ce410cd8f60e3f1e01d6a52e4c583166afe3840a8b49e1a752ea5`). All seven harness hashes match the
+source freeze. The receipt separately confirms the original server, shell and wrapper
+ended, the foreground wait completed before terminal confirmation, no cleanup errors
+remained and scratch was removed. Both clean TERM-preservation cases, raw ordered
+delivery, strict proof-negative cases and failed-exec guards passed. Python syntax
+and scoped whitespace checks pass. Exact-source Darwin execution of this stronger
+foreground-exit gate remains required; prior server-only receipts do not satisfy it.
+
+Parent independent final real Linux run passes at
+`/tmp/zmux-zellij-foreground-parent-20261015/receipt.json`: original server, shell
+and wrapper exits confirmed, both cancellation-preservation cases pass, exact raw
+transport and proof-denial cases pass, scratch removed. Independent reviewer
+accepted the foreground-exit repair; no remaining blocker in this fixture scope.
+Parent full repository checks also pass on the contemporary isolated T03 snapshot
+(`/tmp/zmux-t03-parent-check.log`); this standalone Python fixture has no Rust/app
+dependency changes. Exact-source macOS execution remains pending.

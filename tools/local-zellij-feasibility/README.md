@@ -54,8 +54,10 @@ The actual boundary checks are:
   Relay workers join before child reaping. Explicit owner close uses a third retained
   PTY client, confirms real terminal readiness and the original shell PID, then sends
   the fixture's explicit Ctrl+q Quit binding over its already authenticated transport.
-  The original daemon must exit; client exit 0 is not the cleanup assertion. No
-  global PID-only kill fallback exists on Darwin.
+  The original daemon, foreground shell and wrapper must end; client exit 0 alone
+  is insufficient. Retained full shell/wrapper identities must disappear within a
+  bounded wait before cleanup can succeed. No global PID-only kill fallback exists
+  on Darwin.
 
 Peer credentials and live process inspection are separate APIs. On Darwin,
 `LOCAL_PEERPID` becomes unavailable after the peer disconnects, even while its child
@@ -87,10 +89,24 @@ It never signals an adopted/global daemon PID. The foreground fixture owns an
 unreaped interactive shell child and has a 75-second watchdog; its pane requests
 close-on-exit as an additional containment measure.
 
+Backend input rejection is fatal by default and retains its errno, byte count,
+payload hash, forwarding/pending counters and phase observed before that send.
+An explicit terminal operation may report an outcome with undeliverable input only
+after independent proof: owner Quit requires the original server identity gone and
+an unreaped clean child exit; attachment TERM cancellation requires an unreaped clean
+child exit, the same original server and shell start identities, and startup count
+one before and after joined transport cleanup. Only rejections observed after that
+specific request can be classified. Opaque rejected bytes remain explicitly lost;
+these outcomes make no input-delivery claim. Real socket controls keep rejection
+fatal when a requested shutdown leaves the backend live or cancellation lacks a clean
+child/shell-preservation proof.
+
 Normal resets/broken pipes are recorded explicitly. Other I/O/credential/cleanup
 failures fail the run and retain a private scratch path for diagnosis. Successful
-cleanup requires the original daemon to have exited, then removes only task-owned
-namespaces. Unavailable proof or cleanup is reported as failure, rather than softened
+cleanup requires the original daemon, shell and wrapper identities to have ended,
+then removes only task-owned namespaces. Still-queryable original identities fail
+closed; bounded public ps diagnostics distinguish a visible zombie from a running
+process without calling either absent. Unavailable proof or cleanup is reported as failure, rather than softened
 to a pass. The downloaded executable and compiled fixtures are excluded from uploaded
 artifacts; only metadata, logs and notices are uploaded.
 
