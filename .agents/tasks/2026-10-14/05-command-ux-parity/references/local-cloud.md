@@ -130,3 +130,8 @@ ordering, committed invalid-code cleanup and the three distinct PostgreSQL test 
 Parent isolated `scripts/check` also passes287 tests, strict Clippy, notices and C ABI.
 Current macOS workflow shutdown-test failures are tracked separately in F04; this cloud
 slice does not establish native or full-product acceptance.
+
+At22:23UTC, `scripts/local-cloud start` backed up and rebuilt committed54a0e52,
+recreated the local service and returned HTTP200 for health/readiness at3530.
+Parent compared the running container's db/app/maintenance source hashes to the committed
+files; all three match. This is local runtime promotion, not public tunnel/auth acceptance.

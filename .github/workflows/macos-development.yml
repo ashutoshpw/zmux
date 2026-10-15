@@ -31,10 +31,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
       - name: Type-check native sources before compiling Rust
         run: scripts/check-macos-sources
       - name: Verify native persistence directory paths
         run: scripts/check-native-storage-paths
+      - name: Verify native cloud credential cancellation and ownership
+        run: scripts/check-native-cloud-client --baseline-ref c25c4c631bb4917ee496f9caed39b42e843bb78d
       - name: Check Swift fixture cleanup boundary
         run: scripts/check-swift-fixture-cleanup
       - name: Verify native browser download file ownership
