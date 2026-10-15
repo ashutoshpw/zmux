@@ -1,11 +1,11 @@
 # Accepted native development build
 
-- Source: `7e9355b4dd820580443777ae6b3dd9a5fb0f4024`.
-- [Successful macOS workflow](https://github.com/ashutoshpw/zmux/actions/runs/38647522249).
-- [Download universal development artifact](https://github.com/ashutoshpw/zmux/actions/runs/38647522249/artifacts/11932279010).
-- Artifact expires 2026-10-28 22:28 UTC. Inner ZIP: `zmux-dev-universal-7e9355b.zip`.
-- SHA-256: `af702ab35d18da35de71421eed0b48477a61f3e0b67a2f548aa47db2b02b897e`.
-- 4,908,844-byte ZIP downloaded and checked for integrity, checksum, matching app/build/smoke
+- Source: `70cd3b614e0b3f9cf0fcaa0e33bec4c59c228d7a`.
+- [Successful macOS workflow](https://github.com/ashutoshpw/zmux/actions/runs/38692821187).
+- [Download universal development artifact](https://github.com/ashutoshpw/zmux/actions/runs/38692821187/artifacts/11952308942).
+- Artifact expires 2026-10-29 06:33 UTC. Inner ZIP: `zmux-dev-universal-70cd3b6.zip`.
+- SHA-256: `f75cef6e14fe7bae9633c1870908b20b0ef85dafc75ab98eb987f3303eec1148`.
+- 4,981,755-byte ZIP downloaded and checked for integrity, checksum, matching app/build/smoke
   source metadata, executable permissions, icon/notices and arm64/x86_64 architectures in the
   app executable, CLI and Rust library. Hosted signing verification passed; signing is ad hoc.
 
@@ -18,7 +18,10 @@ was launched through Launch Services on the Apple Silicon runner. Native smoke p
 - ⌘T, ⌘W and ⇧⌘T through native menu equivalents; closed history must be consumed and the
   surviving terminal PID must remain unchanged. Synthetic events preserve Shift and use actual
   ANSI keycodes; dynamic menu availability is refreshed. Physical keyboard dogfood remains open.
-- Sidebar toggle/layout, actual hidden-PTY OSC signal → notification inbox → exact target/read.
+- Wheel history navigation through a native CGEvent, Command-Home/End, native accessibility
+  contents update and typed-input return to live output.
+- Sidebar toggle/layout, actual hidden-PTY OSC signal → notification inbox → exact target/read;
+  tab selection acknowledges existing attention and a later hidden-tab signal stays unread.
 - Real WebKit document/form manipulation and hidden-tab state retention.
 - Split ratio adjustment survives tab switching; balanced browser geometry is asserted.
 - Active terminal title, accessible icon labels, cloud callback contract and bundled CLI control.
@@ -46,4 +49,8 @@ This receipt verifies the P1/P2/P3a first slices, not whole phases or complete c
 | 38645312568 | Runtime tests passed, but downloaded visual review rejected a cramped browser pane. |
 | 38646079812 | Snapshot SDK API is callback-only; adapted to a Sendable PNG continuation. |
 | 38646603782 | Geometry assertion reproduced 104/1026 width. Replaced competing NSSplitView constraint ownership with an explicit frame host, accessible divider and bounded ratio cache. |
-| 38647522249 | All selected checks, geometry assertions and downloaded visual review passed. |
+| 38692821187 | All selected checks, geometry assertions and downloaded visual review passed. |
+
+Corrective source history: f6b60bf added scrolling/attention; 70cd3b6 removed an unused Swift
+binding rejected by warnings-as-errors. All 45 workspace tests and the C ABI checks pass
+locally and in the accepted macOS run. Physical trackpad feel remains a manual gate.

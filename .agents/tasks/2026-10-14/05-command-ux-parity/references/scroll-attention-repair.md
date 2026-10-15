@@ -68,7 +68,7 @@ checks scroll-after-exit, preserved exit status and rejection of further process
 Mouse protocol routing runs on the parser worker, using its current mode; UI snapshots
 cannot cause stale-mode routing or UTF8 corruption of legacy mouse coordinates.
 Native Actions smoke now exercises wheel, Command-Home/End, input return to live output,
-selection-based acknowledgement and a later hidden-tab OSC arrival. Hosted gate pending.
+selection-based acknowledgement and a later hidden-tab OSC arrival. Hosted native gate passed in run 38692821187; see [delivery receipt](native-delivery.md).
 
 Still open: physical trackpad feel/momentum, comprehensive terminal-engine parity,
 focused-read indicators, desktop OS notification delivery/preferences, persistence,

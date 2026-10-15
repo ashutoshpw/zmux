@@ -8,7 +8,8 @@
 - Corrective slice: terminal wheel/history navigation, typed-input return to live screen,
   worker-owned mouse protocol routing and exited-process history; focus/activation attention
   acknowledgement and Dock unread count. Local regression and workspace checks pass;
-  fresh native Actions build pending. CLI repair backlog recorded in scroll-attention-repair.md.
+  macOS Actions compile and packaged smoke pass; artifact downloaded and verified.
+  CLI repair backlog recorded in scroll-attention-repair.md.
 
 - P1: independent terminal tabs; ⌘T/⌘W/⇧⌘T and Recently Closed; move/reorder, grouped closes,
   fresh-shell restoration and retryable launch failures. Hidden sessions remain alive.
@@ -20,8 +21,8 @@
 
 ## Verification and download
 
-Accepted runtime source: `7e9355b4dd820580443777ae6b3dd9a5fb0f4024`.
-[Download macOS build](https://github.com/ashutoshpw/zmux/actions/runs/38647522249/artifacts/11932279010).
+Accepted runtime source: `70cd3b614e0b3f9cf0fcaa0e33bec4c59c228d7a`.
+[Download macOS build](https://github.com/ashutoshpw/zmux/actions/runs/38692821187/artifacts/11952308942).
 Local checks and hosted universal/native smoke pass; archive and both captured images inspected.
 See [delivery receipt](references/native-delivery.md) for checksum, evidence boundaries and repairs.
 
