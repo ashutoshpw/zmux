@@ -106,6 +106,45 @@ actor NativeBridge {
         if let active { action["active"] = active }
         try await send(["command": "attention", "action": action])
     }
+    /// Submit once and return attributable admission, before the disk worker completes.
+    /// A lost acknowledgement is never replayed as another profile creation.
+    func createBrowserProfile(name: String) async throws -> BrowserProfileReceipt {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        guard !name.isEmpty, name.utf8.count <= 128 else {
+            throw BridgeFailure(message: "Profile names must contain 1 to 128 UTF-8 bytes.")
+        }
+        let desktop = handle
+        let data = Data(name.utf8)
+        let admission = Task<BrowserProfileReceipt, Error>.detached(priority: .userInitiated) {
+            let result = data.withUnsafeBytes { bytes in
+                zmux_desktop_profile_add(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else {
+                throw BridgeFailure(message: "Profile creation could not be acknowledged (\(result.status)). Check the profile list before trying again.")
+            }
+            struct Response: Decodable {
+                struct Failure: Decodable { let message: String }
+                let ok: Bool
+                let receipt: BrowserProfileReceipt?
+                let error: Failure?
+                let outcomeUnknown: Bool?
+            }
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let response: Response
+            do { response = try decoder.decode(Response.self, from: Self.consume(result.value)) }
+            catch {
+                throw BridgeFailure(message: "The profile receipt could not be read. Check the profile list before trying again; the outcome is unknown.")
+            }
+            guard response.ok, let receipt = response.receipt, receipt.operationId > 0 else {
+                let detail = response.error?.message ?? "Profile admission receipt is missing"
+                let uncertain = response.outcomeUnknown == true ? ". Check the profile list before trying again; the outcome is unknown." : ""
+                throw BridgeFailure(message: detail + uncertain)
+            }
+            return receipt
+        }
+        return try await admission.value
+    }
     func pasteFiles(surface: UInt64, paths: [String]) async throws {
         try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface, "paths": paths]])
     }

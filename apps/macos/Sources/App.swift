@@ -92,6 +92,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var metadataInspector: WorkspaceMetadataViewController?
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
     private let browserProfilesMenu = NSMenu(title: "Browser Profiles")
+    private var browserProfilesWindow: BrowserProfilesWindowController?
     private var workspaceCount = 1
     private var didSetInitialTerminalFocus = false
 
@@ -500,6 +501,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let browserMenu = NSMenu(title: "Browser")
         for (title, action, key) in [
             ("Back", #selector(browserBack), ""), ("Forward", #selector(browserForward), ""),
+            ("Manage Profiles…", #selector(showBrowserProfiles(_:)), ""),
             ("Reload", #selector(browserReload), "r"), ("Find in Page…", #selector(browserFind), "f"),
             ("Zoom In", #selector(browserZoomIn), "+"), ("Zoom Out", #selector(browserZoomOut), "-"),
             ("Actual Size", #selector(browserZoomReset), "0")
@@ -541,6 +543,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             layoutKey = ""
         }
         self.snapshot = snapshot
+        browserProfilesWindow?.update(snapshot.browserProfiles)
         // Keep the bounded browser set mounted even when its tabs are hidden so
         // automation targets never need to change the user's selection or focus.
         for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
@@ -908,6 +911,25 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             return
         }
         createBrowser(in: pane.id, url: "about:blank", profile: profile)
+    }
+    @objc private func showBrowserProfiles(_ sender: Any?) {
+        if browserProfilesWindow == nil {
+            let bridge = self.bridge
+            browserProfilesWindow = BrowserProfilesWindowController(create: { name in
+                try await bridge.createBrowserProfile(name: name)
+            }, open: { [weak self] profile in
+                guard let self, let pane = self.focusedPane,
+                      let state = self.snapshot?.browserProfiles, state.enabled,
+                      !state.loading, state.error == nil,
+                      state.profiles.contains(where: { $0.id == profile }) else {
+                    throw BridgeFailure(message: "The selected browser profile is unavailable.")
+                }
+                self.createBrowser(in: pane.id, url: "about:blank", profile: profile)
+                self.window.makeKeyAndOrderFront(nil)
+            })
+        }
+        if let state = snapshot?.browserProfiles { browserProfilesWindow?.update(state) }
+        browserProfilesWindow?.showWindow(sender)
     }
     private func profileForMenuItem(_ item: NSMenuItem) -> UUID? {
         guard let id = item.representedObject as? String, let profile = UUID(uuidString: id),
@@ -1593,6 +1615,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "browser_locators_waits": true,
             "browser_profiles_isolation_reopen": true,
             "browser_profile_menu": true,
+            "browser_profile_management": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
             "browser_title_observation": true,
@@ -1933,6 +1956,69 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             throw BridgeFailure(message: "Native profile menu opened a substitute website datastore")
         }
         _ = try await nativeCLI(["close-surface", "--surface", String(menuSurface)])
+        selectTab(privateSurface)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface == privateSurface }
+        try await smokeBrowserProfileManager(origin: origin, pane: pane, privateSurface: privateSurface)
+    }
+    private func smokeBrowserProfileManager(origin: String, pane: UInt64, privateSurface: UInt64) async throws {
+        guard let item = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserProfiles(_:)) }),
+              let menu = item.menu else { throw BridgeFailure(message: "Profile management menu is unavailable") }
+        menu.performActionForItem(at: menu.index(of: item))
+        guard let content = browserProfilesWindow?.window?.contentView,
+              browserProfilesWindow?.window?.isVisible == true else { throw BridgeFailure(message: "Profile manager did not open") }
+        @MainActor func descendants(_ view: NSView) -> [NSView] {
+            var result = [view]
+            for child in view.subviews { result += descendants(child) }
+            return result
+        }
+        let controls = descendants(content)
+        guard let name = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "New profile name" }),
+              let status = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Profile status" }),
+              let create = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Create Profile" }),
+              let open = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Open Profile" }),
+              let profiles = controls.compactMap({ $0 as? NSPopUpButton }).first else {
+            throw BridgeFailure(message: "Profile manager controls are unavailable")
+        }
+        let submittedName = "Smoke Manager " + UUID().uuidString
+        let previousIDs = Set(snapshot?.browserProfiles.profiles.map(\.id) ?? [])
+        name.stringValue = submittedName
+        create.performClick(nil)
+        guard !create.isEnabled, !open.isEnabled else { throw BridgeFailure(message: "Profile manager allowed duplicate pending work") }
+        try await waitUntil { $0.browserProfiles.profiles.contains { $0.name == submittedName && !previousIDs.contains($0.id) } && create.isEnabled }
+        guard let profile = snapshot?.browserProfiles.profiles.first(where: { $0.name == submittedName }),
+              (profiles.selectedItem?.representedObject as? String) == profile.id.uuidString,
+              open.isEnabled else { throw BridgeFailure(message: "Profile manager did not retain the created identity") }
+        // The real duplicate failure must be shown without changing the catalog.
+        let createdIDs = Set(snapshot?.browserProfiles.profiles.map(\.id) ?? [])
+        name.stringValue = submittedName
+        create.performClick(nil)
+        try await waitUntil { _ in create.isEnabled && status.stringValue.contains("already exists") }
+        guard Set(snapshot?.browserProfiles.profiles.map(\.id) ?? []) == createdIDs else {
+            throw BridgeFailure(message: "Duplicate manager creation changed the catalog")
+        }
+        let priorSurfaces = Set(browsers.keys)
+        open.performClick(nil)
+        try await waitUntil { value in
+            guard let selected = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
+            return !priorSurfaces.contains(selected.id) && selected.browserProfileId == profile.id
+        }
+        guard let surface = focusedPane?.selectedSurface,
+              browsers[surface]?.webView.configuration.websiteDataStore.identifier == profile.id else {
+            throw BridgeFailure(message: "Managed profile did not open its UUID datastore")
+        }
+        _ = try await nativeCLI(["browser", "goto", origin + "/first", "--surface", String(surface)])
+        try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "First fixture" && self?.browsers[surface]?.webView.isLoading == false }
+        guard try await browserCLIValue(["browser", "eval", "localStorage.getItem('zmuxProfile') === null && !document.cookie.includes('zmuxProfile=ownerA')", "--surface", String(surface)]) as? Bool == true else {
+            throw BridgeFailure(message: "Managed profile opened another profile's website data")
+        }
+        guard try await browserCLIValue(["browser", "eval", "localStorage.setItem('zmuxManager', 'created'); document.cookie = 'zmuxManager=created; Max-Age=3600; Path=/'; localStorage.getItem('zmuxManager') === 'created' && document.cookie.includes('zmuxManager=created')", "--surface", String(surface)]) as? Bool == true else {
+            throw BridgeFailure(message: "Managed profile did not retain its own website data")
+        }
+        guard try await browserCLIValue(["browser", "eval", "localStorage.getItem('zmuxManager') === null && !document.cookie.includes('zmuxManager=created')", "--surface", String(privateSurface)]) as? Bool == true else {
+            throw BridgeFailure(message: "Managed profile data leaked into the private browser")
+        }
+        _ = try await nativeCLI(["close-surface", "--surface", String(surface)])
+        browserProfilesWindow?.close()
         selectTab(privateSurface)
         try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface == privateSurface }
     }

@@ -111,7 +111,45 @@ entries; ordinary New Browser Tab keeps its existing private behavior.
 The packaged profile journey invokes the actual AppKit item, verifies its new selected
 surface and reads the existing cookie/localStorage data through that surface. This
 distinct menu-to-runtime boundary is required by `browser_profile_menu`; it remains a
-hosted gate until executed. Profile creation/rename/clear/delete UI remains open.
+hosted gate until executed. The following manager slice adds creation UI; rename,
+clear and delete remain open.
+
+## Native catalog manager scope and acceptance
+
+The implementation adds a Browser Profiles window with the runtime catalog, UUID-bound
+selection, a name field and Create/Open controls. The existing durable runtime owns
+validation, capacity, uniqueness and atomic publication. Its catalog is append-only:
+rename, website-data clearing and deletion have no runtime owners and remain backlog.
+The window must not advertise actions that cannot execute.
+
+Creation submits once through a narrow native admission adapter to the existing Add
+command. The adapter returns the exact runtime epoch and operation receipt, rather
+than treating queue acceptance or a matching name as durable success. Existing snapshot
+operations drive pending/completed/failed state under one 20-second UI deadline.
+Timeout, missing receipts and runtime replacement report an uncertain outcome without
+automatic replay. Loading/unavailable catalogs and an admitted operation disable Create.
+Open revalidates the selected immutable UUID against the current catalog and uses the
+existing shared create-browser action in the current focused pane.
+
+Acceptance protects two new boundaries. A real foreign C caller exercises native
+admission, durable completion and invalid/duplicate rejection through the adapter;
+existing filesystem tests remain the primary storage-contract owner. The packaged
+journey operates real window controls, observes the newly created UUID in the runtime
+catalog, opens that profile and verifies its own cookie/localStorage state separately
+from another profile. It also checks duplicate creation leaves the catalog unchanged.
+No private helper tests or test-only production exports are needed. Native compilation
+and actual window/WebKit execution remain hosted gates until run.
+
+Local manager validation uses exclusive `CARGO_TARGET_DIR=/tmp/zmux-b01-manager-target`.
+The foreign C ABI check passes for the real new admission channel: malformed pointers,
+invalid UTF-8 and output-capacity rejection precede mutation; successful admission
+returns its epoch and operation ID, reaches durable completion, and duplicate/invalid
+names fail through the shared owner. The existing 24 desktop browser/persistence tests,
+strict bridge Clippy and workspace formatting also pass. The packaged journey is
+authored against actual menu/window controls and requires `browser_profile_management`;
+it checks pending disablement, exact new UUID selection, duplicate failure with unchanged
+catalog, the UUID website datastore, and positive cookie/localStorage writes isolated
+from the private browser. These are source/local receipts, not macOS execution evidence.
 
 Native d92573f run38762433983 reached Swift compilation and exposed a remaining
 presentation fallback that called the old BrowserView constructor without a datastore.
