@@ -10,11 +10,11 @@ use zmux_desktop_runtime::{browser, downloads};
 
 const INVENTORY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../.agents/tasks/2026-10-14/05-command-ux-parity/references/command-inventory.json"
+    "/contracts/baseline/command-inventory.json"
 ));
 const RECONCILIATION: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../.agents/tasks/2026-10-14/05-command-ux-parity/references/audit-reconciliation.json"
+    "/contracts/baseline/audit-reconciliation.json"
 ));
 const COVERAGE: &str = include_str!("frozen-coverage.json");
 
