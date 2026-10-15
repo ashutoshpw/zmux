@@ -271,7 +271,8 @@
     {
       "id": "B02",
       "title": "Full browser automation and developer workflows",
-      "status": "planned",
+      "status": "in_progress",
+      "evidence": ["b02-browser-automation.md"],
       "owner": "versioned browser action bridge, CLI registry, WebKit execution",
       "depends_on": [
         "F01",

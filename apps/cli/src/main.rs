@@ -18,6 +18,7 @@ use zmux_desktop_runtime::control::{
 use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
+mod browser;
 mod registry;
 mod session;
 mod ssh;
@@ -52,6 +53,7 @@ struct ClientOptions {
 enum Parsed {
     Offline(Offline),
     App(ControlCommand),
+    Browser(ControlCommand),
 }
 
 enum Offline {
@@ -100,16 +102,15 @@ fn run() -> Result<u8, Box<dyn Error>> {
         }
         Parsed::App(command) => {
             let options = client_options(socket_override, timeout, password)?;
-            let response = request(&options, command)?;
-            if !response.ok {
-                let error = response.error.ok_or_else(|| {
-                    CliError("running app returned an invalid error response".into())
-                })?;
-                return Err(CliError(format!("{}: {}", error.code, error.message)).into());
-            }
+            let result = response_result(request(&options, command)?)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(0)
+        }
+        Parsed::Browser(command) => {
+            let options = client_options(socket_override, timeout, password)?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&response.result.unwrap_or(serde_json::Value::Null))?
+                serde_json::to_string_pretty(&browser::run(&options, command)?)?
             );
             Ok(0)
         }
@@ -162,6 +163,9 @@ fn parse(
         .and_then(|value| value.to_str())
         .map(|name| registry::find(name).map_or(name, |spec| spec.name));
     let tail = &args[(index + 1).min(args.len())..];
+    if command == Some("browser") {
+        return Ok((browser::parse(tail)?, socket, timeout, password));
+    }
     if let Some(command) = command
         && registry::find(command).is_some_and(|spec| spec.targeted)
     {
@@ -503,6 +507,16 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
         ));
     }
     Ok(response)
+}
+
+fn response_result(response: ControlResponse) -> Result<serde_json::Value, CliError> {
+    if !response.ok {
+        let error = response
+            .error
+            .ok_or_else(|| CliError("running app returned an invalid error response".into()))?;
+        return Err(CliError(format!("{}: {}", error.code, error.message)));
+    }
+    Ok(response.result.unwrap_or(serde_json::Value::Null))
 }
 
 fn request_id() -> u64 {

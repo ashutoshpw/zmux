@@ -157,6 +157,48 @@ actor NativeBridge {
     func resize(session: UInt64, rows: Int, cols: Int) async throws {
         try await send(["command": "resize", "session_id": session, "rows": rows, "cols": cols])
     }
+    func drainBrowserRequests() async throws -> BrowserDispatchBatch {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let desktop = handle
+        return try await Task.detached(priority: .userInitiated) {
+            let result = zmux_desktop_browser_drain(desktop)
+            guard result.status == 0 else { throw Self.failure(result.status) }
+            let data = try Self.consume(result.value)
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try decoder.decode(BrowserDispatchBatch.self, from: data)
+        }.value
+    }
+    func browserEvent(_ event: BrowserHostEvent) async throws {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let data = try encoder.encode(event)
+        guard data.count <= 300_000 else { throw BridgeFailure(message: "Browser event exceeds native transport limit") }
+        for attempt in 0..<100 {
+            let desktop = handle
+            let status = await Task.detached(priority: .userInitiated) {
+                data.withUnsafeBytes { bytes in
+                    zmux_desktop_browser_event(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                }
+            }.value
+            if status == -4 {
+                guard attempt < 99 else { throw BridgeFailure(message: "Browser event queue remained busy") }
+                try await Task.sleep(for: .milliseconds(10))
+                continue
+            }
+            guard status == 0 else { throw Self.failure(status) }
+            return
+        }
+    }
+    func browserAction(surface: UInt64, action: BrowserAction) async throws {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let encoded = try JSONSerialization.jsonObject(with: encoder.encode(action))
+        try await send(["command": "browser", "request": [
+            "scope": ["surface": "surface:\(surface)"], "action": encoded
+        ]])
+    }
     func close() throws {
         guard handle != 0 else { return }
         let status = zmux_desktop_destroy(handle)

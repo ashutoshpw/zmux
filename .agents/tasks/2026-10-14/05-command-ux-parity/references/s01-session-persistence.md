@@ -29,7 +29,10 @@ Clippy, formatting, notices and C ABI. Fresh gpt-6.1-sol storage/core review pas
 Integration review found stale OSC7 cwd capture and swallowed final-save failures; both
 were repaired and independently reproduced green through real runtime APIs.
 Native errors now show a concrete Quit acknowledgment; teardown is already irreversible.
-Native Actions compilation/execution remains pending for this slice.
+Native Actions at 5f26fbe passed both Foundation checks (38728287986) and universal
+build/packaged smoke (38728288079). Earlier CI exposed fixture /tmp canonicalization,
+allocator-test backpressure assumptions and Darwin mkdtemp declarations; all were
+repaired without weakening production path or allocation checks.
 
 ## Remaining S01 gates
 

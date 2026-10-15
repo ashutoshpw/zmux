@@ -223,7 +223,8 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
-        ControlCommand::SessionStatus { .. }
+        ControlCommand::BrowserStatus { .. }
+        | ControlCommand::SessionStatus { .. }
         | ControlCommand::ListUploads
         | ControlCommand::Status
         | ControlCommand::Capabilities
@@ -233,6 +234,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         | ControlCommand::ListWorkspaces
         | ControlCommand::ListPanes { .. }
         | ControlCommand::ReadScreen { .. } => true,
+        ControlCommand::Browser { request } => request.action.is_read(),
         ControlCommand::Targeted { request } => matches!(
             request.operation,
             TargetOperation::ReadScreen
@@ -322,6 +324,69 @@ mod tests {
         assert!(
             gate.admit(ControlOrigin::LocalOwner, &ControlCommand::Status, None)
                 .is_ok()
+        );
+    }
+    #[test]
+    fn browser_reads_follow_readonly_policy_and_native_relay_stays_denied() {
+        use crate::browser::{
+            BrowserAction, BrowserRequest, DEFAULT_OPERATION_TIMEOUT_MS, GetKind, SnapshotOptions,
+        };
+        let gate = ControlGate::new(ControlPolicy::same_user(ControlAccess::ReadOnly));
+        for (action, expected_read) in [
+            (
+                BrowserAction::Get {
+                    kind: GetKind::Url,
+                    selector: None,
+                    attribute: None,
+                    property: None,
+                },
+                true,
+            ),
+            (
+                BrowserAction::Snapshot {
+                    options: SnapshotOptions::default(),
+                },
+                true,
+            ),
+            (
+                BrowserAction::Eval {
+                    script: "1+1".into(),
+                },
+                false,
+            ),
+            (
+                BrowserAction::Reload {
+                    snapshot_after: false,
+                },
+                false,
+            ),
+        ] {
+            let command = ControlCommand::Browser {
+                request: BrowserRequest {
+                    scope: Default::default(),
+                    caller: Default::default(),
+                    expected_model_revision: None,
+                    timeout_ms: DEFAULT_OPERATION_TIMEOUT_MS,
+                    action,
+                },
+            };
+            assert_eq!(
+                gate.admit(ControlOrigin::LocalOwner, &command, None)
+                    .is_ok(),
+                expected_read
+            );
+            assert!(matches!(
+                gate.admit(ControlOrigin::RemoteRelay, &command, None),
+                Err(PolicyError::RelayDenied)
+            ));
+        }
+        assert!(
+            gate.admit(
+                ControlOrigin::LocalOwner,
+                &ControlCommand::BrowserStatus { operation_id: 1 },
+                None
+            )
+            .is_ok()
         );
     }
 }

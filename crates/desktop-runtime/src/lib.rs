@@ -1,5 +1,6 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
 pub mod attention;
+pub mod browser;
 pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
@@ -8,6 +9,9 @@ pub mod sessions;
 pub mod targets;
 pub mod transfers;
 use attention::{Attention, AttentionCommand, Notification};
+use browser::{
+    BrowserDispatchBatch, BrowserHostEvent, BrowserReceipt, BrowserRequest, BrowserRuntime,
+};
 use targets::{TargetOperation, TargetRequest};
 use transfers::{TransferCommand, TransferSlot, TransferSnapshot};
 use zmux_remote_runtime::connection::ManagedConnection;
@@ -73,6 +77,15 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Browser {
+        request: BrowserRequest,
+    },
+    #[serde(skip)]
+    BrowserHost {
+        event: BrowserHostEvent,
+    },
+    #[serde(skip)]
+    BrowserDrain,
     Session {
         action: sessions::SessionCommand,
     },
@@ -117,6 +130,8 @@ pub struct Request {
 #[derive(Debug, Error)]
 pub enum DesktopError {
     #[error("{0}")]
+    Browser(#[from] browser::BrowserError),
+    #[error("{0}")]
     Policy(#[from] control_policy::PolicyError),
     #[error("target surface is not a terminal")]
     NotTerminal,
@@ -152,6 +167,9 @@ pub struct Snapshot {
     pub notifications_dropped: u64,
     pub uploads: Vec<TransferSnapshot>,
     pub persistence: sessions::PersistenceSnapshot,
+    pub browser_epoch: uuid::Uuid,
+    pub browser_operations: Vec<BrowserReceipt>,
+    pub browser_pending_requests: usize,
     pub last_request_id: u64,
     pub last_error: Option<String>,
     pub closed: bool,
@@ -185,6 +203,8 @@ pub(crate) struct Execution {
     pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
     pub session_operation_id: Option<u64>,
+    pub browser_operation_id: Option<u64>,
+    pub browser_dispatch: Option<BrowserDispatchBatch>,
 }
 
 #[derive(Debug)]
@@ -215,6 +235,7 @@ impl Desktop {
         persistence: Option<sessions::SessionPersistence>,
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+        let browser = BrowserRuntime::default();
         let persistence_snapshot = persistence
             .as_ref()
             .map(|p| p.snapshot.clone())
@@ -229,6 +250,9 @@ impl Desktop {
                 notifications_dropped: 0,
                 uploads: Vec::new(),
                 persistence: persistence_snapshot,
+                browser_epoch: browser.epoch(),
+                browser_operations: Vec::new(),
+                browser_pending_requests: 0,
                 last_request_id: 0,
                 last_error: None,
                 closed: false,
@@ -245,6 +269,9 @@ impl Desktop {
             .spawn(move || {
                 let mut worker = Worker {
                     model,
+                    browser,
+                    browser_operation_id: None,
+                    browser_dispatch: None,
                     persistence,
                     restoring: None,
                     session_operation_id: None,
@@ -371,6 +398,47 @@ impl Desktop {
         })
     }
 
+    /// Trusted native bridge only; execute off the UI thread. Draining is once-only:
+    /// reserve response capacity before calling, and never retry a lost evaluation.
+    pub fn browser_drain_requests(
+        &self,
+        timeout: Duration,
+    ) -> Result<BrowserDispatchBatch, DesktopError> {
+        let execution = self.execute_native_browser(Command::BrowserDrain, timeout)?;
+        execution.result?;
+        execution.browser_dispatch.ok_or_else(|| {
+            DesktopError::Failure("native browser dispatch acknowledgement missing".into())
+        })
+    }
+    /// Trusted host lifecycle/completion path, distinct from socket commands.
+    /// This waits for executor acknowledgement and must run off the UI thread.
+    pub fn browser_host_event(&self, event: BrowserHostEvent) -> Result<(), DesktopError> {
+        self.execute_native_browser(Command::BrowserHost { event }, Duration::from_secs(2))?
+            .result
+    }
+    fn execute_native_browser(
+        &self,
+        payload: Command,
+        timeout: Duration,
+    ) -> Result<Execution, DesktopError> {
+        let request = Request {
+            version: 1,
+            request_id: 0,
+            payload,
+        };
+        self.validate(&request)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Envelope {
+            request,
+            acknowledgement: Some(sender),
+            authorization: None,
+        })?;
+        receiver.recv_timeout(timeout).map_err(|error| match error {
+            mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+            mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+        })
+    }
+
     fn validate(&self, request: &Request) -> Result<(), DesktopError> {
         if self.shared.stop.load(Ordering::Acquire) {
             return Err(DesktopError::Closed);
@@ -463,6 +531,9 @@ struct Completion {
 }
 struct Worker {
     model: WorkspaceStore,
+    browser: BrowserRuntime,
+    browser_operation_id: Option<u64>,
+    browser_dispatch: Option<BrowserDispatchBatch>,
     persistence: Option<sessions::SessionPersistence>,
     restoring: Option<sessions::PendingRestore>,
     session_operation_id: Option<u64>,
@@ -570,6 +641,9 @@ impl Worker {
                     dirty = true;
                 }
             }
+            dirty |= self
+                .browser
+                .reconcile(&self.model.snapshot(), Instant::now());
             dirty |= self.poll_sessions();
             dirty |= self.poll_transfers();
             self.retired.retain_mut(|session| {
@@ -585,6 +659,8 @@ impl Worker {
                 self.publish(false);
             }
         }
+        self.browser
+            .reset("desktop shutdown cancelled browser operations");
         let deadline = Instant::now() + Duration::from_secs(3);
         self.shutdown_persistence(deadline);
         self.cancel_transfers();
@@ -643,6 +719,8 @@ impl Worker {
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
         self.session_operation_id = None;
+        self.browser_operation_id = None;
+        self.browser_dispatch = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if envelope.acknowledgement.is_some()
@@ -713,6 +791,8 @@ impl Worker {
             let _ = sender.try_send(Execution {
                 result,
                 session_operation_id: self.session_operation_id,
+                browser_operation_id: self.browser_operation_id,
+                browser_dispatch: self.browser_dispatch.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -730,7 +810,10 @@ impl Worker {
         if self.session_transition_pending()
             && !matches!(
                 &command,
-                Command::Session { .. } | Command::Attention { .. }
+                Command::Session { .. }
+                    | Command::Attention { .. }
+                    | Command::BrowserHost { .. }
+                    | Command::BrowserDrain
             )
         {
             return Err(DesktopError::Failure(
@@ -738,7 +821,34 @@ impl Worker {
             ));
         }
         match command {
-            Command::Session { action } => self.session_command(action),
+            Command::Browser { request } => {
+                self.browser_operation_id = Some(self.browser.admit(
+                    &self.model.snapshot(),
+                    request,
+                    Instant::now(),
+                )?);
+                Ok(())
+            }
+            Command::BrowserHost { event } => self
+                .browser
+                .host_event(&self.model.snapshot(), event, Instant::now())
+                .map_err(Into::into),
+            Command::BrowserDrain => {
+                self.browser_dispatch = Some(
+                    self.browser
+                        .drain_requests(&self.model.snapshot(), Instant::now()),
+                );
+                Ok(())
+            }
+            Command::Session { action } => {
+                let restore = matches!(&action, sessions::SessionCommand::Restore { .. });
+                self.session_command(action)?;
+                if restore {
+                    self.browser
+                        .reset("session restore replaced native browser hosts");
+                }
+                Ok(())
+            }
             Command::Transfer { action } => self.transfer(action),
             Command::Targeted { request } => self.targeted(request),
             Command::Attention { action } => self.attention_action(action),
@@ -1152,6 +1262,8 @@ impl Worker {
         // Results for closed panes are canceled and reaped, never reattached.
     }
     fn publish(&mut self, closed: bool) -> Arc<Snapshot> {
+        self.browser
+            .reconcile(&self.model.snapshot(), Instant::now());
         self.revision += 1;
         let model = self.model.snapshot();
         let control_frames: Vec<_> = model
@@ -1202,6 +1314,9 @@ impl Worker {
                 .as_ref()
                 .map(|p| p.snapshot.clone())
                 .unwrap_or_default(),
+            browser_epoch: self.browser.epoch(),
+            browser_operations: self.browser.receipts(),
+            browser_pending_requests: self.browser.pending_request_count(),
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),
             closed,

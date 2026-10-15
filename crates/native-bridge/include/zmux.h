@@ -44,6 +44,13 @@ ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_
    waits at most two seconds for that envelope's worker acknowledgement and MUST run off
    the native UI thread. A nonzero C status or outcome_unknown=true must not be retried. */
 ZmuxResult zmux_desktop_transfer_files(uint64_t desktop, const uint8_t *request, size_t length);
+/* Trusted host-only browser channel. Drain reserves an owned buffer before removing
+   work, may wait up to one second, and MUST run off the UI thread. Never replay a
+   failed drain automatically. Events wait up to two seconds and MUST also run off the UI thread.
+   Events are bounded JSON (<=300000 bytes); BUSY means
+   the event was not enqueued and may be retried preserving order. */
+ZmuxResult zmux_desktop_browser_drain(uint64_t desktop);
+int32_t zmux_desktop_browser_event(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_snapshot(uint64_t desktop, uint64_t revision);
 int32_t zmux_desktop_destroy(uint64_t desktop);
 

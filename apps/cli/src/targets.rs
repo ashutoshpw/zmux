@@ -269,17 +269,7 @@ fn request(
     expected_model_revision: Option<u64>,
     operation: TargetOperation,
 ) -> Result<Parsed, CliError> {
-    let caller = if scope.workspace.is_none() && scope.pane.is_none() && scope.surface.is_none() {
-        CallerContext {
-            workspace: environment_target("ZMUX_WORKSPACE_ID")?,
-            surface: match environment_target("ZMUX_SURFACE_ID")? {
-                Some(surface) => Some(surface),
-                None => environment_target("ZMUX_TAB_ID")?,
-            },
-        }
-    } else {
-        CallerContext::default()
-    };
+    let caller = caller(&scope)?;
     Ok(Parsed::App(ControlCommand::Targeted {
         request: TargetRequest {
             scope,
@@ -288,6 +278,21 @@ fn request(
             operation,
         },
     }))
+}
+pub(super) fn caller(scope: &TargetScope) -> Result<CallerContext, CliError> {
+    Ok(
+        if scope.workspace.is_none() && scope.pane.is_none() && scope.surface.is_none() {
+            CallerContext {
+                workspace: environment_target("ZMUX_WORKSPACE_ID")?,
+                surface: match environment_target("ZMUX_SURFACE_ID")? {
+                    Some(surface) => Some(surface),
+                    None => environment_target("ZMUX_TAB_ID")?,
+                },
+            }
+        } else {
+            CallerContext::default()
+        },
+    )
 }
 fn environment_target(name: &str) -> Result<Option<TargetRef>, CliError> {
     match env::var(name) {

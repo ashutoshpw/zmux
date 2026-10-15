@@ -168,3 +168,12 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   runtime reproductions pass. Parent scripts/check: 123 tests plus Clippy/notices/C ABI.
 - Native hosted checks pending; S01 additive/multiwindow/full-browser and safe cancel gates
   remain open. Next implementation begins B02a browser automation bridge.
+
+## B02a shared browser bridge
+
+- Browser navigation/read/eval/snapshot CLI now uses bounded native work receipts and
+  host/document/restore fencing; shared menu/toolbar navigation enters the same owner.
+- Parent 136 Rust tests, strict Clippy, notices and C ABI pass. Fresh reviews accepted
+  shutdown cancellation, viewport and lost-event recovery repairs. Public native smoke
+  authored; hosted Swift/WebKit execution pending. B01/B02 and V01 remain incomplete.
+- Persistence Foundation/macOS checks at5f26fbe passed; no partial artifact handed off.
