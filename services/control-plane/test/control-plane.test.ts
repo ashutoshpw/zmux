@@ -14,6 +14,7 @@ const config: ControlPlaneConfig = {
   databaseUrl,
   authSecret: process.env.BETTER_AUTH_SECRET ?? "test-only-secret-test-only-secret-1234",
   port: Number(new URL(origin).port),
+  host: "127.0.0.1",
   production: false,
   trustProxy: false,
 };

@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Run the owned local Docker control plane without exposing its credentials."""
+import argparse
+import datetime
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import socket
+import stat
+import subprocess
+import sys
+import time
+import urllib.request
+
+ROOT = Path(__file__).resolve().parent.parent
+SERVICE = ROOT / "services/control-plane"
+STATE = Path(os.environ.get("ZMUX_LOCAL_STATE", str(Path.home() / ".local/state/zmux/control-plane"))).absolute()
+PROJECT = "zmux-local-cloud"
+
+
+def run(command, *, output=None, error=subprocess.STDOUT, cwd=ROOT, timeout=180, environment=None):
+    return subprocess.run(command, cwd=cwd, check=True, text=True,
+                          stdout=output if output else subprocess.PIPE,
+                          stderr=error, timeout=timeout, env=environment)
+
+
+def compose(*arguments, output=None, error=subprocess.STDOUT, timeout=180):
+    # Compose gives the process environment priority over --env-file. Remove every
+    # private-file key so an unrelated exported DATABASE_URL cannot redirect migrations.
+    private_keys = {
+        line.partition("=")[0] for line in (STATE / "local.env").read_text().splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+    environment = {key: value for key, value in os.environ.items() if key not in private_keys}
+    return run(["docker", "compose", "--project-name", PROJECT,
+                "--env-file", str(STATE / "local.env"),
+                "--file", str(SERVICE / "deploy/compose.yaml"), *arguments],
+               output=output, error=error, timeout=timeout, environment=environment)
+
+
+def initialize(create=False):
+    if not STATE.is_absolute() or re.search(r"[\s$#'\"\\]", str(STATE)):
+        raise RuntimeError("State path must be absolute and contain no whitespace or shell metacharacters")
+    if STATE.is_symlink():
+        raise RuntimeError("Refusing a symlink state directory")
+    if STATE.is_relative_to(ROOT):
+        raise RuntimeError("State and credentials must stay outside the Git checkout")
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if STATE.stat().st_uid != os.getuid() or stat.S_IMODE(STATE.stat().st_mode) != 0o700:
+        raise RuntimeError("State directory must belong to the current user with mode 0700")
+    env = STATE / "local.env"
+    if env.exists():
+        if env.is_symlink() or not env.is_file() or env.stat().st_uid != os.getuid() or stat.S_IMODE(env.stat().st_mode) != 0o600:
+            raise RuntimeError("Existing local.env must be a regular private file with mode 0600")
+        return
+    if not create:
+        raise RuntimeError("No private environment exists; run scripts/local-cloud start first")
+    # Refuse to create fresh credentials for an existing persistent database.
+    volumes = run(["docker", "volume", "ls", "--filter", f"label=com.docker.compose.project={PROJECT}",
+                   "--format", "{{.Name}}"])
+    if volumes.stdout.strip():
+        raise RuntimeError("Existing zmux volumes found without local.env; recover the original credentials")
+    port = run(["bunx", "path-to-port"], cwd=SERVICE).stdout.strip().splitlines()[-1]
+    if not port.isdigit() or not 1024 <= int(port) <= 65535:
+        raise RuntimeError("bunx path-to-port did not return a usable service port")
+    password = secrets.token_hex(32)
+    database_port = int(port) + 1
+    if database_port > 65535:
+        raise RuntimeError("No adjacent database port is available")
+    for candidate in (int(port), database_port):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", candidate))
+    env.write_text(f"ZMUX_LOCAL_STATE={STATE}\nZMUX_LOCAL_PORT={port}\nZMUX_LOCAL_DATABASE_PORT={database_port}\n"
+                   f"DATABASE_PASSWORD={password}\n"
+                   f"DATABASE_URL=postgres://zmux:{password}@127.0.0.1:{database_port}/zmux\n"
+                   f"BETTER_AUTH_SECRET={secrets.token_hex(48)}\n")
+    env.chmod(0o600)
+
+
+def certificates(log):
+    tls = STATE / "tls"
+    tls.mkdir(mode=0o700, exist_ok=True)
+    if (tls / "server.crt").exists():
+        run(["openssl", "x509", "-in", str(tls / "server.crt"), "-checkend", "86400", "-noout"], output=log)
+        run(["openssl", "verify", "-CAfile", str(tls / "ca.crt"),
+             "-verify_ip", "127.0.0.1", str(tls / "server.crt")], output=log)
+        return
+    run(["openssl", "req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "365",
+         "-keyout", str(tls / "ca.key"), "-out", str(tls / "ca.crt"),
+         "-subj", "/CN=zmux local PostgreSQL CA", "-addext", "basicConstraints=critical,CA:TRUE"], output=log)
+    run(["openssl", "req", "-new", "-newkey", "rsa:3072", "-nodes",
+         "-keyout", str(tls / "server.key"), "-out", str(tls / "server.csr"),
+         "-subj", "/CN=postgres"], output=log)
+    extensions = tls / "server.ext"
+    extensions.write_text("subjectAltName=DNS:postgres,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\n")
+    run(["openssl", "x509", "-req", "-in", str(tls / "server.csr"),
+         "-CA", str(tls / "ca.crt"), "-CAkey", str(tls / "ca.key"), "-CAcreateserial",
+         "-days", "90", "-out", str(tls / "server.crt"), "-extfile", str(extensions)], output=log)
+    for private in [tls / "ca.key", tls / "server.key"]:
+        private.chmod(0o600)
+    # Only the CA certificate is mounted in the non-root application container.
+    (tls / "ca.crt").chmod(0o644)
+
+
+def port_number():
+    for line in (STATE / "local.env").read_text().splitlines():
+        if line.startswith("ZMUX_LOCAL_PORT="):
+            return int(line.partition("=")[2])
+    raise RuntimeError("ZMUX_LOCAL_PORT is missing")
+
+
+def check():
+    origin = f"http://127.0.0.1:{port_number()}"
+    evidence = {}
+    for endpoint in ("health", "ready"):
+        with urllib.request.urlopen(f"{origin}/{endpoint}", timeout=5) as response:
+            evidence[endpoint] = {"status": response.status, "body": json.load(response)}
+    if evidence["ready"]["body"].get("status") != "ready":
+        raise RuntimeError("Database readiness failed")
+    receipt = {"checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+               "local_origin": origin, "public_origin": "https://zmux.w3dev.app",
+               "public_tunnel_verified": False, "checks": evidence}
+    (STATE / "health.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    print(json.dumps(receipt, indent=2))
+
+
+def operate(args):
+    # Never adopt a same-named Compose project from another checkout.
+    existing = run(["docker", "ps", "-a", "--filter", f"label=com.docker.compose.project={PROJECT}",
+                    "--format", '{{.Label "com.docker.compose.project.config_files"}}'])
+    expected = str(SERVICE / "deploy/compose.yaml")
+    if any(line != expected for line in existing.stdout.splitlines()):
+        raise RuntimeError("A same-named Docker project belongs to another checkout")
+    if args.action == "check":
+        check()
+        return
+    if args.action == "status":
+        print(compose("ps").stdout, end="")
+        return
+    if args.action == "stop":
+        compose("stop")
+        print("Stopped only the zmux-local-cloud containers; database volume is retained")
+        return
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    with (STATE / f"operation-{stamp}.log").open("w") as log:
+        if args.action == "start":
+            derived = run(["bunx", "path-to-port"], cwd=SERVICE).stdout.strip().splitlines()[-1]
+            if derived != str(port_number()):
+                raise RuntimeError("Service path-derived port changed; do not silently move an existing service")
+            certificates(log)
+            compose("config", "--quiet", output=log)
+            compose("build", "app", output=log, timeout=600)
+            compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "90", "postgres", output=log)
+        backups = STATE / "backups"
+        backups.mkdir(mode=0o700, exist_ok=True)
+        backup = backups / f"pre-migration-{stamp}.dump"
+        # Complete a pg_dump before every migration, including the initial schema.
+        try:
+            with backup.open("w") as destination:
+                compose("exec", "-T", "postgres", "pg_dump", "--no-password", "-U", "zmux", "-p", str(port_number() + 1),
+                        "-d", "zmux", "--format=custom", output=destination, error=log)
+            if backup.stat().st_size < 1:
+                raise RuntimeError("Database backup was empty")
+        except Exception:
+            backup.unlink(missing_ok=True)
+            raise
+        if args.action == "backup":
+            print(f"Backup saved privately: {backup}")
+            return
+        compose("run", "--rm", "--no-deps", "app", "bun", "run", "migrate", output=log)
+        compose("up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "60", "app", output=log)
+    for attempt in range(30):
+        try:
+            check()
+            print(f"Private state and operation logs: {STATE}")
+            return
+        except Exception:
+            if attempt == 29:
+                raise
+            time.sleep(2)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["start", "check", "stop", "status", "backup"])
+    args = parser.parse_args()
+    os.umask(0o077)
+    initialize(create=args.action == "start")
+    with (STATE / "operation.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("Another local-cloud operation is already running") from None
+        operate(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        # Subprocess output may include credentials. Keep it in the private log.
+        detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+        print(f"Local cloud failed ({detail}); inspect private logs in {STATE}", file=sys.stderr)
+        sys.exit(1)

@@ -9,6 +9,7 @@ const auth = createAuth(pool, config);
 const app = createApp(pool, auth, config);
 
 const server = Bun.serve({
+  hostname: config.host,
   port: config.port,
   maxRequestBodySize: 16 * 1024,
   fetch(request, server) {
