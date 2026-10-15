@@ -71,6 +71,7 @@ jobs:
           name: Zmux-native-diagnostics-${{ github.sha }}
           path: |
             dist/native-*.log
+            dist/native-window-*.json
             dist/native-smoke.json
             dist/native-windows.json
             dist/native-resources.json

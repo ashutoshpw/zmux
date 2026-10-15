@@ -289,6 +289,40 @@ enum WindowLifecycleSmoke {
         }
         try await wait(coordinator) { _ in terminal(coordinator, window: id)?.frame.snapshot?.viewport.contents.lines.contains(marker) == true }
     }
+    /// Public socket reads distinguish a stale native polling loop from the
+    /// current executor state. Each CLI invocation has its own one-second budget
+    /// and runs through nativeCLI's detached subprocess, never blocking AppKit.
+    private static func captureTimeoutStatus(_ coordinator: ApplicationCoordinator) async {
+        guard let socket = ProcessInfo.processInfo.environment["ZMUX_SOCKET"], socket.hasPrefix("/"),
+              let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 1 else {
+            trace("timeout public status unavailable: no exact fixture socket/report")
+            return
+        }
+        var evidence: [String: Any] = [:]
+        for (name, arguments) in [("status", ["status"]), ("session", ["session-status"]), ("profiles", ["browser", "profiles", "list"])] {
+            do {
+                let data = try await coordinator.mainWindowHost.nativeCLI(["--socket", socket] + arguments, timeout: 1000, externalCaller: true)
+                guard data.count <= 32_768, let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw BridgeFailure(message: "Timeout status response is oversized or not a JSON object")
+                }
+                evidence[name] = value
+                if name == "status" {
+                    trace("timeout public status publication=\(value["revision"] ?? "missing") modelRevision=\(value["model_revision"] ?? "missing") windows=\(value["window_count"] ?? "missing") pendingLaunches=\(value["pending_launches"] ?? "missing") closed=\(value["closed"] ?? "missing")")
+                }
+            } catch {
+                let message = String(error.localizedDescription.prefix(512))
+                evidence[name] = ["error": message]
+                trace("timeout public " + name + " failed: " + message)
+            }
+        }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys])
+            guard data.count <= 65_536 else { throw BridgeFailure(message: "Timeout diagnostics exceeded 64 KiB") }
+            let report = URL(fileURLWithPath: CommandLine.arguments[index + 1]).appendingPathExtension("timeout-diagnostics.json")
+            try data.write(to: report, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: report.path)
+        } catch { trace("timeout diagnostics write failed: " + error.localizedDescription) }
+    }
     private static func wait(_ coordinator: ApplicationCoordinator, line: UInt = #line, _ predicate: (DesktopSnapshot) -> Bool) async throws {
         trace("wait begin line=\(line)")
         let deadline = ContinuousClock.now + .seconds(20)
@@ -296,8 +330,15 @@ enum WindowLifecycleSmoke {
             if let snapshot = coordinator.snapshot, predicate(snapshot) { trace("wait complete line=\(line)"); return }
             try await Task.sleep(for: .milliseconds(25))
         }
-        let state = coordinator.snapshot.map { "revision=\($0.model.revision) windows=\($0.model.windows.count) focused=\(String(describing: $0.model.focusedWindow)) observed=\(String(describing: $0.observedKeyWindow)) hosts=\(coordinator.mainWindowHosts.count) requests=\($0.windowRequests.count) lastError=\($0.lastError ?? "none")" } ?? "no snapshot"
+        let state = coordinator.snapshot.map { "publication=\($0.revision) modelRevision=\($0.model.revision) windows=\($0.model.windows.count) focused=\(String(describing: $0.model.focusedWindow)) observed=\(String(describing: $0.observedKeyWindow)) hosts=\(coordinator.mainWindowHosts.count) requests=\($0.windowRequests.count)" } ?? "no snapshot"
         trace("wait timeout line=\(line) " + state)
+        if let snapshot = coordinator.snapshot {
+            trace("timeout persistence startup=\(String(describing: snapshot.persistence?.startupPending)) restoring=\(String(describing: snapshot.persistence?.restoring)) autosave=\(String(describing: snapshot.persistence?.autosaveEnabled)) saved=\(String(describing: snapshot.persistence?.lastSavedRevision))")
+            trace("timeout persistence error=" + (snapshot.persistence?.error ?? "none"))
+            trace("timeout profiles loading=\(snapshot.browserProfiles.loading) enabled=\(snapshot.browserProfiles.enabled) count=\(snapshot.browserProfiles.profiles.count) error=" + (snapshot.browserProfiles.error ?? "none"))
+            trace("timeout lastError=" + (snapshot.lastError ?? "none") + " cleanupError=" + (snapshot.cleanupError ?? "none"))
+        }
+        await captureTimeoutStatus(coordinator)
         throw BridgeFailure(message: "Packaged window lifecycle condition at line \(line) timed out: " + state)
     }
 }
