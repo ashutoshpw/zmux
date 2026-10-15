@@ -15,6 +15,7 @@ use zmux_desktop_runtime::control::{
     CONTROL_VERSION, ControlCommand, ControlRequest, ControlResponse, MAX_CONTROL_REQUEST_BYTES,
     MAX_CONTROL_RESPONSE_BYTES,
 };
+use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis};
 mod registry;
@@ -43,6 +44,7 @@ impl From<io::Error> for CliError {
 struct ClientOptions {
     socket: PathBuf,
     timeout: Duration,
+    password: Option<SocketPassword>,
 }
 
 enum Parsed {
@@ -70,7 +72,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<u8, Box<dyn Error>> {
-    let (parsed, socket_override, timeout) = parse(env::args_os().skip(1).collect())?;
+    let (parsed, socket_override, timeout, password) = parse(env::args_os().skip(1).collect())?;
     match parsed {
         Parsed::Offline(Offline::Help(command)) => {
             print_help(command.as_deref())?;
@@ -90,12 +92,12 @@ fn run() -> Result<u8, Box<dyn Error>> {
         }
         Parsed::Offline(Offline::Prototype(args)) => run_prototype(args),
         Parsed::Offline(Offline::Doctor) => {
-            let options = client_options(socket_override, timeout)?;
+            let options = client_options(socket_override, timeout, password)?;
             doctor(&options)?;
             Ok(0)
         }
         Parsed::App(command) => {
-            let options = client_options(socket_override, timeout)?;
+            let options = client_options(socket_override, timeout, password)?;
             let response = request(&options, command)?;
             if !response.ok {
                 let error = response.error.ok_or_else(|| {
@@ -112,9 +114,12 @@ fn run() -> Result<u8, Box<dyn Error>> {
     }
 }
 
-fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), CliError> {
+fn parse(
+    args: Vec<OsString>,
+) -> Result<(Parsed, Option<PathBuf>, Duration, Option<SocketPassword>), CliError> {
     let mut index = 0;
     let mut socket = None;
+    let mut password = None;
     let mut timeout = DEFAULT_TIMEOUT;
     while let Some(argument) = args.get(index).and_then(|value| value.to_str()) {
         match argument {
@@ -123,6 +128,18 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
                     .get(index + 1)
                     .ok_or_else(|| CliError("--socket requires a path".into()))?;
                 socket = Some(PathBuf::from(path));
+                index += 2;
+            }
+            "--password" => {
+                if password.is_some() {
+                    return Err(CliError("repeated --password".into()));
+                }
+                password = Some(
+                    SocketPassword::new(
+                        utf8_arg(args.get(index + 1), "socket password")?.to_owned(),
+                    )
+                    .map_err(|e| CliError(e.to_string()))?,
+                );
                 index += 2;
             }
             "--timeout" => {
@@ -146,7 +163,7 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
     if let Some(command) = command
         && registry::find(command).is_some_and(|spec| spec.targeted)
     {
-        return Ok((targets::parse(command, tail)?, socket, timeout));
+        return Ok((targets::parse(command, tail)?, socket, timeout, password));
     }
     let parsed = match command {
         None | Some("-h" | "--help") => Parsed::Offline(Offline::Help(None)),
@@ -247,7 +264,7 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
             )));
         }
     };
-    Ok((parsed, socket, timeout))
+    Ok((parsed, socket, timeout, password))
 }
 
 fn help_or_no_args(command: &str, tail: &[OsString], value: Offline) -> Result<Parsed, CliError> {
@@ -329,10 +346,11 @@ fn parse_id(value: &str, label: &str) -> Result<u64, CliError> {
 fn client_options(
     socket_override: Option<PathBuf>,
     timeout: Duration,
+    password: Option<SocketPassword>,
 ) -> Result<ClientOptions, CliError> {
     let socket = match socket_override {
         Some(path) => path,
-        None => match env::var_os("ZMUX_SOCKET") {
+        None => match env::var_os("ZMUX_SOCKET_PATH").or_else(|| env::var_os("ZMUX_SOCKET")) {
             Some(path) => PathBuf::from(path),
             None => default_socket_path()?,
         },
@@ -343,7 +361,13 @@ fn client_options(
             socket.display()
         )));
     }
-    Ok(ClientOptions { socket, timeout })
+    let password =
+        zmux_desktop_runtime::control_credentials::password(password).map_err(CliError)?;
+    Ok(ClientOptions {
+        socket,
+        timeout,
+        password,
+    })
 }
 
 fn default_socket_path() -> Result<PathBuf, CliError> {
@@ -381,6 +405,7 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
     let request = ControlRequest {
         version: CONTROL_VERSION,
         request_id,
+        password: options.password.clone(),
         command,
     };
     let bytes = serde_json::to_vec(&request)
@@ -430,7 +455,7 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
         .map_err(|error| CliError(format!("running app returned invalid JSON: {error}")))?;
     if response.version != CONTROL_VERSION {
         return Err(CliError(format!(
-            "running app uses unsupported protocol version {}",
+            "running app uses unsupported protocol version {}; this CLI requires v{CONTROL_VERSION}. Restart or update the app to match the CLI; the command was not retried",
             response.version
         )));
     }

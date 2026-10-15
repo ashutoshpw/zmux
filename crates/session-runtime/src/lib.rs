@@ -232,6 +232,7 @@ impl Session {
         for (name, value) in environment {
             command.env(name, value);
         }
+        command.env_remove("ZMUX_SOCKET_PASSWORD");
         if let Some(cwd) = launch.cwd {
             command.cwd(cwd);
         }

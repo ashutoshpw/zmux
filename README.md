@@ -8,9 +8,10 @@ It provides local shells, workspaces, split panes and a bundled automation CLI. 
 client and identity/device service are implemented; production hosting is pending. Remote
 terminal transport, mobile clients and full terminal UX parity remain in development.
 
-[Download a macOS development build](docs/development-builds.md) from a successful GitHub
-Actions run. Universal app compilation, packaged native smoke checks and artifact upload
-are required before a build is offered; this is an ad-hoc signed development app.
+GitHub Actions produces diagnostic [macOS development archives](docs/development-builds.md).
+The next user-facing parity artifact is held until full audited compatibility and native,
+remote, cloud and stability acceptance pass. Current snapshots have incomplete features
+and are ad-hoc signed development apps.
 
 ## Development
 
@@ -33,6 +34,9 @@ This runs a local command in a real PTY and returns its final visible screen and
 as JSON. It does not open a native window, retain the full output transcript, or connect
 remotely. It times out after 10 seconds; set `--timeout SECONDS` before `--` when needed.
 See [prototype limits](docs/terminal-prototype.md).
+
+Grouped offline help, an automation guide, command discovery and socket password/access
+modes are described in [local control](docs/local-control.md).
 
 ## Terminal history and attention
 

@@ -12,6 +12,7 @@ nix = { workspace = true, features = ["socket", "user"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+subtle.workspace = true
 zmux-workspace-core.workspace = true
 zmux-session-runtime.workspace = true
 zmux-terminal-adapter.workspace = true

@@ -331,10 +331,18 @@ pub extern "C" fn zmux_desktop_create() -> ZmuxResult {
         let control = std::env::var_os("ZMUX_SOCKET")
             .map(PathBuf::from)
             .map(|path| {
-                ControlServer::start(&path, Arc::clone(&runtime)).map_err(|error| {
-                    eprintln!("zmux local control startup failed: {error}");
-                    INTERNAL
-                })
+                let policy = zmux_desktop_runtime::control_credentials::server_policy().map_err(
+                    |error| {
+                        eprintln!("zmux local control policy configuration failed: {error}");
+                        INTERNAL
+                    },
+                )?;
+                ControlServer::start_with_policy(&path, Arc::clone(&runtime), policy).map_err(
+                    |error| {
+                        eprintln!("zmux local control startup failed: {error}");
+                        INTERNAL
+                    },
+                )
             })
             .transpose()?;
         registry.insert(Entry::Desktop(Arc::new(NativeDesktop { runtime, control })))

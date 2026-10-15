@@ -5,6 +5,11 @@
 
 ## Delivered slices
 
+- F03a implemented locally: local socket access/password modes, credential precedence
+  and private-file validation, executor admission revocation and deny-by-default remote
+  policy. Full checks pass (57 Rust tests plus C ABI); native/managed/resource gates
+  remain open. Fresh repair review passed. See [receipt](references/f03-socket-authorization.md).
+
 - F01a implemented locally: shared command registry, grouped/task/leaf offline help,
   guide/skill alias, executable JSON catalog and app capabilities. Parser regressions
   for literal stdin markers and malformed browser help repaired; full checks pass

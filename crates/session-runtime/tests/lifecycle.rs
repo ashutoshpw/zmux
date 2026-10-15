@@ -45,6 +45,22 @@ fn real_pty_output_is_parsed_and_process_exit_is_reported() {
 }
 
 #[test]
+fn socket_password_scrubbing_wins_over_application_environment_overrides() {
+    let mut session = Session::spawn_with_environment(Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "printf 'credential=%s context=%s' \"${ZMUX_SOCKET_PASSWORD-unset}\" \"$ZMUX_SURFACE_ID\"".into()],
+        cwd: None,
+        size: Size { rows: 8, cols: 60 },
+    }, &[("ZMUX_SOCKET_PASSWORD".into(), "synthetic-secret".into()), ("ZMUX_SURFACE_ID".into(), "owned-surface".into())]).unwrap();
+    let snapshot = wait_for(&session, |s| s.state == State::Exited);
+    assert_eq!(
+        snapshot.viewport.contents,
+        "credential=unset context=owned-surface"
+    );
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+#[test]
 fn input_and_resize_reach_the_real_terminal() {
     let mut session = launch("read line; stty size; printf '\\naccepted:%s\\n' \"$line\"");
     session.resize(Size { rows: 12, cols: 45 }).unwrap();

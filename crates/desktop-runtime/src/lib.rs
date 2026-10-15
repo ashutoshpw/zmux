@@ -1,6 +1,8 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
 pub mod attention;
 pub mod control;
+pub mod control_credentials;
+pub mod control_policy;
 pub mod targets;
 use attention::{Attention, AttentionCommand, Notification};
 use targets::{TargetOperation, TargetRequest};
@@ -102,6 +104,8 @@ pub struct Request {
 
 #[derive(Debug, Error)]
 pub enum DesktopError {
+    #[error("{0}")]
+    Policy(#[from] control_policy::PolicyError),
     #[error("target surface is not a terminal")]
     NotTerminal,
     #[error("terminal is starting or no longer available")]
@@ -156,6 +160,7 @@ pub struct Desktop {
 struct Envelope {
     request: Request,
     acknowledgement: Option<SyncSender<Execution>>,
+    authorization: Option<control_policy::ControlAdmission>,
 }
 
 pub(crate) struct Execution {
@@ -225,19 +230,22 @@ impl Desktop {
         self.send(Envelope {
             request,
             acknowledgement: None,
+            authorization: None,
         })
     }
 
-    pub(crate) fn execute(
+    pub(crate) fn execute_authorized(
         &self,
         request: Request,
         timeout: Duration,
+        authorization: control_policy::ControlAdmission,
     ) -> Result<Execution, DesktopError> {
         self.validate(&request)?;
         let (sender, receiver) = mpsc::sync_channel(1);
         self.send(Envelope {
             request,
             acknowledgement: Some(sender),
+            authorization: Some(authorization),
         })?;
         receiver.recv_timeout(timeout).map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
@@ -490,7 +498,23 @@ impl Worker {
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
         self.last_request_id = request.request_id;
-        let result = match request.payload {
+        let authorization = envelope.authorization;
+        let guard = authorization
+            .as_ref()
+            .map(|admission| admission.check())
+            .transpose();
+        let result = match guard {
+            Err(error) => Err(error.into()),
+            Ok(_guard) => self.execute_command(request.payload),
+        };
+        self.last_error = result.as_ref().err().map(ToString::to_string);
+        let snapshot = self.publish(false);
+        if let Some(sender) = envelope.acknowledgement {
+            let _ = sender.try_send(Execution { result, snapshot });
+        }
+    }
+    fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
+        match command {
             Command::Targeted { request } => self.targeted(request),
             Command::Attention { action } => self.attention_action(action),
             Command::Action { action } => {
@@ -544,11 +568,6 @@ impl Worker {
                 }
                 None => Err(DesktopError::Failure("terminal no longer exists".into())),
             },
-        };
-        self.last_error = result.as_ref().err().map(ToString::to_string);
-        let snapshot = self.publish(false);
-        if let Some(sender) = envelope.acknowledgement {
-            let _ = sender.try_send(Execution { result, snapshot });
         }
     }
     fn targeted(&mut self, request: TargetRequest) -> Result<(), DesktopError> {

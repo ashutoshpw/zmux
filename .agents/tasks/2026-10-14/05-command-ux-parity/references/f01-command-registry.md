@@ -41,3 +41,7 @@ Requested `gpt-5.6-sol / high`; realized model/effort unobservable in native met
 Fresh reviewer `/root/registry_repair_review`: **ship**, no material findings.
 Requested `gpt-5.6-sol / high`; realized model/effort unobservable.
 All 35 catalog leaves and aliases were checked offline; native acceptance remains open.
+
+Hosted native evidence: macOS Actions run `38706071891` at `c572484` passed Rust
+checks, universal compilation and packaged native smoke. Its archive is diagnostic,
+not a full-parity delivery; it was not downloaded/reverified as a final artifact.

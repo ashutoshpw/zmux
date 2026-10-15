@@ -323,7 +323,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --timeout <MILLIS>   Client deadline (50–30000 milliseconds)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
+const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client deadline (50–30000 milliseconds)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
 const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Leading --workspace/--pane/--surface options constrain ownership.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  Explicit selectors override inherited caller defaults. Without them,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Surface caller identity follows tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
 pub(super) fn find(name: &str) -> Option<&'static CommandSpec> {
     COMMANDS
@@ -337,6 +337,7 @@ pub(super) fn top_help() -> String {
     out.push_str(GLOBAL);
     out.push('\n');
     out.push_str(TARGETS);
+    out.push_str("\nSocket authentication:\n  Same-user peer checks apply in every mode. Password precedence:\n  --password, ZMUX_SOCKET_PASSWORD, then ~/.config/zmux/socket-password.\n  ZMUX_SOCKET_PASSWORD_FILE selects another private credential file.\n  ZMUX_SOCKET_PATH overrides the default socket (ZMUX_SOCKET remains an alias).\n");
     out.push_str("\nCommands:\n");
     for (group, title) in GROUPS {
         let rows: Vec<_> = COMMANDS.iter().filter(|s| s.group == *group).collect();
