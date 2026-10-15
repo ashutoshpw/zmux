@@ -13,22 +13,43 @@ struct DownloadFilesProbe {
         throw BrowserDownloadFileFailure(message: "Expected an explicit owned-filesystem refusal")
     }
     static func main() async throws {
-        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+        let requested = FileManager.default.temporaryDirectory
             .appendingPathComponent("zmux-download-files-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         do {
+            // Foundation path standardization can restore an alias such as /var.
+            // Only POSIX realpath establishes the strict walk's actual root.
+            let canonicalPath = try realPath(requested.path)
+            let root = URL(fileURLWithPath: canonicalPath, isDirectory: true)
+            try require(root.path == canonicalPath, "File URL changed the POSIX canonical fixture path")
+            let foundationRoot = root.resolvingSymlinksInPath()
+            FileHandle.standardError.write(Data(("Download fixture root: " + root.path + "; Foundation-resolved: " + foundationRoot.path + "\n").utf8))
+            if foundationRoot.path != canonicalPath {
+                try await expectFailure {
+                    _ = try await BrowserDownloadFiles().prepare(UUID(), destination: foundationRoot.appendingPathComponent("foundation-alias.bin"))
+                }
+            }
             try await run(root)
             try FileManager.default.removeItem(at: root)
         } catch {
-            do { try FileManager.default.removeItem(at: root) }
+            // requested remains available even if POSIX realpath itself failed.
+            do { try FileManager.default.removeItem(at: requested) }
             catch { FileHandle.standardError.write(Data(("download-files fixture cleanup failed: " + error.localizedDescription + "\n").utf8)) }
             throw error
         }
         print("Download files passed: absent handoff, exact bytes/attributes, no replacement, symlink refusal and owned cancellation cleanup.")
     }
+    private static func realPath(_ path: String) throws -> String {
+        guard let resolved = Darwin.realpath(path, nil) else {
+            throw BrowserDownloadFileFailure(message: "Could not resolve the fixture root (errno " + String(errno) + ").")
+        }
+        defer { Darwin.free(resolved) }
+        return String(cString: resolved)
+    }
     static func run(_ root: URL) async throws {
         let files = BrowserDownloadFiles()
         let id = UUID(), final = root.appendingPathComponent("saved.bin")
+        try require(final.path == root.path + "/saved.bin", "Appending the final leaf changed the canonical parent")
         let payload = try await files.prepare(id, destination: final)
         try require(!FileManager.default.fileExists(atPath: payload.path), "WebKit handoff must name an absent file")
         let bytes = Data([0, 1, 255, 2, 3])

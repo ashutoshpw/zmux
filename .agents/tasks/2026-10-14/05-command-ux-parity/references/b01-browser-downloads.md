@@ -222,3 +222,14 @@ Parent independent full `scripts/check` passed in
 `/tmp/zmux-downloads-parent-check.log`). The final list-default timeout correction
 was then verified with the two public download CLI tests. Independent source review
 and eleven owner, one ABI and two CLI cases passed; native gates remain pending.
+
+## First Darwin file-owner run
+
+Run `38775130649` compiled the strict Swift file probe but failed its initial
+directory walk with ENOTDIR. The repair preserves lexical POSIX path components
+through preparation/publication and uses realpath for fixture setup: Foundation
+normalization may restore macOS /var or /tmp aliases. All no-follow directory walks,
+inode checks, no-replacement publication and alias refusal remain. The probe runs
+both default and /tmp temporary roots; native smoke records selected panel paths.
+Parent source review accepts the scoped change; shell syntax/diff checks pass.
+Hosted execution is still required to establish the actual path behavior and repair.

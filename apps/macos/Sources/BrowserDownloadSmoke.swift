@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import WebKit
 
 /// Actual WKDownload conversion, native save sheet actions and bundled CLI receipts.
@@ -33,10 +34,24 @@ enum BrowserDownloadSmoke {
         browser: @MainActor (UInt64) -> BrowserView?
     ) async throws {
         let setup = Task<URL, Error>.detached {
-            let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            let requested = FileManager.default.temporaryDirectory
                 .appendingPathComponent("zmux-native-download-" + UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-            return root
+            try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            do {
+                guard let resolved = Darwin.realpath(requested.path, nil) else {
+                    throw BridgeFailure(message: "Could not resolve the native download fixture (errno " + String(errno) + ").")
+                }
+                defer { Darwin.free(resolved) }
+                let path = String(cString: resolved)
+                let root = URL(fileURLWithPath: path, isDirectory: true)
+                guard root.path == path else { throw BridgeFailure(message: "File URL changed the canonical native download fixture path") }
+                FileHandle.standardError.write(Data(("Native download fixture root: " + root.path + "\n").utf8))
+                return root
+            } catch {
+                do { try FileManager.default.removeItem(at: requested) }
+                catch { FileHandle.standardError.write(Data(("native download fixture setup cleanup: " + error.localizedDescription + "\n").utf8)) }
+                throw error
+            }
         }
         let root = try await setup.value
         var surface: UInt64?
@@ -60,7 +75,9 @@ enum BrowserDownloadSmoke {
                 try await wait("Native download save sheet did not open") { window.attachedSheet is NSSavePanel && snapshot()?.downloads.contains { !prior.contains($0.downloadId) } == true }
                 guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Download did not use NSSavePanel") }
                 let destination = root.appendingPathComponent("saved-" + String(index) + ".bin")
-                panel.directoryURL = root; panel.nameFieldStringValue = destination.lastPathComponent; panel.ok(nil)
+                panel.directoryURL = root; panel.nameFieldStringValue = destination.lastPathComponent
+                FileHandle.standardError.write(Data(("Download save panel URL: " + (panel.url?.path ?? "not selected") + "\n").utf8))
+                panel.ok(nil)
                 try await wait("Native download never confirmed final publication") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "saved" && $0.cleanupComplete } == true }
                 let verify = Task<Data, Error>.detached { try Data(contentsOf: destination) }
                 guard try await verify.value == expected else { throw BridgeFailure(message: "WebKit saved different download bytes") }
@@ -85,7 +102,9 @@ enum BrowserDownloadSmoke {
             _ = try await cli(["browser", "goto"] + target + [origin + "/download-slow"], false)
             try await wait("Slow download save sheet did not open") { window.attachedSheet is NSSavePanel }
             guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Slow download lost its save sheet") }
-            panel.directoryURL = root; panel.nameFieldStringValue = "cancelled.bin"; panel.ok(nil)
+            panel.directoryURL = root; panel.nameFieldStringValue = "cancelled.bin"
+            FileHandle.standardError.write(Data(("Slow download save panel URL: " + (panel.url?.path ?? "not selected") + "\n").utf8))
+            panel.ok(nil)
             try await wait("Slow download did not start") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "downloading" } == true }
             guard let slow = snapshot()?.downloads.first(where: { !prior.contains($0.downloadId) }) else { throw BridgeFailure(message: "Slow download lost its owner") }
             _ = try await cli(["browser", "goto"] + target + [origin + "/second"], false)

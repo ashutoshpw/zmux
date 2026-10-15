@@ -21,8 +21,8 @@ actor BrowserDownloadFiles {
         let staging: Int32
         let stagingName: String
         let finalName: String
-        let finalURL: URL
-        let payloadURL: URL
+        let finalPath: String
+        let parentPath: String
         let device: dev_t
         let inode: ino_t
     }
@@ -36,17 +36,25 @@ actor BrowserDownloadFiles {
               !destination.path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
             throw failure("The selected download destination is invalid or capacity is full.")
         }
-        let name = destination.lastPathComponent
-        guard try JSONEncoder().encode(destination.path).count <= 4096 else { throw failure("The selected destination path is too long.") }
+        // Treat the selected path as lexical POSIX components. Foundation's URL
+        // parent/standardization APIs can turn /private/var back into /var on macOS,
+        // reintroducing a symlink after the caller selected a canonical path.
+        let path = destination.path
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard let last = components.last, !path.hasSuffix("/"),
+              let separator = path.lastIndex(of: "/") else { throw failure("Choose a valid filename.") }
+        let name = String(last)
+        let parentPath = separator == path.startIndex ? "/" : String(path[..<separator])
+        guard try JSONEncoder().encode(path).count <= 4096 else { throw failure("The selected destination path is too long.") }
         guard !name.isEmpty, ![".", ".."].contains(name), name.utf8.count <= 255,
               !name.contains("/"), !name.contains("\\") else { throw failure("Choose a valid filename.") }
         let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
         var parent = Darwin.open("/", flags)
         guard parent >= 0 else { throw systemFailure("open destination root") }
         do {
-            for component in destination.deletingLastPathComponent().pathComponents.dropFirst() {
+            for component in components.dropLast() {
                 guard component != ".", component != ".." else { throw failure("Destination traversal is not allowed.") }
-                let next = component.withCString { Darwin.openat(parent, $0, flags) }
+                let next = String(component).withCString { Darwin.openat(parent, $0, flags) }
                 guard next >= 0 else { throw systemFailure("open destination directory (choose a path without symlink components)") }
                 Darwin.close(parent)
                 parent = next
@@ -72,9 +80,10 @@ actor BrowserDownloadFiles {
                 Darwin.close(staging)
                 throw failure("The private download directory has unexpected ownership.")
             }
-            let payload = destination.deletingLastPathComponent().appendingPathComponent(stagingName, isDirectory: true).appendingPathComponent("payload")
+            let payloadPath = parentPath + (parentPath == "/" ? "" : "/") + stagingName + "/payload"
+            let payload = URL(fileURLWithPath: payloadPath)
             placements[id] = Placement(parent: parent, staging: staging, stagingName: stagingName,
-                                       finalName: name, finalURL: destination, payloadURL: payload,
+                                       finalName: name, finalPath: path, parentPath: parentPath,
                                        device: info.st_dev, inode: info.st_ino)
             unresolvedDirectories.remove(id)
             return payload
@@ -116,7 +125,7 @@ actor BrowserDownloadFiles {
             Darwin.close(placement.staging)
             Darwin.close(placement.parent)
         }
-        return PublishedBrowserDownload(path: placement.finalURL.path, bytes: UInt64(info.st_size), cleanupError: cleanupError, cleanupComplete: cleanupComplete)
+        return PublishedBrowserDownload(path: placement.finalPath, bytes: UInt64(info.st_size), cleanupError: cleanupError, cleanupComplete: cleanupComplete)
     }
 
     func discard(_ id: UUID) throws {
@@ -149,7 +158,7 @@ actor BrowserDownloadFiles {
         // must match the retained parent descriptor. Publication/cleanup use that
         // descriptor; they cannot be redirected to a substituted directory.
         let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-        let current = Darwin.open(placement.finalURL.deletingLastPathComponent().path, flags)
+        let current = Darwin.open(placement.parentPath, flags)
         guard current >= 0 else { throw systemFailure("verify destination directory") }
         defer { Darwin.close(current) }
         var expected = stat(), actual = stat()

@@ -11,3 +11,6 @@ xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -wa
     apps/macos/Sources/BrowserDownloadFiles.swift tools/native-fixtures/download-files.swift \
     -o "$scratch/download-files"
 "$scratch/download-files"
+# Retain the macOS /tmp -> /private/tmp alias case alongside the runner's
+# default /var/folders temporary root. The owner must still refuse aliases.
+TMPDIR=/tmp/ "$scratch/download-files"
