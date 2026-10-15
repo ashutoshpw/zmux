@@ -109,7 +109,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         onScroll?(lines)
     }
     override func scrollWheel(with event: NSEvent) {
-        guard let viewport else { return }
+        guard viewport != nil else { return }
         if event.phase == .began { wheelRemainder = 0 }
         wheelRemainder += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / lineHeight : event.scrollingDeltaY * 3
         let lines = Int(max(-1000, min(1000, wheelRemainder)))
