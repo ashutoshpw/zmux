@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Original Zmux workspace actions and state invariants"
 
 [dependencies]
+uuid.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 

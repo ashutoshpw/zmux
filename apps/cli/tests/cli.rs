@@ -1,7 +1,9 @@
 use serde_json::Value;
 use std::{
     fs,
+    io::{Read, Write},
     os::unix::fs::PermissionsExt,
+    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::{
@@ -32,6 +34,9 @@ fn socket_path() -> PathBuf {
 fn invoke(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_zmux"))
         .args(args)
+        .env_remove("ZMUX_WORKSPACE_ID")
+        .env_remove("ZMUX_SURFACE_ID")
+        .env_remove("ZMUX_TAB_ID")
         .output()
         .unwrap()
 }
@@ -43,6 +48,9 @@ fn invoke_app(socket: &Path, args: &[&str]) -> Value {
         .arg("--timeout")
         .arg("5000")
         .args(args)
+        .env_remove("ZMUX_WORKSPACE_ID")
+        .env_remove("ZMUX_SURFACE_ID")
+        .env_remove("ZMUX_TAB_ID")
         .output()
         .unwrap();
     assert!(
@@ -120,6 +128,33 @@ fn help_and_version_are_complete_and_offline() {
         );
         assert!(String::from_utf8(output.stdout).unwrap().contains("Usage:"));
     }
+    for (args, expected) in [
+        (
+            vec!["rename-workspace", "--bogus"],
+            "unknown rename-workspace option",
+        ),
+        (
+            vec!["focus-pane", "--pane", "1", "--pane", "2"],
+            "repeated --pane",
+        ),
+        (vec!["focus-pane", "--pane", "pane:0"], "positive ID"),
+        (
+            vec!["notify", "--title", "t", "--body", "", "--body", "again"],
+            "invalid or repeated notify option",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .args(["--socket", "relative-socket-must-not-be-used"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "parser did not reject before connecting: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let version = invoke(&["--version"]);
     assert!(version.status.success());
     assert!(
@@ -183,12 +218,86 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
     assert!(
         String::from_utf8(rejected.stderr)
             .unwrap()
-            .contains("command_rejected")
+            .contains("target_not_found")
     );
 
+    let initial_catalog = invoke_app(&socket, &["list-workspaces"]);
+    let initial_workspace_uuid = initial_catalog["targets"][0]["uuid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let created = invoke_app(&socket, &["new-workspace", "CLI Workspace"]);
     let workspace_id = id(&created, "focused_workspace");
+    let workspace_uuid = created["focused_workspace_uuid"]
+        .as_str()
+        .expect("created workspace must expose its stable UUID")
+        .to_owned();
+    let pane_uuid = created["focused_pane_uuid"]
+        .as_str()
+        .expect("created pane must expose its stable UUID")
+        .to_owned();
+    invoke_app(&socket, &["rename-workspace", &workspace_uuid, "By UUID"]);
+    let wrong_kind = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["rename-workspace", &pane_uuid, "Wrong target"])
+        .output()
+        .unwrap();
+    assert!(!wrong_kind.status.success());
+    assert!(String::from_utf8_lossy(&wrong_kind.stderr).contains("wrong_target_kind"));
+    invoke_app(
+        &socket,
+        &[
+            "rename-workspace",
+            &format!("workspace:{workspace_id}"),
+            "CLI Workspace",
+        ],
+    );
     let original_pane = id(&created, "focused_pane");
+    let via_index = invoke_app(&socket, &["list-panes", "--workspace", "index:2"]);
+    assert_eq!(id(&via_index["panes"][0], "pane_id"), original_pane);
+    let inherited = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["rename-workspace", "Caller workspace"])
+        .env("ZMUX_WORKSPACE_ID", &initial_workspace_uuid)
+        .env_remove("ZMUX_SURFACE_ID")
+        .env_remove("ZMUX_TAB_ID")
+        .output()
+        .unwrap();
+    assert!(
+        inherited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inherited.stderr)
+    );
+    let stale = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args([
+            "rename-workspace",
+            "--expect-revision",
+            "18446744073709551615",
+            &workspace_uuid,
+            "Stale rename",
+        ])
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("stale_revision"));
+    let foreign = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args([
+            "focus-pane",
+            "--workspace",
+            &initial_workspace_uuid,
+            &pane_uuid,
+        ])
+        .output()
+        .unwrap();
+    assert!(!foreign.status.success());
+    assert!(String::from_utf8_lossy(&foreign.stderr).contains("target_scope_mismatch"));
+
     let workspaces = invoke_app(&socket, &["list-workspaces"]);
     assert!(
         workspaces["workspaces"]
@@ -283,7 +392,13 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
     }
     let restored = invoke_app(&socket, &["list-pane-surfaces", &original_pane]);
     assert_eq!(restored["surfaces"].as_array().unwrap().len(), 2);
-    let restored_id = id(&restored["surfaces"][1], "surface_id");
+    let restored_surface = restored["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|surface| id(surface, "surface_id") != first_tab_id)
+        .expect("reopening creates a fresh tab alongside the surviving original");
+    let restored_id = id(restored_surface, "surface_id");
     assert_ne!(restored_id, tab_id);
     invoke_app(&socket, &["close-surface", &restored_id]);
 
@@ -299,18 +414,31 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
         ],
     );
 
+    invoke_app(
+        &socket,
+        &[
+            "send-text",
+            &original_pane,
+            "printf '\\nCONTEXT_W=%s\\nCONTEXT_S=%s\\n' \"$ZMUX_WORKSPACE_ID\" \"$ZMUX_SURFACE_ID\"\r",
+        ],
+    );
     let output_deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let screen = invoke_app(&socket, &["read-screen", &original_pane]);
-        if screen["contents"]
-            .as_str()
-            .is_some_and(|contents| contents.contains("ZMUX_CLI_SOCKET_OK"))
-        {
+        if screen["contents"].as_str().is_some_and(|contents| {
+            contents.contains("ZMUX_CLI_SOCKET_OK")
+                && contents.contains(&format!("CONTEXT_W={workspace_uuid}"))
+                && contents.contains(&format!(
+                    "CONTEXT_S={}",
+                    created["focused_surface_uuid"].as_str().unwrap()
+                ))
+        }) {
             break;
         }
         assert!(
             Instant::now() < output_deadline,
-            "CLI input did not reach the real terminal"
+            "CLI input/context did not reach the real terminal: {screen}; expected workspace {workspace_uuid}, surface {}",
+            created["focused_surface_uuid"]
         );
         thread::sleep(Duration::from_millis(10));
     }
@@ -337,11 +465,81 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
             .iter()
             .any(|s| s["url"] == "https://example.com/")
     );
+    let browser_uuid = browser["surface_uuid"].as_str().unwrap();
+    for command in [
+        serde_json::json!({"method":"send_text", "pane_id":new_pane.parse::<u64>().unwrap(), "text":"must not reach a browser"}),
+        serde_json::json!({"method":"targeted", "request": {"scope":{"surface":browser_uuid}, "operation":{"operation":"send_text","text":"must not reach a browser"}}}),
+    ] {
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"version":1,"request_id":90001,"command":command}),
+        )
+        .unwrap();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&bytes).unwrap();
+        let mut header = [0; 4];
+        stream.read_exact(&mut header).unwrap();
+        let mut body = vec![0; u32::from_be_bytes(header) as usize];
+        stream.read_exact(&mut body).unwrap();
+        let response: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"]["code"], "not_terminal",
+            "browser rejection lost its typed error: {response}"
+        );
+    }
+    let rejected_browser_input = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args([
+            "send-text",
+            "--surface",
+            browser_uuid,
+            "must not reach a browser",
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected_browser_input.status.success());
+    assert!(String::from_utf8_lossy(&rejected_browser_input.stderr).contains("not_terminal"));
     invoke_app(&socket, &["close-pane", &new_pane]);
     let panes = invoke_app(&socket, &["list-panes", "--workspace", &workspace_id]);
     assert_eq!(panes["panes"].as_array().unwrap().len(), 1);
 
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let replacement = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/sh".into(),
+            args: vec!["-i".into()],
+            cwd: None,
+        })
+        .unwrap(),
+    );
+    let replacement_server = ControlServer::start(&socket, Arc::clone(&replacement)).unwrap();
+    let replaced = invoke_app(&socket, &["list-workspaces"]);
+    // Startup is asynchronous; wait for the production owner's initial workspace.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut replaced = replaced;
+    while replaced["workspaces"].as_array().unwrap().is_empty() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+        replaced = invoke_app(&socket, &["list-workspaces"]);
+    }
+    assert_eq!(replaced["workspaces"][0]["id"], 1);
+    let stale_uuid = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["rename-workspace", &initial_workspace_uuid, "Wrong app"])
+        .output()
+        .unwrap();
+    assert!(!stale_uuid.status.success());
+    assert!(String::from_utf8_lossy(&stale_uuid.stderr).contains("target_not_found"));
+    replacement_server.shutdown(Duration::from_secs(2)).unwrap();
+    replacement.shutdown(Duration::from_secs(5)).unwrap();
     fs::remove_dir(socket.parent().unwrap()).unwrap();
 }

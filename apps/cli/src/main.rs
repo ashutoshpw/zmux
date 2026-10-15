@@ -16,7 +16,8 @@ use zmux_desktop_runtime::control::{
     MAX_CONTROL_RESPONSE_BYTES,
 };
 use zmux_session_runtime::{Launch, Session, SessionError, State};
-use zmux_workspace_core::{Action, Axis, PaneId, SurfaceId, WorkspaceId};
+use zmux_workspace_core::{Action, Axis};
+mod targets;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -62,6 +63,15 @@ Commands:
   read-screen           Read a pane's current visible screen
   prototype             Run a standalone PTY command without the app
   help                  Print this help or help for one command
+
+Targets:
+  Target arguments accept UUIDs, positive legacy IDs, or typed refs such as pane:2.
+  Use index:N for a one-based position; tab:N is an alias for surface:N.
+  Leading --workspace/--pane/--surface options constrain target ownership.
+  --expect-revision guards a previously observed model_revision.
+  Omitted targets use ZMUX_WORKSPACE_ID/ZMUX_SURFACE_ID, then the focused object.
+  Explicit selectors override inherited caller defaults. UUIDs survive tab moves and
+  reordering; reopened terminals receive new UUIDs. Numeric IDs remain supported.
 
 Local-control results are printed as JSON. Run `zmux help <COMMAND>` for details.
 "#;
@@ -173,6 +183,11 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
     }
     let command = args.get(index).and_then(|value| value.to_str());
     let tail = &args[(index + 1).min(args.len())..];
+    if let Some(command) = command
+        && targets::COMMANDS.contains(&command)
+    {
+        return Ok((targets::parse(command, tail)?, socket, timeout));
+    }
     let parsed = match command {
         None | Some("-h" | "--help") => Parsed::Offline(Offline::Help(None)),
         Some("-V" | "--version") => Parsed::Offline(Offline::Version),
@@ -195,109 +210,16 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
         Some("list-workspaces") => {
             app_no_args("list-workspaces", tail, ControlCommand::ListWorkspaces)?
         }
-        Some("list-panes") => parse_list_panes(tail)?,
         Some("new-workspace") => help_or_exact("new-workspace", tail, 1, |values| {
             Ok(ControlCommand::NewWorkspace {
                 name: values[0].clone(),
             })
         })?,
-        Some("rename-workspace") => help_or_exact("rename-workspace", tail, 2, |values| {
-            Ok(ControlCommand::RenameWorkspace {
-                workspace_id: WorkspaceId(parse_id(&values[0], "workspace")?),
-                name: values[1].clone(),
-            })
-        })?,
-        Some("focus-pane") => help_or_exact("focus-pane", tail, 1, |values| {
-            Ok(ControlCommand::FocusPane {
-                pane_id: PaneId(parse_id(&values[0], "pane")?),
-            })
-        })?,
-        Some("split-pane") => help_or_exact("split-pane", tail, 2, |values| {
-            let axis = match values[1].as_str() {
-                "horizontal" => Axis::Horizontal,
-                "vertical" => Axis::Vertical,
-                _ => {
-                    return Err(CliError(
-                        "split axis must be `horizontal` or `vertical`".into(),
-                    ));
-                }
-            };
-            Ok(ControlCommand::SplitPane {
-                pane_id: PaneId(parse_id(&values[0], "pane")?),
-                axis,
-            })
-        })?,
-        Some("close-pane") => help_or_exact("close-pane", tail, 1, |values| {
-            Ok(ControlCommand::ClosePane {
-                pane_id: PaneId(parse_id(&values[0], "pane")?),
-            })
-        })?,
-        Some("browser") => {
-            if help_requested(tail) || tail.first().is_some_and(|v| v == "help") {
-                Parsed::Offline(Offline::Help(Some("browser".into())))
-            } else {
-                let values = utf8_args(tail)?;
-                let action = match values.as_slice() {
-                    [verb, pane, url] if verb == "open" => Action::CreateBrowser {
-                        pane_id: PaneId(parse_id(pane, "pane")?),
-                        url: url.clone(),
-                    },
-                    [verb, surface, url] if verb == "navigate" || verb == "goto" => {
-                        Action::NavigateBrowser {
-                            surface_id: SurfaceId(parse_id(surface, "surface")?),
-                            url: url.clone(),
-                        }
-                    }
-                    _ => return Err(CliError(
-                        "usage: zmux browser open PANE_ID URL | browser navigate SURFACE_ID URL"
-                            .into(),
-                    )),
-                };
-                Parsed::App(ControlCommand::Action { action })
-            }
-        }
         Some("list-notifications") => app_no_args(
             "list-notifications",
             tail,
             ControlCommand::ListNotifications,
         )?,
-        Some("notify") => {
-            if help_requested(tail) {
-                Parsed::Offline(Offline::Help(Some("notify".into())))
-            } else {
-                let values = utf8_args(tail)?;
-                let mut surface = None;
-                let mut title = None;
-                let mut body = String::new();
-                if values.len() % 2 != 0 {
-                    return Err(CliError(
-                        "notify expects flag/value pairs; run zmux help notify".into(),
-                    ));
-                }
-                for pair in values.chunks_exact(2) {
-                    match pair[0].as_str() {
-                        "--surface" if surface.is_none() => {
-                            surface = Some(SurfaceId(parse_id(&pair[1], "surface")?))
-                        }
-                        "--title" if title.is_none() => title = Some(pair[1].clone()),
-                        "--body" if body.is_empty() => body = pair[1].clone(),
-                        other => {
-                            return Err(CliError(format!(
-                                "invalid or repeated notify option {other}"
-                            )));
-                        }
-                    }
-                }
-                Parsed::App(ControlCommand::Attention {
-                    action: AttentionCommand::Notify {
-                        surface_id: surface
-                            .ok_or_else(|| CliError("notify requires --surface".into()))?,
-                        title: title.ok_or_else(|| CliError("notify requires --title".into()))?,
-                        body,
-                    },
-                })
-            }
-        }
         Some(
             "mark-notification-read"
             | "open-notification"
@@ -343,79 +265,6 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
                 })
             }
         }
-        Some("new-surface") => help_or_exact("new-surface", tail, 1, |v| {
-            Ok(ControlCommand::Action {
-                action: Action::CreateSurface {
-                    pane_id: PaneId(parse_id(&v[0], "pane")?),
-                },
-            })
-        })?,
-        Some("list-pane-surfaces") => help_or_exact("list-pane-surfaces", tail, 1, |v| {
-            Ok(ControlCommand::ListPaneSurfaces {
-                pane_id: PaneId(parse_id(&v[0], "pane")?),
-            })
-        })?,
-        Some("select-surface" | "close-surface" | "close-other-tabs") => {
-            let command = command.unwrap();
-            help_or_exact(command, tail, 1, |v| {
-                let surface_id = SurfaceId(parse_id(&v[0], "surface")?);
-                Ok(ControlCommand::Action {
-                    action: match command {
-                        "select-surface" => Action::SelectSurface { surface_id },
-                        "close-surface" => Action::CloseSurface { surface_id },
-                        _ => Action::CloseOtherSurfaces { surface_id },
-                    },
-                })
-            })?
-        }
-        Some("rename-tab") => help_or_exact("rename-tab", tail, 2, |v| {
-            Ok(ControlCommand::Action {
-                action: Action::RenameSurface {
-                    surface_id: SurfaceId(parse_id(&v[0], "surface")?),
-                    name: v[1].clone(),
-                },
-            })
-        })?,
-        Some("reorder-surface" | "move-surface") => {
-            let command = command.unwrap();
-            help_or_exact(
-                command,
-                tail,
-                if command == "move-surface" { 3 } else { 2 },
-                |v| {
-                    let surface_id = SurfaceId(parse_id(&v[0], "surface")?);
-                    let index = v
-                        .last()
-                        .unwrap()
-                        .parse::<usize>()
-                        .map_err(|_| CliError("index must be a nonnegative integer".into()))?;
-                    Ok(ControlCommand::Action {
-                        action: if command == "move-surface" {
-                            Action::MoveSurface {
-                                surface_id,
-                                pane_id: PaneId(parse_id(&v[1], "pane")?),
-                                index,
-                            }
-                        } else {
-                            Action::ReorderSurface { surface_id, index }
-                        },
-                    })
-                },
-            )?
-        }
-        Some("close-workspace") => help_or_exact("close-workspace", tail, 1, |v| {
-            Ok(ControlCommand::Action {
-                action: Action::CloseWorkspace {
-                    workspace_id: WorkspaceId(parse_id(&v[0], "workspace")?),
-                },
-            })
-        })?,
-        Some("send-text") => parse_send_text(tail)?,
-        Some("read-screen") => help_or_exact("read-screen", tail, 1, |values| {
-            Ok(ControlCommand::ReadScreen {
-                pane_id: PaneId(parse_id(&values[0], "pane")?),
-            })
-        })?,
         Some("prototype") => {
             let values = utf8_args(tail)?;
             if values
@@ -474,49 +323,6 @@ fn help_or_exact(
     }
     let values = utf8_args(tail)?;
     Ok(Parsed::App(build(&values)?))
-}
-
-fn parse_list_panes(tail: &[OsString]) -> Result<Parsed, CliError> {
-    if help_requested(tail) {
-        return Ok(Parsed::Offline(Offline::Help(Some("list-panes".into()))));
-    }
-    let values = utf8_args(tail)?;
-    let workspace_id = match values.as_slice() {
-        [] => None,
-        [flag, id] if flag == "--workspace" => Some(WorkspaceId(parse_id(id, "workspace")?)),
-        _ => {
-            return Err(CliError(
-                "usage: zmux list-panes [--workspace WORKSPACE_ID]".into(),
-            ));
-        }
-    };
-    Ok(Parsed::App(ControlCommand::ListPanes { workspace_id }))
-}
-
-fn parse_send_text(tail: &[OsString]) -> Result<Parsed, CliError> {
-    if help_requested(tail) {
-        return Ok(Parsed::Offline(Offline::Help(Some("send-text".into()))));
-    }
-    let values = utf8_args(tail)?;
-    if values.len() != 2 {
-        return Err(CliError(
-            "usage: zmux send-text PANE_ID <TEXT|--stdin>".into(),
-        ));
-    }
-    let text = if values[1] == "--stdin" {
-        let mut bytes = Vec::new();
-        io::stdin().take(4_097).read_to_end(&mut bytes)?;
-        if bytes.len() > 4_096 {
-            return Err(CliError("stdin text exceeds 4096 bytes".into()));
-        }
-        String::from_utf8(bytes).map_err(|_| CliError("stdin is not valid UTF-8".into()))?
-    } else {
-        values[1].clone()
-    };
-    Ok(Parsed::App(ControlCommand::SendText {
-        pane_id: PaneId(parse_id(&values[0], "pane")?),
-        text,
-    }))
 }
 
 fn help_requested(tail: &[OsString]) -> bool {

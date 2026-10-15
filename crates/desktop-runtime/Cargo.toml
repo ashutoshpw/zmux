@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+uuid = { workspace = true, features = ["v4"] }
 nix = { workspace = true, features = ["socket", "user"] }
 serde.workspace = true
 serde_json.workspace = true

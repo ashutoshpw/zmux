@@ -1,0 +1,433 @@
+//! Stable object addressing and ownership checks. Resolution uses one immutable model revision.
+use crate::{Action, Axis, PaneId, Snapshot, SurfaceId, WorkspaceId};
+use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
+use thiserror::Error;
+use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    Workspace,
+    Pane,
+    Surface,
+}
+impl fmt::Display for TargetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Workspace => "workspace",
+            Self::Pane => "pane",
+            Self::Surface => "surface",
+        })
+    }
+}
+
+/// Numeric forms retain legacy stable-ID semantics. Explicit `index:N` is one-based.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TargetRef(String);
+impl FromStr for TargetRef {
+    type Err = TargetError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let target = Self(value.into());
+        target.selector()?;
+        Ok(target)
+    }
+}
+impl fmt::Display for TargetRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl TargetRef {
+    fn selector(&self) -> Result<Selector, TargetError> {
+        if self.0.len() > 128 {
+            return Err(TargetError::InvalidTarget);
+        }
+        if let Some((prefix, id)) = self.0.split_once(':') {
+            let id = positive(id)?;
+            return match prefix {
+                "workspace" => Ok(Selector::Id(Some(TargetKind::Workspace), id)),
+                "pane" => Ok(Selector::Id(Some(TargetKind::Pane), id)),
+                "surface" | "tab" => Ok(Selector::Id(Some(TargetKind::Surface), id)),
+                "index" => Ok(Selector::Index(id)),
+                _ => Err(TargetError::InvalidTarget),
+            };
+        }
+        if let Ok(uuid) = Uuid::parse_str(&self.0)
+            && uuid.hyphenated().to_string().eq_ignore_ascii_case(&self.0)
+        {
+            return Ok(Selector::Uuid(uuid));
+        }
+        Ok(Selector::Id(None, positive(&self.0)?))
+    }
+    fn is_index(&self) -> Result<bool, TargetError> {
+        Ok(matches!(self.selector()?, Selector::Index(_)))
+    }
+}
+fn positive(value: &str) -> Result<u64, TargetError> {
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(TargetError::InvalidTarget);
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or(TargetError::InvalidTarget)
+}
+enum Selector {
+    Id(Option<TargetKind>, u64),
+    Uuid(Uuid),
+    Index(u64),
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum TargetError {
+    #[error("workspace model changed: expected revision {expected}, current revision {actual}")]
+    StaleRevision { expected: u64, actual: u64 },
+    #[error("target must be a UUID, positive ID, workspace:N/pane:N/surface:N/tab:N, or index:N")]
+    InvalidTarget,
+    #[error("expected a {expected} target, got {actual}")]
+    WrongKind {
+        expected: TargetKind,
+        actual: TargetKind,
+    },
+    #[error("{kind} target {target} no longer exists")]
+    NotFound { kind: TargetKind, target: String },
+    #[error("{kind} target belongs to a different workspace or pane")]
+    ScopeMismatch { kind: TargetKind },
+    #[error("no focused {0} is available")]
+    NoFocus(TargetKind),
+}
+impl TargetError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::StaleRevision { .. } => "stale_revision",
+            Self::InvalidTarget => "invalid_target",
+            Self::WrongKind { .. } => "wrong_target_kind",
+            Self::NotFound { .. } => "target_not_found",
+            Self::ScopeMismatch { .. } => "target_scope_mismatch",
+            Self::NoFocus(_) => "no_focused_target",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ObjectIdentity {
+    pub kind: TargetKind,
+    pub id: u64,
+    pub uuid: Uuid,
+    pub reference: String,
+    pub index: usize,
+    pub workspace_id: WorkspaceId,
+    pub pane_id: Option<PaneId>,
+}
+impl Snapshot {
+    pub fn object_uuid(&self, kind: TargetKind, id: u64) -> Uuid {
+        Uuid::new_v5(&self.identity_namespace, format!("{kind}:{id}").as_bytes())
+    }
+    pub fn target_catalog(&self) -> Vec<ObjectIdentity> {
+        let mut result = Vec::new();
+        for (wi, workspace) in self.workspaces.iter().enumerate() {
+            result.push(self.identity(
+                TargetKind::Workspace,
+                workspace.id.0,
+                wi + 1,
+                workspace.id,
+                None,
+            ));
+            for (pi, pane) in workspace.root.panes().into_iter().enumerate() {
+                result.push(self.identity(
+                    TargetKind::Pane,
+                    pane.id.0,
+                    pi + 1,
+                    workspace.id,
+                    Some(pane.id),
+                ));
+                for (si, surface) in pane.surfaces.iter().enumerate() {
+                    result.push(self.identity(
+                        TargetKind::Surface,
+                        surface.id.0,
+                        si + 1,
+                        workspace.id,
+                        Some(pane.id),
+                    ));
+                }
+            }
+        }
+        result
+    }
+    fn identity(
+        &self,
+        kind: TargetKind,
+        id: u64,
+        index: usize,
+        workspace_id: WorkspaceId,
+        pane_id: Option<PaneId>,
+    ) -> ObjectIdentity {
+        ObjectIdentity {
+            kind,
+            id,
+            uuid: self.object_uuid(kind, id),
+            reference: format!("{kind}:{id}"),
+            index,
+            workspace_id,
+            pane_id,
+        }
+    }
+    fn resolve_handle(
+        &self,
+        handle: &TargetRef,
+        kind: TargetKind,
+        workspace: Option<WorkspaceId>,
+        pane: Option<PaneId>,
+    ) -> Result<ObjectIdentity, TargetError> {
+        let catalog = self.target_catalog();
+        let selector = handle.selector()?;
+        if let Selector::Id(Some(actual), _) = selector
+            && actual != kind
+        {
+            return Err(TargetError::WrongKind {
+                expected: kind,
+                actual,
+            });
+        }
+        let found = match selector {
+            Selector::Uuid(uuid) => catalog.iter().find(|o| o.uuid == uuid),
+            Selector::Id(_, id) => catalog.iter().find(|o| o.id == id),
+            Selector::Index(index) => catalog
+                .iter()
+                .filter(|o| {
+                    o.kind == kind
+                        && workspace.is_none_or(|w| o.workspace_id == w)
+                        && pane.is_none_or(|p| o.pane_id == Some(p))
+                })
+                .nth(usize::try_from(index - 1).unwrap_or(usize::MAX)),
+        }
+        .ok_or_else(|| TargetError::NotFound {
+            kind,
+            target: handle.to_string(),
+        })?;
+        if found.kind != kind {
+            return Err(TargetError::WrongKind {
+                expected: kind,
+                actual: found.kind,
+            });
+        }
+        if workspace.is_some_and(|w| found.workspace_id != w)
+            || pane.is_some_and(|p| found.pane_id != Some(p))
+        {
+            return Err(TargetError::ScopeMismatch { kind });
+        }
+        Ok(found.clone())
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetScope {
+    pub workspace: Option<TargetRef>,
+    pub pane: Option<TargetRef>,
+    pub surface: Option<TargetRef>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallerContext {
+    pub workspace: Option<TargetRef>,
+    pub surface: Option<TargetRef>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct ResolvedTarget {
+    pub workspace: WorkspaceId,
+    pub pane: PaneId,
+    pub surface: SurfaceId,
+}
+impl TargetScope {
+    pub fn resolve(
+        &self,
+        model: &Snapshot,
+        caller: &CallerContext,
+    ) -> Result<ResolvedTarget, TargetError> {
+        let explicit = self.workspace.is_some() || self.pane.is_some() || self.surface.is_some();
+        let workspace_ref = self.workspace.as_ref().or_else(|| {
+            (!explicit && caller.surface.is_none())
+                .then_some(caller.workspace.as_ref())
+                .flatten()
+        });
+        let surface_ref = self
+            .surface
+            .as_ref()
+            .or_else(|| (!explicit).then_some(caller.surface.as_ref()).flatten());
+        let mut workspace = workspace_ref
+            .map(|r| {
+                model
+                    .resolve_handle(r, TargetKind::Workspace, None, None)
+                    .map(|o| o.workspace_id)
+            })
+            .transpose()?;
+        let mut pane = None;
+        if let Some(handle) = &self.pane {
+            let enclosing = if handle.is_index()? {
+                workspace.or(model.focused_workspace)
+            } else {
+                workspace
+            };
+            let object = model.resolve_handle(handle, TargetKind::Pane, enclosing, None)?;
+            workspace = Some(object.workspace_id);
+            pane = object.pane_id;
+        }
+        let mut surface = None;
+        if let Some(handle) = surface_ref {
+            let mut enclosing_pane = pane;
+            let mut enclosing_workspace = workspace;
+            if handle.is_index()? {
+                enclosing_workspace = workspace.or(model.focused_workspace);
+                enclosing_pane = pane.or_else(|| {
+                    model
+                        .workspaces
+                        .iter()
+                        .find(|w| Some(w.id) == enclosing_workspace)
+                        .map(|w| w.focused_pane)
+                });
+            }
+            let object = model.resolve_handle(
+                handle,
+                TargetKind::Surface,
+                enclosing_workspace,
+                enclosing_pane,
+            )?;
+            workspace = Some(object.workspace_id);
+            pane = object.pane_id;
+            surface = Some(SurfaceId(object.id));
+        }
+        let workspace = workspace
+            .or(model.focused_workspace)
+            .ok_or(TargetError::NoFocus(TargetKind::Workspace))?;
+        let owner = model
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace)
+            .ok_or(TargetError::NoFocus(TargetKind::Workspace))?;
+        let pane = pane.unwrap_or(owner.focused_pane);
+        let pane_object = owner
+            .root
+            .panes()
+            .into_iter()
+            .find(|p| p.id == pane)
+            .ok_or(TargetError::NoFocus(TargetKind::Pane))?;
+        Ok(ResolvedTarget {
+            workspace,
+            pane,
+            surface: surface.unwrap_or(pane_object.selected_surface),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TargetAction {
+    RenameWorkspace {
+        name: String,
+    },
+    CloseWorkspace,
+    FocusPane,
+    SplitPane {
+        axis: Axis,
+    },
+    ClosePane,
+    CreateSurface,
+    SelectSurface,
+    CloseSurface,
+    RenameSurface {
+        name: String,
+    },
+    ReorderSurface {
+        index: usize,
+    },
+    MoveSurface {
+        destination: TargetRef,
+        index: usize,
+    },
+    CloseOtherSurfaces,
+    CreateBrowser {
+        url: String,
+    },
+    NavigateBrowser {
+        url: String,
+    },
+}
+impl TargetAction {
+    pub fn resolve(
+        self,
+        model: &Snapshot,
+        scope: &TargetScope,
+        caller: &CallerContext,
+    ) -> Result<Action, TargetError> {
+        let target = scope.resolve(model, caller)?;
+        Ok(match self {
+            Self::RenameWorkspace { name } => Action::RenameWorkspace {
+                workspace_id: target.workspace,
+                name,
+            },
+            Self::CloseWorkspace => Action::CloseWorkspace {
+                workspace_id: target.workspace,
+            },
+            Self::FocusPane => Action::FocusPane {
+                pane_id: target.pane,
+            },
+            Self::SplitPane { axis } => Action::SplitPane {
+                pane_id: target.pane,
+                axis,
+            },
+            Self::ClosePane => Action::ClosePane {
+                pane_id: target.pane,
+            },
+            Self::CreateSurface => Action::CreateSurface {
+                pane_id: target.pane,
+            },
+            Self::SelectSurface => Action::SelectSurface {
+                surface_id: target.surface,
+            },
+            Self::CloseSurface => Action::CloseSurface {
+                surface_id: target.surface,
+            },
+            Self::RenameSurface { name } => Action::RenameSurface {
+                surface_id: target.surface,
+                name,
+            },
+            Self::ReorderSurface { index } => Action::ReorderSurface {
+                surface_id: target.surface,
+                index,
+            },
+            Self::MoveSurface { destination, index } => {
+                let workspace = if destination.is_index()? {
+                    Some(format!("workspace:{}", target.workspace.0).parse()?)
+                } else {
+                    None
+                };
+                let destination = TargetScope {
+                    workspace,
+                    pane: Some(destination),
+                    ..TargetScope::default()
+                }
+                .resolve(model, &CallerContext::default())?;
+                Action::MoveSurface {
+                    surface_id: target.surface,
+                    pane_id: destination.pane,
+                    index,
+                }
+            }
+            Self::CloseOtherSurfaces => Action::CloseOtherSurfaces {
+                surface_id: target.surface,
+            },
+            Self::CreateBrowser { url } => Action::CreateBrowser {
+                pane_id: target.pane,
+                url,
+            },
+            Self::NavigateBrowser { url } => Action::NavigateBrowser {
+                surface_id: target.surface,
+                url,
+            },
+        })
+    }
+}

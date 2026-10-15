@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 mod surfaces;
+pub mod targets;
 use surfaces::PendingRestore;
 pub use surfaces::{ClosedContent, ClosedItem, Surface, SurfaceKind};
 
@@ -150,6 +151,8 @@ pub struct Workspace {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Snapshot {
+    /// Persist with the model: object UUIDs derive from this namespace and never from display order.
+    pub identity_namespace: uuid::Uuid,
     pub model_version: u32,
     pub revision: u64,
     pub closed_items: Vec<ClosedItem>,
@@ -160,6 +163,7 @@ pub struct Snapshot {
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
+            identity_namespace: uuid::Uuid::nil(),
             model_version: MODEL_VERSION,
             revision: 0,
             closed_items: Vec::new(),
@@ -299,6 +303,17 @@ impl Default for WorkspaceStore {
 }
 
 impl WorkspaceStore {
+    /// The application injects an OS-random namespace once; the core performs no I/O.
+    pub fn with_identity_namespace(namespace: uuid::Uuid) -> Self {
+        Self {
+            state: Snapshot {
+                identity_namespace: namespace,
+                ..Snapshot::default()
+            },
+            ..Self::default()
+        }
+    }
+
     /// This snapshot is for infrequent workspace changes, not terminal output frames.
     pub fn snapshot(&self) -> Snapshot {
         self.state.clone()
