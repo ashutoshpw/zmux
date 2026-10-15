@@ -80,3 +80,11 @@ Native528be92 run38764217483 failed Swift warnings-as-errors in the nested fixtu
 cleanup's inferred detached-task expression. The repair explicitly types the task as
 Task<Void, Error> and awaits its value separately. Removal still runs off MainActor
 and cleanup is awaited; hosted compile remains required before accepting this fix.
+
+The explicit-task attempt did not fix native38765601658: Swift still reports both
+no-async/no-throw diagnostics at the nested function's task.value access. The next
+candidate removes that nested function and uses a nonisolated member helper,
+matching working fixture helper boundaries. A first-step standalone Swift diagnostic
+reports whether the minimal nested form reproduces, then requires the extracted
+form to compile and await off-main deletion/error propagation. This probe cannot
+substitute for full App.swift compile or establish the compiler's root cause.
