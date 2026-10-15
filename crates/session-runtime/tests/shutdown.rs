@@ -61,6 +61,85 @@ fn wait_file(path: &Path) {
 }
 
 #[test]
+fn actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies() {
+    const CHILD: &str = "ZMUX_CLEANUP_OUTCOME_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Isolate SIGCHLD disposition in an owned subprocess. SIG_IGN survives
+        // exec and makes the kernel actually auto-reap its eventual PTY child.
+        let mut child = std::process::Command::new("python3")
+            .args([
+                "-c",
+                "import os,signal,sys;signal.signal(signal.SIGCHLD,signal.SIG_IGN);os.execv(sys.argv[1],sys.argv[1:])",
+            ])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("isolated cleanup-outcome child timed out");
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "isolated cleanup-outcome child: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    for policy in [
+        ShutdownPolicy::Kill,
+        ShutdownPolicy::Graceful {
+            timeout: Duration::from_secs(1),
+        },
+    ] {
+        let fixture = Fixture::new();
+        let mut session = Session::spawn_with_shutdown_policy(
+            fixture.launch("import time;print('ready',flush=True);time.sleep(.05)"),
+            &[],
+            &[],
+            policy,
+            (),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if session.is_finished() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "auto-reaped child did not finish"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let first = session.shutdown(Duration::ZERO).unwrap_err().to_string();
+        assert!(first.contains("PTY cleanup failed:"), "{first}");
+        let repeated = session.shutdown(Duration::ZERO).unwrap_err().to_string();
+        assert_eq!(
+            first, repeated,
+            "joining consumed the physical cleanup error"
+        );
+    }
+}
+
+#[test]
 fn graceful_close_retains_wrapper_pty_and_resource_until_nested_cleanup_and_final_reap() {
     struct Resource {
         pid: Arc<AtomicU32>,
