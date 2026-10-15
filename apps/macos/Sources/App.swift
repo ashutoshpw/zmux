@@ -1952,7 +1952,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             return !priorMenuSurfaces.contains(selected.id) && selected.browserProfileId?.uuidString.lowercased() == a
         }
         guard let menuSurface = focusedPane?.selectedSurface else { throw BridgeFailure(message: "Profile menu did not select its new tab") }
-        _ = try await nativeCLI(["browser", "goto", origin + "/first", "--surface", String(menuSurface)])
+        _ = try await nativeCLI(["browser", "goto", "--surface", String(menuSurface), origin + "/first"])
         try await waitUntil { [weak self] _ in self?.browsers[menuSurface]?.webView.title == "First fixture" && self?.browsers[menuSurface]?.webView.isLoading == false }
         guard try await eval("localStorage.getItem('zmuxProfile') === 'ownerA' && document.cookie.includes('zmuxProfile=ownerA')", menuSurface) as? Bool == true else {
             throw BridgeFailure(message: "Native profile menu opened a substitute website datastore")
@@ -2008,7 +2008,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               browsers[surface]?.webView.configuration.websiteDataStore.identifier == profile.id else {
             throw BridgeFailure(message: "Managed profile did not open its UUID datastore")
         }
-        _ = try await nativeCLI(["browser", "goto", origin + "/first", "--surface", String(surface)])
+        _ = try await nativeCLI(["browser", "goto", "--surface", String(surface), origin + "/first"])
         try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "First fixture" && self?.browsers[surface]?.webView.isLoading == false }
         guard try await browserCLIValue(["browser", "eval", "localStorage.getItem('zmuxProfile') === null && !document.cookie.includes('zmuxProfile=ownerA')", "--surface", String(surface)]) as? Bool == true else {
             throw BridgeFailure(message: "Managed profile opened another profile's website data")

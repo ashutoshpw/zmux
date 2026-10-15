@@ -156,3 +156,11 @@ presentation fallback that called the old BrowserView constructor without a data
 Presentation now consumes only the host created by profile-validating reconciliation;
 if that host is unavailable it shows an error placeholder. It never creates a private
 or substitute store. Hosted compile and the profile journeys must verify this repair.
+
+Native1868dcc run38767602739 passed universal compilation but failed the profile
+menu journey because its bundled CLI goto invocation placed selector options after
+the URL. The CLI deliberately requires leading selector options for URL operands.
+Menu and manager fixtures now use that documented grammar; their datastore/identity
+assertions remain unchanged. A secondary direct-launch diagnostic failed sidebar
+dragging with a non-key window; it is not the original Launch Services failure.
+Packaged profile acceptance remains open until the corrected journey executes.
