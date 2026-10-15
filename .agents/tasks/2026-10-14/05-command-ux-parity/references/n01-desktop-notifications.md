@@ -203,3 +203,10 @@ the behavioral coverage, without introducing a thread-stall test seam.
 
 Fresh independent review accepted the expiry repair with no remaining source blockers.
 Parent full checks pass again after that repair.
+
+Hosted `920a2ab` Foundation38743883285 passed and macOS38743883235 compiled
+universally. Packaged acceptance failed in the reply smoke: it searched visible-only
+native frames for a deliberately background terminal. The repair reads that exact
+surface through the existing public `read-screen` command, validates surface/session
+identity and output, and retains the read/no-focus assertions. No renderer exposure
+or selection change is introduced. Native reply acceptance awaits this rerun.
