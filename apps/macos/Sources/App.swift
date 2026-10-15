@@ -1362,6 +1362,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
+            "browser_title_observation": true,
             "native_input": true,
             "ansi_color": true,
             "split_panes": true,
@@ -1613,6 +1614,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "Second fixture" else {
             throw BridgeFailure(message: "Browser history/reload lost the current page")
         }
+        guard try await browserCLIValue(["browser", "eval", "document.title = 'Changed title fixture'"] + target) as? String == "Changed title fixture" else {
+            throw BridgeFailure(message: "Browser title fixture did not change the live document")
+        }
+        try await smokePublishedBrowserTitle(surface: surface, title: "Changed title fixture")
         var pendingFinished = false
         let pending = Task { @MainActor in
             defer { pendingFinished = true }
@@ -1641,6 +1646,27 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard String(decoding: noReplay, as: UTF8.self).contains("javascript_failed"),
               try await browserCLIValue(["browser", "eval", "globalThis.zmuxCspCount"] + target) as? Int == 1 else {
             throw BridgeFailure(message: "User script was replayed after a CSP-shaped exception")
+        }
+        try await smokePublishedBrowserTitle(surface: surface, title: "CSP fixture")
+    }
+
+    private func smokePublishedBrowserTitle(surface: UInt64, title: String) async throws {
+        do {
+            try await waitUntil { value in
+                value.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
+                    .contains { $0.id == surface && $0.title == title }
+            }
+        } catch {
+            throw BridgeFailure(message: "Browser document title did not reach the Rust surface: \(title)")
+        }
+        @MainActor func tabDisplaysTitle(_ view: NSView) -> Bool {
+            if let tab = view as? TerminalTabControl, tab.surface.id == surface {
+                return tab.subviews.compactMap { $0 as? NSTextField }.contains { $0.stringValue == title }
+            }
+            return view.subviews.contains { tabDisplaysTitle($0) }
+        }
+        guard window.title == title, mainHeader.titleLabel.stringValue == title, tabDisplaysTitle(canvas) else {
+            throw BridgeFailure(message: "Browser document title did not reach the native header and tab: \(title)")
         }
     }
 
