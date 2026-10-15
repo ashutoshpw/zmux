@@ -39,6 +39,19 @@ final class SidebarLayout {
 /// the divider remains available to keyboard traversal and explicit AX focus.
 @MainActor
 final class SidebarFocusWindow: NSWindow {
+    var onWorkspaceNumber: ((Int) -> Void)?
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.type == .keyDown, modifiers == [.command],
+           let key = event.charactersIgnoringModifiers, key.count == 1,
+           let digit = Int(key), (1...9).contains(digit), let onWorkspaceNumber {
+            // Consume even an unavailable row before a terminal/browser fallback.
+            onWorkspaceNumber(digit)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func sendEvent(_ event: NSEvent) {
         var divider: SidebarDividerView?
         if event.type == .leftMouseDown, let content = contentView {

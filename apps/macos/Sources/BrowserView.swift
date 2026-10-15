@@ -10,6 +10,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     var onAutomationAction: (@MainActor (BrowserAction) -> Void)?
     private weak var owner: (any BrowserCommandOwner)?
     let webView: WKWebView
+    private enum FocusDestination { case address, document }
+    private var focusDestination = FocusDestination.document
+    private var addressSelection: NSRange?
+    private weak var documentResponder: NSResponder?
     private let address = NSTextField()
     private let status = NSTextField(labelWithString: "Private browser")
     private var generation: UInt64?
@@ -61,6 +65,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     init(surface: Surface, owner: any BrowserCommandOwner, dataStore: WKWebsiteDataStore) {
         profileID = surface.browserProfileId
         surfaceID = surface.id
+        focusDestination = surface.url == nil || surface.url == "about:blank" ? .address : .document
         self.owner = owner
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
@@ -138,7 +143,49 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             }
         }
     }
-    func focusAddress() { window?.makeFirstResponder(address); address.selectText(nil) }
+    func focusAddress() {
+        guard let window, window.isKeyWindow, !isHiddenOrHasHiddenAncestor else { return }
+        focusDestination = .address
+        addressSelection = nil
+        window.makeFirstResponder(address)
+        address.selectText(nil)
+    }
+    /// Capture only an actual AppKit responder owned by this presented host.
+    /// DOM focus in a hidden document cannot alter the native focus preference.
+    @discardableResult
+    func rememberOwnedFocus(in candidate: NSWindow) -> Bool {
+        guard window === candidate, let responder = candidate.firstResponder else { return false }
+        if responder === address || responder === address.currentEditor() {
+            focusDestination = .address
+            addressSelection = (address.currentEditor() as? NSTextView)?.selectedRange()
+            return true
+        }
+        if responder === webView || (responder as? NSView)?.isDescendant(of: webView) == true {
+            focusDestination = .document
+            documentResponder = responder
+            return true
+        }
+        return false
+    }
+    /// Selection/layout reconciliation calls this only for its selected browser.
+    func restorePreferredFocus() -> Bool {
+        guard let window, window.isKeyWindow, !isHiddenOrHasHiddenAncestor else { return false }
+        switch focusDestination {
+        case .address:
+            guard window.makeFirstResponder(address) else { return false }
+            if let range = addressSelection, let editor = address.currentEditor() as? NSTextView {
+                let length = (address.stringValue as NSString).length
+                let location = min(range.location, length)
+                editor.setSelectedRange(NSRange(location: location, length: min(range.length, length - location)))
+            } else { address.selectText(nil) }
+            return true
+        case .document:
+            if let responder = documentResponder,
+               responder === webView || (responder as? NSView)?.isDescendant(of: webView) == true,
+               window.makeFirstResponder(responder) { return true }
+            return window.makeFirstResponder(webView)
+        }
+    }
     func bindAutomation(epoch: UUID, identityNamespace: UUID, emit: @escaping @MainActor (BrowserHostEvent) -> Void) {
         guard !closed else { return }
         if let current = automationOwner, current.epoch == epoch, current.identityNamespace == identityNamespace {
@@ -493,6 +540,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         else if !value.contains("://") && value != "about:blank" { value = "https://" + value }
         guard let url = URL(string: value), Self.allowed(url) else { showError("Enter an http or https address"); return }
         owner?.navigateBrowser(surfaceID, url: url.absoluteString)
+        focusDestination = .document
         window?.makeFirstResponder(webView)
     }
     @objc private func focusSurface() { owner?.selectTab(surfaceID) }

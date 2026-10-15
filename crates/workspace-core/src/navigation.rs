@@ -4,6 +4,36 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+impl crate::Snapshot {
+    /// Default numbered workspace navigation: 1–8 select that ordinary row,
+    /// while 9 selects the last row. Missing rows are an intentional no-op.
+    /// Groups/collapsed rows are not modeled yet; canonical window order owns it.
+    pub fn workspace_number(
+        &self,
+        window: WindowId,
+        digit: u8,
+    ) -> Result<Option<WorkspaceId>, ActionError> {
+        if !(1..=9).contains(&digit) {
+            return Err(ActionError::InvalidOperation(
+                "workspace number must be 1–9".into(),
+            ));
+        }
+        let window = self
+            .windows
+            .iter()
+            .find(|w| w.id == window)
+            .ok_or_else(|| {
+                ActionError::InvalidOperation("numbered workspace window does not exist".into())
+            })?;
+        Ok(if digit == 9 {
+            window.workspace_ids.last()
+        } else {
+            window.workspace_ids.get(usize::from(digit - 1))
+        }
+        .copied())
+    }
+}
+
 pub const MAX_FOCUS_HISTORY: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
