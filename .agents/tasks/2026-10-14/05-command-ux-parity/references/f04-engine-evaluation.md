@@ -196,16 +196,42 @@ The cases cover EOF while the leader runs, a successful leader with a closed-std
 child, an exited leader with a stdout-holding child, and draining 2 MiB while
 retaining 1 MiB. Both workflow jobs run them before building upstream code.
 The earlier complete Linux receipt predates this repair; the focused regression
-run validates the lifecycle change without another upstream build. No macOS build,
-universal slice or hosted workflow execution is claimed here.
+run validates the lifecycle change without another upstream build.
+
+### First hosted run
+
+[Manual workflow 38755466242](https://github.com/ashutoshpw/zmux/actions/runs/38755466242)
+executed `d6a0fc2466d23c0116e9b18da0d9a6d7a1d923cf` on 2026-10-15. Both jobs passed
+the four real-process runner regressions and verified exact upstream archive hashes
+using fresh temporary dependency caches.
+
+- Linux x86_64 completed all library/C/Rust builds, engine assertions and current
+  adapter observations. The Ghostty build took 83.833 seconds. This clears the
+  fresh dependency-download gate for that hosted attempt; local restricted-network
+  availability remains a separate observation.
+- macOS 15.7.9 arm64 compiled the arm64 and x86_64 libraries, C shims and Rust owners.
+  The arm64 fixture passed the same reflow, Unicode, exact query and 128-iteration
+  assertions. x86_64 execution was explicitly `not_run_cross_architecture`.
+  `RLIMIT_CPU` and `RLIMIT_CORE` were configured; `RLIMIT_AS` was unavailable with
+  `ValueError`, so this run establishes no Mac address-space containment.
+- The Mac job failed at `verify-universal-library`: the harness passed the filename
+  after `lipo -verify_arch arm64 x86_64`, whose variable-length architecture list
+  consumed it as another architecture. Library creation had exited zero, but neither
+  universal verification nor the later baseline stages completed. The repair puts
+  the input filename before `-verify_arch`; it does not change pins or assertions.
+  A hosted rerun is required to clear universal-library/executable verification and
+  the Mac current-adapter gate.
+
+Downloaded receipts and bounded phase logs are preserved locally under
+`/tmp/zmux-terminal-feasibility-hosted-38755466242/{linux,macos}`. No native application,
+AppKit acceptance, x86_64 Mac runtime, graphics or performance gate is cleared.
 
 ## Next bounded experiment and decision gates
 
-The smallest useful next test is the same Rust-owned C render-snapshot/reflow fixture
-on Linux and macOS, with native execution identified by architecture and source SHA.
-Compile both Mac architectures separately before any universal-library claim; an
-arm64 execution does not establish x86_64 runtime behavior. Keep this workflow manual
-and separate from application builds/dependencies.
+Rerun the repaired manual workflow to verify universal Mac library/executable slices
+and complete the Mac baseline stages. Keep native execution identified by architecture
+and source SHA: arm64 execution does not establish x86_64 runtime behavior. Keep this
+workflow manual and separate from application builds/dependencies.
 
 Then extend one experimental adapter to export the existing `Viewport` contract,
 normalizing pending wrap, wide continuations, grapheme strings, styles and modes.
