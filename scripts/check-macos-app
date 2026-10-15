@@ -15,6 +15,9 @@ from importlib.util import module_from_spec, spec_from_file_location
 fixture_spec = spec_from_file_location("native_ssh_fixture", Path(__file__).with_name("native-ssh-fixture.py"))
 fixture_module = module_from_spec(fixture_spec)
 fixture_spec.loader.exec_module(fixture_module)
+resource_spec = spec_from_file_location("native_resource_sampler", Path(__file__).with_name("native-resource-sampler.py"))
+resource_module = module_from_spec(resource_spec)
+resource_spec.loader.exec_module(resource_module)
 
 root = Path(__file__).resolve().parent.parent
 if platform.system() != "Darwin":
@@ -108,8 +111,16 @@ def browser_fixture():
         worker.join(timeout=2)
 
 with browser_fixture(), fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
+    sampler = resource_module.NativeResourceSampler(
+        bundle / "MacOS/zmux-app", bundle / "Resources/bin/zmux",
+        dist / "native-resources.json", info.get("ZmuxSourceSHA"),
+    )
     try:
-        subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=150)
+        try:
+            sampler.start()
+            subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=150)
+        finally:
+            sampler.stop()
     except Exception:
         for path in [stdout,stderr]:
             if path.exists(): print(path.read_text())
