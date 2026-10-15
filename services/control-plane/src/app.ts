@@ -25,6 +25,7 @@ const REQUIRED_TABLES = [
   "session",
   "account",
   "verification",
+  "twoFactor",
   "organization",
   "member",
   "invitation",
@@ -246,7 +247,7 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
       if (request.method === "GET" && path === "/health") return json({ status: "ok" });
       if (request.method === "GET" && path === "/ready") {
         try {
-          const schema = await pool.query<{ tableCount: number; migrationApplied: boolean }>(
+          const schema = await pool.query<{ tableCount: number; migrationApplied: boolean; mfaColumn: boolean }>(
             `SELECT
                (SELECT count(*)::int
                   FROM information_schema.tables
@@ -254,11 +255,16 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
                    AND table_name = ANY($1::text[])) AS "tableCount",
                EXISTS (
                  SELECT 1 FROM zmux_schema_migration WHERE name = '001_native_identity.sql'
-               ) AS "migrationApplied"`,
+               ) AS "migrationApplied",
+               EXISTS (
+                 SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = current_schema() AND table_name = 'user'
+                   AND column_name = 'twoFactorEnabled' AND data_type = 'boolean'
+               ) AS "mfaColumn"`,
             [REQUIRED_TABLES],
           );
           const state = schema.rows[0];
-          if (!state || state.tableCount !== REQUIRED_TABLES.length || !state.migrationApplied) {
+          if (!state || state.tableCount !== REQUIRED_TABLES.length || !state.migrationApplied || !state.mfaColumn) {
             return json({ status: "unavailable", capabilities: { identity: "unavailable", devices: "unavailable" } }, 503);
           }
           return json({

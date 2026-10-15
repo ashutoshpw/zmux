@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import type { BetterAuthOptions } from "better-auth";
-import { organization } from "better-auth/plugins";
+import { organization, twoFactor } from "better-auth/plugins";
 import type { Pool } from "pg";
 import type { ControlPlaneConfig } from "./config";
 
@@ -31,6 +31,7 @@ export function createAuthOptions(pool: Pool, config: ControlPlaneConfig, valida
       storage: "memory",
     },
     plugins: [
+      twoFactor({ issuer: "zmux" }),
       organization({
         allowUserToCreateOrganization: true,
         membershipLimit: 100,

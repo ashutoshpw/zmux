@@ -175,7 +175,7 @@ def rehearse_restore(backup, log):
                          "--dbname", database, "--command", query, error=log)
         restored = json.loads(result.stdout)
         required = {"user", "session", "account", "verification", "organization", "member",
-                    "invitation", "native_authorization_code", "native_access_token", "device",
+                    "invitation", "twoFactor", "native_authorization_code", "native_access_token", "device",
                     "zmux_schema_migration"}
         migrations = sorted(path.name for path in (SERVICE / "migrations").glob("*.sql"))
         if not required.issubset(restored["tables"] or []) or restored["migrations"] != migrations:
