@@ -521,3 +521,50 @@ credential-close repair: `/tmp/zmux-zellij-credential-close-parent-20261015/rece
 (log `/tmp/zmux-zellij-credential-close-parent.log`). Source review verified the
 unrelated child's close is accepted only alongside the parent's exact authenticated
 rejection; owned peers still require ACK. Exact-source Darwin execution remains open.
+
+### Prompt drain across short PTY reads
+
+Darwin run `38787432280` at `43a15ccdc6f1c6fc7526b1b8cb974a3e1e34d43c`
+passed the exact credential outcomes and raw relay controls, then failed the real
+PTY-only regression before starting Zellij. It drained61458 bytes (the18-byte READY
+marker plus60 multiples of1024), exceeded the three-second TERM deadline, and recorded
+SIGTERM then SIGKILL, unreaped CLD_KILLED/status9 and reaped-9. This failure has an
+exact child status; it does not establish the cause of the earlier Zellij TERM failure.
+Artifacts are retained at `/tmp/zmux-zellij-hosted-38787432280`.
+
+The exit waiter used the generic polling helper, sleeping20ms after every single
+PTY read even when bytes arrived. A private Linux control changing only the legal
+maximum read size from16384 to1024 reproduced TERM timeout and actual KILL/reaped-9:
+154130 bytes drained in3.059s. The waiter now checks its unchanged deadline around
+each read-only pump and continues immediately after progress. It pauses only with
+no new bytes, including readable EOF before child exit, preventing a busy loop.
+Readiness polling,30ms select, payload size, TERM/KILL deadlines, bounded retained
+logs and strict child0 requirements remain unchanged.
+
+The same private1024-byte-read control now drains262162 bytes, retains65536 and
+observes actual TERM-only exit0 in0.551s. Exact current source passes the real PTY
+case with the same counts and child status. Restoring query responses only during
+exit still fails through the child's independent ESC observer with actual exit3.
+No additional production hook, synthetic child status or Zellij protocol is used.
+Focused receipts and SHA256:
+
+`/tmp/zmux-zellij-short-pty-red-20261015.json`
+`a126b1cb3a22d0eb60213afd2cbde84798bef60ffb19fa5720c308abea671306`.
+
+`/tmp/zmux-zellij-short-pty-green-20261015.json`
+`cc63a56d68831e9637bfce0172f3d22abd054915c68203c4a79c7ea3db3981dd`.
+
+`/tmp/zmux-zellij-short-pty-exact-20261015.json`
+`70763b2bd02e685ce748412402ee04727b4519c1e560a0a264d32626044cc8b6`.
+
+`/tmp/zmux-zellij-short-pty-query-negative-20261015.json`
+`42c5dae6ee67b6a1052d8490568c2c11a464d6e3b0220924b95ee0374a2bb28d`.
+
+Full Linux and exact-source Darwin remain pending for this waiter revision; focused
+Linux controls do not establish Darwin behavior or product parity.
+
+Independent parent full Linux validation passes final short-read waiter source:
+`/tmp/zmux-zellij-short-read-parent-20261015/receipt.json`; log
+`/tmp/zmux-zellij-short-read-parent.log`. Parent source review confirms the same
+absolute deadline, drain-only reads and a bounded pause only without progress.
+Darwin execution remains required.
