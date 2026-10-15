@@ -347,9 +347,27 @@ impl WorkspaceStore {
                     .selected_surface = surface_id;
                 self.focus(wi, pane_id);
             }
-            Action::ReorderSurface { surface_id, index } => {
-                let (_, pane_id, _) = self.location(surface_id)?;
-                self.move_surface(surface_id, pane_id, index)?;
+            Action::ReorderSurface {
+                surface_id,
+                index,
+                focus,
+            } => {
+                let (wi, pane_id, from) = self.location(surface_id)?;
+                self.ensure_settled(&[surface_id])?;
+                let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
+                // This legacy unsigned action takes an already planned final
+                // position. Public signed/relative requests use the pure planner.
+                if index >= pane.surfaces.len() {
+                    return Err(ActionError::InvalidOperation(
+                        "tab index is out of range".into(),
+                    ));
+                }
+                let surface = pane.surfaces.remove(from);
+                pane.surfaces.insert(index, surface);
+                if focus {
+                    pane.selected_surface = surface_id;
+                    self.focus(wi, pane_id);
+                }
             }
             Action::MoveSurface {
                 surface_id,

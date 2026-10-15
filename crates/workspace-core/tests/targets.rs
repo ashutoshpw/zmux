@@ -23,6 +23,7 @@ fn target_identity_survives_reorder_and_move_but_closed_surface_does_not_retarge
         .unwrap();
     store
         .apply(Action::ReorderSurface {
+            focus: true,
             surface_id: surface,
             index: 1,
         })

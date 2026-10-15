@@ -579,6 +579,8 @@ pub enum TargetAction {
     },
     ReorderSurface {
         index: usize,
+        #[serde(default)]
+        focus: bool,
     },
     MoveSurface {
         destination: TargetRef,
@@ -665,9 +667,10 @@ impl TargetAction {
                 surface_id: target.surface,
                 name,
             },
-            Self::ReorderSurface { index } => Action::ReorderSurface {
+            Self::ReorderSurface { index, focus } => Action::ReorderSurface {
                 surface_id: target.surface,
                 index,
+                focus,
             },
             Self::MoveSurface { destination, index } => {
                 let workspace = if destination.is_index()? {
