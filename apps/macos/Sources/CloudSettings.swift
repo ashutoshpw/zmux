@@ -3,6 +3,13 @@ import AuthenticationServices
 
 @MainActor
 final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAuthenticationPresentationContextProviding {
+    // Every native window uses one credential owner for the configured endpoint.
+    private static let connection: (endpoint: CloudEndpoint, client: CloudClient) = {
+        do {
+            let endpoint = try CloudEndpoint(CloudEndpoint.configured)
+            return (endpoint, CloudClient(endpoint: endpoint))
+        } catch { preconditionFailure("Invalid packaged cloud origin: \(error.localizedDescription)") }
+    }()
     private weak var appController: MainWindowHost?
     private let endpoint: CloudEndpoint
     private let client: CloudClient
@@ -21,10 +28,8 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
 
     init(owner: MainWindowHost) {
         self.appController = owner
-        // Build validation supplies a valid owned origin. A malformed configuration fails visibly.
-        do { endpoint = try CloudEndpoint(CloudEndpoint.configured) }
-        catch { preconditionFailure("Invalid packaged cloud origin: \(error.localizedDescription)") }
-        client = CloudClient(endpoint: endpoint)
+        endpoint = Self.connection.endpoint
+        client = Self.connection.client
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 540),
                               styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "zmux Cloud"
@@ -218,6 +223,11 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
         }
     }
     private func presentFailure(_ error: any Error) {
+        if error is CancellationError {
+            setBusy(false)
+            message.stringValue = ""
+            return
+        }
         message.stringValue = error.localizedDescription
         setBusy(false)
         if (error as? CloudFailure)?.requiresSignIn == true {

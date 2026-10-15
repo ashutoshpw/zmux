@@ -21,7 +21,7 @@ struct CloudDevice: Decodable, Sendable {
 struct CloudDevices: Decodable, Sendable { let devices: [CloudDevice] }
 struct CloudAccount: Sendable { let user: CloudUser; let devices: [CloudDevice] }
 private struct CloudToken: Decodable { let accessToken: String; let expiresIn: Int; let tokenType: String }
-private struct StoredCloudToken: Codable { let accessToken: String; let expiresAt: Date }
+private struct StoredCloudToken: Codable, Sendable { let accessToken: String; let expiresAt: Date }
 
 struct CloudEndpoint: Sendable {
     let origin: URL
@@ -107,6 +107,11 @@ actor CloudClient {
     private let session: URLSession
     private let keychainService = "app.w3dev.zmux.dev.cloud"
     private var token: StoredCloudToken?
+    private var generation = UUID()
+    private struct RequestScope: Sendable {
+        let generation: UUID
+        let credential: StoredCloudToken?
+    }
 
     init(endpoint: CloudEndpoint) {
         self.endpoint = endpoint
@@ -118,53 +123,89 @@ actor CloudClient {
         session = URLSession(configuration: config, delegate: CloudRedirectPolicy(), delegateQueue: nil)
     }
     func account() async throws -> CloudAccount {
-        let identity: CloudIdentity = try await request("v1/me")
-        let list: CloudDevices = try await request("v1/devices")
+        try Task.checkCancellation()
+        return try await account(scope: currentScope())
+    }
+    private func account(scope: RequestScope) async throws -> CloudAccount {
+        let identity: CloudIdentity = try await request("v1/me", scope: scope)
+        let list: CloudDevices = try await request("v1/devices", scope: scope)
         return CloudAccount(user: identity.user, devices: list.devices)
     }
     func complete(code: String, verifier: String) async throws -> CloudAccount {
+        try Task.checkCancellation()
+        generation = UUID()
+        let current = generation
         let response: CloudToken = try await request("v1/native/token", method: "POST", body: [
             "grant_type": "authorization_code", "client_id": CloudAuthorization.clientID,
             "redirect_uri": CloudAuthorization.callback, "code": code, "code_verifier": verifier
-        ], authenticated: false)
+        ], scope: RequestScope(generation: current, credential: nil))
         guard response.tokenType.lowercased() == "bearer", !response.accessToken.isEmpty,
               response.accessToken.utf8.count <= 4096, response.expiresIn > 0 else {
             throw CloudFailure(message: "Cloud returned an invalid sign-in response.")
         }
         let stored = StoredCloudToken(accessToken: response.accessToken, expiresAt: Date().addingTimeInterval(Double(response.expiresIn)))
+        // Keep the candidate off Keychain until all awaited account validation
+        // succeeds. A cancelled or superseded login cannot commit credentials.
+        let account = try await account(scope: RequestScope(generation: current, credential: stored))
+        try check(current)
         try save(stored)
         token = stored
-        return try await account()
+        generation = UUID()
+        return account
     }
     func registerDevice(name: String) async throws {
-        _ = try await rawRequest("v1/devices", method: "POST", body: ["name": name, "platform": "macos"])
+        _ = try await rawRequest("v1/devices", method: "POST", body: ["name": name, "platform": "macos"], scope: currentScope())
     }
     func revokeDevice(id: String) async throws {
         guard !id.isEmpty, id.utf8.count <= 128, id.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }) else {
             throw CloudFailure(message: "Invalid device identifier.")
         }
-        _ = try await rawRequest("v1/devices/\(id)", method: "DELETE")
+        _ = try await rawRequest("v1/devices/\(id)", method: "DELETE", scope: currentScope())
     }
     func signOut() async throws -> String {
+        try Task.checkCancellation()
+        generation = UUID()
+        let current = generation
         var remoteError: (any Error)?
-        do { _ = try await rawRequest("v1/native/revoke", method: "POST") } catch { remoteError = error }
+        var revoke: RequestScope?
+        do { revoke = try currentScope() } catch { remoteError = error }
+        // Local sign-out owns this synchronous boundary. A later login must
+        // never be erased by the older revocation response or its HTTP 401.
         try erase()
         token = nil
+        if let revoke {
+            do { _ = try await rawRequest("v1/native/revoke", method: "POST", scope: revoke) }
+            catch { remoteError = error }
+        }
+        try check(current)
         if remoteError != nil {
             return "Signed out on this Mac. Cloud could not confirm token revocation; revoke the session after reconnecting."
         }
         return "Signed out on this Mac."
     }
+    private func check(_ expected: UUID) throws {
+        try Task.checkCancellation()
+        guard generation == expected else { throw CancellationError() }
+    }
+    private func currentScope() throws -> RequestScope {
+        try Task.checkCancellation()
+        if token == nil { token = try load() }
+        guard let token, token.expiresAt > Date() else {
+            throw CloudFailure(message: "Sign in to connect this Mac to zmux Cloud.", requiresSignIn: true)
+        }
+        return RequestScope(generation: generation, credential: token)
+    }
     private func request<T: Decodable>(_ path: String, method: String = "GET", body: [String: String]? = nil,
-                                       authenticated: Bool = true) async throws -> T {
-        let data = try await rawRequest(path, method: method, body: body, authenticated: authenticated)
+                                       scope: RequestScope) async throws -> T {
+        let data = try await rawRequest(path, method: method, body: body, scope: scope)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         do { return try decoder.decode(T.self, from: data) }
         catch { throw CloudFailure(message: "The cloud response is incompatible with this version of zmux.") }
     }
     private func rawRequest(_ path: String, method: String, body: [String: String]? = nil,
-                            authenticated: Bool = true) async throws -> Data {
+                            scope: RequestScope) async throws -> Data {
+        try check(scope.generation)
         var request = URLRequest(url: endpoint.url(path))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -172,25 +213,31 @@ actor CloudClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        if authenticated {
-            if token == nil { token = try load() }
-            guard let token, token.expiresAt > Date() else { throw CloudFailure(message: "Sign in to connect this Mac to zmux Cloud.", requiresSignIn: true) }
+        if let token = scope.credential {
             request.setValue("Bearer \(token.accessToken)", forHTTPHeaderField: "Authorization")
         }
         let (bytes, response) = try await session.bytes(for: request)
+        try check(scope.generation)
         guard let http = response as? HTTPURLResponse else { throw CloudFailure(message: "Cloud did not return an HTTP response.") }
         guard (200..<300).contains(http.statusCode) else {
             if http.statusCode == 401 {
-                try erase(); token = nil
-                throw CloudFailure(message: "Your cloud session has expired or was revoked. Sign in again.", requiresSignIn: true)
+                let ownsCredential = scope.credential.map { $0.accessToken == token?.accessToken } ?? false
+                if ownsCredential {
+                    try erase()
+                    token = nil
+                    generation = UUID()
+                }
+                throw CloudFailure(message: "Your cloud session has expired or was revoked. Sign in again.", requiresSignIn: ownsCredential)
             }
             throw CloudFailure(message: "Cloud request failed (HTTP \(http.statusCode)).")
         }
         var data = Data()
         for try await byte in bytes {
+            try check(scope.generation)
             guard data.count < 1_048_576 else { throw CloudFailure(message: "Cloud response exceeded the size limit.") }
             data.append(byte)
         }
+        try check(scope.generation)
         return data
     }
     private var keychainQuery: [String: Any] {
