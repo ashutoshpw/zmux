@@ -136,3 +136,27 @@ native capacity and first partial/zero-write evidence before any fixture repair;
 it changes no Session production source. All4 linked Session cases still pass on
 Linux; the29-test policy suite retains its1 native-linker skip and193-entry source
 gate passes. Native diagnostic results remain pending.
+
+Run `38811818507` at `0ffc1105da85b51568172cb7946665d67923ff1e` establishes
+the native cause: Darwin24.6 ARM raw PTY accepted1022 of4096 bytes, then EAGAIN,
+with exact1022-byte readback and no zero write. Both public Session backpressure
+setups independently reported zero completed chunks, receipt0 `Partial` with
+1022/4096 confirmed bytes and15 queued `NotWritten` receipts after explicit close.
+The same original quiescence assertion failed. Artifact `12007814726`, ZIP SHA256
+`dd2a740150ded3950b9f5114b1be0017da7151706177e16ab12c07a0a34d27ac`, retains
+the raw probe, actual receipts and candidate binary. Exact uploaded bytes,193
+source hashes and raw ARM Mach-O outputs were independently verified in
+`/tmp/zmux-darwin-session-failed-review-38811818507.json` (SHA256
+`0abbc1f4c649314bf0d4ffc02c9c3a7b1a22affe155e97611266e4792df2cf0d`).
+
+The fixture repair allows stable zero completed chunks, preserving the same100ms
+stability window and3s setup bound. The child now verifies an exact prefix of all
+previously completed4096-byte chunks plus the entire current chunk before the
+literal causal reply. Cancellation and deadline cases require a positive confirmed
+accepted prefix from completed chunks plus public receipt bytes, and every still
+pending receipt must be incomplete. Receipt evidence is printed for both variants.
+Session uses libtest `--show-output` to retain these diagnostics without disrupting
+the exact per-case success lines. No production Session source or deadline changes.
+All4 linked cases pass on Linux:13824 accepted bytes before cancellation/deadline,
+and16384 exact child-observed bytes before the reply on release. Focused8 policy
+tests and193-entry input gate pass. Darwin execution of this repair remains pending.
