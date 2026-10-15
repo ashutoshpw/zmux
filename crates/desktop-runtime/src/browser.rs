@@ -20,6 +20,7 @@ use zmux_workspace_core::{
 
 pub const MAX_SCRIPT_BYTES: usize = 8192;
 pub const MAX_INPUT_TEXT_BYTES: usize = 8192;
+pub const MAX_KEY_TOKEN_BYTES: usize = 128;
 /// Largest integer delta represented exactly by the JavaScript bridge.
 pub const MAX_SCROLL_DELTA: i64 = 9_007_199_254_740_991;
 pub const MAX_SELECTOR_BYTES: usize = 2048;
@@ -65,6 +66,12 @@ impl BrowserRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BrowserAction {
+    Keyboard {
+        operation: BrowserKeyboardOperation,
+        key: String,
+        #[serde(default)]
+        snapshot_after: bool,
+    },
     Back {
         #[serde(default)]
         snapshot_after: bool,
@@ -153,6 +160,13 @@ pub enum BrowserInteraction {
     Check,
     Uncheck,
     ScrollIntoView,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserKeyboardOperation {
+    Press,
+    Down,
+    Up,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -300,6 +314,13 @@ impl BrowserAction {
     }
     pub fn validate(&self) -> Result<(), BrowserError> {
         match self {
+            Self::Keyboard { key, .. }
+                if key.is_empty() || key.len() > MAX_KEY_TOKEN_BYTES || key.contains('\0') =>
+            {
+                return Err(BrowserError::Invalid(
+                    "browser key must be nonempty, contain no NUL and fit 128 UTF-8 bytes",
+                ));
+            }
             Self::Click {
                 selector: value, ..
             }

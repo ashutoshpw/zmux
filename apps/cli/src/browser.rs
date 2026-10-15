@@ -1,9 +1,9 @@
 //! Browser automation submits once, then polls bounded native execution receipts.
 use super::*;
 use zmux_desktop_runtime::browser::{
-    BrowserAction, BrowserInteraction, BrowserLocator, BrowserRequest, BrowserZoom,
-    DEFAULT_OPERATION_TIMEOUT_MS, GetKind, LocatorKind, MAX_OPERATION_TIMEOUT_MS, SnapshotOptions,
-    WaitState,
+    BrowserAction, BrowserInteraction, BrowserKeyboardOperation, BrowserLocator, BrowserRequest,
+    BrowserZoom, DEFAULT_OPERATION_TIMEOUT_MS, GetKind, LocatorKind, MAX_OPERATION_TIMEOUT_MS,
+    SnapshotOptions, WaitState,
 };
 use zmux_workspace_core::targets::{TargetRef, TargetScope};
 
@@ -114,6 +114,10 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 | "select"
                 | "scroll"
                 | "click"
+                | "press"
+                | "key"
+                | "keydown"
+                | "keyup"
         )
     {
         return Err(CliError(format!("unknown browser subcommand `{verb}`")));
@@ -317,6 +321,10 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 set(&mut script, value(&args, index, flag)?, flag)?;
                 index += 2;
             }
+            "--key" if matches!(verb, "press" | "key" | "keydown" | "keyup") => {
+                set(&mut script, value(&args, index, flag)?, flag)?;
+                index += 2;
+            }
             "--attr" if matches!(kind, Some(GetKind::Attr)) => {
                 set(&mut attribute, value(&args, index, flag)?, flag)?;
                 index += 2;
@@ -359,6 +367,10 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                             | "select"
                             | "scroll"
                             | "click"
+                            | "press"
+                            | "key"
+                            | "keydown"
+                            | "keyup"
                     ) =>
             {
                 flag_once(&mut snapshot_after, flag)?;
@@ -383,6 +395,27 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         }
     }
     let action = match verb {
+        "press" | "key" | "keydown" | "keyup" => {
+            let key = match (script, values.as_slice()) {
+                (Some(key), []) => key,
+                (None, [key]) => key.clone(),
+                _ => {
+                    return Err(CliError(
+                        "browser keyboard requires exactly one --key or positional key".into(),
+                    ));
+                }
+            };
+            let operation = match verb {
+                "keydown" => BrowserKeyboardOperation::Down,
+                "keyup" => BrowserKeyboardOperation::Up,
+                _ => BrowserKeyboardOperation::Press,
+            };
+            BrowserAction::Keyboard {
+                operation,
+                key,
+                snapshot_after,
+            }
+        }
         _ if interaction.is_some() || verb == "click" => {
             if selector.is_none() && values.len() == 1 {
                 selector = values.pop();

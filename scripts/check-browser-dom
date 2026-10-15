@@ -27,7 +27,16 @@ except (OSError, RuntimeError) as error:
     raise SystemExit(f'Cannot identify DOM browser {args.browser}: {error}') from error
 version = (version_result.stdout or version_result.stderr).strip()[:256]
 if version_result.returncode or version_result.timed_out or version_result.output_truncated or not version:
-    raise SystemExit(f'Cannot identify DOM browser {args.browser}: {version}')
+    raise SystemExit('Cannot identify DOM browser: ' + json.dumps({
+        'requested_executable': args.browser,
+        'resolved_executable': str(Path(args.browser).resolve()),
+        'arguments': ['--version'], 'timeout_seconds': 5,
+        'exit_code': version_result.returncode, 'timed_out': version_result.timed_out,
+        'output_truncated': version_result.output_truncated,
+        'stdout_bytes_seen': version_result.stdout_bytes_seen,
+        'stderr_bytes_seen': version_result.stderr_bytes_seen,
+        'stdout': version_result.stdout, 'stderr': version_result.stderr,
+    }, ensure_ascii=True))
 print(f'DOM browser: {version}', flush=True)
 
 root = Path(__file__).resolve().parent.parent
@@ -52,6 +61,19 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
    if (performance.now() >= startupDeadline) throw new Error('DOM fixture could not establish loaded document focus: ' + JSON.stringify({readyState:document.readyState,visibility:document.visibilityState,hasFocus:document.hasFocus()}));
    await new Promise(resolve => setTimeout(resolve, 10));
  }
+
+ // Opaque compatibility keys are explicitly synthetic and cannot invent native defaults.
+ document.body.innerHTML='<input id="opaque-entry" value="unchanged">';
+ const opaqueEntry=document.getElementById('opaque-entry');opaqueEntry.focus();
+ const opaqueEvents=[];
+ for(const type of ['keydown','keypress','keyup'])opaqueEntry.addEventListener(type,event=>opaqueEvents.push({type:event.type,key:event.key,trusted:event.isTrusted}));
+ const opaque=await call({action:'keyboard',operation:'press',key:'OpaqueKeyboardToken',snapshot_after:true});
+ assert(opaque.value?.dispatched===true && opaque.value.input==='synthetic' && opaque.value.native_defaults===false && opaque.snapshot?.nodes.length>0,'opaque receipt is explicit and snapshots without replay');
+ assert(opaqueEntry.value==='unchanged' && opaqueEvents.map(event=>event.type).join(',')==='keydown,keyup' && opaqueEvents.every(event=>event.key==='OpaqueKeyboardToken'&&!event.trusted),'opaque input cannot claim trusted/native defaults');
+ await call({action:'keyboard',operation:'down',key:'OpaqueKeyboardToken'});
+ assert(opaqueEvents.map(event=>event.type).join(',')==='keydown,keyup,keydown','opaque keydown does not invent keyup');
+ await call({action:'keyboard',operation:'up',key:'OpaqueKeyboardToken'});
+ assert(opaqueEvents.map(event=>event.type).join(',')==='keydown,keyup,keydown,keyup','opaque keyup is delivered once');
  document.body.innerHTML = `<main>
  <label for="entry">  Account\n name </label><input id="entry" placeholder="Your account" data-testid="user-entry">
  <button id="send" aria-labelledby="send-label">Ignored text</button><span id="send-label">Send   now</span>

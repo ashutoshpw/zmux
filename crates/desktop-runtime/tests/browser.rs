@@ -564,6 +564,21 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
     let mut runtime = BrowserRuntime::default();
     attach(&mut runtime, &model, surface, now);
     for action in [
+        BrowserAction::Keyboard {
+            operation: BrowserKeyboardOperation::Press,
+            key: "Enter".into(),
+            snapshot_after: true,
+        },
+        BrowserAction::Keyboard {
+            operation: BrowserKeyboardOperation::Down,
+            key: "Shift".into(),
+            snapshot_after: false,
+        },
+        BrowserAction::Keyboard {
+            operation: BrowserKeyboardOperation::Up,
+            key: "Shift".into(),
+            snapshot_after: false,
+        },
         BrowserAction::Eval {
             script: "window.value = 1".into(),
         },
@@ -1301,6 +1316,7 @@ fn dom_mutation_navigation_fails_original_owner_without_promoting_or_replaying_i
     .into_iter()
     .chain([
         json!({"action":"type","selector":"#entry","text":"chunk"}),
+        json!({"action":"keyboard","operation":"press","key":"Enter"}),
         json!({"action":"select","selector":"#choice","value":"a"}),
         json!({"action":"scroll","dx":1,"dy":2}),
     ]) {
@@ -1364,6 +1380,9 @@ fn edit_normalization_and_scroll_bounds_are_owned_before_native_dispatch() {
     let owner = attach(&mut runtime, &model, surface, now);
     let make = |value| serde_json::from_value::<BrowserAction>(value).unwrap();
     for action in [
+        make(json!({"action":"keyboard","operation":"press","key":""})),
+        make(json!({"action":"keyboard","operation":"down","key":"x".repeat(129)})),
+        make(json!({"action":"keyboard","operation":"up","key":format!("bad{}key",char::from(0))})),
         make(json!({"action":"type","selector":"#entry","text":"  "})),
         make(json!({"action":"select","selector":"#choice","value":""})),
         make(
@@ -1395,6 +1414,10 @@ fn edit_normalization_and_scroll_bounds_are_owned_before_native_dispatch() {
     }
     assert!(runtime.drain_requests(&before, now).requests.is_empty());
     for (raw, expected) in [
+        (
+            json!({"action":"keyboard","operation":"press","key":" ","snapshot_after":true}),
+            json!({"action":"keyboard","operation":"press","key":" ","snapshot_after":true}),
+        ),
         (
             json!({"action":"type","selector":"#entry","text":"  雪  ","snapshot_after":true}),
             json!({"action":"type","selector":"#entry","text":"雪","snapshot_after":true}),

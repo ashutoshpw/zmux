@@ -670,6 +670,40 @@ fn definitions() -> Vec<Contract> {
         c.limitations = semantics;
         result.push(c);
     }
+    for (name, operation) in [
+        ("browser press", "press"),
+        ("browser key", "press"),
+        ("browser keydown", "down"),
+        ("browser keyup", "up"),
+    ] {
+        let mut c = contract(
+            name,
+            &["--surface", "1", "--key", "Enter"],
+            target_arguments(),
+            "browser",
+        );
+        c.route = "browser";
+        c.requirements = &["running_app", "native_webkit_host"];
+        c.expected.extend([
+            ("/request/action/action", "keyboard"),
+            ("/request/action/operation", operation),
+        ]);
+        c.arguments.extend([
+            option("key", &["--key"], ValueKind::Text),
+            positional("key_operand", ValueKind::Text, false),
+            option("snapshot_after", &["--snapshot-after"], ValueKind::Flag),
+        ]);
+        c.argument_rules.extend([
+            json!({"exactly_one":["key","key_operand"]}),
+            json!({"max_utf8_bytes":browser::MAX_KEY_TOKEN_BYTES,"trim":false,"nul":false}),
+        ]);
+        c.default_pointers.extend([
+            ("snapshot_after", "/request/action/snapshot_after"),
+            ("operation_timeout_ms", "/request/timeout_ms"),
+        ]);
+        c.limitations = "Supported keys use direct native WebKit input with exact host/document ownership and no app focus change. Down/up retain bounded host-local state. Unknown opaque tokens use explicitly synthetic page events; a failed native key never downgrades. Completion establishes dispatch, not a successful page default; timeout uncertainty never authorizes replay. Full mapping, IME and native held-state lifecycle compatibility remain unverified.";
+        result.push(c);
+    }
     let mut scroll = contract(
         "browser scroll",
         &["--surface", "1", "--dx", "12", "--dy", "24"],

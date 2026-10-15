@@ -68,8 +68,10 @@ enum BrowserInteraction: String, Codable, Sendable {
     case dblclick, hover, focus, check, uncheck
     case scrollIntoView = "scroll_into_view"
 }
+enum BrowserKeyboardOperation: String, Codable, Sendable { case press, down, up }
 
 enum BrowserAction: Codable, Sendable {
+    case keyboard(operation: BrowserKeyboardOperation, key: String, snapshotAfter: Bool)
     case back(snapshotAfter: Bool)
     case forward(snapshotAfter: Bool)
     case reload(snapshotAfter: Bool)
@@ -86,10 +88,11 @@ enum BrowserAction: Codable, Sendable {
     case find(locator: BrowserLocator)
     case wait(selector: String, state: String)
 
-    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation, text, value, dx, dy }
+    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation, text, value, dx, dy, key }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .action) {
+        case "keyboard": self = .keyboard(operation: try c.decode(BrowserKeyboardOperation.self, forKey: .operation), key: try c.decode(String.self, forKey: .key), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "back": self = .back(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "forward": self = .forward(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "reload": self = .reload(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
@@ -111,6 +114,9 @@ enum BrowserAction: Codable, Sendable {
     func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .keyboard(let operation, let key, let after):
+            try c.encode("keyboard", forKey: .action); try c.encode(operation, forKey: .operation)
+            try c.encode(key, forKey: .key); try c.encode(after, forKey: .snapshotAfter)
         case .back(let after), .forward(let after), .reload(let after):
             let name: String
             switch self { case .back: name = "back"; case .forward: name = "forward"; default: name = "reload" }
@@ -145,7 +151,8 @@ enum BrowserAction: Codable, Sendable {
     }
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
-    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .type, .select, .scroll, .click, .interact: true; default: false } }
+    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .type, .select, .scroll, .click, .interact, .keyboard: true; default: false } }
+    var isKeyboard: Bool { if case .keyboard = self { return true }; return false }
     var isWait: Bool { if case .wait = self { return true }; return false }
 }
 
@@ -616,6 +623,18 @@ enum BrowserAutomationScript {
       else if (req.action === 'get') value = get();
       else if (req.action === 'find') value = find(req.locator);
       else if (req.action === 'wait') value = wait();
+      else if (req.action === 'keyboard') {
+        if (input.native_keyboard) value = {dispatched:true, input:'native'};
+        else {
+          const target = document.activeElement || document.body;
+          if (!target) fault('element_not_found', 'Document has no keyboard target');
+          const held = input.keyboard_modifiers || {};
+          const emit = type => target.dispatchEvent(new KeyboardEvent(type, {key:req.key,code:'',bubbles:true,cancelable:true,shiftKey:!!held.shift,ctrlKey:!!held.control,altKey:!!held.alt,metaKey:!!held.meta}));
+          if (req.operation === 'up') emit('keyup');
+          else { const allowed=emit('keydown'); if (req.operation === 'press') { if(allowed && Array.from(req.key).length===1) emit('keypress'); emit('keyup'); } }
+          value = {dispatched:true,input:'synthetic',native_defaults:false};
+        }
+      }
       else if (req.action === 'fill') value = editText(false);
       else if (req.action === 'type') value = editText(true);
       else if (req.action === 'select') value = selectValue();
@@ -623,7 +642,7 @@ enum BrowserAutomationScript {
       else if (req.action === 'click') value = click();
       else if (req.action === 'interact') value = interact();
       else fault('unsupported_action', 'Unsupported browser action');
-      const result = JSON.stringify({value, ...(['fill','type','select','scroll','click','interact'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
+      const result = JSON.stringify({value, ...(['fill','type','select','scroll','click','interact','keyboard'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
       if (new TextEncoder().encode(result).length > 58000) fault('result_too_large', 'Browser result exceeds the byte limit; narrow the selector');
       return result;
     } catch (error) {
