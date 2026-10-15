@@ -49,6 +49,7 @@ const READ_QUANTA: usize = 4;
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const IDLE_WAIT: Duration = Duration::from_millis(250);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+const EXIT_REAP_TIMEOUT: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Error)]
 pub enum SessionError {
@@ -273,7 +274,7 @@ enum Input {
 
 struct Shared {
     stop: AtomicBool,
-    close_deadline: Mutex<Option<Instant>>,
+    close_deadline: Arc<Mutex<Option<Instant>>>,
     exited: AtomicBool,
     cleanup_failed: AtomicBool,
     resize: Mutex<Option<Size>>,
@@ -305,6 +306,8 @@ struct ProcessGuard {
     reaped: bool,
     signaled: bool,
     pid: u32,
+    close_deadline: Arc<Mutex<Option<Instant>>>,
+    exit_reap_deadline: Option<Instant>,
 }
 impl ProcessGuard {
     fn poll_exit(&mut self) -> Result<bool, SessionError> {
@@ -336,23 +339,53 @@ impl ProcessGuard {
                 // Observation errors grant no authority or successful cleanup.
                 let group = nix::unistd::getpgid(Some(Pid::from_raw(self.pid as i32)));
                 let mut reap = None;
+                let mut reap_attempts = 0;
+                let reap_started = Instant::now();
                 if error == Errno::EPERM && matches!(group, Err(Errno::ESRCH)) {
-                    match self.child.try_wait() {
-                        Ok(Some(status)) => {
-                            self.reaped = true;
-                            eprintln!(
-                                "zmux PTY cleanup confirmed direct-child reap: pid={}; group_signal=EPERM; getpgid=ESRCH; status={status:?}",
-                                self.pid
-                            );
-                            return Ok(());
+                    // Darwin can remove a PTY group during hangup before its
+                    // retained leader becomes waitable. Do not signal again or
+                    // infer exit from ESRCH: only an actual child reap succeeds.
+                    // Neither Drop retries nor later close requests renew time.
+                    let deadline = *self
+                        .exit_reap_deadline
+                        .get_or_insert(reap_started + EXIT_REAP_TIMEOUT);
+                    loop {
+                        reap_attempts += 1;
+                        match self.child.try_wait() {
+                            Ok(Some(status)) => {
+                                self.reaped = true;
+                                eprintln!(
+                                    "zmux PTY cleanup confirmed direct-child reap: pid={}; group_signal=EPERM; getpgid=ESRCH; status={status:?}; attempts={reap_attempts}; elapsed={:?}",
+                                    self.pid,
+                                    reap_started.elapsed()
+                                );
+                                return Ok(());
+                            }
+                            result => {
+                                let failed = result.is_err();
+                                reap = Some(result);
+                                if failed {
+                                    break;
+                                }
+                            }
                         }
-                        result => reap = Some(result),
+                        let close_deadline = self.close_deadline.lock().map_err(|_| {
+                            SessionError::Failure("PTY cleanup deadline poisoned".into())
+                        })?;
+                        let deadline = close_deadline.map_or(deadline, |close| close.min(deadline));
+                        drop(close_deadline);
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            break;
+                        }
+                        thread::sleep(remaining.min(Duration::from_millis(2)));
                     }
                 }
                 let status = child::observe_child(self.pid, true);
                 Err(SessionError::Failure(format!(
-                    "terminate PTY process group: {error}; signal={signal:?}; owned_child_pid={}; observed_group={group:?}; owned_child_status={status:?}; owned_child_reap={reap:?}",
-                    self.pid
+                    "terminate PTY process group: {error}; signal={signal:?}; owned_child_pid={}; observed_group={group:?}; owned_child_status={status:?}; owned_child_reap={reap:?}; reap_attempts={reap_attempts}; reap_elapsed={:?}",
+                    self.pid,
+                    reap_started.elapsed()
                 )))
             }
         }
@@ -908,16 +941,19 @@ impl Worker {
         let pid = child
             .process_id()
             .ok_or_else(|| SessionError::Failure("PTY child has no PID".into()))?;
+        let close_deadline = Arc::new(Mutex::new(None));
         let process = ProcessGuard {
             child,
             reaped: false,
             signaled: false,
             pid,
+            close_deadline: Arc::clone(&close_deadline),
+            exit_reap_deadline: None,
         };
         drop(pair.slave);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
-            close_deadline: Mutex::new(None),
+            close_deadline,
             exited: AtomicBool::new(false),
             cleanup_failed: AtomicBool::new(false),
             resize: Mutex::new(None),
