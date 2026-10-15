@@ -431,13 +431,16 @@ fn socket_deadline_spans_fragmented_header_body_and_response_stages_without_repl
             ));
         } else {
             let error = String::from_utf8_lossy(&output.stderr);
-            let phase = if scenario == "slow_header" {
-                "waiting for zmux"
-            } else {
-                "reading zmux response"
-            };
+            // A peer write does not prove the client consumed that stage before
+            // its deadline: scheduling may expire the same total budget while
+            // waiting for either the header or body. Assert the deadline contract,
+            // rather than which read happened to observe its expiration.
+            let response_phase =
+                error.contains("waiting for zmux") || error.contains("reading zmux response");
             assert!(
-                error.contains(phase) && error.contains("not retried"),
+                response_phase
+                    && error.contains("request deadline elapsed")
+                    && error.contains("not retried"),
                 "{scenario}: {error}"
             );
             assert!(output.stdout.is_empty());

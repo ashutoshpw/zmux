@@ -167,7 +167,7 @@ final class WorkspaceRowView: NSControl {
         NSLayoutConstraint.activate([
             rowHeight!, progressWidth!, progressSpacing!,
             terminalIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            terminalIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            terminalIcon.topAnchor.constraint(equalTo: topAnchor, constant: 16),
             terminalIcon.widthAnchor.constraint(equalToConstant: 17),
             terminalIcon.heightAnchor.constraint(equalToConstant: 17),
             labels.leadingAnchor.constraint(equalTo: terminalIcon.trailingAnchor, constant: 9),
