@@ -36,14 +36,29 @@ pub(super) fn inode(path: &Path) -> io::Result<(u64, u64)> {
     let metadata = path.symlink_metadata()?;
     Ok((metadata.dev(), metadata.ino()))
 }
+/// Socket namespaces must fit Darwin's sockaddr_un after Zellij appends its
+/// version and full session UUID. The system TMPDIR may already exceed that
+/// budget; use the canonical short /tmp base with private random child roots.
+pub(super) fn runtime_base() -> io::Result<PathBuf> {
+    let base = Path::new("/tmp").canonicalize()?;
+    let info = fs::symlink_metadata(&base)?;
+    // A shared base must preserve private children against other users' unlink
+    // or rename operations. Root or this user may own it; writable shared bases
+    // require the sticky bit. Each random child is still created exclusively.
+    if !info.is_dir()
+        || (info.uid() != 0 && info.uid() != geteuid().as_raw())
+        || (info.mode() & 0o022 != 0 && info.mode() & 0o1000 == 0)
+    {
+        return Err(fail("unsafe short socket runtime base owner/mode/type"));
+    }
+    Ok(base)
+}
 impl Record {
     pub(super) fn session_name(&self) -> String {
         format!("zmux-{}", self.id)
     }
     pub(super) fn runtime(&self) -> io::Result<PathBuf> {
-        Ok(std::env::temp_dir()
-            .canonicalize()?
-            .join(format!("z{}", self.id.simple())))
+        Ok(runtime_base()?.join(format!("z{}", self.id.simple())))
     }
     pub(super) fn backend(&self) -> io::Result<PathBuf> {
         Ok(self.runtime()?.join("s/0.43.0").join(self.session_name()))

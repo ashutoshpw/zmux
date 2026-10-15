@@ -27,8 +27,15 @@ creation attempt. Persisted states are `reserved`, `starting`, `bound`, `uncerta
 Any uncertainty after possible execution retains the reservation and forbids replay.
 No automatic retry, adoption, stale-record prune or owner termination is implemented.
 
-Each record derives its short private runtime from the UUID under the canonical
-system temp directory (`z<UUIDsimple>`), with isolated socket/config/cache directories.
+Each record derives its short private runtime from the UUID under canonical `/tmp`
+(`z<UUIDsimple>`), with isolated socket/config/cache directories. The relay uses that
+same short base for its independent random namespace. Darwin resolves `/tmp` to
+`/private/tmp`; the full version/session socket path is 97 bytes, below the existing
+99-byte limit. The per-user system `TMPDIR` can exceed the limit and is not used
+for these socket namespaces. The base must be a directory owned by root or the
+current user; a group/other-writable base must have the sticky bit. Random roots
+still use exclusive mode0700 creation and existing inode/UID binding. No global
+environment variable is changed.
 Zellij appends `s/0.43.0/zmux-<full UUID>`. Paths are bounded below the portable Unix
 socket limit. Private type/mode/UID, root/socket device+inode, exact config, no prefix
 shadow, no symlink/resurrection layout and bounded cache walk are revalidated.
@@ -223,3 +230,23 @@ Each actual attachment/input probe now writes a fresh nonce and requires exact
 marker contents before signaling that client, preventing delayed input from a prior
 attachment from falsely establishing readiness. Signal failures retain bounded final
 PTY output for diagnosis; successful clean detach remains required.
+
+Darwin runs38799167366/38799167465 and owner run38799176839 next exposed Unix
+socket paths over SUN_LEN, first in the direct supervisor fixture and then the real
+broker peer fixture. The production owner and relay now share checked canonical
+`/tmp` selection. The direct auth fixture uses a short private root; the public
+owner fixture injects a deliberately long private `TMPDIR` into its CLI subprocesses,
+without changing the test process environment. Existing full foreground lifecycle
+coverage fails before the repair with the production 99-byte rejection, and passes
+afterward while retaining exact workload identity, detach and reattach assertions.
+The existing real-kernel broker peer test likewise reproduced SUN_LEN under long
+TMPDIR and passes after repair; the CLI auth/FIFO/grammar tests pass unchanged in
+behavior. Queued cancellation still cannot authorize a workload under the long
+subprocess TMPDIR. The pinned Linux Zellij0.43.0 binary checksum matches pins.json.
+
+The isolated `f14ceee` baseline plus this five-file repair passed full `scripts/check`
+(280 Rust tests, formatting, Clippy, inventory and foreign C ABI). Logs are
+`/tmp/zmux-zellij-short-root-{red,green,owner-red,owner-green,cli,cancel,check}.log`.
+Source review preserves exclusive mode0700 creation, shared-base sticky/owner checks,
+namespace inode/UID fencing and existing 99-byte refusal. Fresh Darwin execution is
+still required; this portable repair does not establish native reopen acceptance.
