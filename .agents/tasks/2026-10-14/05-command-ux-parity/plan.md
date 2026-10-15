@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [B01 browser downloads](references/b01-browser-downloads.md) — bounded native resource ownership, CLI list/wait and pending hosted acceptance.
 - [F04 integrated owner](references/f04-integrated-owner.md) — one bounded terminal/collector, aggregate accounting and failure-fenced publication acceptance.
 - [T03 multiwindow design](references/t03-multiwindow-design.md) — singleton model v6/session v4 foundation passes portable core/runtime checks; shared native coordinator, no-focus moves, caller/attention ownership and last-close recovery remain pending.
 - [F04 callback effects](references/f04-effects-slice.md) — isolated ordered BEL/reply/RESET batches, overflow/publication contracts and remaining metadata provenance gates.

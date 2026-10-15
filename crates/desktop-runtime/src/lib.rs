@@ -4,6 +4,8 @@ pub mod browser;
 pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
+mod download_paths;
+pub mod downloads;
 pub mod local_tmux;
 pub mod metadata;
 pub mod persistence;
@@ -93,6 +95,13 @@ pub enum Command {
     Browser {
         request: BrowserRequest,
     },
+    Downloads {
+        request: downloads::DownloadRequest,
+    },
+    #[serde(skip)]
+    NativeDownload {
+        request: downloads::NativeDownload,
+    },
     #[serde(skip)]
     BrowserHost {
         event: BrowserHostEvent,
@@ -156,6 +165,8 @@ pub enum DesktopError {
     #[error("{0}")]
     Browser(#[from] browser::BrowserError),
     #[error("{0}")]
+    Download(#[from] downloads::DownloadError),
+    #[error("{0}")]
     Policy(#[from] control_policy::PolicyError),
     #[error("target surface is not a terminal")]
     NotTerminal,
@@ -199,6 +210,9 @@ pub struct Snapshot {
     pub local_tmux_operations: Vec<local_tmux::Receipt>,
     pub browser_epoch: uuid::Uuid,
     pub browser_operations: Vec<BrowserReceipt>,
+    pub download_epoch: uuid::Uuid,
+    pub downloads: Vec<downloads::DownloadRecord>,
+    pub download_waits: Vec<downloads::WaitReceipt>,
     pub browser_pending_requests: usize,
     pub last_request_id: u64,
     pub last_error: Option<String>,
@@ -242,6 +256,7 @@ pub(crate) struct Execution {
     pub notification_reply: Option<attention::NotificationReply>,
     pub browser_operation_id: Option<u64>,
     pub browser_dispatch: Option<BrowserDispatchBatch>,
+    pub download_result: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -314,6 +329,7 @@ impl Desktop {
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
+        let downloads = downloads::DownloadRuntime::default();
         let profiles = profiles::ProfileRuntime::start(profile_directory)?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let attention = Attention::default();
@@ -339,6 +355,9 @@ impl Desktop {
                 local_tmux_operations: Vec::new(),
                 browser_epoch: browser.epoch(),
                 browser_operations: Vec::new(),
+                download_epoch: downloads.epoch,
+                downloads: Vec::new(),
+                download_waits: Vec::new(),
                 browser_pending_requests: 0,
                 last_request_id: 0,
                 last_error: None,
@@ -359,6 +378,8 @@ impl Desktop {
                     tmux_operation_id: None,
                     model,
                     browser,
+                    downloads,
+                    download_result: None,
                     profiles,
                     profile_operation_id: None,
                     browser_operation_id: None,
@@ -496,6 +517,20 @@ impl Desktop {
             revision: execution.snapshot.revision,
             upload_id: execution.created_uploads.into_iter().next(),
         })
+    }
+
+    /// Trusted download lifecycle channel. Run off the UI thread and never replay
+    /// a missing acknowledgement; admission/publication may already have happened.
+    pub fn native_download(
+        &self,
+        request: downloads::NativeDownload,
+    ) -> Result<serde_json::Value, DesktopError> {
+        let execution =
+            self.execute_native(Command::NativeDownload { request }, NATIVE_COMMAND_TIMEOUT)?;
+        execution.result?;
+        execution
+            .download_result
+            .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
     }
 
     /// Admit one durable profile creation and return that exact executor receipt.
@@ -815,6 +850,8 @@ struct Worker {
     profile_operation_id: Option<u64>,
     model: WorkspaceStore,
     browser: BrowserRuntime,
+    downloads: downloads::DownloadRuntime,
+    download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
     browser_dispatch: Option<BrowserDispatchBatch>,
     persistence: Option<sessions::SessionPersistence>,
@@ -937,6 +974,7 @@ impl Worker {
             dirty |= self
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
+            dirty |= self.downloads.poll(&self.model.snapshot(), Instant::now());
             dirty |= self.profiles.poll();
             dirty |= self.poll_local_tmux();
             if !self.profiles.snapshot.loading {
@@ -1025,6 +1063,9 @@ impl Worker {
         ) {
             self.cleanup_error = Some(error.to_string());
         }
+        if let Err(error) = self.downloads.shutdown(deadline) {
+            self.cleanup_error = Some(error);
+        }
         self.publish(true);
     }
     fn retire(&mut self, session: Session) {
@@ -1047,6 +1088,7 @@ impl Worker {
         self.notification_reply = None;
         self.browser_operation_id = None;
         self.browser_dispatch = None;
+        self.download_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if acknowledgement.is_some()
@@ -1130,6 +1172,7 @@ impl Worker {
                 notification_reply: self.notification_reply.take(),
                 browser_operation_id: self.browser_operation_id,
                 browser_dispatch: self.browser_dispatch.take(),
+                download_result: self.download_result.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -1151,6 +1194,7 @@ impl Worker {
                     | Command::Attention { .. }
                     | Command::BrowserHost { .. }
                     | Command::BrowserDrain
+                    | Command::NativeDownload { .. }
                     | Command::NativeAttention { .. }
             )
         {
@@ -1160,6 +1204,86 @@ impl Worker {
         }
         match command {
             Command::LocalTmux { request } => self.local_tmux_command(request),
+            Command::Downloads { request } => {
+                let model = self.model.snapshot();
+                let target = request.scope.resolve(&model, &request.caller)?;
+                if !model
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .any(|s| {
+                        s.id == target.surface
+                            && s.kind == zmux_workspace_core::SurfaceKind::Browser
+                    })
+                {
+                    return Err(browser::BrowserError::NotBrowser.into());
+                }
+                self.download_result = Some(match request.action {
+                    downloads::DownloadAction::List { limit } => {
+                        let mut result = self.downloads.list(
+                            model.object_uuid(
+                                zmux_workspace_core::targets::TargetKind::Surface,
+                                target.surface.0,
+                            ),
+                            limit,
+                        )?;
+                        result["surface_id"] = serde_json::json!(target.surface);
+                        result["surface_uuid"] = serde_json::json!(model.object_uuid(
+                            zmux_workspace_core::targets::TargetKind::Surface,
+                            target.surface.0
+                        ));
+                        result["workspace_id"] = serde_json::json!(target.workspace);
+                        result["workspace_uuid"] = serde_json::json!(model.object_uuid(
+                            zmux_workspace_core::targets::TargetKind::Workspace,
+                            target.workspace.0
+                        ));
+                        result
+                    }
+                    downloads::DownloadAction::Wait { path, timeout_ms } => {
+                        serde_json::to_value(self.downloads.wait(
+                            &model,
+                            target.surface,
+                            path,
+                            timeout_ms,
+                            Instant::now(),
+                        )?)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))?
+                    }
+                    downloads::DownloadAction::Cancel { download_id } => {
+                        self.downloads.cancel(
+                            model.object_uuid(
+                                zmux_workspace_core::targets::TargetKind::Surface,
+                                target.surface.0,
+                            ),
+                            download_id,
+                        )?;
+                        serde_json::json!({"accepted": true})
+                    }
+                });
+                Ok(())
+            }
+            Command::NativeDownload { request } => {
+                self.download_result = Some(match request {
+                    downloads::NativeDownload::Begin {
+                        owner,
+                        token,
+                        filename,
+                    } => {
+                        self.browser.check_owner(&owner)?;
+                        serde_json::to_value(self.downloads.begin(
+                            &self.model.snapshot(),
+                            owner,
+                            token,
+                            filename,
+                            Instant::now(),
+                        )?)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))?
+                    }
+                    other => self.downloads.update(other)?,
+                });
+                Ok(())
+            }
             Command::Profiles { action } => {
                 self.profile_operation_id = Some(self.profiles.admit(action)?);
                 Ok(())
@@ -1173,11 +1297,19 @@ impl Worker {
                 Ok(())
             }
             Command::BrowserHost { event } => {
+                let detached = if let BrowserHostEvent::Detach { owner } = &event {
+                    Some(owner.host_id)
+                } else {
+                    None
+                };
                 if let Some(action) =
                     self.browser
                         .host_event(&self.model.snapshot(), event, Instant::now())?
                 {
                     self.action(action)?;
+                }
+                if let Some(host) = detached {
+                    self.downloads.detach(host);
                 }
                 Ok(())
             }
@@ -2027,6 +2159,9 @@ impl Worker {
             local_tmux_operations: self.local_tmux.receipts.clone(),
             browser_epoch: self.browser.epoch(),
             browser_operations: self.browser.receipts(),
+            download_epoch: self.downloads.epoch,
+            downloads: self.downloads.records(),
+            download_waits: self.downloads.wait_receipts(),
             browser_pending_requests: self.browser.pending_request_count(),
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),

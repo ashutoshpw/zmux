@@ -21,6 +21,7 @@ use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod browser;
+mod browser_download;
 mod local_multiplexer;
 mod registry;
 mod session;
@@ -60,6 +61,7 @@ enum Parsed {
     App(ControlCommand),
     Browser(ControlCommand, Option<Duration>),
     BrowserProfile(ControlCommand),
+    BrowserDownload(ControlCommand, Option<Duration>),
 }
 
 enum Offline {
@@ -118,6 +120,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&local_multiplexer::run_gui(&options, command)?)?
+            );
+            Ok(0)
+        }
+        Parsed::BrowserDownload(command, _) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&browser_download::run(&options, command)?)?
             );
             Ok(0)
         }
@@ -200,6 +210,9 @@ fn parse(
         let parsed = browser::parse(tail)?;
         if !explicit_timeout && let Parsed::Browser(_, Some(wait)) = &parsed {
             timeout = *wait + Duration::from_secs(1);
+        }
+        if !explicit_timeout && let Parsed::BrowserDownload(_, Some(wait)) = &parsed {
+            timeout = *wait;
         }
         return Ok((parsed, socket, timeout, password));
     }

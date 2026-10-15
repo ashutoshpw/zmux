@@ -65,6 +65,19 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             "browser requires a subcommand; run `zmux help browser`".into(),
         ));
     };
+    if verb == "download" {
+        return super::browser_download::parse(&args[1..]);
+    }
+    if args.get(1).is_some_and(|verb| verb == "download") {
+        let target = args[0].clone();
+        let mut download = args[2..].to_vec();
+        let before_literal = download
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(download.len());
+        download.splice(before_literal..before_literal, ["--surface".into(), target]);
+        return super::browser_download::parse(&download);
+    }
     if matches!(verb, "open" | "navigate" | "goto") {
         return targets::parse(
             "browser",

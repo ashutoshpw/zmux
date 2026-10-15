@@ -9,6 +9,7 @@ private enum UICommand: Sendable {
     case attention(String, UInt64?, UInt64?, Bool?)
     case browser(String, UInt64?, UInt64?, String, String?, UUID?)
     case browserAutomation(UInt64, BrowserAction)
+    case downloadCancel(BrowserDownloadRecord)
     case pasteFiles(UInt64, [String])
     case cancelUpload(UInt64)
     case input(UInt64, String)
@@ -24,6 +25,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private(set) var snapshot: DesktopSnapshot?
 
     private let bridge = NativeBridge()
+    private lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
     private lazy var notificationDelivery = makeNotificationDelivery()
     private func makeNotificationDelivery() -> NotificationDelivery {
         NotificationDelivery(
@@ -149,6 +151,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
                     case .browser(let operation, let surface, let pane, let url, let title, let profile):
                         try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title, profile: profile)
+                    case .downloadCancel(let record):
+                        try await self.bridge.cancelBrowserDownload(record)
                     case .browserAutomation(let surface, let action):
                         try await self.bridge.browserAction(surface: surface, action: action)
                     case .attention(let operation, let id, let through, let active):
@@ -209,6 +213,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         pollingTask?.cancel()
         browsers.values.forEach { $0.close() }
         browsers.removeAll()
+        try await browserDownloads.shutdown()
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
@@ -502,6 +507,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         for (title, action, key) in [
             ("Back", #selector(browserBack), ""), ("Forward", #selector(browserForward), ""),
             ("Manage Profiles…", #selector(showBrowserProfiles(_:)), ""),
+            ("Downloads…", #selector(showBrowserDownloads(_:)), ""),
             ("Reload", #selector(browserReload), "r"), ("Find in Page…", #selector(browserFind), "f"),
             ("Zoom In", #selector(browserZoomIn), "+"), ("Zoom Out", #selector(browserZoomOut), "-"),
             ("Actual Size", #selector(browserZoomReset), "0")
@@ -543,6 +549,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             layoutKey = ""
         }
         self.snapshot = snapshot
+        browserDownloads.update(snapshot)
         browserProfilesWindow?.update(snapshot.browserProfiles)
         // Keep the bounded browser set mounted even when its tabs are hidden so
         // automation targets never need to change the user's selection or focus.
@@ -912,6 +919,15 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         createBrowser(in: pane.id, url: "about:blank", profile: profile)
     }
+    @objc private func showBrowserDownloads(_ sender: Any?) { browserDownloads.showWindow(sender) }
+    func reserveBrowserDownload(origin: BrowserOwner, profile: UUID?, webView: WKWebView, conversionOwner: BrowserView, filename: String) async throws -> BrowserDownloadToken {
+        try await browserDownloads.reserve(origin: origin, profile: profile, webView: webView, conversionOwner: conversionOwner, filename: filename)
+    }
+    func adoptBrowserDownload(_ download: WKDownload, token: BrowserDownloadToken, webView: WKWebView) { browserDownloads.adopt(download, token: token, webView: webView) }
+    func abandonBrowserDownload(_ token: BrowserDownloadToken) { browserDownloads.abandon(token) }
+    func cancelBrowserDownloadConversion(_ token: BrowserDownloadToken) { browserDownloads.cancelConversion(token) }
+    func cancelBrowserDownloads(host: UUID) { browserDownloads.cancelHost(host) }
+    func cancelBrowserDownload(_ record: BrowserDownloadRecord) { enqueue(.downloadCancel(record)) }
     @objc private func showBrowserProfiles(_ sender: Any?) {
         if browserProfilesWindow == nil {
             let bridge = self.bridge
@@ -1617,6 +1633,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "browser_profiles_isolation_reopen": true,
             "browser_profile_menu": true,
             "browser_profile_management": true,
+            "browser_downloads_native": true,
             "local_tmux_cli_native_reopen": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
@@ -2172,6 +2189,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         try await smokePublishedBrowserTitle(surface: surface, title: "CSP fixture")
         try await smokeBrowserProfiles(origin: origin, pane: pane.id, privateSurface: surface)
+        try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
+        guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
+              let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }
+        downloadsMenu.performActionForItem(at: downloadsMenu.index(of: downloadsItem))
+        guard let downloadsWindow = NSApp.windows.first(where: { $0.title == "Downloads" && $0.isVisible }) else { throw BridgeFailure(message: "Downloads menu did not open its native history") }
+        downloadsWindow.close()
     }
 
     private func smokePublishedBrowserTitle(surface: UInt64, title: String) async throws {

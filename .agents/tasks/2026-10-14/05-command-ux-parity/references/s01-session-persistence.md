@@ -65,5 +65,8 @@ and dangling lock symlinks are refused without creating/changing targets or a le
 All 14 focused persistence tests and strict Clippy pass locally. Parent independent
 `scripts/check` passes in `/tmp/zmux-lock-retry-parent-verify-ef2fsvhd` with a fresh
 private Cargo target (log `/tmp/zmux-lock-retry-parent-check.log`). Source review
-accepts the bounded retry without weakening lock ownership. Identical hosted
-post-fix/native validation remains pending.
+accepts the bounded retry without weakening lock ownership. Post-fix diagnostic run `38773735612` at `610e897` also passed all 128
+attempts; its downloaded receipt is in
+`/tmp/zmux-persistence-concurrency-postfix-38773735612`. Both pre-fix and
+post-fix diagnostics passed, so these receipts do not establish the OS root cause.
+Native build validation remains pending.

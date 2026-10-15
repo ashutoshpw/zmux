@@ -223,7 +223,8 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
-        ControlCommand::LocalTmuxStatus { .. }
+        ControlCommand::DownloadWaitStatus { .. }
+        | ControlCommand::LocalTmuxStatus { .. }
         | ControlCommand::BrowserProfilesStatus { .. }
         | ControlCommand::BrowserStatus { .. }
         | ControlCommand::SessionStatus { .. }
@@ -237,6 +238,10 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         | ControlCommand::ListPanes { .. }
         | ControlCommand::ReadScreen { .. } => true,
         ControlCommand::Browser { request } => request.action.is_read(),
+        ControlCommand::Downloads { request } => !matches!(
+            request.action,
+            crate::downloads::DownloadAction::Cancel { .. }
+        ),
         ControlCommand::Targeted { request } => matches!(
             request.operation,
             TargetOperation::ReadScreen

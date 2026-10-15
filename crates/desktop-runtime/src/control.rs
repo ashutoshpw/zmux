@@ -68,6 +68,13 @@ pub enum ControlCommand {
     Browser {
         request: crate::browser::BrowserRequest,
     },
+    Downloads {
+        request: crate::downloads::DownloadRequest,
+    },
+    DownloadWaitStatus {
+        epoch: uuid::Uuid,
+        ticket_id: uuid::Uuid,
+    },
     BrowserStatus {
         operation_id: u64,
     },
@@ -586,6 +593,28 @@ fn dispatch(
                     "local tmux receipt expired or missing".into(),
                 ))
         }
+        ControlCommand::Downloads {
+            request: download_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Downloads {
+                request: download_request,
+            },
+        ),
+        ControlCommand::DownloadWaitStatus { epoch, ticket_id } => {
+            let snapshot = current_snapshot(desktop)?;
+            snapshot
+                .download_waits
+                .iter()
+                .find(|t| t.epoch == epoch && t.ticket_id == ticket_id)
+                .map(|t| json!(t))
+                .ok_or((
+                    "download_wait_not_found",
+                    "Download wait ticket expired or belongs to another runtime".into(),
+                ))
+        }
         ControlCommand::BrowserProfiles { action } => mutate(
             desktop,
             admission,
@@ -903,12 +932,16 @@ fn mutate(
         DesktopError::Policy(error) => (error.code(), error.to_string()),
         DesktopError::Target(error) => (error.code(), error.to_string()),
         DesktopError::Browser(error) => (error.code(), error.to_string()),
+        DesktopError::Download(error) => (error.code, error.to_string()),
         DesktopError::Attention(error) => (error.code(), error.to_string()),
         DesktopError::Metadata(error) => (error.code(), error.to_string()),
         DesktopError::NotTerminal => ("not_terminal", error.to_string()),
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(download) = execution.download_result {
+        return Ok(download);
+    }
     if let Some(metadata) = execution.metadata_result {
         return Ok(json!(metadata));
     }
@@ -1035,6 +1068,7 @@ fn desktop_error(error: DesktopError) -> (&'static str, String) {
         DesktopError::Target(ref error) => error.code(),
         DesktopError::Browser(ref error) => error.code(),
         DesktopError::Failure(_) => "desktop_error",
+        DesktopError::Download(ref error) => error.code,
     };
     (code, error.to_string())
 }
