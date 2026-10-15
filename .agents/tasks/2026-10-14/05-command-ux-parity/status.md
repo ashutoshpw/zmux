@@ -5,6 +5,20 @@
 
 ## Active implementation
 
+- F04 isolated metadata owner committed/pushed `b86a700`; independent full39+7
+  and final focused normal/source/arena controls pass, all29 final hashes checked.
+  Hosted Linux/macOS `38777353391` running; no production engine switch.
+- Native coordinator extraction `bded4e2` committed; downloads file-owner fixes
+  passed hosted filesystem probe in `38776244720` at `eaf8cda`; app compilation
+  and packaged WebKit acceptance still running. Earlier runs failed file-path
+  handling then a Swift fixture isolation boundary; both retained strict guards.
+- Zellij Darwin public SDK/peer and descendant containment now execute, but latest
+  `38777058699` fails PTY failed-exec evidence and exact-close timeout. Diagnostics
+  show exit111 with no retained PTY bytes, live server after helper exit0, and
+  ENOTCONN relay closes. Owner is repairing per-direction lifetime and stage evidence.
+- F01 contract schema frozen for independent review/parent checks. Two-window
+  vertical lifecycle implementation and isolated real-PTY terminal design are active.
+
 - Browser downloads committed `0bda3f1`: independent portable full checks/review pass;
   packaged Darwin file/WebKit acceptance remains pending. Zellij public-peer fixture
   committed `4d09a03`: independent real Linux transport/cleanup rerun passes;
