@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Local cloud](references/local-cloud.md) — Docker service, tunnel target, configuration isolation and verification limits.
 - [T02 navigation](references/t02-navigation.md) — shared directional actions, focus history, split-close restoration and current verification gates.
 - [R01d clipboard images](references/r01-clipboard-images.md) — bounded native image preparation, exact-session receipts and upload-source lifetime; universal/native smoke passed, broader remote gates open.
 - [R01c authenticated file transfer](references/r01-file-transfers.md) — private terminal channels, bounded upload/cancel, native file drop/paste and remaining image/directory gates.

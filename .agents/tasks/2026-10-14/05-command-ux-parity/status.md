@@ -151,3 +151,11 @@ Implement the audited P0 command registry/target contracts and the managed SSH/t
 priority journey, alongside remaining P1 navigation/window/recovery actions;
 then close P2 attention and P3 browser gaps against the linked ledgers. Preserve native artifact
 and visual gates, and commit cohesive validated slices. Full parity is still the objective.
+
+## 2026-10-15 local hosting and native verification
+
+- Local Docker launcher reviewed and environment override defect repaired; service healthy
+  at http://127.0.0.1:3530. Hosted deployment deferred by user; public tunnel unverified.
+- macOS Actions run 38725306919 at 85e6e9f passed universal build and packaged native
+  smoke after shifted-bracket shortcut correction. No full-parity artifact handed off.
+- Session persistence integration and crash-safe allocator work remain in progress.

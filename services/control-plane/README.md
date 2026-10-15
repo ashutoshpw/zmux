@@ -72,6 +72,12 @@ intentionally owns its local counters.
 
 ## Production image and configuration
 
+For the authorized local Docker service and Cloudflare Tunnel handoff, use
+[`scripts/local-cloud`](../../scripts/local-cloud) as described in
+[cloud deployment](../../docs/cloud-deployment.md#local-docker-service-and-tunnel-handoff).
+It derives the port with `bunx path-to-port`, preserves production PostgreSQL TLS,
+keeps credentials outside Git, and backs up before migrations.
+
 Build and inspect the hosting-neutral image:
 
 ```sh
@@ -88,8 +94,11 @@ bytes), and `ZMUX_CLOUD_ORIGIN`. The selected official origin is
 Production rejects HTTP origins. PostgreSQL TLS certificate validation is enabled in
 production, so the connection endpoint must present a certificate trusted by the image.
 Set `TRUST_PROXY=true` only behind a trusted proxy that replaces `X-Forwarded-For`.
+`HOST` accepts a literal IPv4 or IPv6 bind address and defaults to `0.0.0.0`; the local
+Docker setup sets `HOST=127.0.0.1` explicitly.
 
-Run migrations as a protected GitHub Actions deployment step before starting a new image.
+For future hosted rollouts, run migrations as a protected GitHub Actions deployment step
+before starting a new image. The authorized local script backs up and migrates locally.
 Do not run them in image build or server startup. The runtime user is non-root, listens on
 `PORT` (default 3000), and the image health check calls `/health`. Route external traffic
 through an HTTPS reverse proxy to the same origin configured in `ZMUX_CLOUD_ORIGIN`.

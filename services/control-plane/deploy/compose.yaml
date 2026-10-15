@@ -1,0 +1,65 @@
+name: zmux-local-cloud
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: zmux
+      POSTGRES_DB: zmux
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?private environment file required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      ZMUX_LOCAL_DATABASE_PORT: ${ZMUX_LOCAL_DATABASE_PORT:?private database port required}
+    network_mode: host
+    entrypoint: [/bin/sh, /opt/zmux/postgres-entrypoint.sh]
+    volumes:
+      - database:/var/lib/postgresql
+      - ${ZMUX_LOCAL_STATE:?private state directory required}/tls/server.crt:/opt/zmux/tls/server.crt:ro
+      - ${ZMUX_LOCAL_STATE}/tls/server.key:/opt/zmux/tls/server.key:ro
+      - ./postgres-entrypoint.sh:/opt/zmux/postgres-entrypoint.sh:ro
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/zmux-tls.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U zmux -d zmux -p "$${ZMUX_LOCAL_DATABASE_PORT}"']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    mem_limit: 512m
+    cpus: 1
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  app:
+    build:
+      context: ..
+    image: zmux-control-plane:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 127.0.0.1
+      PORT: ${ZMUX_LOCAL_PORT:?run bunx path-to-port}
+      ZMUX_CLOUD_ORIGIN: https://zmux.w3dev.app
+      DATABASE_URL: ${DATABASE_URL:?private environment file required}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?private environment file required}
+      NODE_EXTRA_CA_CERTS: /opt/zmux/ca.crt
+      TRUST_PROXY: 'false'
+    network_mode: host
+    healthcheck:
+      test: [CMD, bun, -e, "const r=await fetch('http://127.0.0.1:'+process.env.PORT+'/health');if(!r.ok)process.exit(1)"]
+      interval: 3s
+      timeout: 3s
+      start_period: 3s
+      retries: 10
+    volumes:
+      - ${ZMUX_LOCAL_STATE}/tls/ca.crt:/opt/zmux/ca.crt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 512m
+    cpus: 1
+    logging: *logging
+
+volumes:
+  database:

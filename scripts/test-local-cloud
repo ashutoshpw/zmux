@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Check real Compose interpolation without contacting Docker or any database."""
+import json
+import os
+from pathlib import Path
+import runpy
+import tempfile
+
+root = Path(__file__).resolve().parent.parent
+with tempfile.TemporaryDirectory(prefix="zmux-compose-contract-") as temporary:
+    state = Path(temporary)
+    values = {
+        "ZMUX_LOCAL_STATE": str(state),
+        "ZMUX_LOCAL_PORT": "3530",
+        "ZMUX_LOCAL_DATABASE_PORT": "3531",
+        "DATABASE_PASSWORD": "dummy-private-password",
+        "DATABASE_URL": "postgres://dummy:dummy@127.0.0.1:3531/isolated",
+        "BETTER_AUTH_SECRET": "dummy-private-auth-secret",
+    }
+    (state / "local.env").write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    os.environ["ZMUX_LOCAL_STATE"] = str(state)
+    module = runpy.run_path(str(root / "scripts/local-cloud"))
+    # Simulate unrelated project credentials and ports exported in the caller's shell.
+    for key in values:
+        os.environ[key] = "unrelated-project-value"
+    os.environ["ZMUX_LOCAL_PORT"] = "9998"
+    os.environ["ZMUX_LOCAL_DATABASE_PORT"] = "9999"
+    os.environ["ZMUX_LOCAL_STATE"] = str(state / "unrelated")
+    config = json.loads(module["compose"]("config", "--format", "json").stdout)
+    app = config["services"]["app"]
+    postgres = config["services"]["postgres"]
+    assert app["environment"]["DATABASE_URL"] == values["DATABASE_URL"]
+    assert app["environment"]["BETTER_AUTH_SECRET"] == values["BETTER_AUTH_SECRET"]
+    assert str(app["environment"]["PORT"]) == values["ZMUX_LOCAL_PORT"]
+    assert postgres["environment"]["POSTGRES_PASSWORD"] == values["DATABASE_PASSWORD"]
+    assert str(postgres["environment"]["ZMUX_LOCAL_DATABASE_PORT"]) == values["ZMUX_LOCAL_DATABASE_PORT"]
+    assert app["volumes"][0]["source"] == str(state / "tls/ca.crt")
+print("Local cloud Compose environment isolation passed; no database or daemon accessed.")

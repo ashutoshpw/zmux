@@ -1,8 +1,11 @@
+import { isIP } from "node:net";
+
 export type ControlPlaneConfig = {
   origin: string;
   databaseUrl: string;
   authSecret: string;
   port: number;
+  host: string;
   production: boolean;
   trustProxy: boolean;
 };
@@ -40,12 +43,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ControlPlaneCo
   const portText = env.PORT ?? "3000";
   const port = Number(portText);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be an integer from 1 to 65535");
+  const host = env.HOST ?? "0.0.0.0";
+  if (!isIP(host)) throw new Error("HOST must be an IPv4 or IPv6 address");
 
   return {
     origin: originUrl.origin,
     databaseUrl: required(env, "DATABASE_URL"),
     authSecret,
     port,
+    host,
     production,
     trustProxy: parseBoolean(env.TRUST_PROXY, "TRUST_PROXY"),
   };
