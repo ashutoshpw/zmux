@@ -58,6 +58,7 @@ enum Parsed {
     LocalMultiplexer(local_multiplexer::Invocation),
     App(ControlCommand),
     Browser(ControlCommand, Option<Duration>),
+    BrowserProfile(ControlCommand),
 }
 
 enum Offline {
@@ -111,6 +112,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
             Ok(0)
         }
         Parsed::LocalMultiplexer(invocation) => local_multiplexer::run(invocation),
+        Parsed::BrowserProfile(command) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&browser::run_profile(&options, command)?)?
+            );
+            Ok(0)
+        }
         Parsed::Browser(command, wait_timeout) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(

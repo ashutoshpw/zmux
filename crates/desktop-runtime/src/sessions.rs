@@ -375,6 +375,10 @@ impl Worker {
                 continue;
             };
             match completion.result {
+                Ok(PersistenceOutcome::Profiles(_)) => {
+                    self.last_error =
+                        Some("unexpected profile completion on session worker".into());
+                }
                 Ok(PersistenceOutcome::Reserved(reservation)) => {
                     let result = self.model.advance_identifier_floor(reservation.start);
                     let p = self.persistence.as_mut().expect("enabled");
@@ -427,6 +431,12 @@ impl Worker {
                     );
                     match prepared {
                         Ok(mut prepared) => {
+                            if let Err(error) =
+                                self.profiles.validate_model(&prepared.store.snapshot())
+                            {
+                                self.load_failed(op, error.to_string());
+                                continue;
+                            }
                             if let Err(error) = prepared
                                 .store
                                 .advance_identifier_floor(loaded.allocation_start)
@@ -678,7 +688,7 @@ impl SessionPersistence {
                                 self.snapshot.last_saved_revision = op.save_revision;
                             }
                         }
-                        Ok(PersistenceOutcome::Reserved(_)) => {}
+                        Ok(PersistenceOutcome::Reserved(_) | PersistenceOutcome::Profiles(_)) => {}
                         Ok(PersistenceOutcome::Loaded(_)) => {
                             self.finish(op.receipt, Err("restore cancelled by shutdown".into()))
                         }

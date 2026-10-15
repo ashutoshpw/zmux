@@ -51,6 +51,26 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     } else {
         None
     };
+    let mut browser_profile = None;
+    if browser_verb.as_deref() == Some("open") {
+        let mut index = 0;
+        while index < args.len() && args[index] != "--" {
+            if args[index] == "--profile" {
+                if browser_profile.is_some() {
+                    return Err(CliError("repeated --profile".into()));
+                }
+                let profile = args
+                    .get(index + 1)
+                    .filter(|value| !value.is_empty() && !value.starts_with("--"))
+                    .ok_or_else(|| CliError("--profile requires a name or UUID".into()))?
+                    .clone();
+                browser_profile = Some(profile);
+                args.drain(index..index + 2);
+            } else {
+                index += 1;
+            }
+        }
+    }
     let browser_focus = if browser_verb.as_deref() == Some("open") {
         extract_browser_focus(&mut args)?
     } else {
@@ -177,6 +197,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         }
         "browser" => match browser_verb.as_deref() {
             Some("open") => TargetAction::CreateBrowser {
+                profile: browser_profile,
                 url: target_and_value(values, &mut scope.pane, "pane and URL")?,
                 focus: browser_focus,
             },

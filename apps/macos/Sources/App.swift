@@ -7,7 +7,7 @@ private enum UICommand: Sendable {
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
     case attention(String, UInt64?, UInt64?, Bool?)
-    case browser(String, UInt64?, UInt64?, String, String?)
+    case browser(String, UInt64?, UInt64?, String, String?, UUID?)
     case browserAutomation(UInt64, BrowserAction)
     case pasteFiles(UInt64, [String])
     case cancelUpload(UInt64)
@@ -85,6 +85,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var modelRevision: UInt64 = .max
     private var terminals: [UInt64: TerminalView] = [:]
     private var browsers: [UInt64: BrowserView] = [:]
+    private var browserDataStores: [UUID: WKWebsiteDataStore] = [:]
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
     private var workspaceRowsNamespace: UUID?
     private var metadataPopover: NSPopover?
@@ -117,8 +118,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         buildMenus()
     }
 
-    func start(persistent: Bool = true) async throws {
-        try await bridge.start(persistent: persistent)
+    func start(storage: NativeDesktopStorage = .applicationSupport) async throws {
+        try await bridge.start(storage: storage)
         browserEventTask = Task { [weak self] in
             guard let self else { return }
             for await (generation, event) in self.browserEvents.stream {
@@ -144,8 +145,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
                     case .navigation(let action, let direction, let pane, let surface, let workspace, let focus):
                         try await self.bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
-                    case .browser(let operation, let surface, let pane, let url, let title):
-                        try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title)
+                    case .browser(let operation, let surface, let pane, let url, let title, let profile):
+                        try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title, profile: profile)
                     case .browserAutomation(let surface, let action):
                         try await self.bridge.browserAction(surface: surface, action: action)
                     case .attention(let operation, let id, let through, let active):
@@ -539,9 +540,23 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         // automation targets never need to change the user's selection or focus.
         for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
             let view: BrowserView
-            if let existing = browsers[surface.id] { view = existing }
+            if let existing = browsers[surface.id], existing.profileID == surface.browserProfileId { view = existing }
             else {
-                view = BrowserView(surface: surface, owner: self)
+                browsers.removeValue(forKey: surface.id)?.close()
+                let dataStore: WKWebsiteDataStore
+                if let profile = surface.browserProfileId {
+                    guard snapshot.browserProfiles.profiles.contains(where: { $0.id == profile }) else {
+                        showError("Browser profile is unavailable; its data store was not replaced")
+                        continue
+                    }
+                    if let existing = browserDataStores[profile] { dataStore = existing }
+                    else {
+                        guard browserDataStores.count < 32 else { showError("Browser profile data store capacity reached"); continue }
+                        dataStore = WKWebsiteDataStore(forIdentifier: profile)
+                        browserDataStores[profile] = dataStore
+                    }
+                } else { dataStore = .nonPersistent() }
+                view = BrowserView(surface: surface, owner: self, dataStore: dataStore)
                 view.frame = NSRect(x: 0, y: 0, width: min(1920, max(640, canvas.bounds.width)), height: min(1200, max(480, canvas.bounds.height)))
                 view.layoutSubtreeIfNeeded()
             }
@@ -875,8 +890,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard let pane = focusedPane else { return }
         createBrowser(in: pane.id, url: "about:blank")
     }
-    func createBrowser(in pane: UInt64, url: String) { enqueue(.browser("create_browser", nil, pane, url, nil)) }
-    func navigateBrowser(_ id: UInt64, url: String) { enqueue(.browser("navigate_browser", id, nil, url, nil)) }
+    func createBrowser(in pane: UInt64, url: String, profile: UUID? = nil) { enqueue(.browser("create_browser", nil, pane, url, nil, profile)) }
+    func navigateBrowser(_ id: UInt64, url: String) { enqueue(.browser("navigate_browser", id, nil, url, nil, nil)) }
     @objc func focusBrowserAddress() {
         if let pane = focusedPane, let browser = browsers[pane.selectedSurface] { browser.focusAddress() }
         else { newBrowser() }
@@ -1532,6 +1547,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "remote_file_url_directory_refusal": true,
             "browser_cli_automation": true,
             "browser_locators_waits": true,
+            "browser_profiles_isolation_reopen": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
             "browser_title_observation": true,
@@ -1801,6 +1817,59 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             try await waitUntil { $0.model.focusedWorkspace == foregroundWorkspace }
         }
     }
+    /// Explicit eval prepares storage/target-blank fixtures. This exercises real
+    /// WebKit profile ownership, not pointer input or complete browser persistence.
+    private func smokeBrowserProfiles(origin: String, pane: UInt64, privateSurface: UInt64) async throws {
+        func add(_ name: String) async throws -> String {
+            let data = try await nativeCLI(["browser", "profiles", "add", name])
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any], let id = result["id"] as? String else { throw BridgeFailure(message: "Profile add omitted durable identity") }
+            return id
+        }
+        func open(_ profile: String) async throws -> UInt64 {
+            let data = try await nativeCLI(["browser", "open", "--pane", String(pane), "--profile", profile, "--no-focus", origin + "/first"])
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any], let created = result["created_surfaces"] as? [[String: Any]], let id = (created.first?["surface_id"] as? NSNumber)?.uint64Value else { throw BridgeFailure(message: "Profile open omitted surface identity") }
+            try await waitUntil { [weak self] _ in self?.browsers[id]?.webView.title == "First fixture" && self?.browsers[id]?.webView.isLoading == false }
+            return id
+        }
+        func eval(_ script: String, _ surface: UInt64) async throws -> Any { try await browserCLIValue(["browser", "eval", script, "--surface", String(surface)]) }
+        let suffix = UUID().uuidString
+        let a = try await add("Smoke A " + suffix), b = try await add("Smoke B " + suffix)
+        let first = try await open(a), sibling = try await open(a), separate = try await open(b)
+        guard browsers[first]?.webView.configuration.websiteDataStore.identifier?.uuidString.lowercased() == a,
+              browsers[separate]?.webView.configuration.websiteDataStore.identifier?.uuidString.lowercased() == b,
+              browsers[privateSurface]?.webView.configuration.websiteDataStore.isPersistent == false else {
+            throw BridgeFailure(message: "Native host selected a substitute profile datastore")
+        }
+        _ = try await eval("document.cookie = 'zmuxProfile=ownerA; Max-Age=3600; Path=/'; localStorage.setItem('zmuxProfile', 'ownerA'); null", first)
+        guard try await eval("localStorage.getItem('zmuxProfile')", sibling) as? String == "ownerA",
+              try await eval("document.cookie.includes('zmuxProfile=ownerA')", sibling) as? Bool == true,
+              try await eval("localStorage.getItem('zmuxProfile') === null && !document.cookie.includes('zmuxProfile=ownerA')", separate) as? Bool == true,
+              try await eval("localStorage.getItem('zmuxProfile') === null && !document.cookie.includes('zmuxProfile=ownerA')", privateSurface) as? Bool == true else {
+            throw BridgeFailure(message: "Native persistent profile sharing/isolation failed")
+        }
+        guard let found = try await browserCLIValue(["browser", "find", "role", "button", "--name", "Continue", "--exact", "--surface", String(first)]) as? [String: Any], let oldRef = found["ref"] as? String else { throw BridgeFailure(message: "Profile fixture omitted element ref") }
+        _ = try await nativeCLI(["close-surface", "--surface", String(sibling)])
+        _ = try await nativeCLI(["close-surface", "--surface", String(first)])
+        _ = try await nativeCLI(["reopen-closed"])
+        try await waitUntil { [weak self] value in
+            guard let surface = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
+            return surface.browserProfileId?.uuidString.lowercased() == a && surface.id != first && self?.browsers[surface.id]?.webView.title == "First fixture" && self?.browsers[surface.id]?.webView.isLoading == false
+        }
+        guard let reopened = snapshot?.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface,
+              try await eval("localStorage.getItem('zmuxProfile') === 'ownerA' && document.cookie.includes('zmuxProfile=ownerA')", reopened) as? Bool == true else { throw BridgeFailure(message: "Profile storage identity did not survive last-host close/reopen") }
+        let stale = try await nativeCLI(["browser", "wait", "--selector", oldRef, "--state", "hidden", "--surface", String(reopened)], expectFailure: true)
+        guard String(decoding: stale, as: UTF8.self).contains("stale_reference") else { throw BridgeFailure(message: "Profile reopen reused a stale host reference") }
+        // A target-blank DOM fixture tests popup routing; it is not a pointer claim.
+        let prior = Set(browsers.keys)
+        _ = try await eval("const link = document.createElement('a'); link.href = '/first'; link.target = '_blank'; document.body.append(link); link.click(); null", reopened)
+        try await waitUntil { value in value.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.contains { !prior.contains($0.id) && $0.browserProfileId?.uuidString.lowercased() == a } }
+        guard let popup = snapshot?.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }).first(where: { !prior.contains($0.id) && $0.browserProfileId?.uuidString.lowercased() == a }) else { throw BridgeFailure(message: "Popup lost its parent profile") }
+        try await waitUntil { [weak self] _ in self?.browsers[popup.id]?.webView.title == "First fixture" && self?.browsers[popup.id]?.webView.isLoading == false }
+        guard try await eval("localStorage.getItem('zmuxProfile')", popup.id) as? String == "ownerA" else { throw BridgeFailure(message: "Popup did not use its parent's datastore") }
+        for id in [popup.id, separate, reopened] { _ = try await nativeCLI(["close-surface", "--surface", String(id)]) }
+        selectTab(privateSurface)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface == privateSurface }
+    }
     /// Public bundled-CLI assertions on a never-selected WebKit document. Fixture
     /// DOM writes are explicit eval; no synthetic input is presented as pointer parity.
     private func smokeBrowserLocators(surface: UInt64) async throws {
@@ -1948,6 +2017,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             throw BridgeFailure(message: "User script was replayed after a CSP-shaped exception")
         }
         try await smokePublishedBrowserTitle(surface: surface, title: "CSP fixture")
+        try await smokeBrowserProfiles(origin: origin, pane: pane.id, privateSurface: surface)
     }
 
     private func smokePublishedBrowserTitle(surface: UInt64, title: String) async throws {
@@ -2253,7 +2323,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // normal app context starts; never create two owners for one path.
                     try await NotificationPermissionSmoke.validate()
                 }
-                try await controller.start(persistent: !CommandLine.arguments.contains("--smoke-test"))
+                let storage: NativeDesktopStorage
+                if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                    storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
+                } else { storage = .applicationSupport }
+                try await controller.start(storage: storage)
                 if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {

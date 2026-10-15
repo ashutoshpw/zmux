@@ -6,6 +6,7 @@ pub mod control_credentials;
 pub mod control_policy;
 pub mod metadata;
 pub mod persistence;
+pub mod profiles;
 mod replies;
 pub mod sessions;
 pub mod targets;
@@ -98,6 +99,9 @@ pub enum Command {
     NativeAttention {
         action: NativeAttentionAction,
     },
+    Profiles {
+        action: profiles::ProfileCommand,
+    },
     Session {
         action: sessions::SessionCommand,
     },
@@ -186,6 +190,7 @@ pub struct Snapshot {
     pub native_notifications: NativeNotificationSnapshot,
     pub uploads: Vec<TransferSnapshot>,
     pub persistence: sessions::PersistenceSnapshot,
+    pub browser_profiles: profiles::ProfileSnapshot,
     pub browser_epoch: uuid::Uuid,
     pub browser_operations: Vec<BrowserReceipt>,
     pub browser_pending_requests: usize,
@@ -222,6 +227,7 @@ pub(crate) struct Execution {
     pub created_panes: Vec<zmux_workspace_core::PaneId>,
     pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
+    pub profile_operation_id: Option<u64>,
     pub session_operation_id: Option<u64>,
     pub metadata_result: Option<metadata::WorkspaceMetadata>,
     pub notification_mutation: Option<NotificationMutation>,
@@ -256,20 +262,22 @@ pub struct NativeNotificationExecution {
 
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
-        Self::start(shell, None)
+        Self::start(shell, None, None)
     }
 
     pub fn with_persistence(shell: Shell, state_directory: PathBuf) -> Result<Self, DesktopError> {
-        let persistence = sessions::SessionPersistence::start(state_directory)?;
-        Self::start(shell, Some(persistence))
+        let persistence = sessions::SessionPersistence::start(state_directory.clone())?;
+        Self::start(shell, Some(persistence), Some(state_directory))
     }
 
     fn start(
         shell: Shell,
         persistence: Option<sessions::SessionPersistence>,
+        profile_directory: Option<PathBuf>,
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
+        let profiles = profiles::ProfileRuntime::start(profile_directory)?;
         let attention = Attention::default();
         let persistence_snapshot = persistence
             .as_ref()
@@ -288,6 +296,7 @@ impl Desktop {
                 native_notifications: attention.native_snapshot(&model.snapshot()),
                 uploads: Vec::new(),
                 persistence: persistence_snapshot,
+                browser_profiles: profiles.snapshot.clone(),
                 browser_epoch: browser.epoch(),
                 browser_operations: Vec::new(),
                 browser_pending_requests: 0,
@@ -308,6 +317,8 @@ impl Desktop {
                 let mut worker = Worker {
                     model,
                     browser,
+                    profiles,
+                    profile_operation_id: None,
                     browser_operation_id: None,
                     browser_dispatch: None,
                     persistence,
@@ -715,6 +726,8 @@ fn notification_filter(
 }
 
 struct Worker {
+    profiles: profiles::ProfileRuntime,
+    profile_operation_id: Option<u64>,
     model: WorkspaceStore,
     browser: BrowserRuntime,
     browser_operation_id: Option<u64>,
@@ -839,7 +852,10 @@ impl Worker {
             dirty |= self
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
-            dirty |= self.poll_sessions();
+            dirty |= self.profiles.poll();
+            if !self.profiles.snapshot.loading {
+                dirty |= self.poll_sessions();
+            }
             dirty |= self.attention.reconcile(&self.model.snapshot());
             dirty |= self.poll_transfers();
             dirty |= self.poll_replies();
@@ -862,6 +878,9 @@ impl Worker {
         self.attention
             .reset_native("desktop shutdown cancelled native notifications");
         let deadline = Instant::now() + Duration::from_secs(3);
+        if let Err(error) = self.profiles.shutdown(deadline) {
+            self.cleanup_error = Some(error.to_string());
+        }
         self.shutdown_persistence(deadline);
         self.cancel_transfers();
         let sessions: Vec<_> = self
@@ -919,6 +938,7 @@ impl Worker {
         let mut acknowledgement = envelope.acknowledgement;
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
+        self.profile_operation_id = None;
         self.session_operation_id = None;
         self.notification_mutation = None;
         self.metadata_result = None;
@@ -1000,6 +1020,7 @@ impl Worker {
         if let Some(sender) = acknowledgement {
             let _ = sender.try_send(Execution {
                 result,
+                profile_operation_id: self.profile_operation_id,
                 session_operation_id: self.session_operation_id,
                 metadata_result: self.metadata_result.take(),
                 notification_mutation: self.notification_mutation.take(),
@@ -1036,6 +1057,10 @@ impl Worker {
             ));
         }
         match command {
+            Command::Profiles { action } => {
+                self.profile_operation_id = Some(self.profiles.admit(action)?);
+                Ok(())
+            }
             Command::Browser { request } => {
                 self.browser_operation_id = Some(self.browser.admit(
                     &self.model.snapshot(),
@@ -1138,7 +1163,14 @@ impl Worker {
         let model = self.model.snapshot();
         request.validate_revision(&model)?;
         match request.operation {
-            TargetOperation::Action { action } => {
+            TargetOperation::Action { mut action } => {
+                if let zmux_workspace_core::targets::TargetAction::CreateBrowser {
+                    profile: Some(selector),
+                    ..
+                } = &mut action
+                {
+                    *selector = self.profiles.resolve(selector)?.to_string();
+                }
                 let action = action.resolve(&model, &request.scope, &request.caller)?;
                 self.action(action)?;
                 self.acknowledge_focused();
@@ -1558,6 +1590,7 @@ impl Worker {
                 "development build supports at most {MAX_BROWSERS} browser tabs"
             )));
         }
+        self.profiles.validate_model(&candidate.snapshot())?;
         self.ensure_reserved(&candidate)?;
         self.model = candidate;
         self.effects(transition.effects);
@@ -1798,6 +1831,7 @@ impl Worker {
                 .as_ref()
                 .map(|p| p.snapshot.clone())
                 .unwrap_or_default(),
+            browser_profiles: self.profiles.snapshot.clone(),
             browser_epoch: self.browser.epoch(),
             browser_operations: self.browser.receipts(),
             browser_pending_requests: self.browser.pending_request_count(),

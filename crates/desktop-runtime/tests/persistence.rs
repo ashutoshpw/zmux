@@ -463,3 +463,118 @@ fn durable_blocks_burn_unused_runtime_ids_across_restart_and_later_import() {
     );
     close(second);
 }
+
+#[test]
+fn browser_profile_catalog_is_durable_locked_bounded_and_preserves_other_writers() {
+    let directory = Directory::new();
+    let first = directory.worker();
+    let second = directory.worker();
+    let profiles = |worker: &PersistenceWorker, name: Option<String>| match wait(
+        worker,
+        worker.submit_profiles(name).unwrap(),
+    )
+    .result
+    .unwrap()
+    {
+        PersistenceOutcome::Profiles(catalog) => catalog,
+        other => panic!("unexpected catalog outcome: {other:?}"),
+    };
+    assert!(profiles(&first, None).profiles.is_empty());
+    assert!(profiles(&second, None).profiles.is_empty());
+    let a = profiles(&first, Some("Work".into())).profiles[0].clone();
+    let catalog = profiles(&second, Some("Personal".into()));
+    assert_eq!(catalog.profiles.len(), 2);
+    assert_eq!(catalog.profiles[0], a);
+    let path = directory.0.join("state/browser-profiles.json");
+    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+    let before = fs::read(&path).unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.0.join("state/browser-profiles.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    assert!(matches!(
+        wait(
+            &first,
+            first.submit_profiles(Some("Locked".into())).unwrap()
+        )
+        .result,
+        Err(PersistenceError::LedgerBusy)
+    ));
+    drop(lock);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    for name in [
+        "Work",
+        " bad",
+        "bad\nname",
+        "00000000-0000-0000-0000-000000000001",
+    ] {
+        assert!(
+            wait(&first, first.submit_profiles(Some(name.into())).unwrap())
+                .result
+                .is_err()
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    for index in 2..32 {
+        profiles(&first, Some(format!("Profile {index}")));
+    }
+    let full = fs::read(&path).unwrap();
+    assert!(
+        wait(
+            &second,
+            second.submit_profiles(Some("Overflow".into())).unwrap()
+        )
+        .result
+        .is_err()
+    );
+    assert_eq!(fs::read(&path).unwrap(), full);
+    close(first);
+    close(second);
+    let reopened = directory.worker();
+    let restored = profiles(&reopened, None);
+    assert_eq!(restored.profiles.len(), 32);
+    assert_eq!(restored.profiles[0], a);
+    // Session export cannot overwrite the catalog or its synchronization owner.
+    for name in ["browser-profiles.json", "browser-profiles.lock"] {
+        assert!(matches!(
+            wait(
+                &reopened,
+                reopened
+                    .submit_save(directory.0.join("state").join(name), document(), true)
+                    .unwrap()
+            )
+            .result,
+            Err(PersistenceError::ReservedStatePath)
+        ));
+    }
+    close(reopened);
+}
+
+#[test]
+fn browser_profile_catalog_rejects_corruption_and_unsafe_files_without_replacement() {
+    for bad in [b"{broken".as_slice(),b"{\"version\":99,\"profiles\":[]}",b"{\"version\":1,\"profiles\":[{\"id\":\"00000000-0000-0000-0000-000000000000\",\"name\":\"Work\"}]}"] {
+        let directory=Directory::new();let worker=directory.worker();
+        wait(&worker,worker.submit_profiles(None).unwrap()).result.unwrap();
+        let path=directory.0.join("state/browser-profiles.json");write_private(&path,bad);
+        assert!(wait(&worker,worker.submit_profiles(Some("New".into())).unwrap()).result.is_err());
+        assert_eq!(fs::read(&path).unwrap(),bad);close(worker);
+    }
+    let directory = Directory::new();
+    let worker = directory.worker();
+    wait(&worker, worker.submit_profiles(None).unwrap())
+        .result
+        .unwrap();
+    let source = directory.0.join("source");
+    write_private(&source, b"{\"version\":1,\"profiles\":[]}");
+    let path = directory.0.join("state/browser-profiles.json");
+    symlink(&source, &path).unwrap();
+    assert!(
+        wait(&worker, worker.submit_profiles(Some("New".into())).unwrap())
+            .result
+            .is_err()
+    );
+    assert!(path.is_symlink());
+    close(worker);
+}

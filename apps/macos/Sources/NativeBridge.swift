@@ -30,26 +30,36 @@ private struct ImageTransferResponse: Decodable {
     }
 }
 
+enum NativeDesktopStorage: Sendable {
+    case transient
+    case applicationSupport
+    case persistentDirectory(URL)
+}
+
 /// Actor isolation keeps Rust operations, JSON decoding and shutdown off AppKit's main actor.
 actor NativeBridge {
     private var handle: UInt64 = 0
     private var requestId: UInt64 = 0
     private var revision: UInt64 = 0
 
-    func start(persistent: Bool = false) throws {
+    func start(storage: NativeDesktopStorage = .transient) throws {
         guard zmux_abi_version() == 1 else { throw BridgeFailure(message: "Unsupported native bridge version") }
         let result: ZmuxResult
-        if persistent {
-            // Actor isolation keeps Foundation directory lookup off the AppKit thread.
-            let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                .resolvingSymlinksInPath()
-            let directory = support.appendingPathComponent("app.w3dev.zmux.dev", isDirectory: true)
+        switch storage {
+        case .transient: result = zmux_desktop_create()
+        case .applicationSupport, .persistentDirectory:
+            let directory: URL
+            switch storage {
+            case .persistentDirectory(let explicit): directory = explicit.resolvingSymlinksInPath()
+            default:
+                // Directory lookup remains off MainActor for ordinary startup.
+                let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).resolvingSymlinksInPath()
+                directory = support.appendingPathComponent("app.w3dev.zmux.dev", isDirectory: true)
+            }
             let path = Data(directory.path.utf8)
             result = path.withUnsafeBytes { storage in
                 zmux_desktop_create_persistent(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
             }
-        } else {
-            result = zmux_desktop_create()
         }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
@@ -64,7 +74,7 @@ actor NativeBridge {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let snapshot = try decoder.decode(DesktopSnapshot.self, from: data)
-        guard snapshot.model.modelVersion == 3 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        guard snapshot.model.modelVersion == 4 else { throw BridgeFailure(message: "Unsupported workspace model version") }
         revision = snapshot.revision
         return snapshot
     }
@@ -81,10 +91,11 @@ actor NativeBridge {
         if let focus { action["focus"] = focus }
         try await send(["command": "action", "action": action])
     }
-    func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?) async throws {
+    func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?, profile: UUID? = nil) async throws {
         var action: [String: Any] = ["action": name, "url": url]
         if let surface { action["surface_id"] = surface }
         if let pane { action["pane_id"] = pane }
+        if let profile { action["profile_id"] = profile.uuidString.lowercased() }
         if let title { action["title"] = title }
         try await send(["command": "action", "action": action])
     }

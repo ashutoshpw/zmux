@@ -49,11 +49,13 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private lazy var forward = IconButton(symbol: "chevron.right", label: "Forward", target: self, action: #selector(goForward))
     private lazy var reload = IconButton(symbol: "arrow.clockwise", label: "Reload or stop", target: self, action: #selector(reloadPage))
 
-    init(surface: Surface, owner: AppController) {
+    let profileID: UUID?
+    init(surface: Surface, owner: AppController, dataStore: WKWebsiteDataStore) {
+        profileID = surface.browserProfileId
         surfaceID = surface.id
         self.owner = owner
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = dataStore
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init(color: ZmuxPalette.chrome)
         webView.navigationDelegate = self
@@ -468,7 +470,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         guard let url = navigationAction.request.url, Self.allowed(url) else { showError("This link type is not supported"); return .cancel }
         if navigationAction.targetFrame == nil {
             if let pane = owner?.snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.surfaces.contains(where: { $0.id == surfaceID }) }) {
-                owner?.createBrowser(in: pane.id, url: url.absoluteString)
+                owner?.createBrowser(in: pane.id, url: url.absoluteString, profile: profileID)
             }
             return .cancel
         }

@@ -64,6 +64,7 @@ fn fixture() -> WorkspaceStore {
     let pane = store.snapshot().workspaces[0].focused_pane;
     store
         .apply(Action::CreateBrowser {
+            profile_id: None,
             focus: true,
             pane_id: pane,
             url: "https://example.org/path?token=private#fragment".into(),
@@ -549,6 +550,7 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
     let terminal = original.workspaces[0].root.panes()[0].selected_surface;
     store
         .apply(Action::CreateBrowser {
+            profile_id: None,
             focus: true,
             pane_id: pane,
             url: "https://example.org/".into(),
@@ -581,6 +583,7 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
         for _ in 0..batch {
             for action in [
                 TargetAction::CreateBrowser {
+                    profile: None,
                     focus: true,
                     url: "https://example.org/temporary".into(),
                 },
@@ -639,6 +642,7 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
         1,
         Command::Action {
             action: Action::CreateBrowser {
+                profile_id: None,
                 focus: true,
                 pane_id: pane,
                 url: "https://example.org/new".into(),
@@ -769,4 +773,66 @@ fn observed_shell_cwd_is_captured_by_explicit_save_and_final_flush_without_a_top
         })
     });
     restarted.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn unknown_browser_profile_restore_fails_before_any_pty_launch_or_topology_publish() {
+    let directory = Directory::new();
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    store
+        .apply(Action::CreateWorkspace {
+            name: "must not launch".into(),
+        })
+        .unwrap();
+    let pane = store.snapshot().workspaces[0].focused_pane;
+    store
+        .apply(Action::CreateBrowser {
+            pane_id: pane,
+            url: "https://example.org/".into(),
+            focus: true,
+            profile_id: Some(uuid::Uuid::new_v4()),
+        })
+        .unwrap();
+    let source = serde_json::to_vec(&store.session_document().unwrap()).unwrap();
+    let path = directory.0.join("unknown-profile.json");
+    fs::write(&path, &source).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let desktop = directory.desktop();
+    let initial = wait(&desktop, ready);
+    send(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CloseWorkspace {
+                workspace_id: initial.model.workspaces[0].id,
+            },
+        },
+    );
+    wait(&desktop, |snapshot| {
+        snapshot.model.workspaces.is_empty() && snapshot.pending_launches == 0
+    });
+    send(
+        &desktop,
+        2,
+        Command::Session {
+            action: SessionCommand::Restore {
+                path: Some(path.clone()),
+            },
+        },
+    );
+    let rejected = wait(&desktop, |snapshot| {
+        snapshot.persistence.operations.iter().any(|op| {
+            matches!(op.state, OperationState::Failed)
+                && op
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("unknown browser profile"))
+        })
+    });
+    assert!(rejected.model.workspaces.is_empty());
+    assert_eq!(rejected.pending_launches, 0);
+    assert!(rejected.control_frames.is_empty());
+    assert_eq!(fs::read(&path).unwrap(), source);
+    desktop.shutdown(Duration::from_secs(3)).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), source);
 }

@@ -255,6 +255,7 @@ fn reply_execution(
         created_panes: Vec::new(),
         created_surfaces: Vec::new(),
         created_uploads: Vec::new(),
+        profile_operation_id: None,
         session_operation_id: None,
         browser_operation_id: None,
         browser_dispatch: None,

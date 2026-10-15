@@ -112,6 +112,7 @@ pub enum PersistenceOutcome {
     Loaded(LoadedSession),
     Reserved(AllocationReservation),
     Saved,
+    Profiles(crate::profiles::Catalog),
 }
 #[derive(Debug)]
 pub struct PersistenceCompletion {
@@ -120,6 +121,9 @@ pub struct PersistenceCompletion {
 }
 
 enum Request {
+    Profiles {
+        name: Option<String>,
+    },
     Load {
         path: PathBuf,
     },
@@ -174,6 +178,9 @@ impl PersistenceWorker {
                         Err(PersistenceError::Cancelled)
                     } else {
                         match request.request {
+                            Request::Profiles { name } => {
+                                profile_catalog(&state_path, name).map(PersistenceOutcome::Profiles)
+                            }
                             Request::Load { path } => {
                                 load(&state_path, &path, limits).map(PersistenceOutcome::Loaded)
                             }
@@ -223,6 +230,9 @@ impl PersistenceWorker {
             stop,
             thread: Some(worker),
         })
+    }
+    pub fn submit_profiles(&self, name: Option<String>) -> Result<OperationId, PersistenceError> {
+        self.submit(Request::Profiles { name })
     }
     pub fn submit_load(&self, path: PathBuf) -> Result<OperationId, PersistenceError> {
         self.submit(Request::Load { path })
@@ -501,10 +511,13 @@ fn unique_next_ids<'de, D: serde::Deserializer<'de>>(
     deserializer.deserialize_map(Entries)
 }
 fn lock_ledger(directory: &File) -> Result<File, PersistenceError> {
+    lock_named(directory, LOCK_NAME)
+}
+fn lock_named(directory: &File, name: &str) -> Result<File, PersistenceError> {
     let lock = File::from(
         fs::openat(
             directory,
-            LOCK_NAME,
+            name,
             OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::from_raw_mode(0o600),
         )
@@ -628,7 +641,11 @@ fn save(
     let bytes = serialize_bounded(&document, MAX_DOCUMENT_BYTES, "session document")?;
     let state = state_directory(state)?;
     let (directory, name) = parent(path)?;
-    if name == LOCK_NAME || name == LEDGER_NAME {
+    if name == LOCK_NAME
+        || name == LEDGER_NAME
+        || name == crate::profiles::CATALOG_NAME
+        || name == "browser-profiles.lock"
+    {
         let destination = directory
             .metadata()
             .map_err(|e| io_error("inspect save parent", e))?;
@@ -741,4 +758,43 @@ fn atomic_write(
         }
     }
     result
+}
+
+fn profile_catalog(
+    state: &Path,
+    name: Option<String>,
+) -> Result<crate::profiles::Catalog, PersistenceError> {
+    use crate::profiles::{CATALOG_NAME, Catalog, MAX_PROFILE_BYTES};
+    let directory = state_directory(state)?;
+    let _lock = lock_named(&directory, "browser-profiles.lock")?;
+    let mut catalog = match private_file(
+        &directory,
+        OsStr::new(CATALOG_NAME),
+        MAX_PROFILE_BYTES,
+        "browser profile catalog",
+    ) {
+        Ok(file) => serde_json::from_slice::<Catalog>(&read_bounded(
+            file,
+            MAX_PROFILE_BYTES,
+            "browser profile catalog",
+        )?)
+        .map_err(|error| {
+            PersistenceError::InvalidDocument(format!("browser profile catalog: {error}"))
+        })?,
+        Err(PersistenceError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+            Catalog::default()
+        }
+        Err(error) => return Err(error),
+    };
+    catalog
+        .validate()
+        .map_err(PersistenceError::InvalidDocument)?;
+    if let Some(name) = name {
+        catalog
+            .add(name)
+            .map_err(PersistenceError::InvalidDocument)?;
+        let bytes = serialize_bounded(&catalog, MAX_PROFILE_BYTES, "browser profile catalog")?;
+        atomic_write(&directory, OsStr::new(CATALOG_NAME), &bytes, true)?;
+    }
+    Ok(catalog)
 }

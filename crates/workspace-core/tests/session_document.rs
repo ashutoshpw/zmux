@@ -23,6 +23,7 @@ fn fixture() -> WorkspaceStore {
     let last = store.snapshot().workspaces[0].focused_pane;
     store
         .apply(Action::CreateBrowser {
+            profile_id: None,
             focus: true,
             pane_id: last,
             url: "https://example.org/docs?token=secret#private".into(),
@@ -321,4 +322,73 @@ fn reserved_allocator_floors_and_restore_revisions_only_advance_and_fail_closed_
     assert_eq!(rebased.revision, allocated.revision + 101);
     assert!(store.advance_restore_revision(u64::MAX).is_err());
     assert_eq!(store.snapshot(), rebased);
+}
+
+#[test]
+fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    store
+        .apply(Action::CreateWorkspace {
+            name: "profiles".into(),
+        })
+        .unwrap();
+    let pane = store.snapshot().workspaces[0].focused_pane;
+    let profile = uuid::Uuid::new_v4();
+    store
+        .apply(Action::CreateBrowser {
+            pane_id: pane,
+            url: "https://example.org/?secret=1".into(),
+            focus: true,
+            profile_id: Some(profile),
+        })
+        .unwrap();
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    assert_eq!(wire["version"], 2);
+    assert_eq!(
+        wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"],
+        profile.to_string()
+    );
+    let restore = |wire: Value| {
+        let validated = serde_json::from_value::<SessionDocument>(wire)?
+            .validate(limits())
+            .map_err(|e| serde::de::Error::custom(e.to_string()))?;
+        WorkspaceStore::prepare_session_restore(validated, &[SessionId(1000)])
+            .map_err(|e| serde::de::Error::custom(e.to_string()))
+    };
+    let restored: Result<_, serde_json::Error> = restore(wire.clone());
+    let restored = restored.unwrap().store.snapshot();
+    assert_eq!(
+        restored.workspaces[0].root.panes()[0].surfaces[1].browser_profile_id,
+        Some(profile)
+    );
+    let mut legacy = wire.clone();
+    legacy["version"] = json!(1);
+    // Even explicit null is a v2 field and must not be accepted then forgotten by v1.
+    legacy["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"] = Value::Null;
+    assert!(restore(legacy.clone()).is_err());
+    legacy["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]
+        .as_object_mut()
+        .unwrap()
+        .remove("profile_id");
+    let restored = restore(legacy.clone()).unwrap().store.snapshot();
+    assert_eq!(
+        restored.workspaces[0].root.panes()[0].surfaces[1].browser_profile_id,
+        None
+    );
+    legacy["version"] = json!(2);
+    assert!(restore(legacy).is_err());
+    store
+        .apply(Action::CloseSurface {
+            surface_id: store.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        })
+        .unwrap();
+    store
+        .apply(Action::ReopenClosed { closed_id: None })
+        .unwrap();
+    assert_eq!(
+        store.snapshot().workspaces[0].root.panes()[0]
+            .selected()
+            .browser_profile_id,
+        Some(profile)
+    );
 }

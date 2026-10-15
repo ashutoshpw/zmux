@@ -860,3 +860,202 @@ fn leading_browser_targets_preserve_legacy_url_operands() {
         );
     }
 }
+
+#[test]
+fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_catalog() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("profile-state");
+    let socket = fixture.0.join("profile.sock");
+    let start = || {
+        let desktop = Arc::new(
+            Desktop::with_persistence(
+                Shell {
+                    program: "/bin/sh".into(),
+                    args: vec!["-i".into()],
+                    cwd: Some(fixture.0.clone()),
+                },
+                state.clone(),
+            )
+            .unwrap(),
+        );
+        let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = desktop.snapshot().unwrap();
+            if !snapshot.persistence.startup_pending
+                && !snapshot.browser_profiles.loading
+                && snapshot.pending_launches == 0
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        (desktop, server)
+    };
+    let (desktop, server) = start();
+    let profile = value(&socket, &fixture.0, &["browser", "profiles", "add", "Work"]);
+    let original_epoch = value(&socket, &fixture.0, &["browser", "profiles", "list"])["epoch"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let id = profile["id"].as_str().unwrap();
+    assert_eq!(profile["name"], "Work");
+    assert_eq!(
+        value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"][0],
+        profile
+    );
+    let pane = desktop.snapshot().unwrap().model.workspaces[0].focused_pane;
+    let before = desktop.snapshot().unwrap().model.clone();
+    let bad = invoke(
+        &socket,
+        &fixture.0,
+        &["browser", "open", "--profile", "Missing", "about:blank"],
+    );
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown browser profile"));
+    assert_eq!(desktop.snapshot().unwrap().model, before);
+    // Raw generic action ingress must share the catalog owner, not bypass it.
+    desktop
+        .submit(zmux_desktop_runtime::Request {
+            version: 1,
+            request_id: 9999,
+            payload: zmux_desktop_runtime::Command::Action {
+                action: zmux_workspace_core::Action::CreateBrowser {
+                    profile_id: Some("99999999-1111-4222-8333-444444444444".parse().unwrap()),
+                    pane_id: pane,
+                    url: "about:blank".into(),
+                    focus: true,
+                },
+            },
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = desktop.snapshot().unwrap();
+        if snapshot.last_request_id == 9999 {
+            assert!(
+                snapshot
+                    .last_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("unknown browser profile")
+            );
+            assert_eq!(snapshot.model, before);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    for selector in ["Work", id] {
+        let opened = value(
+            &socket,
+            &fixture.0,
+            &[
+                "browser",
+                "open",
+                "--profile",
+                selector,
+                "--no-focus",
+                "https://example.org/path",
+            ],
+        );
+        let surface = opened["created_surfaces"][0]["surface_id"]
+            .as_u64()
+            .unwrap()
+            .to_string();
+        let rows = value(&socket, &fixture.0, &["list-pane-surfaces"]);
+        assert_eq!(
+            rows["surfaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["surface_id"].as_u64().unwrap().to_string() == surface)
+                .unwrap()["browser_profile_id"],
+            id
+        );
+        value(
+            &socket,
+            &fixture.0,
+            &["close-surface", "--surface", &surface],
+        );
+        value(&socket, &fixture.0, &["reopen-closed"]);
+        assert_eq!(
+            desktop.snapshot().unwrap().model.workspaces[0].root.panes()[0]
+                .selected()
+                .browser_profile_id
+                .unwrap()
+                .to_string(),
+            id
+        );
+    }
+    server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    assert!(
+        invoke(&socket, &fixture.0, &["browser", "profiles", "list"])
+            .status
+            .success()
+    );
+    assert!(
+        String::from_utf8_lossy(
+            &invoke(
+                &socket,
+                &fixture.0,
+                &["browser", "profiles", "add", "Blocked"]
+            )
+            .stderr
+        )
+        .contains("read-only")
+    );
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(3)).unwrap();
+    drop(server);
+    drop(desktop);
+    let (desktop, server) = start();
+    assert_eq!(
+        value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"][0],
+        profile
+    );
+    assert!(
+        desktop
+            .snapshot()
+            .unwrap()
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser)
+            .all(|s| s.browser_profile_id.unwrap().to_string() == id)
+    );
+    // The new runtime reuses receipt 1. Old owner epochs must not observe this
+    // different creation as the completion of an earlier admitted command.
+    value(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "add", "Later"],
+    );
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let request=serde_json::to_vec(&json!({"version":2,"request_id":77,"command":{"method":"browser_profiles_status","operation_id":1,"epoch":original_epoch}})).unwrap();
+    stream
+        .write_all(&(request.len() as u32).to_be_bytes())
+        .unwrap();
+    stream.write_all(&request).unwrap();
+    let mut length = [0; 4];
+    stream.read_exact(&mut length).unwrap();
+    let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+    stream.read_exact(&mut bytes).unwrap();
+    let rejected: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(rejected["ok"], false);
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("runtime owner changed")
+    );
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(3)).unwrap();
+}

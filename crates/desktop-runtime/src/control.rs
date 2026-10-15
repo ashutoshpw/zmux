@@ -49,6 +49,15 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    BrowserProfiles {
+        action: crate::profiles::ProfileCommand,
+    },
+    BrowserProfilesStatus {
+        #[serde(default)]
+        epoch: Option<uuid::Uuid>,
+        #[serde(default)]
+        operation_id: Option<u64>,
+    },
     Browser {
         request: crate::browser::BrowserRequest,
     },
@@ -539,6 +548,38 @@ fn dispatch(
     admission: &ControlAdmission,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::BrowserProfiles { action } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Profiles { action },
+        ),
+        ControlCommand::BrowserProfilesStatus {
+            operation_id,
+            epoch,
+        } => {
+            let snapshot = current_snapshot(desktop)?;
+            if operation_id.is_some() && epoch != Some(snapshot.browser_profiles.epoch) {
+                return Err((
+                    "profile_operation_not_found",
+                    "profile runtime owner changed or is missing".into(),
+                ));
+            }
+            if let Some(id) = operation_id {
+                snapshot
+                    .browser_profiles
+                    .operations
+                    .iter()
+                    .find(|op| op.operation_id == id)
+                    .map(|op| json!(op))
+                    .ok_or((
+                        "profile_operation_not_found",
+                        "profile receipt expired or missing".into(),
+                    ))
+            } else {
+                Ok(json!(snapshot.browser_profiles))
+            }
+        }
         ControlCommand::Session { action } => mutate(
             desktop,
             admission,
@@ -775,7 +816,7 @@ fn list_surfaces(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'stati
     let surfaces: Vec<_> = pane.surfaces.iter().map(|surface| {
                 let frame = surface.session_id.and_then(|id| frame_for(snapshot, id));
                 json!({"surface_id": surface.id, "surface_uuid": snapshot.model.object_uuid(TargetKind::Surface, surface.id.0), "surface_ref": format!("surface:{}", surface.id.0), "session_id": surface.session_id, "title": surface.title,
-                    "cwd": surface.cwd, "remote": surface.remote, "kind": surface.kind, "url": surface.url, "selected": pane.selected_surface == surface.id,
+                    "cwd": surface.cwd, "remote": surface.remote, "kind": surface.kind, "url": surface.url, "browser_profile_id": surface.browser_profile_id, "selected": pane.selected_surface == surface.id,
                     "process_id": frame.and_then(|f| f.process_id), "starting": surface.session_id.is_some() && frame.is_none_or(|f| f.starting),
                     "state": frame.and_then(|f| f.snapshot.as_ref()).map(|s| state_name(s.state)),
                     "failure": frame.and_then(|f| f.failure.clone())})
@@ -851,6 +892,11 @@ fn mutate(
                     "browser admission receipt missing".into(),
                 )
             });
+    }
+    if let Some(operation_id) = execution.profile_operation_id {
+        return Ok(
+            json!({"operation_id":operation_id,"state":"pending","epoch":execution.snapshot.browser_profiles.epoch}),
+        );
     }
     if let Some(operation_id) = execution.session_operation_id {
         return Ok(

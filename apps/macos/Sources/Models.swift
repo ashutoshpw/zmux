@@ -42,7 +42,7 @@ struct UploadProgress: Decodable, Sendable {
     let state: String; let bytesSent: UInt64; let totalBytes: UInt64
     let remotePaths: [String]; let remoteResultUncertain: Bool; let error: String?; let delivery: String; let deliveryError: String?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let remote: RemoteEndpoint? }
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
@@ -120,7 +120,10 @@ struct WorkspaceMetadata: Decodable, Sendable, Equatable {
     }
     var isEmpty: Bool { statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
 }
+struct BrowserProfile: Decodable, Sendable { let id: UUID; let name: String }
+struct BrowserProfileState: Decodable, Sendable { let enabled: Bool; let loading: Bool; let profiles: [BrowserProfile]; let error: String? }
 struct DesktopSnapshot: Decodable, Sendable {
+    let browserProfiles: BrowserProfileState
     let nativeNotifications: NativeNotificationSnapshot
     let browserEpoch: UUID
     let browserPendingRequests: Int

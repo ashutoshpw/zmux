@@ -11,6 +11,30 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     if help_requested(tail) || args.as_slice() == ["help"] {
         return help();
     }
+    if args.first().is_some_and(|arg| arg == "profiles") {
+        return match args
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            ["profiles", "list"] => Ok(Parsed::App(ControlCommand::BrowserProfilesStatus {
+                operation_id: None,
+                epoch: None,
+            })),
+            ["profiles", "add", name] => {
+                zmux_desktop_runtime::profiles::validate_name(name).map_err(CliError)?;
+                Ok(Parsed::BrowserProfile(ControlCommand::BrowserProfiles {
+                    action: zmux_desktop_runtime::profiles::ProfileCommand::Add {
+                        name: (*name).into(),
+                    },
+                }))
+            }
+            _ => Err(CliError(
+                "browser profiles requires list or add NAME".into(),
+            )),
+        };
+    }
     let mut prefix = Vec::new();
     while args.first().is_some_and(|flag| {
         matches!(
@@ -490,4 +514,58 @@ fn remaining(
         timeout,
         password: options.password.clone(),
     })
+}
+
+pub(super) fn run_profile(
+    options: &ClientOptions,
+    command: ControlCommand,
+) -> Result<serde_json::Value, CliError> {
+    let deadline = Instant::now() + options.timeout;
+    let mut receipt = response_result(request(&remaining(options, deadline, None)?, command)?)?;
+    let id = receipt["operation_id"]
+        .as_u64()
+        .filter(|id| *id > 0)
+        .ok_or_else(|| CliError("invalid profile operation receipt".into()))?;
+    let epoch = receipt["epoch"]
+        .as_str()
+        .ok_or_else(|| CliError("profile receipt missing runtime owner".into()))?
+        .to_owned();
+    let owner = epoch
+        .parse()
+        .map_err(|_| CliError("invalid profile runtime owner".into()))?;
+    loop {
+        if receipt["epoch"].as_str() != Some(epoch.as_str())
+            || receipt["operation_id"].as_u64() != Some(id)
+        {
+            return Err(CliError("mismatched profile operation receipt".into()));
+        }
+        match receipt["state"].as_str() {
+            Some("completed") => {
+                return receipt
+                    .get("profile")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .ok_or_else(|| CliError("profile completion missing identity".into()));
+            }
+            Some("failed") => {
+                return Err(CliError(
+                    receipt["error"]
+                        .as_str()
+                        .unwrap_or("browser profile operation failed")
+                        .into(),
+                ));
+            }
+            Some("pending") => {}
+            _ => return Err(CliError("invalid profile receipt state".into())),
+        }
+        let budget = remaining(options, deadline, Some(id))?;
+        thread::sleep(Duration::from_millis(20).min(budget.timeout));
+        receipt = response_result(request(
+            &remaining(options, deadline, Some(id))?,
+            ControlCommand::BrowserProfilesStatus {
+                operation_id: Some(id),
+                epoch: Some(owner),
+            },
+        )?)?;
+    }
 }
