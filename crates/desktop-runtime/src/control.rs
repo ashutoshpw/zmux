@@ -824,10 +824,14 @@ fn mutate(
         DesktopError::Target(error) => (error.code(), error.to_string()),
         DesktopError::Browser(error) => (error.code(), error.to_string()),
         DesktopError::Attention(error) => (error.code(), error.to_string()),
+        DesktopError::Metadata(error) => (error.code(), error.to_string()),
         DesktopError::NotTerminal => ("not_terminal", error.to_string()),
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(metadata) = execution.metadata_result {
+        return Ok(json!(metadata));
+    }
     if let Some(navigation) = execution.notification_navigation {
         return Ok(json!(navigation));
     }
@@ -923,6 +927,7 @@ fn object_receipt(
 fn desktop_error(error: DesktopError) -> (&'static str, String) {
     let code = match error {
         DesktopError::Attention(ref error) => error.code(),
+        DesktopError::Metadata(ref error) => error.code(),
         DesktopError::Policy(ref error) => error.code(),
         DesktopError::NotTerminal => "not_terminal",
         DesktopError::TerminalUnavailable => "terminal_not_ready",
