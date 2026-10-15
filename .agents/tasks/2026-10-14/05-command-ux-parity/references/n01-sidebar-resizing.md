@@ -38,8 +38,16 @@ macOS 38751027370 at 700648d passed Rust/ABI and universal Swift compilation,
 then reproduced the strict native drag failure through both launch paths. The
 diagnostics showed correct divider hit testing and a 264-point resulting width,
 but AppKit promoted the terminal responder to the divider during mouse-down.
-`SidebarFocusWindow` now fences only that divider promotion while dispatching
-its pointer down event. It never restores a retained responder or changes focus
-for another control; keyboard traversal and explicit AX focus still use normal
-first-responder behavior. The same strict NSWindow-event smoke remains unchanged.
-Hosted compilation and packaged execution of this repair remain pending.
+The first `SidebarFocusWindow` repair rejected `makeFirstResponder(divider)`
+inside pointer-down dispatch. macOS 38752187218 at 4cc3d55 passed universal
+compilation, but both packaged launch paths then retained terminal focus while
+leaving width/preference at 200 points. Rejecting the promotion also prevented
+normal drag dispatch; this was not a successful repair.
+
+The revised window scopes the divider's first-responder eligibility to false
+only during that divider's pointer-down dispatch, restoring its prior value in
+defer for nested events. NSWindow now owns the complete event-dispatch path with
+no `makeFirstResponder` override. No retained responder is restored and no other
+control's eligibility changes; keyboard traversal and explicit AX focus outside
+pointer dispatch retain normal behavior. The same strict NSWindow-event smoke
+remains unchanged. Hosted compilation and packaged execution remain pending.
