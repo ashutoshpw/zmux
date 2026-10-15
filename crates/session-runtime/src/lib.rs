@@ -5,6 +5,7 @@
 compile_error!("The initial Zmux PTY prototype supports Linux and macOS only");
 
 pub mod child;
+mod terminal;
 
 use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, POLLOUT, poll, pollfd};
 use nix::{
@@ -27,8 +28,11 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use terminal::TerminalOwner;
 use thiserror::Error;
-use zmux_terminal_adapter::{Size, Terminal, Viewport, Wheel};
+#[cfg(feature = "ghostty")]
+pub use zmux_terminal_adapter::GhosttyLimits;
+use zmux_terminal_adapter::{EngineBatch, Size, Viewport, Wheel};
 
 pub const INPUT_CHUNK_BYTES: usize = 4_096;
 pub const INPUT_QUEUE_CHUNKS: usize = 16;
@@ -75,6 +79,26 @@ pub enum ShutdownPolicy {
     Graceful {
         timeout: Duration,
     },
+}
+
+/// Session selection is local to this crate's feature. Dependency feature
+/// unification must not implicitly enable a backend in the worker.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum EngineKind {
+    #[default]
+    Vt100,
+    #[cfg(feature = "ghostty")]
+    Ghostty(GhosttyLimits),
+}
+
+/// Explicit optional backend policy. Mapping caps and reply lifetime are caller
+/// policy, not default product budgets or a total RSS guarantee. Raw bytes stay
+/// exact; typed key/paste/application-wheel fidelity remains a separate gate.
+#[derive(Clone, Copy, Debug)]
+pub struct EngineOptions {
+    pub kind: EngineKind,
+    /// Bounds a staged causal reply including any earlier worker-owned user suffix.
+    pub reply_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -254,6 +278,7 @@ pub struct Session {
     worker: Option<JoinHandle<()>>,
     process_id: u32,
     shutdown_policy: ShutdownPolicy,
+    application_wheel_supported: bool,
 }
 
 // Borrows a live PTY only long enough for FileDescriptor to duplicate its descriptor.
@@ -377,6 +402,57 @@ impl Session {
         shutdown_policy: ShutdownPolicy,
         resource: impl Send + 'static,
     ) -> Result<Self, SessionError> {
+        Self::spawn_configured(
+            launch,
+            environment,
+            removals,
+            shutdown_policy,
+            None,
+            resource,
+        )
+    }
+
+    /// Opt into a backend without changing app/default engine selection. Queue
+    /// acceptance is not worker admission: while a causal reply is staged,
+    /// external chunks remain queued; the current worker-owned chunk finishes
+    /// before that reply. All physical writes use the same worker/PTY descriptor.
+    pub fn spawn_with_engine(
+        launch: Launch,
+        environment: &[(String, String)],
+        removals: &[std::ffi::OsString],
+        shutdown_policy: ShutdownPolicy,
+        engine: EngineOptions,
+        resource: impl Send + 'static,
+    ) -> Result<Self, SessionError> {
+        Self::spawn_configured(
+            launch,
+            environment,
+            removals,
+            shutdown_policy,
+            Some(engine),
+            resource,
+        )
+    }
+
+    fn spawn_configured(
+        launch: Launch,
+        environment: &[(String, String)],
+        removals: &[std::ffi::OsString],
+        shutdown_policy: ShutdownPolicy,
+        engine: Option<EngineOptions>,
+        resource: impl Send + 'static,
+    ) -> Result<Self, SessionError> {
+        if engine.is_some_and(|options| {
+            options.reply_timeout.is_zero() || options.reply_timeout > Duration::from_secs(30)
+        }) {
+            return Err(SessionError::Failure(
+                "engine reply timeout must be positive and at most 30s".into(),
+            ));
+        }
+        let application_wheel_supported = matches!(
+            engine.map(|options| options.kind),
+            None | Some(EngineKind::Vt100)
+        );
         // Launch configuration crosses the thread boundary; the terminal never does.
         let environment = environment.to_vec();
         let removals = removals.to_vec();
@@ -387,7 +463,14 @@ impl Session {
             .spawn(move || {
                 let _resource = resource;
                 let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Worker::start(launch, environment, removals, shutdown_policy, input_rx)
+                    Worker::start(
+                        launch,
+                        environment,
+                        removals,
+                        shutdown_policy,
+                        engine,
+                        input_rx,
+                    )
                 }));
                 match started {
                     Ok(Ok((worker, ready))) => {
@@ -415,6 +498,7 @@ impl Session {
                 worker: Some(worker),
                 process_id: ready.process_id,
                 shutdown_policy,
+                application_wheel_supported,
             }),
             result => {
                 // A startup failure is not a running Session. Join its ended worker
@@ -516,6 +600,9 @@ impl Session {
         self.enqueue_navigation(Input::Scroll(lines.clamp(-1000, 1000)))
     }
     pub fn wheel(&self, event: Wheel) -> Result<(), SessionError> {
+        if !event.history && !self.application_wheel_supported {
+            return Err(SessionError::Failure("Ghostty application wheel encoding is not yet supported; explicit history navigation is available".into()));
+        }
         self.enqueue_navigation(Input::Wheel(event))
     }
     fn enqueue_navigation(&self, event: Input) -> Result<(), SessionError> {
@@ -648,7 +735,7 @@ struct Worker {
     io: Option<FileDescriptor>,
     wake: UnixStream,
     process: ProcessGuard,
-    terminal: Terminal,
+    terminal: TerminalOwner,
     input: Receiver<Input>,
     shared: Arc<Shared>,
     bytes_read: u64,
@@ -661,6 +748,14 @@ struct Worker {
     pending_deadline: Option<Instant>,
     shutdown_policy: ShutdownPolicy,
     close_deadline: Option<Instant>,
+    engine_reply_timeout: Option<Duration>,
+    causal_reply: Option<CausalReply>,
+}
+
+struct CausalReply {
+    batch: EngineBatch,
+    written: usize,
+    deadline: Instant,
 }
 
 impl Worker {
@@ -669,6 +764,7 @@ impl Worker {
         environment: Vec<(String, String)>,
         removals: Vec<std::ffi::OsString>,
         shutdown_policy: ShutdownPolicy,
+        engine: Option<EngineOptions>,
         input_rx: Receiver<Input>,
     ) -> Result<(Self, StartupReady), SessionError> {
         if let ShutdownPolicy::Graceful { timeout } = shutdown_policy
@@ -694,8 +790,7 @@ impl Worker {
                 )));
             }
         }
-        let terminal =
-            Terminal::new(launch.size).map_err(|e| SessionError::Failure(e.to_string()))?;
+        let terminal = TerminalOwner::new(launch.size, engine)?;
         // Export the first frame before a child can produce any terminal output.
         let viewport = terminal.viewport();
         let pair = native_pty_system()
@@ -781,6 +876,8 @@ impl Worker {
             pending_deadline: None,
             shutdown_policy,
             close_deadline: None,
+            engine_reply_timeout: engine.map(|options| options.reply_timeout),
+            causal_reply: None,
         };
         Ok((
             worker,
@@ -815,10 +912,12 @@ impl Worker {
                 self.publish(state, None);
             }
             Ok(Err(error)) => {
+                self.abort_engine();
                 self.finish_inputs(InputWriteFailure::WorkerFailed);
                 self.publish(State::Failed, Some(error.to_string()));
             }
             Err(_) => {
+                self.abort_engine();
                 // Dropping guards reports queued input as not written
                 // and active input as unknown before process cleanup.
                 drop(self.pending_completion.take());
@@ -866,6 +965,7 @@ impl Worker {
         let mut dirty = false;
         loop {
             if self.shared.stop.load(Ordering::Acquire) {
+                self.abort_engine();
                 match self.shutdown_policy {
                     ShutdownPolicy::Kill => {
                         // Darwin can keep an output-blocked child in exit until
@@ -902,25 +1002,45 @@ impl Worker {
                     }
                 }
             }
-            let size = self
-                .shared
-                .resize
-                .lock()
-                .map_err(|_| SessionError::Failure("resize lock poisoned".into()))?
-                .take();
-            if let Some(size) = size.filter(|_| self.close_deadline.is_none()) {
-                self.master
-                    .as_ref()
-                    .expect("active PTY master")
-                    .resize(pty_size(size))
-                    .map_err(|e| SessionError::Failure(format!("resize PTY: {e}")))?;
-                self.terminal
-                    .resize(size)
-                    .map_err(|e| SessionError::Failure(e.to_string()))?;
-                dirty = true;
+            if self.causal_reply.is_none() && self.close_deadline.is_none() {
+                let size = self
+                    .shared
+                    .resize
+                    .lock()
+                    .map_err(|_| SessionError::Failure("resize lock poisoned".into()))?
+                    .take();
+                if let Some(size) = size {
+                    // Stage engine geometry before the irreversible kernel resize.
+                    // Failure aborts; no rollback-atomicity claim is made.
+                    let staged = self.terminal.stages_mutations();
+                    let batch = if staged {
+                        self.terminal.resize(size)?
+                    } else {
+                        None
+                    };
+                    self.master
+                        .as_ref()
+                        .expect("active PTY master")
+                        .resize(pty_size(size))
+                        .map_err(|error| {
+                            SessionError::Failure(format!(
+                                "resize PTY after engine stage: {error}; session recovery required"
+                            ))
+                        })?;
+                    let batch = if staged {
+                        batch
+                    } else {
+                        self.terminal.resize(size)?
+                    };
+                    dirty |= self.accept_batch(batch)?;
+                }
+                dirty |= self.load_input()?;
             }
-            if self.close_deadline.is_none() {
-                dirty |= self.load_input();
+            // A zero-reply commit can observe cancellation during resize or
+            // input's scroll-to-bottom. Reenter close handling before any user
+            // write/deadline path; an already closing graceful worker still drains.
+            if self.close_deadline.is_none() && self.shared.stop.load(Ordering::Acquire) {
+                continue;
             }
             if self
                 .pending_deadline
@@ -931,8 +1051,21 @@ impl Worker {
                 }
                 self.pending.clear();
                 self.pending_deadline = None;
+                if self.causal_reply.is_some() {
+                    return Err(SessionError::Failure("user input deadline blocked a staged terminal reply; session recovery required".into()));
+                }
             }
-            if !self.pending.is_empty() {
+            if self
+                .causal_reply
+                .as_ref()
+                .is_some_and(|reply| Instant::now() >= reply.deadline)
+            {
+                return Err(self.reply_failure("deadline"));
+            }
+            if self.causal_reply.is_some() && self.process.poll_exit()? {
+                return Err(self.reply_failure("child exited before complete physical delivery"));
+            }
+            if !self.pending.is_empty() && !self.shared.stop.load(Ordering::Acquire) {
                 match self
                     .io
                     .as_mut()
@@ -961,9 +1094,13 @@ impl Worker {
                     Err(e) => return Err(SessionError::Failure(format!("write PTY input: {e}"))),
                 }
             }
+            dirty |= self.advance_reply()?;
             let mut buffer = [0; IO_CHUNK_BYTES];
-            if !self.eof {
+            if !self.eof && self.causal_reply.is_none() {
                 for _ in 0..READ_QUANTA {
+                    if self.close_deadline.is_none() && self.shared.stop.load(Ordering::Acquire) {
+                        break;
+                    }
                     match self.io.as_mut().expect("active PTY I/O").read(&mut buffer) {
                         Ok(0) => {
                             self.eof = true;
@@ -972,10 +1109,15 @@ impl Worker {
                         Ok(count) => {
                             self.bytes_read += count as u64;
                             if self.close_deadline.is_none() {
-                                self.terminal
-                                    .process(&buffer[..count])
-                                    .map_err(|e| SessionError::Failure(e.to_string()))?;
+                                let batch = self.terminal.process(&buffer[..count])?;
+                                self.accept_batch(batch)?;
+                                // Publish read progress using only the last committed viewport.
                                 dirty = true;
+                                if self.causal_reply.is_some()
+                                    || self.shared.stop.load(Ordering::Acquire)
+                                {
+                                    break;
+                                }
                             }
                         }
                         Err(e) if retryable(&e) => break,
@@ -1005,6 +1147,9 @@ impl Worker {
                 });
                 self.exit_seen = Some(Instant::now());
             }
+            if self.exit_seen.is_some() && self.causal_reply.is_some() {
+                return Err(self.reply_failure("child exited before publication"));
+            }
             if self.exit_seen.is_some() && self.eof {
                 return Ok(if self.close_deadline.is_some() {
                     State::Closed
@@ -1024,7 +1169,7 @@ impl Worker {
                 published = Instant::now();
             }
             if self.close_deadline.is_none() {
-                dirty |= self.load_input();
+                dirty |= self.load_input()?;
             }
             let mut fds = [
                 pollfd {
@@ -1036,8 +1181,15 @@ impl Worker {
                             .expect("active PTY I/O")
                             .as_raw_file_descriptor()
                     },
-                    events: if self.eof { 0 } else { POLLIN }
-                        | if self.pending.is_empty() { 0 } else { POLLOUT },
+                    events: if self.eof || self.causal_reply.is_some() {
+                        0
+                    } else {
+                        POLLIN
+                    } | if self.pending.is_empty() && self.causal_reply.is_none() {
+                        0
+                    } else {
+                        POLLOUT
+                    },
                     revents: 0,
                 },
                 pollfd {
@@ -1053,6 +1205,9 @@ impl Worker {
             };
             let timeout = self.pending_deadline.map_or(timeout, |deadline| {
                 timeout.min(deadline.saturating_duration_since(Instant::now()))
+            });
+            let timeout = self.causal_reply.as_ref().map_or(timeout, |reply| {
+                timeout.min(reply.deadline.saturating_duration_since(Instant::now()))
             });
             let timeout = self
                 .close_deadline
@@ -1082,17 +1237,20 @@ impl Worker {
         while !self.shared.stop.load(Ordering::Acquire) {
             let mut dirty = false;
             for _ in 0..INPUT_QUEUE_CHUNKS {
+                if self.shared.stop.load(Ordering::Acquire) {
+                    break;
+                }
                 let Ok(input) = self.input.try_recv() else {
                     break;
                 };
                 match input {
                     Input::Scroll(lines) => {
-                        self.terminal.scroll(lines);
+                        self.history_scroll(lines)?;
                         dirty = true;
                     }
                     Input::Wheel(event) => {
                         // Completed processes cannot consume mouse/application input.
-                        self.terminal.scroll(event.lines);
+                        self.history_scroll(event.lines)?;
                         dirty = true;
                     }
                     Input::Bytes { mut completion, .. } => {
@@ -1131,9 +1289,12 @@ impl Worker {
         Ok(())
     }
 
-    fn load_input(&mut self) -> bool {
-        if !self.pending.is_empty() {
-            return false;
+    fn load_input(&mut self) -> Result<bool, SessionError> {
+        if !self.pending.is_empty()
+            || self.causal_reply.is_some()
+            || self.shared.stop.load(Ordering::Acquire)
+        {
+            return Ok(false);
         }
         for _ in 0..INPUT_QUEUE_CHUNKS {
             let Ok(input) = self.input.try_recv() else {
@@ -1151,21 +1312,121 @@ impl Worker {
                     {
                         continue;
                     }
-                    self.terminal.scroll(0);
                     self.pending = bytes;
                     self.written = 0;
                     self.pending_completion = completion;
                     self.pending_deadline = deadline;
+                    let batch = self.terminal.scroll(0)?;
+                    self.accept_batch(batch)?;
                 }
-                Input::Scroll(lines) => self.terminal.scroll(lines),
+                Input::Scroll(lines) => {
+                    let batch = self.terminal.scroll(lines)?;
+                    self.accept_batch(batch)?;
+                }
                 Input::Wheel(event) => {
-                    self.pending = self.terminal.wheel(event);
+                    let (bytes, batch) = self.terminal.wheel(event)?;
+                    self.pending = bytes;
                     self.written = 0;
+                    self.accept_batch(batch)?;
                 }
             }
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
+    }
+
+    fn accept_batch(&mut self, batch: Option<EngineBatch>) -> Result<bool, SessionError> {
+        let Some(batch) = batch else {
+            return Ok(true);
+        };
+        if batch.replies().is_empty() {
+            return self.commit_batch(&batch);
+        }
+        let timeout = self.engine_reply_timeout.ok_or_else(|| {
+            SessionError::Failure("missing explicit engine reply lifetime".into())
+        })?;
+        self.causal_reply = Some(CausalReply {
+            batch,
+            written: 0,
+            deadline: Instant::now() + timeout,
+        });
+        Ok(false)
+    }
+
+    fn advance_reply(&mut self) -> Result<bool, SessionError> {
+        if !self.pending.is_empty() || self.shared.stop.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        let Some(reply) = self.causal_reply.as_mut() else {
+            return Ok(false);
+        };
+        if Instant::now() >= reply.deadline {
+            return Err(self.reply_failure("deadline"));
+        }
+        match self
+            .io
+            .as_mut()
+            .expect("active PTY I/O")
+            .write(&reply.batch.replies()[reply.written..])
+        {
+            Ok(0) => return Err(self.reply_failure("zero-byte write")),
+            Ok(count) => reply.written += count,
+            Err(error) if retryable(&error) => return Ok(false),
+            Err(error) => return Err(self.reply_failure(&format!("physical write: {error}"))),
+        }
+        if reply.written != reply.batch.replies().len() {
+            return Ok(false);
+        }
+        if self.shared.stop.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        if Instant::now() >= reply.deadline {
+            return Err(self.reply_failure("deadline after physical write"));
+        }
+        let reply = self
+            .causal_reply
+            .take()
+            .expect("validated outstanding reply");
+        self.commit_batch(&reply.batch)
+    }
+
+    // All worker commit entrypoints share the observed-cancellation fence,
+    // including zero-reply resize/scroll/output and completed-history batches.
+    fn commit_batch(&mut self, batch: &EngineBatch) -> Result<bool, SessionError> {
+        if self.shared.stop.load(Ordering::Acquire) {
+            self.abort_engine();
+            return Ok(false);
+        }
+        self.terminal.commit(batch)?;
+        Ok(true)
+    }
+
+    fn reply_failure(&self, reason: &str) -> SessionError {
+        let (written, total) = self
+            .causal_reply
+            .as_ref()
+            .map_or((0, 0), |reply| (reply.written, reply.batch.replies().len()));
+        SessionError::Failure(format!(
+            "terminal causal reply {reason}: {written}/{total} bytes physically accepted; unpublished frame discarded, explicit session recovery required"
+        ))
+    }
+
+    fn abort_engine(&mut self) {
+        self.causal_reply = None;
+        self.terminal.abort();
+    }
+
+    fn history_scroll(&mut self, lines: i32) -> Result<(), SessionError> {
+        if let Some(batch) = self.terminal.scroll(lines)? {
+            if !batch.replies().is_empty() {
+                self.terminal.abort();
+                return Err(SessionError::Failure(
+                    "completed history produced a terminal reply without a live PTY".into(),
+                ));
+            }
+            self.commit_batch(&batch)?;
+        }
+        Ok(())
     }
 
     fn finish_inputs(&mut self, reason: InputWriteFailure) {

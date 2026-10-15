@@ -68,3 +68,5 @@ object/executable/log receipts are retained separately in the linkage artifact.
 The workflow never invokes Zig or the engine producer. Native linkage remains
 unexecuted until the committed lane is dispatched and its actual bytes reviewed;
 no worker/default/native-app/input/performance acceptance follows from this lane.
+
+The next production worker slice is tracked in [F04 Session engine integration](f04-session-engine.md).

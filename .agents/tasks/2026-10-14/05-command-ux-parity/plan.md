@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [F04 session engine](references/f04-session-engine.md) — optional worker-owned engine, physical causal replies and remaining native/fidelity gates.
 - [Shared shutdown](references/s01-shared-shutdown.md) — one deadline, physical owner barriers and pending native lifecycle acceptance.
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.
 - [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — pinned MIT 0.43.0 lifecycle and passed public-API Darwin fixture; separate production native gate pending.
