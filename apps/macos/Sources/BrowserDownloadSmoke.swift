@@ -24,12 +24,11 @@ enum BrowserDownloadSmoke {
         }
     }
     private static func chooseDestination(_ destination: URL, panel: NSSavePanel) async throws {
-        let path = destination.path
-        guard let separator = path.lastIndex(of: "/") else { throw BridgeFailure(message: "Invalid fixture destination") }
-        panel.directoryURL = URL(fileURLWithPath: String(path[..<separator]), isDirectory: true)
-        panel.nameFieldStringValue = String(path[path.index(after: separator)...])
-        // Save panels use an asynchronous remote view. Setting these properties
-        // does not mean the selected URL has caught up in the same run-loop turn.
+        // Apple explicitly disallows programmatic NSSavePanel.ok(_:) on macOS
+        // 10.15+. Drive the real remote UI from a separately authorized process.
+        // Selection and acceptance are separate so the app independently checks
+        // the panel's actual destination before any Save action is sent.
+        try await drivePanel("select", currentName: panel.nameFieldStringValue, destination: destination)
         do {
             try await wait("Save panel did not select the requested fixture destination") {
                 panel.url?.path == destination.path
@@ -39,7 +38,55 @@ enum BrowserDownloadSmoke {
                                 + "; expected " + destination.path)
         }
         FileHandle.standardError.write(Data(("Confirmed download save panel URL: " + destination.path + "\n").utf8))
-        panel.ok(nil)
+        try await drivePanel("accept", currentName: destination.lastPathComponent, destination: destination)
+    }
+    private static func drivePanel(_ phase: String, currentName: String, destination: URL) async throws {
+        guard let app = Bundle.main.executableURL else { throw BridgeFailure(message: "Native save driver cannot identify its exact app") }
+        let executable = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("native-save-panel-driver")
+        let arguments = [phase, String(getpid()), app.path, currentName, destination.deletingLastPathComponent().path, destination.lastPathComponent]
+        let output = destination.deletingLastPathComponent().appendingPathComponent("ax-" + phase + "-" + destination.lastPathComponent + ".log")
+        try await Task.detached {
+            guard FileManager.default.isExecutableFile(atPath: executable.path),
+                  FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw BridgeFailure(message: "Native download acceptance gated: external save-panel UI driver or its private log is unavailable")
+            }
+            let log = try FileHandle(forWritingTo: output)
+            defer {
+                do { try log.close() }
+                catch { FileHandle.standardError.write(Data(("Save-panel driver log cleanup: " + error.localizedDescription + "\n").utf8)) }
+            }
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = arguments
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = log
+            process.standardError = log
+            try process.run()
+            let deadline = ContinuousClock.now + .seconds(15)
+            while process.isRunning, ContinuousClock.now < deadline { usleep(25_000) }
+            let timedOut = process.isRunning
+            if timedOut {
+                process.terminate()
+                let stopDeadline = ContinuousClock.now + .milliseconds(500)
+                while process.isRunning, ContinuousClock.now < stopDeadline { usleep(25_000) }
+                if process.isRunning, Darwin.kill(process.processIdentifier, SIGKILL) != 0, errno != ESRCH {
+                    throw BridgeFailure(message: "Could not stop the owned save-panel UI driver (errno " + String(errno) + ")")
+                }
+            }
+            process.waitUntilExit()
+            let reader = try FileHandle(forReadingFrom: output)
+            let data: Data
+            do { data = try reader.read(upToCount: 8192) ?? Data(); try reader.close() }
+            catch {
+                do { try reader.close() }
+                catch { FileHandle.standardError.write(Data(("Save-panel driver read cleanup: " + error.localizedDescription + "\n").utf8)) }
+                throw error
+            }
+            FileHandle.standardError.write(data)
+            guard !timedOut, process.terminationReason == .exit, process.terminationStatus == 0 else {
+                throw BridgeFailure(message: "Native download acceptance gated: external save-panel UI input failed (" + String(process.terminationStatus) + "): " + String(decoding: data, as: UTF8.self))
+            }
+        }.value
     }
     private nonisolated static func removeFixture(_ root: URL) async throws {
         let removal = Task<Void, Error>.detached { try FileManager.default.removeItem(at: root) }
