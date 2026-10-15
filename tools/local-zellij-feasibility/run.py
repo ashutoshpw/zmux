@@ -597,7 +597,9 @@ def failed_exec_fixture(api, binary, wrapper, config, name, backend, server, env
                 client = TerminalClient(wrapper, missing, config, name, broker)
                 wait_until(lambda: child_exited(client.process), "real exec failure", 5)
                 client.pump()
-                require(b"exec fixture:" in client.output, "PTY wrapper did not reach the failed exec")
+                require(b"exec fixture:" in client.output,
+                        "PTY wrapper did not reach the failed exec: " + repr(bytes(client.output))
+                        + "; status=" + repr(os.waitid(os.P_PID, client.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)))
                 require(client.process.returncode is None, "Failed exec child was reaped before broker cleanup")
                 client.close()
                 require(client.process.returncode == 111, "PTY wrapper failed for an unrelated reason")
@@ -747,6 +749,18 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
                 wait_until(original_gone, "original daemon exit", 12)
             except Exception as error:
                 errors.append("physical owner cleanup: " + repr(error))
+            observations["close_helper"] = {
+                "exit_code": helper.returncode if helper is not None else None,
+                "records": closer.records if closer is not None else [],
+                "rejected": closer.rejected if closer is not None else [],
+                "errors": closer.errors if closer is not None else [],
+                "normal_closes": closer.closes if closer is not None else []}
+            if errors:
+                try:
+                    observations["server_diagnostic"] = command(
+                        ["/bin/ps", "-p", str(server["pid"]), "-o", "pid=,ppid=,pgid=,stat="], environment)
+                except Exception as diagnostic:
+                    observations["server_diagnostic_error"] = repr(diagnostic)
             observations["cleanup"] = {"original_server_exited": original_gone(), "errors": errors}
         elif backend.exists():
             errors.append("unconfirmed task-owned backend remains; retained namespace for diagnosis")
