@@ -2108,8 +2108,12 @@ emit("done")
                         details.append("applicationCursor=\(viewport.applicationCursor),scrollbackOffset=\(viewport.scrollbackOffset),scrollbackLines=\(viewport.scrollbackLines),alternateScreen=\(viewport.alternateScreen),rows=\(viewport.size.rows),cols=\(viewport.size.cols)")
                     } else { details.append("frameSnapshot=unavailable") }
                 } else { details.append("frame=not-visible") }
-                let ownsTarget = snapshot?.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
-                    .contains { $0.id == surface && $0.kind == "terminal" && $0.sessionId == session } == true
+                let diagnosticWorkspaces: [Workspace] = snapshot?.model.workspaces ?? []
+                let diagnosticPanes: [Pane] = diagnosticWorkspaces.flatMap { $0.root.panes }
+                let diagnosticSurfaces: [Surface] = diagnosticPanes.flatMap { $0.surfaces }
+                let ownsTarget = diagnosticSurfaces.contains { candidate in
+                    candidate.id == surface && candidate.kind == "terminal" && candidate.sessionId == session
+                }
                 if ownsTarget {
                     do {
                         let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000, externalCaller: true)
