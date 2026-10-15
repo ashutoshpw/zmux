@@ -155,16 +155,18 @@
       "implemented_slices": [
         "R01a typed SSH descriptor/endpoint renderer foundation only",
         "R01b real SSH workspace/PTY launch, no-focus IDs and endpoint-preserving fresh tabs/splits/reopen; fresh review passed",
-        "R01c private terminal channel, bounded regular-file uploads and native file drop/paste; final fresh review passed"
+        "R01c private terminal channel, bounded regular-file uploads and native file drop/paste; final fresh review passed",
+        "R01d bounded raw clipboard image preparation/paste/drop, exact-session native transfer receipts and worker-finish source cleanup; fresh review passed, hosted native gates pending"
       ],
       "verification_receipts": [
         "r01-ssh-descriptor.md",
         "r01-ssh-workspaces.md",
-        "r01-file-transfers.md"
+        "r01-file-transfers.md",
+        "r01-clipboard-images.md"
       ],
       "remaining_gates": [
         "Physical native Finder drop/file paste and progress/cancel visual acceptance; c9cd45c Linux/macOS tests and universal packaged smoke pass",
-        "Raw clipboard image preparation/cleanup and directory/custom upload contracts",
+        "Hosted native image preparation/paste/cache smoke, remote image coordinator acceptance and directory/custom upload contracts",
         "Remaining SSH option/config compatibility, password/host-key/jump-host acceptance and remote cwd restore",
         "Real two-host/physical native transfer and stress acceptance"
       ]

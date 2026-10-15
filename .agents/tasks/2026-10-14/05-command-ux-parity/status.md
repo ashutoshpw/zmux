@@ -101,25 +101,23 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 - Cloud is not deployed. Origin is https://zmux.w3dev.app; provider/database selection is deferred.
   All deployments must use GitHub Actions.
 
-## Local draft awaiting integration
+## R01d working slice
 
-`apps/macos/Sources/ClipboardImagePreparation.swift` is an untracked, independently authored
-helper from `clipboard_image_preparation`. Source review repairs are applied, but it has
-not compiled against the Apple SDK and is not part of `c9cd45c`. API: actor `prepare(data:)`
-returns Sendable `PreparedClipboardImage` (UUID/fileURL/byte and pixel dimensions);
-`release(_:)` removes the exact private cache entry. Bounds: 32 MiB input/output, 16M pixels,
-256 MiB cache and seven-day inactive retention. Ownership, symlink and mode checks,
-bounded shallow enumeration, unlink/rmdir cleanup are included. Local paths remain cached.
+The former clipboard-image draft is integrated with native paste/drop classification,
+bounded asynchronous preparation, captured surface/session guards, attributable C ABI
+transfer receipts and safe remote-source cleanup. Local insertion retains its cached PNG;
+remote cleanup waits for the upload worker, not merely cancelled delivery. Orientation is
+normalized into PNG pixels. Native ImageIO/cache/pasteboard and real view-to-shell smoke
+are wired. Fresh read-only review passed; hosted compilation/runtime remain pending.
 
-Next integration must capture origin surface/session before async work, bound pending
-preparations, keep UI command input flowing, correlate remote upload/source cleanup, handle
-closed/rejected/cancelled origins, classify file URLs before raw images before text, and add
-real native ImageIO/cache/pasteboard smoke. Do not claim raw clipboard-image support yet.
+Parent `scripts/check` passes (79 Rust tests plus fmt/Clippy/notices/C ABI). This reviewed slice is being committed for hosted checks; it is not a delivered artifact
+or full R01/V01 acceptance.
+See [R01d receipt](references/r01-clipboard-images.md).
 
 ## Next action
 
-Integrate the local clipboard-image draft with captured origin surface/session, bounded
-preparation admission, cleanup correlation and real native pasteboard/cache smoke. Continue directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
+Finish R01d fresh review and GitHub Actions native ImageIO/cache/pasteboard and
+view-to-shell smoke validation. Continue directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based

@@ -10,6 +10,8 @@ const MAX_UPLOAD_HISTORY: usize = 8;
 pub enum TransferCommand {
     PasteFiles {
         surface_id: SurfaceId,
+        #[serde(default)]
+        expected_session_id: Option<SessionId>,
         paths: Vec<PathBuf>,
     },
     Cancel {
@@ -26,6 +28,8 @@ pub struct TransferSnapshot {
     pub upload: UploadSnapshot,
     pub delivery: String,
     pub delivery_error: Option<String>,
+    /// The source may be removed only after the worker has stopped reading it.
+    pub source_released: bool,
 }
 pub(super) struct TransferSlot {
     snapshot: TransferSnapshot,
@@ -48,7 +52,11 @@ impl Worker {
                 slot.snapshot.delivery = "cancelled".into();
                 Ok(())
             }
-            TransferCommand::PasteFiles { surface_id, paths } => {
+            TransferCommand::PasteFiles {
+                surface_id,
+                expected_session_id,
+                paths,
+            } => {
                 if paths.is_empty() || paths.len() > zmux_remote_runtime::upload::MAX_UPLOAD_FILES {
                     return Err(DesktopError::Failure("choose 1–16 files".into()));
                 }
@@ -68,6 +76,14 @@ impl Worker {
                     .find(|s| s.id == surface_id)
                     .ok_or(DesktopError::TerminalUnavailable)?;
                 let session_id = surface.session_id.ok_or(DesktopError::NotTerminal)?;
+                if let Some(expected) = expected_session_id
+                    && expected != session_id
+                {
+                    return Err(DesktopError::Failure(format!(
+                        "originating terminal session changed (expected {}, found {})",
+                        expected.0, session_id.0
+                    )));
+                }
                 let slot = self
                     .slots
                     .get(&session_id)
@@ -137,6 +153,7 @@ impl Worker {
                         upload,
                         delivery: "pending".into(),
                         delivery_error: None,
+                        source_released: false,
                     },
                 });
                 Ok(())
@@ -148,6 +165,11 @@ impl Worker {
         let model = self.model.snapshot();
         let mut changed = false;
         for slot in &mut self.transfers {
+            let source_released = slot.job.is_finished();
+            if source_released != slot.snapshot.source_released {
+                slot.snapshot.source_released = source_released;
+                changed = true;
+            }
             let origin_live = model
                 .workspaces
                 .iter()

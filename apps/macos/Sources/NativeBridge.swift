@@ -5,6 +5,31 @@ struct BridgeFailure: Error, LocalizedError, Sendable {
     var errorDescription: String? { message }
 }
 
+struct ImageTransferAdmission: Sendable {
+    let revision: UInt64
+    let uploadId: UInt64?
+}
+
+struct ImageTransferFailure: Error, LocalizedError, Sendable {
+    let message: String
+    let outcomeUnknown: Bool
+    var errorDescription: String? { message }
+}
+
+private struct ImageTransferResponse: Decodable {
+    struct Failure: Decodable { let message: String }
+    let ok: Bool
+    let revision: UInt64?
+    let uploadId: UInt64?
+    let outcomeUnknown: Bool?
+    let error: Failure?
+    enum CodingKeys: String, CodingKey {
+        case ok, revision, error
+        case uploadId = "upload_id"
+        case outcomeUnknown = "outcome_unknown"
+    }
+}
+
 /// Actor isolation keeps Rust operations, JSON decoding and shutdown off AppKit's main actor.
 actor NativeBridge {
     private var handle: UInt64 = 0
@@ -14,16 +39,16 @@ actor NativeBridge {
     func start() throws {
         guard zmux_abi_version() == 1 else { throw BridgeFailure(message: "Unsupported native bridge version") }
         let result = zmux_desktop_create()
-        guard result.status == 0 else { throw failure(result.status) }
+        guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
     }
     func poll() throws -> DesktopSnapshot? {
         guard handle != 0 else { return nil }
         let result = zmux_desktop_snapshot(handle, revision)
         if result.status == -4 { return nil }
-        guard result.status == 0 else { throw failure(result.status) }
+        guard result.status == 0 else { throw Self.failure(result.status) }
         guard result.value != 0 else { return nil }
-        let data = try consume(result.value)
+        let data = try Self.consume(result.value)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let snapshot = try decoder.decode(DesktopSnapshot.self, from: data)
@@ -59,6 +84,39 @@ actor NativeBridge {
     func pasteFiles(surface: UInt64, paths: [String]) async throws {
         try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface, "paths": paths]])
     }
+    /// Wait for the attributable executor receipt on a separate worker. Actor reentrancy
+    /// keeps normal input and snapshot polling flowing while this call awaits admission.
+    func pastePreparedImage(surface: UInt64, session: UInt64, path: String) async throws -> ImageTransferAdmission {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        requestId += 1
+        let desktop = handle
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 1, "request_id": requestId,
+            "payload": ["command": "transfer", "action": [
+                "operation": "paste_files", "surface_id": surface,
+                "expected_session_id": session, "paths": [path]
+            ]]
+        ])
+        return try await Task.detached {
+            let result = data.withUnsafeBytes { bytes in
+                zmux_desktop_transfer_files(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            // Conservatively retain the source if the acknowledgement cannot be read.
+            guard result.status == 0 else {
+                throw ImageTransferFailure(message: "Image transfer receipt failed (\(result.status)); the cached source was retained", outcomeUnknown: true)
+            }
+            let receipt: ImageTransferResponse
+            do { receipt = try JSONDecoder().decode(ImageTransferResponse.self, from: Self.consume(result.value)) }
+            catch { throw ImageTransferFailure(message: "Could not read the image transfer receipt; the cached source was retained", outcomeUnknown: true) }
+            guard receipt.ok else {
+                throw ImageTransferFailure(message: receipt.error?.message ?? "Image transfer rejected", outcomeUnknown: receipt.outcomeUnknown ?? true)
+            }
+            guard let revision = receipt.revision else {
+                throw ImageTransferFailure(message: "Image transfer receipt has no revision; the cached source was retained", outcomeUnknown: true)
+            }
+            return ImageTransferAdmission(revision: revision, uploadId: receipt.uploadId)
+        }.value
+    }
     func cancelUpload(id: UInt64) async throws {
         try await send(["command": "transfer", "action": ["operation": "cancel", "id": id]])
     }
@@ -88,7 +146,7 @@ actor NativeBridge {
     func close() throws {
         guard handle != 0 else { return }
         let status = zmux_desktop_destroy(handle)
-        guard status == 0 else { throw failure(status) }
+        guard status == 0 else { throw Self.failure(status) }
         handle = 0
     }
     private func send(_ payload: [String: Any]) async throws {
@@ -104,8 +162,8 @@ actor NativeBridge {
                 try await Task.sleep(for: .milliseconds(10))
                 continue
             }
-            guard result.status == 0 else { throw failure(result.status) }
-            let response = try JSONSerialization.jsonObject(with: consume(result.value)) as? [String: Any]
+            guard result.status == 0 else { throw Self.failure(result.status) }
+            let response = try JSONSerialization.jsonObject(with: Self.consume(result.value)) as? [String: Any]
             guard response?["ok"] as? Bool == true else {
                 let error = response?["error"] as? [String: Any]
                 throw BridgeFailure(message: error?["message"] as? String ?? "Command rejected")
@@ -113,19 +171,19 @@ actor NativeBridge {
             return
         }
     }
-    private func consume(_ token: UInt64) throws -> Data {
+    private nonisolated static func consume(_ token: UInt64) throws -> Data {
         defer {
             let status = zmux_buffer_release(token)
             if status != 0 { FileHandle.standardError.write(Data("Zmux buffer release failed: \(status)\n".utf8)) }
         }
         let length = zmux_buffer_length(token)
-        guard length.status == 0, length.value <= 8_388_608 else { throw failure(length.status) }
+        guard length.status == 0, length.value <= 8_388_608 else { throw Self.failure(length.status) }
         var data = Data(count: Int(length.value))
         let status = data.withUnsafeMutableBytes { bytes in
             zmux_buffer_copy(token, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
         }
-        guard status == 0 else { throw failure(status) }
+        guard status == 0 else { throw Self.failure(status) }
         return data
     }
-    private func failure(_ status: Int32) -> BridgeFailure { BridgeFailure(message: "Native operation failed (\(status))") }
+    private nonisolated static func failure(_ status: Int32) -> BridgeFailure { BridgeFailure(message: "Native operation failed (\(status))") }
 }

@@ -22,6 +22,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private(set) var snapshot: DesktopSnapshot?
 
     private let bridge = NativeBridge()
+    private lazy var imagePastes = ClipboardImagePastes(bridge: bridge, reportError: { [weak self] message in
+        self?.showError(message)
+    }, statusChanged: { [weak self] in
+        guard let self, let snapshot = self.snapshot else { return }
+        self.updateHeader(snapshot)
+    })
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
     private var sidebarWidth: NSLayoutConstraint?
@@ -38,6 +44,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private let mainHeader = MainHeaderView()
     private lazy var cancelUploadButton = IconButton(symbol: "xmark.circle", label: "Cancel active upload", target: self, action: #selector(cancelActiveUpload))
     private var statusMessage = "Starting shell…"
+    private var presentationError: String?
     private lazy var cloudFooter = CloudFooterView(target: self, action: #selector(showCloudSettings))
     private var actionButtons: [IconButton] = []
     private let stream: AsyncStream<UICommand>
@@ -134,7 +141,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
+        await imagePastes.stopAccepting()
         try await bridge.close()
+        await imagePastes.desktopClosed()
     }
 
     func updateCloudStatus(_ label: String, connected: Bool) {
@@ -142,12 +151,14 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func enqueue(_ command: UICommand) {
+        presentationError = nil
         if case .dropped = continuation.yield(command) {
             showError("Command queue is full; the new command was not accepted")
         }
     }
 
     private func showError(_ message: String) {
+        presentationError = message
         statusMessage = message
         mainHeader.update(title: mainHeader.titleLabel.stringValue, detail: message, error: true)
     }
@@ -381,6 +392,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             value.close(); return false
         }
         self.snapshot = snapshot
+        imagePastes.update(snapshot)
         statusMessage = snapshot.lastError ?? "Ready"
         rebuildWorkspaceRowsIfNeeded(snapshot)
         updateWorkspaceRows(snapshot)
@@ -460,9 +472,13 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let uploadFailure = latestUpload.flatMap { $0.delivery == "failed" ? $0 : nil }
         cancelUploadButton.isHidden = activeUpload == nil
         if let activeUpload { cancelUploadButton.toolTip = "Cancel upload \(activeUpload.id)" }
-        let isError = snapshot.lastError != nil || uploadFailure != nil
-        if let activeUpload {
+        let isError = presentationError != nil || snapshot.lastError != nil || uploadFailure != nil
+        if let error = presentationError {
+            detail = error
+        } else if let activeUpload {
             detail = "Uploading \(ByteCountFormatter.string(fromByteCount: Int64(activeUpload.bytesSent), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(activeUpload.totalBytes), countStyle: .file))"
+        } else if imagePastes.preparingCount > 0 {
+            detail = "Preparing image…"
         } else if let failure = uploadFailure {
             detail = failure.deliveryError ?? failure.error ?? "Upload failed"
         } else if let error = snapshot.lastError {
@@ -555,6 +571,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 let terminal = terminals[session] ?? TerminalView(pane: pane)
                 terminal.pane = pane
                 terminal.onFiles = { [weak self] paths in self?.enqueue(.pasteFiles(pane.selectedSurface, paths)) }
+                terminal.onImage = { [weak self] data in
+                    guard let self else { return false }
+                    self.presentationError = nil
+                    return self.imagePastes.paste(data, surface: pane.selectedSurface, session: session)
+                }
+                terminal.onPasteError = { [weak self] message in self?.showError(message) }
                 terminal.onInput = { [weak self] text in self?.enqueue(.input(session, text)) }
                 terminal.onWheel = { [weak self] lines, row, col, modifiers, history in self?.enqueue(.wheel(session, lines, row, col, modifiers, history)) }
                 terminal.onScroll = { [weak self] lines in self?.enqueue(.scroll(session, lines)) }
@@ -906,6 +928,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             throw BridgeFailure(message: "PTY title was not reflected in native window chrome")
         }
         try await smokeHistoryNavigation()
+        try await smokeClipboardImagePaste()
         let cliURL = Bundle.main.resourceURL!.appendingPathComponent("bin/zmux")
         let cliData = try await Task.detached {
             let process = Process()
@@ -1081,6 +1104,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "split_ratio_retained": true,
             "browser_render_png_bytes": pagePNG.count,
             "active_terminal_title": true,
+            "clipboard_image_preparation": true,
+            "clipboard_image_pasteboard": true,
+            "clipboard_image_local_paste": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,
             "accessible_icon_controls": true,
@@ -1089,6 +1115,31 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "source_sha": Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local"
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+    }
+
+    private func smokeClipboardImagePaste() async throws {
+        guard let pane = focusedPane, let terminal = focusedTerminal else {
+            throw BridgeFailure(message: "No terminal for clipboard image smoke")
+        }
+        let png = try await ClipboardImageSmoke.validate(pane: pane)
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        guard pasteboard.setData(png, forType: .png),
+              pasteboard.setString("IMAGE_TEXT_MUST_NOT_BE_PASTED", forType: .string) else {
+            throw BridgeFailure(message: "Could not populate the image smoke pasteboard")
+        }
+        // Exercise the actual view -> asynchronous preparation -> attributable Rust
+        // insertion path. The shell independently verifies that the inserted path exists.
+        terminal.insertText("test -f ", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.contents.contains("test -f") == true }
+        guard terminal.paste(from: pasteboard) else { throw BridgeFailure(message: "Native image paste was not accepted") }
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.contents.contains("ClipboardImages") == true }
+        terminal.insertText(" && printf '\\nZMUX_IMAGE_%s\\n' READABLE\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.contents.components(separatedBy: "\n").contains("ZMUX_IMAGE_READABLE") == true }
+        guard snapshot?.frames.first?.snapshot?.viewport.contents.contains("IMAGE_TEXT_MUST_NOT_BE_PASTED") == false else {
+            throw BridgeFailure(message: "Image paste also inserted the text representation")
+        }
     }
 
     private func smokeHistoryNavigation() async throws {

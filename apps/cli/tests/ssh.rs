@@ -11,7 +11,11 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use zmux_desktop_runtime::{Desktop, Shell, control::ControlServer};
+use zmux_desktop_runtime::{
+    Command as DesktopCommand, Desktop, Request as DesktopRequest, Shell, control::ControlServer,
+    transfers::TransferCommand,
+};
+use zmux_workspace_core::{SessionId, SurfaceId};
 
 struct Fixture {
     root: PathBuf,
@@ -296,6 +300,51 @@ fn ssh_cli_opens_an_actual_remote_session_and_reopen_never_replays_its_command()
     let source = fixture.root.join("image ' $(touch injected)-画像.png");
     let contents: Vec<u8> = (0..=255).cycle().take(100_003).collect();
     fs::write(&source, &contents).unwrap();
+    let restored_surface_id = SurfaceId(restored["focused_surface"].as_u64().unwrap());
+    let before = desktop.snapshot().unwrap();
+    let restored_session_id = before
+        .model
+        .workspaces
+        .iter()
+        .flat_map(|workspace| workspace.root.panes())
+        .flat_map(|pane| &pane.surfaces)
+        .find(|surface| surface.id == restored_surface_id)
+        .and_then(|surface| surface.session_id)
+        .unwrap();
+    let stale = desktop
+        .execute_transfer_receipt(DesktopRequest {
+            version: 1,
+            request_id: 9_001,
+            payload: DesktopCommand::Transfer {
+                action: TransferCommand::PasteFiles {
+                    surface_id: restored_surface_id,
+                    expected_session_id: Some(SessionId(restored_session_id.0 + 1)),
+                    paths: vec![source.clone()],
+                },
+            },
+        })
+        .unwrap_or_else(|error| {
+            panic!(
+                "stale remote receipt failed before acknowledgement: {}, unknown={}",
+                error.error, error.outcome_unknown
+            )
+        });
+    assert!(
+        stale
+            .result
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("session changed"))
+    );
+    assert!(stale.upload_id.is_none());
+    assert_eq!(
+        desktop.snapshot().unwrap().uploads.len(),
+        before.uploads.len()
+    );
+    assert_eq!(
+        fs::read_dir(fixture.root.join("uploads")).unwrap().count(),
+        0,
+        "a stale native receipt started remote upload work"
+    );
     json(
         &socket,
         &[
@@ -378,8 +427,10 @@ fn ssh_cli_opens_an_actual_remote_session_and_reopen_never_replays_its_command()
     let acknowledged = std::str::from_utf8(&bytes[..bytes.len() - 1]).unwrap();
     assert_eq!(fs::read(acknowledged).unwrap(), contents);
     json(&socket, &["cancel-upload", &late_id.to_string()]);
-    let late = upload(&socket, late_id, |u| u["state"] == "cancelled");
+    let late = upload(&socket, late_id, |u| u["source_released"] == true);
+    assert_eq!(late["state"], "cancelled");
     assert_eq!(late["delivery"], "cancelled");
+    assert_eq!(late["source_released"], true);
     assert_eq!(late["remote_result_uncertain"], false);
     assert_eq!(
         late["remote_paths"][0], acknowledged,
