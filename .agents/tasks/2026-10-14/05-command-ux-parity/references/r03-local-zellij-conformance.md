@@ -193,3 +193,12 @@ Independent source review prompted explicit EPERM and unreaped-identity guards.
 The complete Linux fixture still passes at
 `/tmp/zmux-zellij-darwin-cleanup-reviewed-20261015/receipt.json`. Linux does not
 execute this Darwin-only branch; hosted rerun is required.
+
+Run `38775950132` at `df2e060` confirmed the initial EPERM group contained only
+the unreaped leader in state `Z<`; SDK fixture compilation and public API loading
+passed (macOS15.7.9, SDK15.5). It then failed Python peer executable identity.
+The fixture now launches the current interpreter image obtained independently
+from the public process API and compares that exact file; it does not trust a
+peer-supplied path or skip image validation. This accommodates framework launcher
+paths without weakening binary identity. Complete Linux rerun passes at
+`/tmp/zmux-zellij-interpreter-parent-20261015/receipt.json`; Darwin remains pending.

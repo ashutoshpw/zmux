@@ -233,3 +233,8 @@ inode checks, no-replacement publication and alias refusal remain. The probe run
 both default and /tmp temporary roots; native smoke records selected panel paths.
 Parent source review accepts the scoped change; shell syntax/diff checks pass.
 Hosted execution is still required to establish the actual path behavior and repair.
+
+Run `38775942552` stopped at Swift6 compilation of the new alias-refusal fixture:
+its MainActor closure crossed a nonisolated helper without Sendable. The helper
+now explicitly takes a Sendable async closure; its URL/UUID/actor captures support
+that contract. No assertions or production isolation were relaxed.
