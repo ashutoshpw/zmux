@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import platform
 import selectors
-import signal
 import subprocess
 import sys
 import tarfile
@@ -18,6 +17,9 @@ import urllib.request
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
+sys.path.insert(0, str(REPO / "scripts"))
+from process_group import ProcessGroup
+
 BUILD_TIMEOUT = 600
 MAX_LOG_BYTES = 1024 * 1024
 MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
@@ -41,31 +43,26 @@ def execute_fixture(binary, arguments=()):
 def run(command, label, output, phases, timeout=60, cwd=None, env=None):
     """Drain bounded logs and stop only the newly created subprocess group."""
     began = time.monotonic()
-    process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               start_new_session=True)
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
+    group = ProcessGroup(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    process = group.process
+    selector = None
     total = retained = 0
     timed_out = False
     killed_at = None
     path = output / (label + ".log")
-    def stop_group():
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
     try:
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
         with path.open("wb") as log:
             # EOF is independent of process completion. A leader may close its
             # output and keep running, or exit while a child retains the pipe.
-            while selector.get_map() or process.poll() is None:
+            while selector.get_map() or not group.exited():
                 now = time.monotonic()
                 if now - began >= timeout and killed_at is None:
                     timed_out = True
                     killed_at = now
-                    stop_group()
+                    group.stop()
                 if killed_at is not None and now - killed_at >= 5:
                     break
                 for key, _ in selector.select(timeout=0.1):
@@ -78,22 +75,20 @@ def run(command, label, output, phases, timeout=60, cwd=None, env=None):
                     log.write(saved)
                     retained += len(saved)
     finally:
-        selector.close()
-        process.stdout.close()
         # Phase ownership ends here, including children that closed stdout
         # before their leader exited successfully. Never leave them running.
-        stop_group()
         try:
-            code = process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            stop_group()
-            code = process.wait(timeout=5)
+            if selector is not None:
+                selector.close()
+        finally:
+            code = group.close(timeout=5, retry=True)
+        timed_out = timed_out or group.reap_retried
     record = {"label": label, "command": [str(part) for part in command],
               "exit_code": code, "timed_out": timed_out,
               "wall_seconds": round(time.monotonic() - began, 3),
               "log": path.name, "log_bytes_seen": total,
-              "log_bytes_retained": retained}
+              "log_bytes_retained": retained,
+              "confirmed_zombie_group": group.confirmed_zombie_group}
     phases.append(record)
     if timed_out or code:
         raise RuntimeError(f"{label} failed: exit={code}, timed_out={timed_out}")
@@ -156,7 +151,7 @@ def main():
     if machine == "aarch64" and system == "Darwin":
         machine = "arm64"
     host = f"{system}-{machine}"
-    inputs = ["run.py", "pins.json", "probe.c", "probe.rs", "owner.rs", "frame.h",
+    inputs = ["run.py", "../../scripts/process_group.py", "pins.json", "probe.c", "probe.rs", "owner.rs", "frame.h",
               "compatibility.rs", "current-adapter.rs"]
     if args.resource_experiment:
         inputs += ["resource.patch", "resource.c", "resource.h", "resource.rs",
