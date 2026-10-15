@@ -33,3 +33,13 @@ macOS38746667499 atda33cea stopped at compilation: the C spelling
 `NSSetFocusRingStyle` is unavailable to Swift. The repair uses the SDK-designated
 `NSFocusRingPlacement.only.set()` API. No native resizing acceptance is claimed
 from that run; the same packaged journey must execute on the repaired source.
+
+macOS 38751027370 at 700648d passed Rust/ABI and universal Swift compilation,
+then reproduced the strict native drag failure through both launch paths. The
+diagnostics showed correct divider hit testing and a 264-point resulting width,
+but AppKit promoted the terminal responder to the divider during mouse-down.
+`SidebarFocusWindow` now fences only that divider promotion while dispatching
+its pointer down event. It never restores a retained responder or changes focus
+for another control; keyboard traversal and explicit AX focus still use normal
+first-responder behavior. The same strict NSWindow-event smoke remains unchanged.
+Hosted compilation and packaged execution of this repair remain pending.

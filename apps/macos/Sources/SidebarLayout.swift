@@ -32,6 +32,30 @@ final class SidebarLayout {
     }
 }
 
+/// AppKit normally focuses an accepting view before delivering its mouse-down.
+/// A pointer resize must leave the current content responder untouched, while
+/// the divider remains available to keyboard traversal and explicit AX focus.
+@MainActor
+final class SidebarFocusWindow: NSWindow {
+    private var pointerDivider: SidebarDividerView?
+
+    override func sendEvent(_ event: NSEvent) {
+        let previous = pointerDivider
+        pointerDivider = nil
+        if event.type == .leftMouseDown, let content = contentView {
+            let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+            pointerDivider = content.hitTest(point) as? SidebarDividerView
+        }
+        defer { pointerDivider = previous }
+        super.sendEvent(event)
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if let pointerDivider, responder === pointerDivider { return false }
+        return super.makeFirstResponder(responder)
+    }
+}
+
 /// Mouse resizing preserves the current content responder. Keyboard users can
 /// focus the splitter and use arrows; accessibility uses the same width action.
 @MainActor

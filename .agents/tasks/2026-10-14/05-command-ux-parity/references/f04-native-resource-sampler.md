@@ -65,3 +65,18 @@ probe, and publication/finalization use one lock without holding it across probe
 or thread join. Portable syntax/unavailable-platform/process-parser checks and a
 controlled delayed-publication check pass; fresh repair review reports no blocker.
 Filesystem artifact I/O remains best-effort rather than a hard real-time guarantee.
+
+## First Darwin execution receipt
+
+macOS Actions38751027370 at700648dae2f77bd4ad5c156c05b059a81807a461 compiled both
+architectures and reached packaged smoke, which failed on sidebar pointer focus.
+Its downloaded native-resources.json names macOS15.7.9 arm64 VirtualMac2,1, three
+logical CPUs and 7GiB RAM. In the short2.55-second primary run, exact-app attribution
+produced two resource samples (53,952 and57,168KiB RSS), one successful bundled status
+probe (24.408ms including process launch), and one explicit socket-owner-unverified
+skip. The sampler finalized before the separate direct diagnostic rerun.
+
+These values establish that Darwin process lookup, successful socket attribution,
+probe execution, unavailable states and artifact publication executed. Two startup
+samples from a failed journey establish no idle cost, percentile, sustained-output
+budget, remote-stall stability or comparative engine result.

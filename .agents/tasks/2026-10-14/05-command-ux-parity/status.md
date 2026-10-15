@@ -16,13 +16,16 @@
   regression was observed before repair. Rerun is blocked earlier by sidebar acceptance.
 - Sidebar resizing compiles universally but macOS38747700382 failed the compound
   drag/focus check. Diagnostic-only df3f8ff adds width, event-hit and responder evidence;
-  macOS38749608349 is running. No speculative production repair is claimed.
+  macOS38749608349 stopped earlier on a scheduler-dependent CLI test assertion.
+  That assertion is repaired without changing runtime/timing; macOS38750257118 at13504c3
+  is the next diagnostic run. No speculative sidebar production repair is claimed.
 - T01a F1–F12/modified navigation encoder is committed; native PTY-byte acceptance
   has not yet executed because of the earlier sidebar failure.
 - F04 bounded external resource sampler committed at2095b5b and pushed with df3f8ff;
   portable review/checks pass, first Darwin measurements pending.
-- A01 workspace status/progress/log Rust/CLI slice passes full local checks (189 tests).
-  Native row/inspector integration is under independent review and not yet committed.
+- A01 workspace status/progress/log plus native rows/inspector committed at035a285;
+  icon spacing repaired at13504c3. Full local checks (189 tests) and independent source
+  reviews pass. Native compilation and execution remain pending.
 - Local Docker cloud is healthy on3530; `bunx path-to-port` confirmed3530 after
   health checks. Public tunnel is unverified; VM/relay/email remain unavailable.
 
@@ -148,7 +151,9 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 ## Next action
 
 Validate the remote image paste coordinator and physical provider behavior, then
-continue directory/symlink/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
+continue native file-URL/symlink/refusal and custom-upload contracts plus real two-host
+transfer acceptance. Directory refusal and regular-file symlink semantics are already
+covered by the existing R01 backend; recursive directory push belongs to H03. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based
@@ -278,3 +283,29 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   never authorize replay. Complete establishes local PTY acceptance only.
 - Next: immutable terminal reply opt-in and bounded core receipt polling, then native
   text-input category and confirmed outcomes. Native/remote reply parity stays open.
+
+## Current integration at13504c3
+
+- Full local checks pass after A01 integration and deadline-fixture correction.
+- df3f8ff Foundation38749608190 passed; macOS38749608349 failed during a CLI test
+  before native compile. The test incorrectly required body-phase expiry, although
+  header-phase expiry under load also preserves the same absolute deadline contract.
+- At13504c3 the test accepts either response phase, explicitly requires deadline expiry,
+  and retains original timing limits, ordinary success, empty-output and no-replay checks.
+- macOS38750257118 must establish actual metadata/title/sidebar/key execution; it is
+  not yet an acceptance receipt. Browser readiness/locators and native R01 file-URL
+  journeys are in progress. Engine evaluation is gathering source-backed alternatives.
+- Local cloud health and readiness rechecked HTTP200; path-to-port again returned3530
+  after health. Public Cloudflare Tunnel and VM/relay/email remain unverified/unavailable.
+
+## Native diagnostic at700648d
+
+- macOS38751027370 passes universal compile and reaches packaged smoke. The sidebar
+  trace proves width/preference264 and correct hit routing, but AppKit promotes the
+  divider to first responder on mouse-down. An event-specific focus repair is in progress;
+  keyboard/AX focus and strict assertions remain required.
+- First Darwin sampler artifact downloaded and inspected: two startup RSS samples,
+  one successful status probe and one owner-unverified skip. This verifies instrumentation,
+  not a performance budget; see F04 resource reference.
+- R01 native file-URL/refusal acceptance committed004c05a after fresh review and full
+  scripts/check in an isolated index snapshot. Native execution pending; not pushed yet.
