@@ -176,13 +176,23 @@ impl Drop for Client {
 struct Fixture {
     root: PathBuf,
     binary: PathBuf,
+    temporary: PathBuf,
 }
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!("r03-{}", uuid::Uuid::new_v4().simple()));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        // Only spawned public CLI processes receive this deliberately long
+        // TMPDIR. Their Unix socket namespace must use the short runtime base.
+        let temporary =
+            root.join("long-private-temporary-directory-for-unix-domain-socket-regression");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&temporary)
+            .unwrap();
         Self {
             root: root.canonicalize().unwrap(),
+            temporary,
             binary: PathBuf::from(
                 std::env::var_os("ZMUX_TEST_ZELLIJ_BIN")
                     .expect("host gate requires checksum-verified ZMUX_TEST_ZELLIJ_BIN"),
@@ -191,6 +201,7 @@ impl Fixture {
     }
     fn environment(&self) -> Vec<(&str, std::ffi::OsString)> {
         vec![
+            ("TMPDIR", self.temporary.clone().into_os_string()),
             (
                 "ZMUX_LOCAL_ZELLIJ_ROOT",
                 self.root.join("profile").into_os_string(),
@@ -342,7 +353,7 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     assert_eq!(fs::read(&count).unwrap(), b"x");
     // These are real namespace changes at the public attach boundary. Each must
     // fail before another client is admitted, preserving the original workload.
-    let runtime = std::env::temp_dir()
+    let runtime = std::path::Path::new("/tmp")
         .canonicalize()
         .unwrap()
         .join(format!("z{}", id.replace('-', "")));

@@ -42,7 +42,10 @@ fn production_supervisor_rejects_changed_starter_and_unauthorized_spawn() {
         time::{Duration, Instant},
     };
     use zmux_session_runtime::child::process_identity;
-    let root = std::env::temp_dir().join(format!("r03-auth-{}", uuid::Uuid::new_v4().simple()));
+    // Darwin's per-user TMPDIR can exceed sockaddr_un before this UUID and
+    // socket basename are appended. Retain the private fixture under short /tmp.
+    let root =
+        std::path::Path::new("/tmp").join(format!("r03-auth-{}", uuid::Uuid::new_v4().simple()));
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
     let root = root.canonicalize().unwrap();
     for changed_starter in [true, false] {

@@ -253,9 +253,7 @@ struct Broker {
 }
 impl Broker {
     fn start(record: &Record) -> io::Result<Self> {
-        let root = std::env::temp_dir()
-            .canonicalize()?
-            .join(format!("a{}", Uuid::new_v4().simple()));
+        let root = files::runtime_base()?.join(format!("a{}", Uuid::new_v4().simple()));
         fs::DirBuilder::new().mode(0o700).create(&root)?;
         files::directory(&root, true)?;
         files::directory(&root.join("s"), true)?;
