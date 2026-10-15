@@ -537,6 +537,11 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         // Admission latency must not consume all of the receipt observation
         // budget. The negative control withholds status replies: the CLI must
         // then stop at its original deadline without inventing a host timeout.
+        // Allow the real timeout receipt a 700 ms scheduling margin on macOS:
+        // 4000 ms total - 3000 ms execution - 300 ms admission. The former
+        // fixed 100 ms reserve still expires before execution can time out.
+        let timeout_ms = if stall_status { 2000 } else { 4000 };
+        let cli_timeout = timeout_ms.to_string();
         let proxy = BrowserSocketDelay::new(
             &fixture.0,
             socket.clone(),
@@ -554,7 +559,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
                 &cli_root,
                 &[
                     "--timeout",
-                    "2000",
+                    &cli_timeout,
                     "browser",
                     "eval",
                     "--surface",
@@ -589,7 +594,11 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
                 "CLI extended its total deadline"
             );
         } else {
-            assert!(error.contains("browser_timeout"), "{error}");
+            assert!(
+                error.contains("browser_timeout"),
+                "real runtime timeout receipt was not observed within {timeout_ms} ms (elapsed {:?}): {error}",
+                started.elapsed()
+            );
         }
         let after = desktop.snapshot().unwrap();
         assert_eq!(

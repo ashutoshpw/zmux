@@ -565,6 +565,7 @@ name = "zmux"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "socket2",
  "zmux-desktop-runtime",
  "zmux-remote-runtime",
  "zmux-session-runtime",
