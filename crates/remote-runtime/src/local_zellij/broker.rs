@@ -677,11 +677,17 @@ mod tests {
             target.shutdown(std::net::Shutdown::Both).unwrap();
             drop(target);
             let mut report = TransportReport::default();
-            assert!(
-                connection
-                    .pump(&mut report, &AtomicBool::new(canceled))
-                    .unwrap()
-            );
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !connection
+                .pump(&mut report, &AtomicBool::new(canceled))
+                .unwrap()
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "real rejected-input drain exceeded bound: {report:?}"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
             assert_eq!(report.read_from_client, 3);
             assert_eq!(report.forwarded_to_server, 0);
             assert_eq!(report.rejected_to_server, 3);
@@ -766,10 +772,22 @@ mod tests {
         assert_eq!(report.read_from_client, 0);
         assert_eq!(report.forwarded_to_server, 0);
         let (mut upstream, _) = backend.accept().unwrap();
-        upstream
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
-        assert_eq!(upstream.read(&mut [0; 64]).unwrap(), 0);
+        upstream.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match upstream.read(&mut [0; 64]) {
+                Ok(0) => break,
+                Ok(count) => panic!("rejected backend received{count} bytes"),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "rejected backend did not reach EOF"
+                    );
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("rejected backend read failed: {error}"),
+            }
+        }
         child.cancel().unwrap();
         fs::remove_dir_all(runtime).unwrap();
     }
