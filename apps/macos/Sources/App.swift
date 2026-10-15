@@ -2510,7 +2510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.messageText = "Unable to start zmux"
                 alert.informativeText = error.localizedDescription
                 alert.runModal()
-                NSApp.terminate(nil)
+                coordinator.requestApplicationTermination()
             }
         }
     }

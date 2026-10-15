@@ -227,6 +227,14 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         if let cleanupFailure { throw cleanupFailure }
     }
 
+    func requestApplicationTermination() {
+        // AppKit may enter a nested termination loop for terminateLater. Invoke
+        // it from a run-loop selector, after the current Swift actor job returns,
+        // so the delegate's asynchronous shutdown can acquire the main actor.
+        NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil,
+                      afterDelay: 0, inModes: [.common])
+    }
+
     func shutdown() async throws {
         if let shutdownTask { return try await shutdownTask.value }
         let task = Task { try await self.performShutdown() }
@@ -407,7 +415,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             // Acknowledge only the termination request. The unchanged model is saved
             // by the same Cmd-Q path; this does not claim successful persistence.
             try await bridge.windowEvent(NativeWindowEvent(event: "complete", token: token, operationId: request.operationId))
-            if !Task.isCancelled { NSApp.terminate(nil) }
+            if !Task.isCancelled { requestApplicationTermination() }
         default: throw NativeWindowPreflightFailure(message: "Unsupported native window request")
         }
     }
