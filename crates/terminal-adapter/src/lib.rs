@@ -107,12 +107,15 @@ pub struct Wheel {
     pub history: bool,
 }
 
+/// One worker owns construction, mutation, export and destruction. This contract
+/// stays independent of the backend so thread-bound C owners need no unsafe Send.
 pub struct Terminal {
     parser: vt100::Parser<Metadata>,
     size: Size,
     control: ControlMode,
     failed: bool,
     scrollback_lines: usize,
+    _worker_owned: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 #[derive(Default)]
@@ -219,6 +222,7 @@ impl Terminal {
             control: ControlMode::Ground,
             failed: false,
             scrollback_lines: 0,
+            _worker_owned: std::marker::PhantomData,
         })
     }
 

@@ -64,6 +64,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [F04 integrated owner](references/f04-integrated-owner.md) — one bounded terminal/collector, aggregate accounting and failure-fenced publication acceptance.
 - [F04 metadata contract](references/f04-metadata-contract.md) — isolated provenance/capture owner, approved migration policies, local boundary evidence and production closure gates.
 - [F04 kernel PTY replies](references/f04-pty-replies.md) — isolated real-child ordering, bounded reply lifetime, resize/backpressure/cancel and publication acceptance.
+- [F04 worker startup](references/f04-worker-startup.md) — production worker-owned engine lifecycle and explicit startup failure before candidate linkage.
 - [A01 workspace metadata](references/a01-workspace-metadata.md) — scoped status/progress/log commands, aggregate bounds and native presentation gates.
 - [F04 resource telemetry](references/f04-native-resource-sampler.md) — bounded external Mac measurements and remaining workload/budget gates.
 - [T01 terminal input](references/t01-terminal-input.md) — legacy special-key encoding and real PTY acceptance.

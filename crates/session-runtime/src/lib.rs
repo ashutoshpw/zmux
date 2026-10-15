@@ -323,7 +323,9 @@ impl Session {
     }
 
     /// Keep a production-owned resource alive through PTY and child cleanup.
-    /// Its final release happens on the session worker, never the UI/core executor.
+    /// Once the worker starts, release happens there even on startup failure.
+    /// OS thread-creation failure releases the captured resource on the caller.
+    /// Startup and explicit shutdown belong on background callers, never AppKit/core.
     pub fn spawn_with_resource(
         launch: Launch,
         environment: &[(String, String)],
@@ -340,182 +342,59 @@ impl Session {
         removals: &[std::ffi::OsString],
         resource: impl Send + 'static,
     ) -> Result<Self, SessionError> {
-        // portable-pty may fall back to a home directory on a failed chdir. Restore
-        // must fail visibly rather than launching a shell in an unexpected location.
-        if let Some(cwd) = &launch.cwd {
-            let metadata = std::fs::metadata(cwd).map_err(|error| {
-                SessionError::Failure(format!(
-                    "working directory {} is unavailable: {error}",
-                    cwd.display()
-                ))
-            })?;
-            if !metadata.is_dir() {
-                return Err(SessionError::Failure(format!(
-                    "working directory {} is not a directory",
-                    cwd.display()
-                )));
-            }
-        }
-        let terminal =
-            Terminal::new(launch.size).map_err(|e| SessionError::Failure(e.to_string()))?;
-        let pair = native_pty_system()
-            .openpty(pty_size(launch.size))
-            .map_err(|e| SessionError::Failure(format!("open PTY: {e}")))?;
-        if pair.master.as_raw_fd().is_none() {
-            return Err(SessionError::Failure("PTY has no native descriptor".into()));
-        }
-        let mut io = FileDescriptor::dup(&MasterFd(&*pair.master))
-            .map_err(|e| SessionError::Failure(format!("duplicate PTY: {e}")))?;
-        io.set_non_blocking(true)
-            .map_err(|e| SessionError::Failure(format!("configure PTY: {e}")))?;
-        // Linux standard-library sends suppress SIGPIPE. Darwin requires the
-        // socket option explicitly, including for a native host with SIG_DFL.
-        // Never change process-wide signal disposition from this library.
-        let (wake_tx, wake_rx) = UnixStream::pair()
-            .map_err(|e| SessionError::Failure(format!("create wake channel: {e}")))?;
-        #[cfg(target_os = "macos")]
-        socket2::SockRef::from(&wake_tx)
-            .set_nosigpipe(true)
-            .map_err(|e| SessionError::Failure(format!("configure wake SIGPIPE handling: {e}")))?;
-        wake_tx
-            .set_nonblocking(true)
-            .map_err(|e| SessionError::Failure(e.to_string()))?;
-        wake_rx
-            .set_nonblocking(true)
-            .map_err(|e| SessionError::Failure(e.to_string()))?;
-        let mut command = CommandBuilder::new(&launch.program);
-        command.args(&launch.args);
-        command.env("TERM", "xterm-256color");
-        for name in removals {
-            command.env_remove(name);
-        }
-        for (name, value) in environment {
-            command.env(name, value);
-        }
-        command.env_remove("ZMUX_SOCKET_PASSWORD");
-        if let Some(cwd) = launch.cwd {
-            command.cwd(cwd);
-        }
-        let child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|e| SessionError::Failure(format!("launch PTY command: {e}")))?;
-        let pid = child
-            .process_id()
-            .ok_or_else(|| SessionError::Failure("PTY child has no PID".into()))?;
-        let process = ProcessGuard {
-            child,
-            reaped: false,
-            signaled: false,
-            pid,
-        };
-        drop(pair.slave);
-        let shared = Arc::new(Shared {
-            stop: AtomicBool::new(false),
-            exited: AtomicBool::new(false),
-            resize: Mutex::new(None),
-            snapshot: Mutex::new(Arc::new(Snapshot {
-                state: State::Running,
-                viewport: terminal.viewport(),
-                bytes_read: 0,
-                exit_code: None,
-                failure: None,
-            })),
-        });
+        // Launch configuration crosses the thread boundary; the terminal never does.
+        let environment = environment.to_vec();
+        let removals = removals.to_vec();
         let (input_tx, input_rx) = mpsc::sync_channel(INPUT_QUEUE_CHUNKS);
-        let worker_shared = Arc::clone(&shared);
+        let (startup_tx, startup_rx) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
-            .name(format!("zmux-session-{pid}"))
+            .name("zmux-session".into())
             .spawn(move || {
                 let _resource = resource;
-                let mut worker = Worker {
-                    master: pair.master,
-                    io,
-                    wake: wake_rx,
-                    process,
-                    terminal,
-                    input: input_rx,
-                    shared: worker_shared,
-                    bytes_read: 0,
-                    exit_code: None,
-                    exit_seen: None,
-                    eof: false,
-                    pending: Vec::new(),
-                    written: 0,
-                    pending_completion: None,
-                    pending_deadline: None,
-                };
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let state = worker.run()?;
-                    if state == State::Exited {
-                        worker.finish_inputs(InputWriteFailure::SessionExited);
-                        worker.shared.exited.store(true, Ordering::Release);
-                        worker.publish(state, None);
-                        worker.review_history()?;
-                    }
-                    Ok::<State, SessionError>(state)
+                let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Worker::start(launch, environment, removals, input_rx)
                 }));
-                worker.shared.stop.store(true, Ordering::Release);
-                match result {
-                    Ok(Ok(state)) => {
-                        worker.finish_inputs(InputWriteFailure::SessionClosed);
-                        worker.publish(state, None);
+                match started {
+                    Ok(Ok((worker, ready))) => {
+                        if startup_tx.send(Ok(ready)).is_err() {
+                            worker.shared.stop.store(true, Ordering::Release);
+                        }
+                        worker.execute();
                     }
                     Ok(Err(error)) => {
-                        worker.finish_inputs(InputWriteFailure::WorkerFailed);
-                        worker.publish(State::Failed, Some(error.to_string()));
+                        let _ = startup_tx.send(Err(error));
                     }
                     Err(_) => {
-                        // Dropping guards reports queued input as not written
-                        // and active input as unknown before process cleanup.
-                        drop(worker.pending_completion.take());
-                        for input in worker.input.try_iter() {
-                            drop(input);
-                        }
-                        // Do not enter a possibly corrupted parser after a worker panic.
-                        match worker.shared.snapshot.lock() {
-                            Ok(mut slot) => {
-                                let mut last = (**slot).clone();
-                                last.state = State::Failed;
-                                last.failure = Some(
-                                    "session worker panicked; session recovery required".into(),
-                                );
-                                *slot = Arc::new(last);
-                            }
-                            Err(error) => eprintln!("zmux panic publication failed: {error}"),
-                        }
-                    }
-                }
-                // Explicitly report cleanup failures rather than hiding them inside Drop.
-                let shared = Arc::clone(&worker.shared);
-                let Worker {
-                    master,
-                    io,
-                    mut process,
-                    ..
-                } = worker;
-                drop(io);
-                drop(master);
-                if let Err(error) = process.stop() {
-                    match shared.snapshot.lock() {
-                        Ok(mut slot) => {
-                            let mut last = (**slot).clone();
-                            last.state = State::Failed;
-                            last.failure = Some(error.to_string());
-                            *slot = Arc::new(last);
-                        }
-                        Err(error) => eprintln!("zmux cleanup publication failed: {error}"),
+                        let _ = startup_tx.send(Err(SessionError::Failure(
+                            "session worker panicked during startup".into(),
+                        )));
                     }
                 }
             })
             .map_err(|e| SessionError::Failure(format!("start session worker: {e}")))?;
-        Ok(Self {
-            input: input_tx,
-            wake: Mutex::new(wake_tx),
-            shared,
-            worker: Some(worker),
-            process_id: pid,
-        })
+        match startup_rx.recv() {
+            Ok(Ok(ready)) => Ok(Self {
+                input: input_tx,
+                wake: Mutex::new(ready.wake),
+                shared: ready.shared,
+                worker: Some(worker),
+                process_id: ready.process_id,
+            }),
+            result => {
+                // A startup failure is not a running Session. Join its ended worker
+                // so startup resources have been released before returning the error.
+                worker.join().map_err(|_| {
+                    SessionError::Failure("session startup cleanup panicked".into())
+                })?;
+                match result {
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(SessionError::Failure(
+                        "session worker stopped before startup acknowledgement".into(),
+                    )),
+                    Ok(Ok(_)) => unreachable!(),
+                }
+            }
+        }
     }
 
     /// Lets an owning coordinator reap completed workers without blocking its command loop.
@@ -694,6 +573,13 @@ impl Drop for Session {
     }
 }
 
+// Only owned/shared values cross startup acknowledgement; no terminal handle.
+struct StartupReady {
+    wake: UnixStream,
+    shared: Arc<Shared>,
+    process_id: u32,
+}
+
 // Field order is intentional: release both master descriptors before ProcessGuard waits.
 struct Worker {
     master: Box<dyn MasterPty + Send>,
@@ -714,6 +600,187 @@ struct Worker {
 }
 
 impl Worker {
+    fn start(
+        launch: Launch,
+        environment: Vec<(String, String)>,
+        removals: Vec<std::ffi::OsString>,
+        input_rx: Receiver<Input>,
+    ) -> Result<(Self, StartupReady), SessionError> {
+        // portable-pty may fall back to a home directory on a failed chdir. Restore
+        // must fail visibly rather than launching a shell in an unexpected location.
+        if let Some(cwd) = &launch.cwd {
+            let metadata = std::fs::metadata(cwd).map_err(|error| {
+                SessionError::Failure(format!(
+                    "working directory {} is unavailable: {error}",
+                    cwd.display()
+                ))
+            })?;
+            if !metadata.is_dir() {
+                return Err(SessionError::Failure(format!(
+                    "working directory {} is not a directory",
+                    cwd.display()
+                )));
+            }
+        }
+        let terminal =
+            Terminal::new(launch.size).map_err(|e| SessionError::Failure(e.to_string()))?;
+        // Export the first frame before a child can produce any terminal output.
+        let viewport = terminal.viewport();
+        let pair = native_pty_system()
+            .openpty(pty_size(launch.size))
+            .map_err(|e| SessionError::Failure(format!("open PTY: {e}")))?;
+        if pair.master.as_raw_fd().is_none() {
+            return Err(SessionError::Failure("PTY has no native descriptor".into()));
+        }
+        let mut io = FileDescriptor::dup(&MasterFd(&*pair.master))
+            .map_err(|e| SessionError::Failure(format!("duplicate PTY: {e}")))?;
+        io.set_non_blocking(true)
+            .map_err(|e| SessionError::Failure(format!("configure PTY: {e}")))?;
+        // Linux standard-library sends suppress SIGPIPE. Darwin requires the
+        // socket option explicitly, including for a native host with SIG_DFL.
+        // Never change process-wide signal disposition from this library.
+        let (wake_tx, wake_rx) = UnixStream::pair()
+            .map_err(|e| SessionError::Failure(format!("create wake channel: {e}")))?;
+        #[cfg(target_os = "macos")]
+        socket2::SockRef::from(&wake_tx)
+            .set_nosigpipe(true)
+            .map_err(|e| SessionError::Failure(format!("configure wake SIGPIPE handling: {e}")))?;
+        wake_tx
+            .set_nonblocking(true)
+            .map_err(|e| SessionError::Failure(e.to_string()))?;
+        wake_rx
+            .set_nonblocking(true)
+            .map_err(|e| SessionError::Failure(e.to_string()))?;
+        let mut command = CommandBuilder::new(&launch.program);
+        command.args(&launch.args);
+        command.env("TERM", "xterm-256color");
+        for name in &removals {
+            command.env_remove(name);
+        }
+        for (name, value) in &environment {
+            command.env(name, value);
+        }
+        command.env_remove("ZMUX_SOCKET_PASSWORD");
+        if let Some(cwd) = launch.cwd {
+            command.cwd(cwd);
+        }
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|e| SessionError::Failure(format!("launch PTY command: {e}")))?;
+        let pid = child
+            .process_id()
+            .ok_or_else(|| SessionError::Failure("PTY child has no PID".into()))?;
+        let process = ProcessGuard {
+            child,
+            reaped: false,
+            signaled: false,
+            pid,
+        };
+        drop(pair.slave);
+        let shared = Arc::new(Shared {
+            stop: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+            resize: Mutex::new(None),
+            snapshot: Mutex::new(Arc::new(Snapshot {
+                state: State::Running,
+                viewport,
+                bytes_read: 0,
+                exit_code: None,
+                failure: None,
+            })),
+        });
+        let worker = Self {
+            master: pair.master,
+            io,
+            wake: wake_rx,
+            process,
+            terminal,
+            input: input_rx,
+            shared: Arc::clone(&shared),
+            bytes_read: 0,
+            exit_code: None,
+            exit_seen: None,
+            eof: false,
+            pending: Vec::new(),
+            written: 0,
+            pending_completion: None,
+            pending_deadline: None,
+        };
+        Ok((
+            worker,
+            StartupReady {
+                wake: wake_tx,
+                shared,
+                process_id: pid,
+            },
+        ))
+    }
+
+    fn execute(mut self) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let state = self.run()?;
+            if state == State::Exited {
+                self.finish_inputs(InputWriteFailure::SessionExited);
+                self.shared.exited.store(true, Ordering::Release);
+                self.publish(state, None);
+                self.review_history()?;
+            }
+            Ok::<State, SessionError>(state)
+        }));
+        self.shared.stop.store(true, Ordering::Release);
+        match result {
+            Ok(Ok(state)) => {
+                self.finish_inputs(InputWriteFailure::SessionClosed);
+                self.publish(state, None);
+            }
+            Ok(Err(error)) => {
+                self.finish_inputs(InputWriteFailure::WorkerFailed);
+                self.publish(State::Failed, Some(error.to_string()));
+            }
+            Err(_) => {
+                // Dropping guards reports queued input as not written
+                // and active input as unknown before process cleanup.
+                drop(self.pending_completion.take());
+                for input in self.input.try_iter() {
+                    drop(input);
+                }
+                // Do not enter a possibly corrupted parser after a worker panic.
+                match self.shared.snapshot.lock() {
+                    Ok(mut slot) => {
+                        let mut last = (**slot).clone();
+                        last.state = State::Failed;
+                        last.failure =
+                            Some("session worker panicked; session recovery required".into());
+                        *slot = Arc::new(last);
+                    }
+                    Err(error) => eprintln!("zmux panic publication failed: {error}"),
+                }
+            }
+        }
+        // Explicitly report cleanup failures rather than hiding them inside Drop.
+        let shared = Arc::clone(&self.shared);
+        let Worker {
+            master,
+            io,
+            mut process,
+            ..
+        } = self;
+        drop(io);
+        drop(master);
+        if let Err(error) = process.stop() {
+            match shared.snapshot.lock() {
+                Ok(mut slot) => {
+                    let mut last = (**slot).clone();
+                    last.state = State::Failed;
+                    last.failure = Some(error.to_string());
+                    *slot = Arc::new(last);
+                }
+                Err(error) => eprintln!("zmux cleanup publication failed: {error}"),
+            }
+        }
+    }
+
     fn run(&mut self) -> Result<State, SessionError> {
         let mut published = Instant::now();
         let mut dirty = false;
