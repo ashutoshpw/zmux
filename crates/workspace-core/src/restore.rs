@@ -1,0 +1,507 @@
+//! Versioned topology descriptors. No process state, input, filesystem or network I/O.
+//!
+//! V1 preserves current selections, not undo-close or navigation history. Browser query
+//! strings/fragments and observed browser titles are deliberately omitted for privacy.
+//! Full browser restoration and native split ratios need their own future schema version.
+use crate::*;
+use std::collections::HashSet;
+use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
+
+pub const SESSION_DOCUMENT_VERSION: u32 = 1;
+const FORMAT: &str = "zmux.session";
+// Retain room for an ordinary four-ID create-workspace action after restoration.
+const MAX_NEXT_ID: u64 = u64::MAX - 4;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionDocument {
+    pub format: String,
+    pub version: u32,
+    pub identity_namespace: uuid::Uuid,
+    pub next_id: u64,
+    pub focused_workspace: Option<WorkspaceId>,
+    pub workspaces: Vec<SavedWorkspace>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedWorkspace {
+    pub id: WorkspaceId,
+    pub name: String,
+    pub focused_pane: PaneId,
+    pub root: SavedTree,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SavedTree {
+    Leaf {
+        pane: SavedPane,
+    },
+    Split {
+        axis: Axis,
+        first: Box<Self>,
+        second: Box<Self>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedPane {
+    pub id: PaneId,
+    pub selected_surface: SurfaceId,
+    pub surfaces: Vec<SavedSurface>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedSurface {
+    pub id: SurfaceId,
+    pub title: String,
+    pub content: SavedContent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SavedContent {
+    LocalTerminal { cwd: Option<String> },
+    SshTerminal { connection: SavedSshConnection },
+    Browser { url: String },
+}
+
+/// Explicit allowlist: startup commands, environment and credential contents have no field.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedSshConnection {
+    pub destination: String,
+    pub config_file: Option<String>,
+    pub port: Option<u16>,
+    pub identity: Option<String>,
+    pub forward_agent: Option<bool>,
+    pub ssh_options: Vec<String>,
+    pub jump_hosts: Vec<JumpConfig>,
+}
+
+impl From<&SshConnectionConfig> for SavedSshConnection {
+    fn from(value: &SshConnectionConfig) -> Self {
+        Self {
+            destination: value.destination.clone(),
+            config_file: value.config_file.clone(),
+            port: value.port,
+            identity: value.identity.clone(),
+            forward_agent: value.forward_agent,
+            ssh_options: value.ssh_options.clone(),
+            jump_hosts: value.jump_hosts.clone(),
+        }
+    }
+}
+impl From<&SavedSshConnection> for SshConnectionConfig {
+    fn from(value: &SavedSshConnection) -> Self {
+        Self {
+            destination: value.destination.clone(),
+            config_file: value.config_file.clone(),
+            port: value.port,
+            identity: value.identity.clone(),
+            forward_agent: value.forward_agent,
+            ssh_options: value.ssh_options.clone(),
+            jump_hosts: value.jump_hosts.clone(),
+            command: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RestoreLimits {
+    pub terminals: usize,
+    pub browsers: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ValidatedSessionDocument {
+    document: SessionDocument,
+    terminals: usize,
+    browsers: usize,
+}
+impl ValidatedSessionDocument {
+    pub fn terminal_count(&self) -> usize {
+        self.terminals
+    }
+    pub fn browser_count(&self) -> usize {
+        self.browsers
+    }
+    pub fn next_id(&self) -> u64 {
+        self.document.next_id
+    }
+    pub fn identity_namespace(&self) -> uuid::Uuid {
+        self.document.identity_namespace
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedSessionRestore {
+    pub store: WorkspaceStore,
+    pub effects: Vec<Effect>,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("invalid session document: {0}")]
+pub struct RestoreError(pub String);
+fn invalid(message: impl Into<String>) -> RestoreError {
+    RestoreError(message.into())
+}
+
+struct Validation {
+    ids: HashSet<u64>,
+    terminals: usize,
+    browsers: usize,
+    next_id: u64,
+    limits: RestoreLimits,
+}
+impl Validation {
+    fn id(&mut self, id: u64) -> Result<(), RestoreError> {
+        if id == 0 || id >= self.next_id || !self.ids.insert(id) {
+            return Err(invalid(
+                "object IDs must be nonzero, unique and below next_id",
+            ));
+        }
+        Ok(())
+    }
+    fn tree(
+        &mut self,
+        tree: &SavedTree,
+        depth: usize,
+        panes: &mut Vec<PaneId>,
+    ) -> Result<(), RestoreError> {
+        if depth > MAX_SPLIT_DEPTH {
+            return Err(invalid("split depth limit exceeded"));
+        }
+        match tree {
+            SavedTree::Split { first, second, .. } => {
+                self.tree(first, depth + 1, panes)?;
+                self.tree(second, depth + 1, panes)?;
+            }
+            SavedTree::Leaf { pane } => {
+                if panes.len() >= MAX_PANES_PER_WORKSPACE {
+                    return Err(invalid("pane limit exceeded"));
+                }
+                self.id(pane.id.0)?;
+                panes.push(pane.id);
+                if pane.surfaces.is_empty() || pane.surfaces.len() > MAX_SURFACES_PER_PANE {
+                    return Err(invalid("pane must contain a bounded nonempty surface list"));
+                }
+                if !pane.surfaces.iter().any(|s| s.id == pane.selected_surface) {
+                    return Err(invalid("selected surface does not belong to pane"));
+                }
+                for surface in &pane.surfaces {
+                    self.id(surface.id.0)?;
+                    valid_name(surface.title.clone())
+                        .map_err(|_| invalid("invalid surface title"))?;
+                    match &surface.content {
+                        SavedContent::LocalTerminal { cwd } => {
+                            if cwd.as_ref().is_some_and(|cwd| {
+                                !cwd.starts_with('/')
+                                    || cwd.len() > 4096
+                                    || cwd.chars().any(char::is_control)
+                            }) {
+                                return Err(invalid(
+                                    "cwd must be a bounded absolute path without controls",
+                                ));
+                            }
+                            self.terminals += 1;
+                        }
+                        SavedContent::SshTerminal { connection } => {
+                            SshConnectionConfig::from(connection)
+                                .validate()
+                                .map_err(|e| invalid(format!("invalid SSH connection: {e}")))?;
+                            self.terminals += 1;
+                        }
+                        SavedContent::Browser { url } => {
+                            surfaces::validate_browser_url(url)
+                                .map_err(|e| invalid(e.to_string()))?;
+                            if url.contains(['?', '#']) {
+                                return Err(invalid(
+                                    "saved browser URLs must omit query strings and fragments",
+                                ));
+                            }
+                            self.browsers += 1;
+                        }
+                    }
+                    if self.terminals > self.limits.terminals
+                        || self.browsers > self.limits.browsers
+                    {
+                        return Err(invalid("runtime surface capacity exceeded"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl SessionDocument {
+    /// Byte-length and parse-recursion limits belong to the persistence worker before this call.
+    pub fn validate(self, limits: RestoreLimits) -> Result<ValidatedSessionDocument, RestoreError> {
+        if self.format != FORMAT || self.version != SESSION_DOCUMENT_VERSION {
+            return Err(invalid("unsupported format or version"));
+        }
+        if self.identity_namespace.is_nil() {
+            return Err(invalid("identity namespace must be nonzero"));
+        }
+        if self.next_id == 0 || self.next_id > MAX_NEXT_ID {
+            return Err(invalid("allocator space exhausted"));
+        }
+        if self.workspaces.len() > MAX_WORKSPACES {
+            return Err(invalid("workspace limit exceeded"));
+        }
+        if self.workspaces.is_empty() != self.focused_workspace.is_none()
+            || self
+                .focused_workspace
+                .is_some_and(|id| !self.workspaces.iter().any(|w| w.id == id))
+        {
+            return Err(invalid("focused workspace does not belong to document"));
+        }
+        let mut validation = Validation {
+            ids: HashSet::new(),
+            terminals: 0,
+            browsers: 0,
+            next_id: self.next_id,
+            limits,
+        };
+        for workspace in &self.workspaces {
+            validation.id(workspace.id.0)?;
+            valid_name(workspace.name.clone()).map_err(|_| invalid("invalid workspace name"))?;
+            let mut panes = Vec::new();
+            validation.tree(&workspace.root, 0, &mut panes)?;
+            if !panes.contains(&workspace.focused_pane) {
+                return Err(invalid("focused pane does not belong to workspace"));
+            }
+        }
+        Ok(ValidatedSessionDocument {
+            document: self,
+            terminals: validation.terminals,
+            browsers: validation.browsers,
+        })
+    }
+}
+
+impl SavedTree {
+    fn capture(tree: &PaneTree) -> Self {
+        match tree {
+            PaneTree::Split {
+                axis,
+                first,
+                second,
+            } => Self::Split {
+                axis: *axis,
+                first: Box::new(Self::capture(first)),
+                second: Box::new(Self::capture(second)),
+            },
+            PaneTree::Leaf { pane } => Self::Leaf {
+                pane: SavedPane {
+                    id: pane.id,
+                    selected_surface: pane.selected_surface,
+                    surfaces: pane
+                        .surfaces
+                        .iter()
+                        .map(|surface| SavedSurface {
+                            id: surface.id,
+                            title: if surface.kind == SurfaceKind::Browser {
+                                "Browser".into()
+                            } else {
+                                surface.title.clone()
+                            },
+                            content: match surface.kind {
+                                SurfaceKind::Terminal => match &surface.remote {
+                                    Some(remote) => SavedContent::SshTerminal {
+                                        connection: remote.into(),
+                                    },
+                                    None => SavedContent::LocalTerminal {
+                                        cwd: surface.cwd.clone(),
+                                    },
+                                },
+                                SurfaceKind::Browser => SavedContent::Browser {
+                                    url: surface
+                                        .url
+                                        .as_deref()
+                                        .unwrap_or("about:blank")
+                                        .split(['?', '#'])
+                                        .next()
+                                        .unwrap_or("about:blank")
+                                        .into(),
+                                },
+                            },
+                        })
+                        .collect(),
+                },
+            },
+        }
+    }
+    fn restore(
+        self,
+        ids: &mut impl Iterator<Item = SessionId>,
+        effects: &mut Vec<Effect>,
+    ) -> PaneTree {
+        match self {
+            Self::Split {
+                axis,
+                first,
+                second,
+            } => PaneTree::Split {
+                axis,
+                first: Box::new(first.restore(ids, effects)),
+                second: Box::new(second.restore(ids, effects)),
+            },
+            Self::Leaf { pane } => {
+                let surfaces = pane
+                    .surfaces
+                    .into_iter()
+                    .map(|saved| match saved.content {
+                        SavedContent::Browser { url } => Surface {
+                            id: saved.id,
+                            kind: SurfaceKind::Browser,
+                            session_id: None,
+                            url: Some(url),
+                            navigation: 0,
+                            title: saved.title,
+                            cwd: None,
+                            remote: None,
+                        },
+                        content => {
+                            let session_id = ids.next().expect("validated injected session count");
+                            let (cwd, remote) = match content {
+                                SavedContent::LocalTerminal { cwd } => (cwd, None),
+                                SavedContent::SshTerminal { connection } => {
+                                    (None, Some(SshConnectionConfig::from(&connection)))
+                                }
+                                _ => unreachable!(),
+                            };
+                            effects.push(Effect::StartSession {
+                                pane_id: pane.id,
+                                session_id,
+                                cwd: cwd.clone(),
+                                remote: remote.clone(),
+                            });
+                            let mut surface = Surface::terminal(saved.id, session_id);
+                            surface.title = saved.title;
+                            surface.cwd = cwd;
+                            surface.remote = remote;
+                            surface
+                        }
+                    })
+                    .collect();
+                PaneTree::Leaf {
+                    pane: Pane {
+                        id: pane.id,
+                        selected_surface: pane.selected_surface,
+                        surfaces,
+                    },
+                }
+            }
+        }
+    }
+}
+
+impl WorkspaceStore {
+    /// Runtime allocation reservations are durable; the pure core only exposes the
+    /// next unused ID and can skip forward into a newly reserved block.
+    pub fn next_identifier(&self) -> u64 {
+        self.next_id
+    }
+
+    pub fn advance_identifier_floor(&mut self, floor: u64) -> Result<(), RestoreError> {
+        if floor == 0 || floor > MAX_NEXT_ID {
+            return Err(invalid(
+                "allocator floor is outside supported identifier space",
+            ));
+        }
+        self.next_id = self.next_id.max(floor);
+        Ok(())
+    }
+
+    /// Replacing a live desktop model must invalidate every earlier revision guard.
+    /// Document revisions are deliberately not trusted or imported from disk.
+    pub fn advance_restore_revision(&mut self, previous_revision: u64) -> Result<(), RestoreError> {
+        self.state.revision = self
+            .state
+            .revision
+            .max(previous_revision)
+            .checked_add(1)
+            .ok_or_else(|| invalid("model revision space exhausted"))?;
+        Ok(())
+    }
+
+    pub fn session_document(&self) -> Result<SessionDocument, RestoreError> {
+        let document = SessionDocument {
+            format: FORMAT.into(),
+            version: SESSION_DOCUMENT_VERSION,
+            identity_namespace: self.state.identity_namespace,
+            next_id: self.next_id,
+            focused_workspace: self.state.focused_workspace,
+            workspaces: self
+                .state
+                .workspaces
+                .iter()
+                .map(|workspace| SavedWorkspace {
+                    id: workspace.id,
+                    name: workspace.name.clone(),
+                    focused_pane: workspace.focused_pane,
+                    root: SavedTree::capture(&workspace.root),
+                })
+                .collect(),
+        };
+        document.clone().validate(RestoreLimits {
+            terminals: usize::MAX,
+            browsers: usize::MAX,
+        })?;
+        Ok(document)
+    }
+
+    /// Runtime must durably reserve these IDs before launching. The imported source file is
+    /// never its reservation ledger; repeated imports must not reuse a prior runtime identity.
+    pub fn prepare_session_restore(
+        document: ValidatedSessionDocument,
+        fresh_session_ids: &[SessionId],
+    ) -> Result<PreparedSessionRestore, RestoreError> {
+        if fresh_session_ids.len() != document.terminals {
+            return Err(invalid("wrong number of runtime session IDs"));
+        }
+        let mut unique = HashSet::new();
+        let mut next_id = document.document.next_id;
+        for id in fresh_session_ids {
+            if id.0 < document.document.next_id || id.0 >= MAX_NEXT_ID || !unique.insert(*id) {
+                return Err(invalid(
+                    "runtime session IDs must be fresh, unique and leave allocator capacity",
+                ));
+            }
+            next_id = next_id.max(id.0 + 1);
+        }
+        let mut ids = fresh_session_ids.iter().copied();
+        let mut effects = Vec::new();
+        let source = document.document;
+        let state = Snapshot {
+            identity_namespace: source.identity_namespace,
+            model_version: MODEL_VERSION,
+            revision: 0,
+            focused_workspace: source.focused_workspace,
+            closed_items: Vec::new(),
+            workspaces: source
+                .workspaces
+                .into_iter()
+                .map(|workspace| Workspace {
+                    id: workspace.id,
+                    name: workspace.name,
+                    focused_pane: workspace.focused_pane,
+                    root: workspace.root.restore(&mut ids, &mut effects),
+                })
+                .collect(),
+        };
+        Ok(PreparedSessionRestore {
+            store: Self {
+                state,
+                next_id,
+                ..Self::default()
+            },
+            effects,
+        })
+    }
+}

@@ -19,6 +19,7 @@ use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod registry;
+mod session;
 mod ssh;
 mod targets;
 
@@ -189,6 +190,9 @@ fn parse(
         Some("capabilities") => app_no_args("capabilities", tail, ControlCommand::Capabilities)?,
         Some("doctor") => help_or_no_args("doctor", tail, Offline::Doctor)?,
         Some("ssh") => ssh::parse(tail)?,
+        Some("restore-session" | "save-session" | "session-status") => {
+            session::parse(command.unwrap(), tail)?
+        }
         Some("focus-history") => help_or_exact("focus-history", tail, 1, |values| {
             let direction = match values[0].as_str() {
                 "back" => FocusHistoryDirection::Back,

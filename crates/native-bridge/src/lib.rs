@@ -320,42 +320,69 @@ fn native_desktop(id: u64) -> Result<Arc<NativeDesktop>, i32> {
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_desktop_create() -> ZmuxResult {
+    guard(|| create_desktop(None))
+}
+
+/// Create a desktop with durable session state. File I/O and restoration run on workers.
+/// # Safety
+/// The path must remain readable for length bytes; it is UTF-8, without a trailing NUL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_create_persistent(
+    path: *const u8,
+    length: usize,
+) -> ZmuxResult {
     guard(|| {
-        let mut registry = registry().try_lock().map_err(lock_status)?;
-        if registry
-            .entries
-            .values()
-            .filter(|e| matches!(e, Entry::Desktop(_)))
-            .count()
-            >= 4
-        {
-            return Err(CAPACITY);
+        if path.is_null() || length == 0 || length > 4096 {
+            return Err(INVALID_ARGUMENT);
         }
-        let runtime = Arc::new(Desktop::new(Shell::default()).map_err(|error| {
+        // SAFETY: checked nonnull bounded storage, readable by the caller contract.
+        let bytes = unsafe { std::slice::from_raw_parts(path, length) };
+        let text = std::str::from_utf8(bytes).map_err(|_| INVALID_ARGUMENT)?;
+        if text.contains('\0') || !std::path::Path::new(text).is_absolute() {
+            return Err(INVALID_ARGUMENT);
+        }
+        create_desktop(Some(PathBuf::from(text)))
+    })
+}
+
+fn create_desktop(state_directory: Option<PathBuf>) -> Result<u64, i32> {
+    let mut registry = registry().try_lock().map_err(lock_status)?;
+    if registry
+        .entries
+        .values()
+        .filter(|e| matches!(e, Entry::Desktop(_)))
+        .count()
+        >= 4
+    {
+        return Err(CAPACITY);
+    }
+    let runtime = Arc::new(
+        match state_directory {
+            Some(path) => Desktop::with_persistence(Shell::default(), path),
+            None => Desktop::new(Shell::default()),
+        }
+        .map_err(|error| {
             eprintln!("zmux desktop startup failed: {error}");
             INTERNAL
-        })?);
-        // Native tests create multiple contexts, so local control is explicitly opt-in.
-        // The app supplies one absolute, owner-private path before creating its desktop.
-        let control = std::env::var_os("ZMUX_SOCKET")
-            .map(PathBuf::from)
-            .map(|path| {
-                let policy = zmux_desktop_runtime::control_credentials::server_policy().map_err(
-                    |error| {
-                        eprintln!("zmux local control policy configuration failed: {error}");
-                        INTERNAL
-                    },
-                )?;
-                ControlServer::start_with_policy(&path, Arc::clone(&runtime), policy).map_err(
-                    |error| {
-                        eprintln!("zmux local control startup failed: {error}");
-                        INTERNAL
-                    },
-                )
+        })?,
+    );
+    // Native tests create multiple contexts, so local control is explicitly opt-in.
+    // The app supplies one absolute, owner-private path before creating its desktop.
+    let control = std::env::var_os("ZMUX_SOCKET")
+        .map(PathBuf::from)
+        .map(|path| {
+            let policy =
+                zmux_desktop_runtime::control_credentials::server_policy().map_err(|error| {
+                    eprintln!("zmux local control policy configuration failed: {error}");
+                    INTERNAL
+                })?;
+            ControlServer::start_with_policy(&path, Arc::clone(&runtime), policy).map_err(|error| {
+                eprintln!("zmux local control startup failed: {error}");
+                INTERNAL
             })
-            .transpose()?;
-        registry.insert(Entry::Desktop(Arc::new(NativeDesktop { runtime, control })))
-    })
+        })
+        .transpose()?;
+    registry.insert(Entry::Desktop(Arc::new(NativeDesktop { runtime, control })))
 }
 /// # Safety
 /// Request storage must remain readable for length bytes throughout the call.

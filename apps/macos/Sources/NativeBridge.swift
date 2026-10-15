@@ -36,9 +36,21 @@ actor NativeBridge {
     private var requestId: UInt64 = 0
     private var revision: UInt64 = 0
 
-    func start() throws {
+    func start(persistent: Bool = false) throws {
         guard zmux_abi_version() == 1 else { throw BridgeFailure(message: "Unsupported native bridge version") }
-        let result = zmux_desktop_create()
+        let result: ZmuxResult
+        if persistent {
+            // Actor isolation keeps Foundation directory lookup off the AppKit thread.
+            let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                .resolvingSymlinksInPath()
+            let directory = support.appendingPathComponent("app.w3dev.zmux.dev", isDirectory: true)
+            let path = Data(directory.path.utf8)
+            result = path.withUnsafeBytes { storage in
+                zmux_desktop_create_persistent(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
+            }
+        } else {
+            result = zmux_desktop_create()
+        }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
     }
@@ -148,7 +160,20 @@ actor NativeBridge {
     func close() throws {
         guard handle != 0 else { return }
         let status = zmux_desktop_destroy(handle)
-        guard status == 0 else { throw Self.failure(status) }
+        if status != 0 {
+            // Failed teardown retains the handle so its final cleanup error is readable.
+            let snapshot = zmux_desktop_snapshot(handle, 0)
+            if snapshot.status == 0, snapshot.value != 0 {
+                let data = try Self.consume(snapshot.value)
+                let decoder = JSONDecoder()
+                decoder.keyDecodingStrategy = .convertFromSnakeCase
+                let state = try decoder.decode(DesktopSnapshot.self, from: data)
+                if let message = state.cleanupError ?? state.persistence?.error {
+                    throw BridgeFailure(message: message)
+                }
+            }
+            throw Self.failure(status)
+        }
         handle = 0
     }
     private func send(_ payload: [String: Any]) async throws {
