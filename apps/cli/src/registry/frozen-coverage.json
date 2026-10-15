@@ -700,8 +700,8 @@
       "inventory_id": "CMD-099",
       "reference_command": "current",
       "review_owner": "audit-terminal-ux.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "current"
     },
     {
       "inventory_id": "CMD-100",

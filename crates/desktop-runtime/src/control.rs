@@ -106,6 +106,10 @@ pub enum ControlCommand {
         action: crate::transfers::TransferCommand,
     },
     Status,
+    Current {
+        #[serde(default = "crate::inspection::default_limit")]
+        limit: usize,
+    },
     Capabilities,
     /// Shared action transport; the same enum is used by the native bridge.
     Action {
@@ -855,6 +859,10 @@ fn dispatch(
         ControlCommand::Status => {
             let snapshot = current_snapshot(desktop)?;
             Ok(status(&snapshot))
+        }
+        ControlCommand::Current { limit } => {
+            let snapshot = current_snapshot(desktop)?;
+            crate::inspection::current(&snapshot, limit)
         }
         ControlCommand::ListWorkspaces => {
             let snapshot = current_snapshot(desktop)?;

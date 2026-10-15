@@ -6,6 +6,7 @@ pub mod control_credentials;
 pub mod control_policy;
 mod download_paths;
 pub mod downloads;
+pub mod inspection;
 pub mod local_tmux;
 pub mod metadata;
 pub mod persistence;

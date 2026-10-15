@@ -40,6 +40,14 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "current",
+        "inspect",
+        false,
+        true,
+        "current [--limit 1..200] [--json]",
+        "Inspect app-wide facts from one cached desktop publication without changing focus or refreshing owners. Default limit 100 bounds surfaces in canonical window/workspace/pane/tab order; totals and truncation are explicit. JSON includes exact identities, publication/model revisions, local child lifecycle, metadata counts and unread observations. A running child does not establish an active task, current command or remote liveness. Browser activity, tasks and human obligations remain unknown. Logs/transcripts, resources, external repositories and Cloud machines are not read. --json is an optional compatibility spelling; all results use JSON. Historical text/schema compatibility remains unresolved."
+    ),
+    command!(
         "local-zellij",
         "remote",
         false,
