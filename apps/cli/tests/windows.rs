@@ -5,12 +5,17 @@ mod desktop_snapshot;
 use serde_json::Value;
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
+    io::{Read, Write},
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -234,10 +239,13 @@ impl Fixture {
         fixture
     }
     fn command(&self, args: &[&str]) -> Command {
+        self.command_at(&self.socket, args)
+    }
+    fn command_at(&self, socket: &Path, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_zmux"));
         command
             .arg("--socket")
-            .arg(&self.socket)
+            .arg(socket)
             .args(args)
             .stdin(Stdio::null());
         for key in [
@@ -537,8 +545,104 @@ fn window_cli_waits_for_native_receipts_and_preserves_no_focus_and_exact_scope()
 #[test]
 fn accepted_window_mutation_times_out_without_replay_or_premature_success() {
     let fixture = Fixture::new();
-    let create = fixture.spawn(&["--timeout", "120", "new-window"]);
+    let proxy_path = fixture.root.join("p");
+    let listener = UnixListener::bind(&proxy_path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let upstream = fixture.socket.clone();
+    let (observed_tx, observed_rx) = mpsc::sync_channel(1);
+    let proxy = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let accept = || {
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "CLI never reached proxy phase");
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("window proxy accept: {error}"),
+                }
+            };
+            // Darwin inherits the listener's nonblocking mode.
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+        };
+        let frame = |stream: &mut UnixStream| {
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let length = u32::from_be_bytes(length) as usize;
+            assert!(length > 0 && length <= desktop_runtime::control::MAX_CONTROL_RESPONSE_BYTES);
+            let mut bytes = vec![0; length];
+            stream.read_exact(&mut bytes).unwrap();
+            bytes
+        };
+        let mut client = accept();
+        let request = frame(&mut client);
+        let mut server = UnixStream::connect(upstream).unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        server
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        server
+            .write_all(&(request.len() as u32).to_be_bytes())
+            .unwrap();
+        server.write_all(&request).unwrap();
+        let response = frame(&mut server);
+        let admission: Value = serde_json::from_slice(&response).unwrap();
+        assert_eq!(admission["ok"], true);
+        client
+            .write_all(&(response.len() as u32).to_be_bytes())
+            .unwrap();
+        client.write_all(&response).unwrap();
+        drop(client);
+        let mut client = accept();
+        let status: Value = serde_json::from_slice(&frame(&mut client)).unwrap();
+        assert_eq!(status["command"]["method"], "window_status");
+        assert_eq!(status["command"]["epoch"], admission["result"]["epoch"]);
+        assert_eq!(
+            status["command"]["operation_id"],
+            admission["result"]["operation_id"]
+        );
+        // This request proves the CLI decoded the real admission receipt. Hold
+        // its response until the client's own deadline; never manufacture one.
+        observed_tx
+            .send(status["command"]["operation_id"].clone())
+            .unwrap();
+        assert_eq!(client.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "CLI replayed a window mutation or receipt request"
+        );
+    });
+    // The small transport deadline is covered independently in cli.rs. Here an
+    // observed status request establishes the receipt phase before its timeout.
+    let create = fixture
+        .command_at(&proxy_path, &["--timeout", "3000", "new-window"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let observed = match observed_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(observed) => observed,
+        Err(error) => {
+            let output = finish(create);
+            panic!(
+                "CLI did not observe window admission: {error}; {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    };
     let request = fixture.pending(WindowKind::Open);
+    assert_eq!(observed, request.operation_id.to_string());
     assert!(request.focus, "new-window must request focus by default");
     assert_eq!(
         desktop_snapshot::read(&fixture.desktop)
@@ -547,7 +651,9 @@ fn accepted_window_mutation_times_out_without_replay_or_premature_success() {
         Some(request.window_id)
     );
     let output = finish(create);
+    proxy.join().unwrap();
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains(&request.operation_id.to_string()), "{error}");
     assert!(error.contains("not replayed"), "{error}");
