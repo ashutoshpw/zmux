@@ -1,0 +1,711 @@
+{
+  "schema_version": 1,
+  "notices": [
+    {
+      "path": "licenses/uucode-MIT",
+      "sha256": "312e901e142be2477b4ca859e9311f9e3f80d33372991759b7921c1893605f33",
+      "source": "https://codeload.github.com/jacobsandlund/uucode/tar.gz/9d55524551411b493cca41ca06363625d90aff1e",
+      "source_member": "LICENSE.md",
+      "source_archive_sha256": "68d23543cb2c6c5dfdbdf38b38375e0c6d412a5c5fb72ce06bd139f7a4d25132",
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/uucode-Unicode-V3",
+      "sha256": "1eda5a3b026870c737b22e8bcd4954338612c790db688242e003f41a4fa95175",
+      "source": "https://codeload.github.com/jacobsandlund/uucode/tar.gz/9d55524551411b493cca41ca06363625d90aff1e",
+      "source_member": "licenses/LICENSE_unicode",
+      "source_archive_sha256": "68d23543cb2c6c5dfdbdf38b38375e0c6d412a5c5fb72ce06bd139f7a4d25132",
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/uucode-Bjoern-Hoehrmann",
+      "sha256": "de219cece932aad5a817bf763393d8d149d378a15d2ad5320e3331eac07626dd",
+      "source": "https://codeload.github.com/jacobsandlund/uucode/tar.gz/9d55524551411b493cca41ca06363625d90aff1e",
+      "source_member": "licenses/LICENSE_Bjoern_Hoehrmann",
+      "source_archive_sha256": "68d23543cb2c6c5dfdbdf38b38375e0c6d412a5c5fb72ce06bd139f7a4d25132",
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/Ghostty-MIT",
+      "sha256": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
+      "source": "https://codeload.github.com/ghostty-org/ghostty/tar.gz/22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+      "source_member": "LICENSE",
+      "source_archive_sha256": "a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f",
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/Zig-MIT",
+      "sha256": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
+      "source": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+      "source_member": "LICENSE",
+      "source_archive_sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/musl-COPYRIGHT",
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "source": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+      "source_member": "lib/libc/musl/COPYRIGHT",
+      "source_archive_sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/LLVM-02d85149a05c-LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/02d85149a05cb1f6dc49f0ba7a2ceca53718ae17/compiler-rt/LICENSE.TXT",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/LLVM-2ffb1b0413ef-LICENSE.TXT",
+      "sha256": "dd27f8c290bcdc8368549cd7cd98710a9dbdc34122f2e096a1edb97824ed4148",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/2ffb1b0413efa9a24eb3c49e710e36f92e2cb50b/compiler-rt/LICENSE.TXT",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/LLVM-d674d96bc56c-LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/d674d96bc56c0f377879d01c9d8dfdaaa7859cdb/compiler-rt/LICENSE.TXT",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/LLVM-d32170dbd5b0-LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/d32170dbd5b0d54436537b6b75beaf44324e0c28/compiler-rt/LICENSE.TXT",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/LLVM-d7b669b3a303-LICENSE.TXT",
+      "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/d7b669b3a30345cfcdb2fde2af6f48aa4b94845d/compiler-rt/LICENSE.TXT",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/LLVM-release80-LICENSE.TXT",
+      "sha256": "dd27f8c290bcdc8368549cd7cd98710a9dbdc34122f2e096a1edb97824ed4148",
+      "source": "https://raw.githubusercontent.com/llvm-mirror/compiler-rt/df52202e77b13320eb05f29519a0b4eed1d31349/LICENSE.TXT",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "scope": "linked_or_bundled_runtime"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__cos.c.notice",
+      "sha256": "27047e42e3a4b71c63b76080ffe0717310b91d38ef4d15c940bbadc1eb8ff420",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__cos.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "3f0f774aab60a18d7ef935ffdf121bcda17cbadabff14096c614da22e31a42c1",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__cosdf.c.notice",
+      "sha256": "2c5ca50ddd8ea3d2e5d6a02e212842567aae377abd6ed57e0d0e8888c9fb94ae",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__cosdf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "0ba872cc7e26b93bb9784d19fee84b263e1fa3543a76ec3c0893aea47453a2a7",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__cosl.c.notice",
+      "sha256": "143a675d5409a23faa8a6853e69b9a06d7dbde9060869d0c67322114176e4333",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__cosl.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "fd644ce4ab8797b1220e2197b284212094a3b299bdf2c4faf66ead81b0fc620d",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__rem_pio2.c.notice",
+      "sha256": "0bd9382fac6f493f9dc5f4eaa4c2012cc04951048f045aea7121e5540b08d871",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__rem_pio2.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "938329e0939cd83ee2185a52154b41242f618d4a6df1b08395f344da33d4f1e6",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__rem_pio2_large.c.notice",
+      "sha256": "82c5481a6eed4acef10144da0860ed303595437a9f054254ece6bc1584b0c89d",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__rem_pio2_large.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "b97f19fb5951c83a0c10506fab35646caefde13bd03100ad2af55ef00af0b9fb",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__rem_pio2f.c.notice",
+      "sha256": "d35098402c1cc702758ebd75de69e834e6f24efe2c38ff419d7fbb9eb476bec8",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__rem_pio2f.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "b73a0219ba4a34e39ed904b5008126ff1b12dfa1a4a380941363c8db5088d756",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__rem_pio2l.c.notice",
+      "sha256": "d487153f0370371447fac301eb2ae8003e9cf763ff4bc9c3a6bdd7ef500edf8e",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__rem_pio2l.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "70f1c69285c0d211d696d5c048e269d46000e5d75fc6a80623ef45e861447a94",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__sin.c.notice",
+      "sha256": "e651c1164fa50852a81332d2a3962dd0de64c64735f47b2f0e846f94f1da8d38",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__sin.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "f3a37ef9bcfb8a2f9c809d8c7f1aa2c17c8c3319ad7fb2fe7c0a6284ea8859d2",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__sindf.c.notice",
+      "sha256": "701b472045d066eaeab43d5a94c692d87aecf5401ecab9064dfbf93a6a1a0c2e",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__sindf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "de7026bcd159b7d06a8cbcc162df722014f3b1a3cc4183116b6b7829eef1d118",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__sinl.c.notice",
+      "sha256": "07408ceca7418281d9fdf2684d448079541295866020dd09c4469a881adaf881",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__sinl.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "b6dfffc327cac147a0a2b17a12e9f4ec8ff6df463733db55c316a55ef4bcdb96",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__tand.c.notice",
+      "sha256": "daeafcdba6eed4bac3fb9ab78e2e410f7bd5a8a9c733558645ec392725eb0b6b",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__tan.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "e18b65b69fced8dbb2d3ed1a3dc6daea0e9f857f2762f274380bd89a6f89d2c4",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__tandf.c.notice",
+      "sha256": "cd8d03dca6657c0e15589067270f1d0760deb456d630c76b53929e8d3f151d23",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__tandf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "60455f3cc0ac743f3eaf0017a3a4f0adbab37c0ee30d29397852d22904c40444",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-__tanl.c.notice",
+      "sha256": "c060e5c6efa98c3267ee67929e4ec242161f972875c863a1087c826c78db6582",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/__tanl.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "3788db7251d2e14b17e761bc2eccd0d8faa3c72c16eef7a56ca2ca75eca177df",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-cos.c.notice",
+      "sha256": "3a74ecd1eabada0e4a750c7866b3e7c8d8fe48577b98baf10113cada5acc49a6",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/cos.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "3a74e054057d636fa494bdd76a53a40db5cee618264f6ab31cb0538ba63c6bda",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-cosf.c.notice",
+      "sha256": "b678cacff093c1956507564f4b9ad9a1951cfb46cb87aebd88ee2031b25f9667",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/cosf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "33cf828e8e733da2b72c723b9ff20057b9a4f10df72a3923dadcb626c23d222c",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-exp.c.notice",
+      "sha256": "d879464986502f5a108b0b25095f85968c7fe617f656407b6ebb2d8b1be9874f",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/exp.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "7db56f21ca9b8915d36dd5099b707aafeb6a736eae798e19b76b074764e75f34",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-exp2.c.notice",
+      "sha256": "e1017045b7be3852669b46ce0d74a56f6cdaa3f68dda3b5a3190367abebd29f6",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/exp2.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "b771de769e1b69b931d1f95baa39b429a73c9904e8b5607e1736771c6ace92b1",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-exp2f.c.notice",
+      "sha256": "c0d38bf9658ee5bebdb19a72064ca647b573547ab317d1c27a040120369429a2",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/exp2f.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "1753e636d3b395160a03e9dd4a4ed4fba2abcd9ee12e4cf2d919f5a6bd7e2732",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-expf.c.notice",
+      "sha256": "07a119201b1601e24ddf6c3142f92eaeb103120d6a37cc5349cb27eee4faf03f",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/expf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "225123b9b3a47a083c06f2580c6b73d5cadae5cec545f9e928f7041ff837b4b4",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-fmaf.c.notice",
+      "sha256": "ceba0b483522a5c09b22ae51b1833f2fabcf183c6e26077189f39f6a29c92ad5",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/fmaf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "e5baf54228b74b036da629902d811f9f57de26133a03ce290879b5ec6de04433",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-fmal.c.notice",
+      "sha256": "541bf7c1610ec70e4c233de014d6e4cf739a56f16a53bae1703eaa8854f742c9",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/fmal.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "1c7587e59b9f249bd5e8dfabb154b602978fbb490348f92af5300ee8eadce518",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-log.c.notice",
+      "sha256": "3b0f4b6e0ba95a6f9205a61c3e20c272cb6f4d0b50ab2865340ff43a57c69932",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/log.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "a0694d8587a0d145d0f8ae87cbffba014d7988bc2ebcbfad94cea73b394c9ecc",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-log10.c.notice",
+      "sha256": "a10b1a81999d6e187cc65a869b53fcc2168bbd62b4b8ffb7b932726ddb2a5081",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/log10.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "ef9b4b1f0918cf1fcb797f9fa4d4ffe177bfa27f668d74a41d613bfbcd83850a",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-log10f.c.notice",
+      "sha256": "38a62e94ec64429d40e70621dcd7177d1d87c90acbc87dc1b197cbba1de18536",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/log10f.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "b8de5c0f14be2c622eca1cb33e80e5b131576c7c229aeffb8ea9f1d61555f6b9",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-log2.c.notice",
+      "sha256": "1811ecaf980210c8286b1bbd6e08a494f751b73f9bbecc410de5f29ffee2ff8d",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/log2.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "281e4fc0f737419e245019d8bc8a8ca53032c2d88c31d08561e9e59dcb4b4640",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-log2f.c.notice",
+      "sha256": "87c98c5b0ceb9c72e117cd0eff3a8686d02835ac4aec1d008c0386eeb96d3a97",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/log2f.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "f2393ef18e78e6dc540e7349dbfea000018246d64fca3eefe73f11a286403352",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-logf.c.notice",
+      "sha256": "ecb8ce4061e2890f3c26f093f7c4d9bb254cb66c2329b79115c2f0b7ccff190a",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/logf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "eecf8e5dd0afd5f64f938ccae07c85b0a8e82919f5d4269936a3b8493fb64e47",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-sin.c.notice",
+      "sha256": "bc263f1827be6be870e26a0b8a131bd7d5beb363778097a02fcdd4bf0a3fe62c",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/sin.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "24e53a9d85f196f66919cc19247be5480bb607ef38844b1a24bc47c4fe4974ef",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-sinf.c.notice",
+      "sha256": "b6a2605352aea5dd02e594be2282448e0f9b2b26e3ef9c17120d608068fa6c48",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/sinf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "2583af55446f07da3225186c368a7aae5a0a0a0edab268967f4122b92e222b87",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-tan.c.notice",
+      "sha256": "b48f815fbb4269c92e8c70d45c6f961b3de4ceecc277a35501bff6b10bf92f69",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/tan.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "422d411bac962a1077ae394d14e54313012a6faa3476c20b2a66d3fb3f7a923f",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.2.5-tanf.c.notice",
+      "sha256": "32af7958518d0c3d2854d114f793823817fe691aae1ee15100367632b6644e1d",
+      "source": "https://musl.libc.org/releases/musl-1.2.5.tar.gz",
+      "source_member": "musl-1.2.5/src/math/tanf.c",
+      "source_archive_sha256": "a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4",
+      "source_file_sha256": "38b39aaf03d33341e606b67b3743ee5fa436b7e8338af155994d4b794b366003",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-2d7d05f031e0-logf.c.notice",
+      "sha256": "411464ab5cc8c73d1d7463c0aeeeb2921ed5444128b3def0890c1f12cdd99b83",
+      "source": "https://git.musl-libc.org/cgit/musl/plain/src/math/logf.c?id=2d7d05f031e014068a61d3076c6178513395d2ae",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "source_file_sha256": "9d054cebcf07ad0aa0f63c397dd10d115cc6c76ac706c4425219dd796202db08",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1b76ff0767d0-log.c.notice",
+      "sha256": "3b0f4b6e0ba95a6f9205a61c3e20c272cb6f4d0b50ab2865340ff43a57c69932",
+      "source": "https://git.musl-libc.org/cgit/musl/plain/src/math/log.c?id=1b76ff0767d01df72f692806ee5adee13c67ef88",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "source_file_sha256": "a0694d8587a0d145d0f8ae87cbffba014d7988bc2ebcbfad94cea73b394c9ecc",
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/Go-BSD-LICENSE",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
+      "source": "https://raw.githubusercontent.com/golang/go/d90b98e65320778f3b1f99a6951ab20f04d218b3/LICENSE",
+      "source_member": null,
+      "source_archive_sha256": null,
+      "source_file_sha256": null,
+      "scope": "conservative_bundled_runtime_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__cos.c.notice",
+      "sha256": "27047e42e3a4b71c63b76080ffe0717310b91d38ef4d15c940bbadc1eb8ff420",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__cos.c",
+      "source_file_sha256": "3f0f774aab60a18d7ef935ffdf121bcda17cbadabff14096c614da22e31a42c1",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__cosdf.c.notice",
+      "sha256": "2c5ca50ddd8ea3d2e5d6a02e212842567aae377abd6ed57e0d0e8888c9fb94ae",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__cosdf.c",
+      "source_file_sha256": "0ba872cc7e26b93bb9784d19fee84b263e1fa3543a76ec3c0893aea47453a2a7",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__cosl.c.notice",
+      "sha256": "143a675d5409a23faa8a6853e69b9a06d7dbde9060869d0c67322114176e4333",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__cosl.c",
+      "source_file_sha256": "fd644ce4ab8797b1220e2197b284212094a3b299bdf2c4faf66ead81b0fc620d",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__rem_pio2.c.notice",
+      "sha256": "0bd9382fac6f493f9dc5f4eaa4c2012cc04951048f045aea7121e5540b08d871",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__rem_pio2.c",
+      "source_file_sha256": "6fa942298b97bd9fe4bdb67d7c3156db8af9622c58de6fdd4c7108eedb672471",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__rem_pio2_large.c.notice",
+      "sha256": "82c5481a6eed4acef10144da0860ed303595437a9f054254ece6bc1584b0c89d",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__rem_pio2_large.c",
+      "source_file_sha256": "b97f19fb5951c83a0c10506fab35646caefde13bd03100ad2af55ef00af0b9fb",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__rem_pio2f.c.notice",
+      "sha256": "d35098402c1cc702758ebd75de69e834e6f24efe2c38ff419d7fbb9eb476bec8",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__rem_pio2f.c",
+      "source_file_sha256": "edd423adda392c07b75f5962fc51f3a10ecada00f3ad98937ca6dc812cc0f707",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__rem_pio2l.c.notice",
+      "sha256": "d487153f0370371447fac301eb2ae8003e9cf763ff4bc9c3a6bdd7ef500edf8e",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__rem_pio2l.c",
+      "source_file_sha256": "925d3fd047cc8ac687d1abfa21925a45d27450bf51dea0ce9499e434a0f7811f",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__sin.c.notice",
+      "sha256": "e651c1164fa50852a81332d2a3962dd0de64c64735f47b2f0e846f94f1da8d38",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__sin.c",
+      "source_file_sha256": "f3a37ef9bcfb8a2f9c809d8c7f1aa2c17c8c3319ad7fb2fe7c0a6284ea8859d2",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__sindf.c.notice",
+      "sha256": "701b472045d066eaeab43d5a94c692d87aecf5401ecab9064dfbf93a6a1a0c2e",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__sindf.c",
+      "source_file_sha256": "de7026bcd159b7d06a8cbcc162df722014f3b1a3cc4183116b6b7829eef1d118",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__sinl.c.notice",
+      "sha256": "07408ceca7418281d9fdf2684d448079541295866020dd09c4469a881adaf881",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__sinl.c",
+      "source_file_sha256": "b6dfffc327cac147a0a2b17a12e9f4ec8ff6df463733db55c316a55ef4bcdb96",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__tand.c.notice",
+      "sha256": "daeafcdba6eed4bac3fb9ab78e2e410f7bd5a8a9c733558645ec392725eb0b6b",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__tan.c",
+      "source_file_sha256": "e18b65b69fced8dbb2d3ed1a3dc6daea0e9f857f2762f274380bd89a6f89d2c4",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__tandf.c.notice",
+      "sha256": "cd8d03dca6657c0e15589067270f1d0760deb456d630c76b53929e8d3f151d23",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__tandf.c",
+      "source_file_sha256": "60455f3cc0ac743f3eaf0017a3a4f0adbab37c0ee30d29397852d22904c40444",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-__tanl.c.notice",
+      "sha256": "c060e5c6efa98c3267ee67929e4ec242161f972875c863a1087c826c78db6582",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/__tanl.c",
+      "source_file_sha256": "3788db7251d2e14b17e761bc2eccd0d8faa3c72c16eef7a56ca2ca75eca177df",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-cos.c.notice",
+      "sha256": "3a74ecd1eabada0e4a750c7866b3e7c8d8fe48577b98baf10113cada5acc49a6",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/cos.c",
+      "source_file_sha256": "3a74e054057d636fa494bdd76a53a40db5cee618264f6ab31cb0538ba63c6bda",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-cosf.c.notice",
+      "sha256": "b678cacff093c1956507564f4b9ad9a1951cfb46cb87aebd88ee2031b25f9667",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/cosf.c",
+      "source_file_sha256": "33cf828e8e733da2b72c723b9ff20057b9a4f10df72a3923dadcb626c23d222c",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-exp.c.notice",
+      "sha256": "d879464986502f5a108b0b25095f85968c7fe617f656407b6ebb2d8b1be9874f",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/exp.c",
+      "source_file_sha256": "7db56f21ca9b8915d36dd5099b707aafeb6a736eae798e19b76b074764e75f34",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-exp2.c.notice",
+      "sha256": "e1017045b7be3852669b46ce0d74a56f6cdaa3f68dda3b5a3190367abebd29f6",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/exp2.c",
+      "source_file_sha256": "b771de769e1b69b931d1f95baa39b429a73c9904e8b5607e1736771c6ace92b1",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-exp2f.c.notice",
+      "sha256": "c0d38bf9658ee5bebdb19a72064ca647b573547ab317d1c27a040120369429a2",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/exp2f.c",
+      "source_file_sha256": "1753e636d3b395160a03e9dd4a4ed4fba2abcd9ee12e4cf2d919f5a6bd7e2732",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-expf.c.notice",
+      "sha256": "07a119201b1601e24ddf6c3142f92eaeb103120d6a37cc5349cb27eee4faf03f",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/expf.c",
+      "source_file_sha256": "225123b9b3a47a083c06f2580c6b73d5cadae5cec545f9e928f7041ff837b4b4",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-fmaf.c.notice",
+      "sha256": "ceba0b483522a5c09b22ae51b1833f2fabcf183c6e26077189f39f6a29c92ad5",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/fmaf.c",
+      "source_file_sha256": "a62c5618345755fbd5dd920d5847fc5df958c4e9b12c2ed0018ed4f56639e549",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-fmal.c.notice",
+      "sha256": "541bf7c1610ec70e4c233de014d6e4cf739a56f16a53bae1703eaa8854f742c9",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/fmal.c",
+      "source_file_sha256": "1c7587e59b9f249bd5e8dfabb154b602978fbb490348f92af5300ee8eadce518",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-log.c.notice",
+      "sha256": "3b0f4b6e0ba95a6f9205a61c3e20c272cb6f4d0b50ab2865340ff43a57c69932",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/log.c",
+      "source_file_sha256": "a0694d8587a0d145d0f8ae87cbffba014d7988bc2ebcbfad94cea73b394c9ecc",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-log10.c.notice",
+      "sha256": "a10b1a81999d6e187cc65a869b53fcc2168bbd62b4b8ffb7b932726ddb2a5081",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/log10.c",
+      "source_file_sha256": "ef9b4b1f0918cf1fcb797f9fa4d4ffe177bfa27f668d74a41d613bfbcd83850a",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-log10f.c.notice",
+      "sha256": "38a62e94ec64429d40e70621dcd7177d1d87c90acbc87dc1b197cbba1de18536",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/log10f.c",
+      "source_file_sha256": "b8de5c0f14be2c622eca1cb33e80e5b131576c7c229aeffb8ea9f1d61555f6b9",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-log2.c.notice",
+      "sha256": "1811ecaf980210c8286b1bbd6e08a494f751b73f9bbecc410de5f29ffee2ff8d",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/log2.c",
+      "source_file_sha256": "281e4fc0f737419e245019d8bc8a8ca53032c2d88c31d08561e9e59dcb4b4640",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-log2f.c.notice",
+      "sha256": "87c98c5b0ceb9c72e117cd0eff3a8686d02835ac4aec1d008c0386eeb96d3a97",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/log2f.c",
+      "source_file_sha256": "f2393ef18e78e6dc540e7349dbfea000018246d64fca3eefe73f11a286403352",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-logf.c.notice",
+      "sha256": "ecb8ce4061e2890f3c26f093f7c4d9bb254cb66c2329b79115c2f0b7ccff190a",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/logf.c",
+      "source_file_sha256": "23275ffd35f333d0242eb8bb962d3fa35496c312c4bca4e46fc9eff6e5bd372e",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-sin.c.notice",
+      "sha256": "bc263f1827be6be870e26a0b8a131bd7d5beb363778097a02fcdd4bf0a3fe62c",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/sin.c",
+      "source_file_sha256": "24e53a9d85f196f66919cc19247be5480bb607ef38844b1a24bc47c4fe4974ef",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-sinf.c.notice",
+      "sha256": "b6a2605352aea5dd02e594be2282448e0f9b2b26e3ef9c17120d608068fa6c48",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/sinf.c",
+      "source_file_sha256": "2583af55446f07da3225186c368a7aae5a0a0a0edab268967f4122b92e222b87",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-sqrt.c.notice",
+      "sha256": "36d667f7673b000eaf5193a15fcb680ba3f472fab4a6f69f87e6882def183147",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/sqrt.c",
+      "source_file_sha256": "0e6ceed7b813f3113ec3ae4edbc6229e30fb6503bf2557430fbe8dfbbed2824b",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-sqrtf.c.notice",
+      "sha256": "cc909c1ec953d6b4dfc31a604ebb8916200d00ac00821c7659d25d0c88b276f8",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/sqrtf.c",
+      "source_file_sha256": "7ed4fd4df0e928444ec39dd6f4f1ec66364ae7cbbd86cc31df7ba999599871b8",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-tan.c.notice",
+      "sha256": "b48f815fbb4269c92e8c70d45c6f961b3de4ceecc277a35501bff6b10bf92f69",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/tan.c",
+      "source_file_sha256": "422d411bac962a1077ae394d14e54313012a6faa3476c20b2a66d3fb3f7a923f",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/musl-1.1.24-tanf.c.notice",
+      "sha256": "32af7958518d0c3d2854d114f793823817fe691aae1ee15100367632b6644e1d",
+      "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+      "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+      "source_member": "musl-1.1.24/src/math/tanf.c",
+      "source_file_sha256": "38b39aaf03d33341e606b67b3743ee5fa436b7e8338af155994d4b794b366003",
+      "scope": "conservative_historical_bundled_math_notice"
+    },
+    {
+      "path": "licenses/Go-math-tan-Cephes.notice",
+      "sha256": "7866f04ea9cb78354bd96130a456283ffd0a1a337aa85546bafdc9a5cc822ade",
+      "source": "https://raw.githubusercontent.com/golang/go/d90b98e65320778f3b1f99a6951ab20f04d218b3/src/math/tan.go",
+      "source_file_sha256": "b1a549f6d267acf37399b29827ecc4cc152cfb655d8a2ed6dfe56a67e58f8e60",
+      "scope": "Go tan source attribution includes Cephes permissive use notice; not covered by root BSD attribution alone"
+    }
+  ]
+}

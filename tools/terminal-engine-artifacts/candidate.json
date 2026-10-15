@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "target": "linux-x86_64",
+    "sha256": "bdc3fc3c6ec69875fed19c220082412b2299bb2fce75cc4e1f49b7fc8673d891",
+    "scope": "retained reconstructed isolated metadata/PTY library; host-native ELF64; not production app artifact",
+    "local_path": "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/install/lib/libghostty-vt.a"
+  },
+  "producer_receipt": {
+    "sha256": "cefd9ea053b59abf33ddc6433ba759be3e374ece27fa7b6f5dad2924a9e73aaf",
+    "path": "evidence/reconstruction-producer.json",
+    "currently_retained": true
+  },
+  "witness": {
+    "path": "evidence/reconstruction-pty-witness.json",
+    "sha256": "383607bed1de7b1fe69ac5457743999dd55381b5d771ae60daaa6ca61d190a44",
+    "binding": "library digest binds actual focused normal PTY plus two named negative controls to reconstruction producer"
+  },
+  "repository_inputs_sha256": {
+    "tools/terminal-feasibility/../../scripts/process_group.py": "09fb1373399df79581ae4368eaaea09c4ebc042b2ca67b567bfdb2b0348ebe06",
+    "tools/terminal-feasibility/METADATA_CONTRACT.md": "7bac4f427a4eec76b2e6176ad2901df7b497ef56e8982949a58b78295d45c30c",
+    "tools/terminal-feasibility/RESOURCE_CONTRACT.md": "05ba32701af2aa4d49d546a3b82b6d8724eefa80be8c807fd0b674910561928e",
+    "tools/terminal-feasibility/collector.c": "0cedd95c24bf2ec731ec69118040db84a81f424fd2afbd19b74de293296d20f9",
+    "tools/terminal-feasibility/collector.h": "8ffcd98be2080e5bc761972f533b86312f59587ef64ea9113e3bc135dcdba842",
+    "tools/terminal-feasibility/compatibility.rs": "8a8af877507ab867d4950ad36504d122252e5caf5162644705140c4820cceb81",
+    "tools/terminal-feasibility/current-adapter.rs": "ac7f78251ab60c8aee36e0c94bc11b8a5e4349557261b2bb4ccca92931110180",
+    "tools/terminal-feasibility/effects.c": "184e801e93da2beae5fd8c3fac05949de80338fa8b6ce149c856168e993d027a",
+    "tools/terminal-feasibility/effects.h": "15d879c3291aab2f21b5a2039c58a7da837af0db6e29cf78eae9c6b7d40a4ebf",
+    "tools/terminal-feasibility/effects.rs": "2705c1668ae0fa73ad5fd2ce4e8a5c0bcad22eae7116a102d180987224655ef0",
+    "tools/terminal-feasibility/frame.h": "8231f0f4f66a8c9f9b937b13aa8a93cfbc16b10448cb706c8ae4e85b05cfa6f7",
+    "tools/terminal-feasibility/integrated.c": "1a5885cb31b59e9248d8be138c8b0a7856aeda169fb264bbf2d0a4e55d38d411",
+    "tools/terminal-feasibility/integrated.h": "c7feb9d0e8f96259ebbfcc1f3955b3a50acaafe4f3746f6b2e368de4aaaaf3f1",
+    "tools/terminal-feasibility/integrated.rs": "c115496beb3e5de74f84d21c23b34455aaa575fdf9dda57fe5c168677822a140",
+    "tools/terminal-feasibility/licenses/Ghostty-LICENSE": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
+    "tools/terminal-feasibility/metadata-owner.rs": "8abf975e8737f093062452f71b006dd5f39927cdfd3402a133026176e4c395d1",
+    "tools/terminal-feasibility/metadata.c": "2aecb5464b8dd3c818051459b99cd650e0d9129aeda73021da71e81a88fd747e",
+    "tools/terminal-feasibility/metadata.h": "cc9d2b5fe115b8c2912d675ebea17b11d3ba89fa517b300aa5febc71dec31ce9",
+    "tools/terminal-feasibility/metadata.patch": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7",
+    "tools/terminal-feasibility/metadata.rs": "9d9f64b18cc400362e684d2e8abd96eee44a5457ed5674393287475c7caf7b3b",
+    "tools/terminal-feasibility/owner.rs": "218a924f7a05d07aab31e225e1cf8f00a4fa3676da1d828b10779bc80d0075ec",
+    "tools/terminal-feasibility/pins.json": "d3d4dc2fa3a68ab7f2d8b9c6ca816f66c818c225137604e53549380a9367ba71",
+    "tools/terminal-feasibility/probe.c": "11c6d127d264d8cfbd326fa3c630d08dcf10589808ab3a6b4bf99925c0c4eaac",
+    "tools/terminal-feasibility/probe.rs": "cee63ce66d9bee2b1cf93ceebe4b096a339746f6fb1c4ddad98c1a2b2dbcce14",
+    "tools/terminal-feasibility/resource-internal.h": "fdd872054abe433dc4bb2932241e60cec5f059516c4d18d1b6b71c8d6a8b0e54",
+    "tools/terminal-feasibility/resource.c": "1acb646ac30a77f792218bb0ae5aeaa02607008aafd6600e4a8f21b1ec7397ff",
+    "tools/terminal-feasibility/resource.h": "ff3cdb28662bc65669a51a79b027728d4cb86bd2bc669cc9792e38a13dac72ca",
+    "tools/terminal-feasibility/resource.patch": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02",
+    "tools/terminal-feasibility/resource.rs": "0b4223de28e01a3469fc85f26b012c8345f2f653f8e9908b88ce4fa6afd306d4",
+    "tools/terminal-feasibility/run.py": "8c2f70b650b72c58764081ac764bd5fea04a5a015ffc2407db73a2b29433ea2f",
+    "tools/terminal-feasibility/test_runner.py": "f4ca3a96adcd68852cbc1af997d30b00fe30ab16ac58d805c309d6de8cad4d96",
+    "tools/terminal-pty-feasibility/base-lock.json": "9361e9672a02384bfedc1f3d24237779ea562b6c5de83fc9f61987d9b16a319a"
+  },
+  "upstream_inputs_sha256": "f96041d8d5b6af22ba1751bd7e76adb91b8331f9de0276c45aacadacd9e6019b",
+  "notices_sha256": "295dbce195cfe2f314a9521d00f2a51fc6f81dd5e4db94bdc43fb5e5cd5290d4",
+  "unresolved_notice_provenance": [],
+  "acceptance_gates": {
+    "accepted_binary_currently_retained": true,
+    "producer_receipt_currently_retained": true,
+    "darwin_slices_included": false,
+    "minimum_os_abi_verified": false,
+    "app_linkage_verified": false,
+    "named_mac_workloads_verified": false
+  },
+  "supporting_inventory_sha256": {
+    "musl-references.json": "c58ffac416f3a423dcd1b0d7513d5accf266c04c5bbbc6f0e8fb727949bc09ba",
+    "musl-root-classification.json": "9246ff60bb00ebcb90a0135dbae96782f68df8c1f106cc311c9d38f97e19e0c0",
+    "archive-inventory.json": "2a0ad2c9eab26e81fb2b8b7ebfeb621eb08e56ec054f2a1c620b6396c7774f10",
+    "musl-historical-classification.json": "217a381328a7be6349f7b2da8022b2e8c4eb8619fb3d28a27ce99af2f6a3064d"
+  },
+  "historical_lost_candidate": {
+    "artifact": {
+      "target": "linux-x86_64",
+      "sha256": "19835502236b56c9ca0a2144b7b73568216a9b1601393a76192aa20212ada65d",
+      "scope": "accepted isolated metadata library; host-native ELF64; not production app artifact"
+    },
+    "producer_receipt": {
+      "sha256": "09851da2383bade8ce023965d5116e4ff77421c3d63ad87cdcb63552845795f4",
+      "original_path": "/tmp/zmux-f04-metadata-repro-final-semicolon-20261015/receipt.json",
+      "currently_retained": false
+    },
+    "witness": {
+      "path": "evidence/accepted-library-witness.json",
+      "sha256": "1cfdfadddc21b0dc3bf23e49319bf9284c0c3ce0fcdc4457de99aeb095f048ea",
+      "binding": "preserved_build_inputs_sha256 contains exact accepted library digest; this is not the original producer receipt"
+    }
+  },
+  "resolved_notice_provenance": [
+    "Independent coverage review remains required for musl/Go ports whose origin revisions are not specified in Zig; conservative historical/current notices are retained.",
+    "Independent review must include the Cephes attribution and quoted permissive use terms carried by the Go tan source reference; root Go BSD alone is insufficient."
+  ],
+  "notice_review": {
+    "path": "evidence/notice-coverage-review.json",
+    "sha256": "1ded1f188e686a852363a9944f587facf2d47bc92f691e34cc2caa85f7b397e0",
+    "scope": "independent factual retained-notice coverage for the two listed source gates; no ABI/native/linkage/performance/legal guarantee"
+  }
+}

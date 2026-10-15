@@ -307,8 +307,40 @@ with exit 101/no timeout. Construction and all three cleanup cases pass. All 31
 base inputs remain fixed. Final nine-input freeze:
 `/tmp/zmux-f04-pty-partial-publication-frozen-manifest-20261015.json`, SHA-256
 `a8715b5e615d6b13ee601a37f0c8d26c63840231a3ed12a91196e93d58c9a27b`.
-Independent review and hosted Darwin execution of this strengthened fixture remain
-required; the preceding normal Darwin success does not prove the new control.
+Parent independent source review finds no blocker, and a separate focused run
+passes the strengthened normal invariant and both exact controls without rebuilding
+the engine. Parent receipt `parent-focused/receipt.json` in the retained directory,
+SHA-256 `7a71517e626a5f6dfac1534588627024526df93f72d3520d4b535b2cb267738c`.
+Full current-main `scripts/check` also passes before delivery; log:
+`/tmp/zmux-pty-publication-integrated-check.log`.
+
+## Final exact-source hosted PTY acceptance
+
+Workflow [38791084172](https://github.com/ashutoshpw/zmux/actions/runs/38791084172)
+at `1abc98d1fc778083f1d19cd4a78ff93fa0a5c39a` passes both Linux x86_64 and
+Darwin arm64/macOS 15.7.9. Downloaded receipts match the complete final nine-input
+freeze and unchanged 31-input base lock. Each executes construction exhaustion,
+all three physical cleanup probes, all seven normal PTY modes and both controls.
+Both controls exit 101 without timeout at their exact named physical-order and
+publication-boundary assertions. These are executed fixtures, not compile/skipped
+job inference.
+
+- Darwin receipt SHA-256:
+  `37b9f3a449149d4824451edadd274567ae7857b49061d480cadb1b74245111d1`.
+  Four deterministic partial reply writes preserve publication; actual flood
+  EAGAIN/short-write counts are 1/1, stalled-reader counts 43/1. Stalled input
+  times out as intended and cleanup reaps/closes owned resources successfully.
+- Linux receipt SHA-256:
+  `28f470a68113b63330bc59c00d59b02bf118ecc5f500a01701e9c57938134fab`.
+  Four deterministic partial reply writes preserve publication; actual flood
+  EAGAIN/short-write counts are 1/0, stalled-reader counts 232/0.
+
+Downloaded evidence is under `/tmp/zmux-pty-hosted-38791084172-{macos,linux}/`.
+Darwin RLIMIT_AS remains unavailable with ValueError; CPU/core limits were applied.
+Neither the configured allocator cap nor these fixture limits establish total RSS.
+This closes the exact-source isolated PTY/negative-control gate on the two runner
+architectures. It does not establish a controlling terminal, native input/shell/job
+control, AppKit integration, a default-engine decision or named-Mac workloads.
 
 ## Capacity ledger and remaining boundary
 
@@ -331,9 +363,9 @@ child heap/threads, runtime/allocator overhead and kernel PTY/pipe buffers are
 separate and excluded from a total-RSS claim. No per-operation coordinator payload
 allocation is needed for prepare/validate/exact commit/slot swap.
 
-Hosted execution of the strengthened nine-input publication follow-up remains
-separate from focused local acceptance. Darwin normal PTY/cleanup passes at the
-preceding master-close revision; exact negative-control specificity remains open
-on the strengthened fixture. The metadata workflow alone cannot prove transport.
+The final nine-input publication follow-up has both focused and exact-source
+hosted Linux/Darwin acceptance, including the intended negative controls. The
+metadata workflow alone does not prove transport; the separate PTY run above does
+so within its isolated runner/fixture scope.
 Native input/shell/job-control, production adapter integration and
 representative workloads remain open gates; the application engine is unchanged.

@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "state": "complete",
+  "source_sha256": {
+    "run.py": "6bb4c6f06400e282ffdd7d8b8e82230eecc248cc2a53c934dd98773d13bb9020",
+    "base-lock.json": "9361e9672a02384bfedc1f3d24237779ea562b6c5de83fc9f61987d9b16a319a",
+    "transport.c": "243a3178d51dd30572a7b33f7d7a25777b38109c762139ddb351fdd2928c044f",
+    "child.py": "97bd96c08fd2be40b0fb002b65c4446fdc7074050f162ca2501850c8264ba985",
+    "pty.rs": "b1777991296eb24520d59b36599aae01e6155a3a4dbb20b4889fd87ecf0ea6f8",
+    "pty-owner.rs": "443b8176134b907082732394a8da221f4303ba207c85e9a79bf11370331b962f",
+    "PTY_CONTRACT.md": "8500f2f75a713cd1398059b985881ea41fff6916678366e78cab23032005cc34",
+    "construction.c": "2573eb41626e27bd9682e188680d7320ee7f0c689036f5a352c932abdee98f27",
+    "cleanup.c": "71b2dfef79eda2ecdbdead7d67f53b51c44c537cf09e69026a401b13befac0ac"
+  },
+  "base_verified_inputs": 31,
+  "phases": [
+    {
+      "label": "transport-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-c",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/transport.c",
+        "-o",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/transport.o"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.068,
+      "log": "transport-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "construction-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/construction.c",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/transport.o",
+        "-lutil",
+        "-o",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/construction"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.158,
+      "log": "construction-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "construction-fixture",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/construction"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.199,
+      "log": "construction-fixture.log",
+      "log_bytes_seen": 248,
+      "log_bytes_retained": 248,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "cleanup-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/cleanup.c",
+        "-lutil",
+        "-o",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/cleanup"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.105,
+      "log": "cleanup-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "cleanup-exited",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/cleanup",
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.208,
+      "log": "cleanup-exited.log",
+      "log_bytes_seen": 248,
+      "log_bytes_retained": 248,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "cleanup-wait-error",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/cleanup",
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "reaped-error"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.124,
+      "log": "cleanup-wait-error.log",
+      "log_bytes_seen": 258,
+      "log_bytes_retained": 258,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "cleanup-master-first",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/cleanup",
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "master-first",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/child.py"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.235,
+      "log": "cleanup-master-first.log",
+      "log_bytes_seen": 246,
+      "log_bytes_retained": 246,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "normal-rust",
+      "command": [
+        "rustc",
+        "--edition=2024",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/pty.rs",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/probe.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/resource.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/collector.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/integrated.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/metadata.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-pty-master-first-author-20261015/transport.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-final-library/libghostty-vt.a",
+        "-l",
+        "util",
+        "-o",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/normal-pty"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.496,
+      "log": "normal-rust.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "normal-fixture",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/normal-pty",
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/child.py"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 1.387,
+      "log": "normal-fixture.log",
+      "log_bytes_seen": 1060,
+      "log_bytes_retained": 1060,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "duplicate-reply-rust",
+      "command": [
+        "rustc",
+        "--edition=2024",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/duplicate-reply-main.rs",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/probe.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/resource.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/collector.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/integrated.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/metadata.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-pty-master-first-author-20261015/transport.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-final-library/libghostty-vt.a",
+        "-l",
+        "util",
+        "-o",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/duplicate-reply-pty"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.569,
+      "log": "duplicate-reply-rust.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "duplicate-reply-fixture",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/duplicate-reply-pty",
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/child.py"
+      ],
+      "exit_code": 101,
+      "timed_out": false,
+      "wall_seconds": 0.179,
+      "log": "duplicate-reply-fixture.log",
+      "log_bytes_seen": 454,
+      "log_bytes_retained": 454,
+      "confirmed_zombie_group": null,
+      "expected_failure": true
+    },
+    {
+      "label": "early-publication-rust",
+      "command": [
+        "rustc",
+        "--edition=2024",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/early-publication-main.rs",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/probe.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/resource.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/collector.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/integrated.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-focused-final-20261015/metadata.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-pty-master-first-author-20261015/transport.o",
+        "-C",
+        "link-arg=/tmp/zmux-f04-metadata-final-library/libghostty-vt.a",
+        "-l",
+        "util",
+        "-o",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/early-publication-pty"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.604,
+      "log": "early-publication-rust.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "early-publication-fixture",
+      "command": [
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-feasibility/run.py",
+        "--execute-fixture",
+        "/tmp/zmux-f04-pty-master-first-author-20261015/early-publication-pty",
+        "/home/linuxbrew/.linuxbrew/opt/python@3.14/bin/python3.14",
+        "/data/PROJECTS/ashutoshpw/zmux/tools/terminal-pty-feasibility/child.py"
+      ],
+      "exit_code": 101,
+      "timed_out": false,
+      "wall_seconds": 1.31,
+      "log": "early-publication-fixture.log",
+      "log_bytes_seen": 726,
+      "log_bytes_retained": 726,
+      "confirmed_zombie_group": null,
+      "expected_failure": true
+    }
+  ],
+  "scope": "focused rebuilt final transport/coordinator with preserved accepted engine library and C objects; not a fresh dependency build",
+  "preserved_build_inputs_sha256": {
+    "/tmp/zmux-f04-metadata-focused-final-20261015/probe.o": "2102bd3fba3f5aa1b370460ca8429d6911d36e2d57402cdb5fbe05be9adf17ed",
+    "/tmp/zmux-f04-metadata-focused-final-20261015/resource.o": "e0e9d28dfae2232356d57215c9c0be9ac2253fd253885eb05b1b9e042cf3c912",
+    "/tmp/zmux-f04-metadata-focused-final-20261015/collector.o": "14983783682039e08696a9fde34d84caa6c9a16149b987e31a0bfa6d1a8642f0",
+    "/tmp/zmux-f04-metadata-focused-final-20261015/integrated.o": "fddfbd7611f4ea9625e72199f77be894ea9f07a6c6c33c11d0cbf7779156e957",
+    "/tmp/zmux-f04-metadata-focused-final-20261015/metadata.o": "3745d381aeeba2b0ad21924bf80e927268839f5667265da8b7d767f22985998c",
+    "/tmp/zmux-f04-metadata-final-library/libghostty-vt.a": "19835502236b56c9ca0a2144b7b73568216a9b1601393a76192aa20212ada65d"
+  },
+  "observation_stdout": "FIXTURE_LIMITS={\"RLIMIT_AS\": {\"state\": \"configured\", \"value\": 536870912}, \"RLIMIT_CORE\": {\"state\": \"configured\", \"value\": 0}, \"RLIMIT_CPU\": {\"state\": \"configured\", \"value\": 3}}\npty: actual child validates PRE/cursor/status/POST order, metadata and resized kernel geometry\npty: flood actual_eagain=1 kernel_short_writes=0 max_pending=768 timeout=false\npty: stall actual_eagain=213 kernel_short_writes=0 max_pending=768 timeout=true\npty: cancel keeps last-good publication and closes/reaps physical owned resources\npty: close keeps last-good publication and closes/reaps physical owned resources\npty: resize-error keeps last-good publication and closes/reaps physical owned resources\npty: engine-error keeps last-good publication and closes/reaps physical owned resources\npty_reply_reserved_capacities: probe_unused=4096 collector=4096 publication_slots=8192 input=8192 total=24576; included in fixed C/slot/inline accounting\npty_success=true transport_c_fixed_bytes=296 coordinator_inline_bytes=12096 fixed_input_bytes=8192 read_bytes=512 reply_deadline_ms=250\n",
+  "negative_controls": [
+    {
+      "name": "duplicate-reply",
+      "mutated_source_sha256": "29a7e4ca02085a12bfcdbf5c247b8133f13b2c533f97ac8553600c3d87586110"
+    },
+    {
+      "name": "early-publication",
+      "mutated_source_sha256": "098761932efc8102b450d5cb74c99f292168bff41bd2910724c3b914f5659059"
+    }
+  ]
+}
