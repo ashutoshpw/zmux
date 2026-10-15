@@ -5,6 +5,25 @@
 
 ## Active implementation
 
+- Workspace ordering committed `b4fcf6e`: parent full isolated `scripts/check`
+  passes after repairing a prompt-sensitive cwd fixture with exact framed actual
+  pwd output. Independent ordering and fixture amendment reviews pass. Native
+  execution remains pending. Browser fill is committed separately as `0dc50f0`.
+- Native `38787910086` universal build passes, but packaged startup stalls after
+  bridge startup and before initial window activation completes. Per-call traces
+  and bounded sampling of the exact isolated test executable are added; no timeout
+  extension or second app launch. Zellij `38787914932` passes on Darwin at
+  `11258fe`; PTY `38787910315` passes Linux but still fails Darwin, under diagnosis.
+
+- Browser fill committed `0dc50f0`: exact 13 frozen source hashes, full isolated
+  check (256 Rust tests, Clippy, notices and C ABI), independent review and parent
+  Chromium 48-case DOM run pass. Google Chrome 151 failed to start the fixture;
+  Chromium 155 completed it. Native WebKit execution remains pending.
+- Workspace ordering is frozen against `0dc50f0`; independent review and parent
+  isolated integration check are running. Native `38787910086` at `11258fe` passed
+  Rust/C ABI and is building; pushes are held to preserve its lifecycle evidence.
+  PTY `38787910315` and Zellij `38787914932` remain separate hosted gates.
+
 - `c01c3bc` Foundation passes Linux and macOS (`38786746911`). Native
   `38786746932` failed strict Swift compilation at the zoom fixture's CGFloat
   string conversion; explicit Double conversion is repaired and isolated

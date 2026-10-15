@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 import platform
+import re
 import subprocess
 import tempfile
 
@@ -66,6 +67,26 @@ def main():
                 parts.append("public_process_snapshot\n" + "\n".join(line for line in processes.stdout.splitlines() if "zmux-app" in line)[-65536:])
             except Exception as error:
                 parts.append("process_snapshot_failed=" + repr(error))
+        if inspect_processes:
+            # Sample only the isolated packaged process identified by its private
+            # trace and current executable path. Never launch another app on failure.
+            trace = directory / "prepared.json.trace.log"
+            if trace.is_file():
+                match = re.search(r"\[window-lifecycle pid=(\d+) ", trace.read_text()[:4096])
+                if match:
+                    pid = match.group(1)
+                    try:
+                        command = subprocess.check_output(
+                            ["/bin/ps", "-p", pid, "-o", "comm="], text=True, timeout=5).strip()
+                        if command == str(bundle / "Contents/MacOS/zmux-app"):
+                            sample = subprocess.run(
+                                ["/usr/bin/sample", pid, "3", "-file", str(dist / ("native-window-" + phase + "-sample.log"))],
+                                capture_output=True, text=True, timeout=10)
+                            parts.append("sample_exit=" + str(sample.returncode) + "\n" + sample.stderr[-4096:])
+                        else:
+                            parts.append("sample_refused_unmatched_executable=" + command)
+                    except (OSError, subprocess.SubprocessError) as error:
+                        parts.append("sample_failed=" + repr(error))
         (dist / ("native-window-" + phase + "-diagnostics.log")).write_text("\n".join(parts)[-262144:])
 
     for phase in ["close", "reopen"]:

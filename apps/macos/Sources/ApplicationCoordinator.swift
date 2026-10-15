@@ -189,8 +189,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         WindowLifecycleSmoke.trace("coordinator loops scheduled; before initial window activation")
         mainWindowHost.installMenus()
+        WindowLifecycleSmoke.trace("initial menus installed; before makeKeyAndOrderFront")
         mainWindowHost.window.makeKeyAndOrderFront(nil)
+        WindowLifecycleSmoke.trace("initial window ordered; before NSApp.activate")
         NSApp.activate()
+        WindowLifecycleSmoke.trace("initial app activated; before appActive")
         appActive(NSApp.isActive)
         WindowLifecycleSmoke.trace("coordinator initial activation completed")
     }
