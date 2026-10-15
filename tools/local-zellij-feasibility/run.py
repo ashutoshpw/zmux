@@ -59,6 +59,50 @@ def child_exited(process):
     return process.returncode is not None or os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
+def confirm_darwin_zombie_group(process, environment):
+    # Darwin may reject killpg for a group containing only exited processes.
+    # Do not accept EPERM from a live/uninspectable group. The unreaped leader
+    # pins its group identity while the public ps snapshot verifies every member.
+    require(platform.system() == "Darwin" and process.returncode is None
+            and os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None,
+            "Permission denied while a command leader may still execute")
+    probe = subprocess.Popen(["/bin/ps", "-A", "-o", "pid=,pgid=,stat="],
+                             env=environment, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    selector = selectors.DefaultSelector()
+    selector.register(probe.stdout, selectors.EVENT_READ)
+    output = bytearray()
+    deadline = time.monotonic() + 2
+    try:
+        while selector.get_map():
+            require(time.monotonic() < deadline, "Process-group inspection timed out")
+            for key, _ in selector.select(0.03):
+                data = os.read(key.fileobj.fileno(), 16384)
+                if not data:
+                    selector.unregister(key.fileobj)
+                require(len(output) + len(data) <= LIMIT, "Process-group inspection exceeded its bound")
+                output.extend(data)
+        require(probe.wait(timeout=1) == 0, "Public process-group inspection failed")
+    finally:
+        selector.close()
+        probe.stdout.close()
+        if probe.poll() is None:
+            probe.kill()
+        probe.wait(timeout=2)
+    members = []
+    for row in output.decode("ascii", errors="strict").splitlines():
+        fields = row.split()
+        require(len(fields) == 3, "Malformed public process-group snapshot")
+        pid, group = int(fields[0]), int(fields[1])
+        if group == process.pid:
+            members.append({"pid": pid, "state": fields[2]})
+    require(any(member["pid"] == process.pid for member in members),
+            "Public snapshot omitted the unreaped group leader")
+    require(all(member["state"].startswith("Z") for member in members),
+            "Permission denied with live process-group members: " + str(members))
+    return members
+
+
 def command(argv, environment, timeout=10):
     process = subprocess.Popen([str(x) for x in argv], env=environment, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
@@ -68,6 +112,7 @@ def command(argv, environment, timeout=10):
     seen = 0
     deadline = time.monotonic() + timeout
     timed_out = False
+    zombie_group = None
     try:
         while selector.get_map() or not child_exited(process):
             if time.monotonic() >= deadline:
@@ -87,9 +132,14 @@ def command(argv, environment, timeout=10):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        code = process.wait(timeout=5)
+        except PermissionError as error:
+            if error.errno != errno.EPERM:
+                raise
+            zombie_group = confirm_darwin_zombie_group(process, environment)
+        finally:
+            code = process.wait(timeout=5)
     result = {"exit_code": code, "timed_out": timed_out, "bytes_seen": seen,
-              "output": kept.decode(errors="replace")}
+              "output": kept.decode(errors="replace"), "confirmed_zombie_group": zombie_group}
     if timed_out or code != 0:
         raise CommandFailure(argv, result)
     return result
@@ -729,7 +779,8 @@ def main():
         key = platform.system() + "-" + platform.machine()
         require(key in pins["assets"], "Unsupported host: " + key)
         environment = isolated_environment(scratch)
-        receipt["source_sha"] = command(["git", "-C", REPO, "rev-parse", "HEAD"], environment)["output"].strip()
+        receipt["source_command"] = command(["git", "-C", REPO, "rev-parse", "HEAD"], environment)
+        receipt["source_sha"] = receipt["source_command"]["output"].strip()
         receipt["harness_sha256"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in HERE.iterdir() if p.is_file()}
         library = scratch / ("public_identity.dylib" if platform.system() == "Darwin" else "public_identity.so")
         compiler = ["xcrun", "clang"] if platform.system() == "Darwin" else ["cc"]
