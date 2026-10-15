@@ -694,6 +694,8 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         6,
         Command::Attention {
             action: Attention::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: first.id,
                 title: "Foreground".into(),
                 body: String::new(),
@@ -725,6 +727,8 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         9,
         Command::Attention {
             action: Attention::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: first.id,
                 title: "Background".into(),
                 body: String::new(),
@@ -827,6 +831,8 @@ fn selecting_and_reactivating_acknowledges_only_the_focused_surface() {
             id,
             Command::Attention {
                 action: Attention::Notify {
+                    subtitle: String::new(),
+                    desktop: None,
                     surface_id,
                     title: format!("Attention {id}"),
                     body: String::new(),
@@ -869,6 +875,8 @@ fn selecting_and_reactivating_acknowledges_only_the_focused_surface() {
         7,
         Command::Attention {
             action: Attention::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: first,
                 title: "Later generation".into(),
                 body: String::new(),

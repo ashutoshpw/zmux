@@ -127,6 +127,8 @@ fn a_pre_restore_notification_cannot_open_a_new_shell_reusing_its_surface_id() {
         2,
         Command::Attention {
             action: AttentionCommand::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: target.id,
                 title: "Earlier shell".into(),
                 body: "Review its output".into(),
@@ -266,6 +268,8 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         2,
         Command::Attention {
             action: AttentionCommand::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: first_surface.id,
                 title: "Exact target".into(),
                 body: "".into(),
@@ -357,6 +361,8 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         3,
         Command::Attention {
             action: AttentionCommand::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: second_surface.id,
                 title: "Dismiss this row".into(),
                 body: "".into(),
@@ -400,6 +406,8 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         4,
         Command::Attention {
             action: AttentionCommand::Notify {
+                subtitle: String::new(),
+                desktop: None,
                 surface_id: second_surface.id,
                 title: "Inbox only".into(),
                 body: "".into(),
@@ -460,6 +468,8 @@ fn native_inbox_callbacks_reject_coalesced_and_closed_targets_without_acknowledg
     );
     let notify = || Command::Attention {
         action: AttentionCommand::Notify {
+            subtitle: String::new(),
+            desktop: None,
             surface_id: surface.id,
             title: "Repeated event".into(),
             body: "Same content".into(),

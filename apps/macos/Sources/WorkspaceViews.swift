@@ -503,7 +503,15 @@ final class NotificationRowView: BackgroundView {
         let date = Date(timeIntervalSince1970: Double(item.timestampMs) / 1000)
         let detail = NSTextField(labelWithString: "\(item.source) · \(date.formatted(date: .omitted, time: .shortened))" + (available ? "" : " · Terminal closed"))
         detail.font = .systemFont(ofSize: 10); detail.textColor = ZmuxPalette.subdued
-        let labels = NSStackView(views: [title, body, detail])
+        let labels = NSStackView(views: [title])
+        if !item.subtitle.isEmpty {
+            let subtitle = NSTextField(wrappingLabelWithString: item.subtitle)
+            subtitle.font = .systemFont(ofSize: 11, weight: .medium)
+            subtitle.textColor = .secondaryLabelColor
+            labels.addArrangedSubview(subtitle)
+        }
+        if !item.body.isEmpty { labels.addArrangedSubview(body) }
+        labels.addArrangedSubview(detail)
         labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 4
         let open = IconButton(symbol: "arrow.up.forward", label: "Open terminal", target: self, action: #selector(openTarget))
         open.isEnabled = available

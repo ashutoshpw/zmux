@@ -389,4 +389,53 @@ mod tests {
             .is_ok()
         );
     }
+    #[test]
+    fn bulk_notification_acknowledgements_and_removals_require_mutation_authority() {
+        use crate::attention::{
+            DismissSelection, NotificationAction, NotificationScope, NotificationSelection,
+        };
+        let readonly = ControlGate::new(ControlPolicy::same_user(ControlAccess::ReadOnly));
+        let full = ControlGate::new(ControlPolicy::same_user(ControlAccess::Full));
+        for action in [
+            NotificationAction::MarkRead {
+                selection: NotificationSelection::All,
+            },
+            NotificationAction::Dismiss {
+                selection: DismissSelection::AllRead,
+            },
+            NotificationAction::Clear {
+                scope: NotificationScope::All,
+                through_id: None,
+                expected_epoch: None,
+            },
+        ] {
+            let command = ControlCommand::Targeted {
+                request: crate::targets::TargetRequest {
+                    operation: crate::targets::TargetOperation::Notifications { action },
+                    ..Default::default()
+                },
+            };
+            assert!(matches!(
+                readonly.admit(ControlOrigin::LocalOwner, &command, None),
+                Err(PolicyError::ReadOnly)
+            ));
+            assert!(
+                full.admit(ControlOrigin::LocalOwner, &command, None)
+                    .is_ok()
+            );
+            assert!(matches!(
+                full.admit(ControlOrigin::RemoteRelay, &command, None),
+                Err(PolicyError::RelayDenied)
+            ));
+        }
+        assert!(
+            readonly
+                .admit(
+                    ControlOrigin::LocalOwner,
+                    &ControlCommand::ListNotifications,
+                    None
+                )
+                .is_ok()
+        );
+    }
 }

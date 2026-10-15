@@ -460,7 +460,6 @@ fn a_large_valid_response_with_an_ample_deadline_is_rendered_completely() {
     let socket = socket_path();
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     let listener = UnixListener::bind(&socket).unwrap();
-    let values = values.clone();
     let peer = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream

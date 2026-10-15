@@ -30,8 +30,17 @@ pub enum TargetOperation {
         text: String,
     },
     Notify {
+        #[serde(default = "crate::attention::default_notification_title")]
         title: String,
+        #[serde(default)]
+        subtitle: String,
+        #[serde(default)]
         body: String,
+        #[serde(default)]
+        desktop: Option<bool>,
+    },
+    Notifications {
+        action: crate::attention::NotificationAction,
     },
     ReadScreen,
     #[default]

@@ -10,11 +10,15 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
-use zmux_workspace_core::{SessionId, Snapshot, SurfaceId};
+use zmux_workspace_core::{SessionId, Snapshot, SurfaceId, WorkspaceId};
 
 pub const MAX_NOTIFICATIONS: usize = 128;
 pub const MAX_NOTIFICATION_TITLE_CHARS: usize = 128;
 pub const MAX_NOTIFICATION_BODY_CHARS: usize = 2048;
+pub const DEFAULT_NOTIFICATION_TITLE: &str = "Notification";
+pub fn default_notification_title() -> String {
+    DEFAULT_NOTIFICATION_TITLE.into()
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +108,9 @@ impl DesktopDelivery {
 pub struct Notification {
     pub id: u64,
     pub surface_id: SurfaceId,
+    pub identity_namespace: Uuid,
+    /// Last workspace owning this exact live session; retained after close.
+    pub workspace_id: WorkspaceId,
     pub title: String,
     pub subtitle: String,
     pub body: String,
@@ -171,6 +178,12 @@ pub enum AttentionError {
     StaleTarget,
     #[error("notification authorization observation is stale")]
     StaleAuthorization,
+    #[error("notification cursor belongs to a previous attention epoch")]
+    StaleEpoch,
+    #[error("notification {0} does not exist")]
+    NotFound(u64),
+    #[error("{0}")]
+    InvalidSelector(&'static str),
 }
 impl AttentionError {
     pub fn code(&self) -> &'static str {
@@ -180,6 +193,9 @@ impl AttentionError {
             Self::Exhausted => "notification_ids_exhausted",
             Self::StaleTarget => "stale_notification_target",
             Self::StaleAuthorization => "stale_notification_authorization",
+            Self::StaleEpoch => "stale_notification_epoch",
+            Self::NotFound(_) => "notification_not_found",
+            Self::InvalidSelector(_) => "invalid_notification_selector",
         }
     }
 }
@@ -188,8 +204,14 @@ impl AttentionError {
 pub enum AttentionCommand {
     Notify {
         surface_id: SurfaceId,
+        #[serde(default = "default_notification_title")]
         title: String,
+        #[serde(default)]
+        subtitle: String,
+        #[serde(default)]
         body: String,
+        #[serde(default)]
+        desktop: Option<bool>,
     },
     Read {
         id: u64,
@@ -207,6 +229,90 @@ pub enum AttentionCommand {
     AppActive {
         active: bool,
     },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NotificationAction {
+    MarkRead {
+        selection: NotificationSelection,
+    },
+    Dismiss {
+        selection: DismissSelection,
+    },
+    Clear {
+        scope: NotificationScope,
+        #[serde(default)]
+        through_id: Option<u64>,
+        #[serde(default)]
+        expected_epoch: Option<Uuid>,
+    },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "selector", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NotificationSelection {
+    Id { id: u64 },
+    All,
+    Workspace,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "selector", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DismissSelection {
+    Id { id: u64 },
+    AllRead,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationScope {
+    All,
+    Workspace,
+    Surface,
+    Caller,
+}
+
+/// Resolved by the shared target resolver on the executor, never by the CLI.
+pub enum NotificationFilter {
+    Id(u64),
+    All,
+    Workspace {
+        identity_namespace: Uuid,
+        workspace_id: WorkspaceId,
+    },
+    Surface {
+        identity_namespace: Uuid,
+        surface_id: SurfaceId,
+    },
+}
+impl NotificationFilter {
+    fn matches(&self, item: &Notification) -> bool {
+        match self {
+            Self::Id(id) => item.id == *id,
+            Self::All => true,
+            Self::Workspace {
+                identity_namespace,
+                workspace_id,
+            } => {
+                item.identity_namespace == *identity_namespace && item.workspace_id == *workspace_id
+            }
+            Self::Surface {
+                identity_namespace,
+                surface_id,
+            } => item.identity_namespace == *identity_namespace && item.surface_id == *surface_id,
+        }
+    }
+}
+pub enum NotificationMutationKind {
+    MarkRead,
+    Dismiss,
+    DismissRead,
+    Clear,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct NotificationMutation {
+    pub epoch: Uuid,
+    pub cursor: u64,
+    pub affected_ids: Vec<u64>,
+    pub affected_count: usize,
 }
 
 /// The executor owns this state. Native readers consume bounded snapshots; only
@@ -235,6 +341,56 @@ impl Attention {
     pub fn epoch(&self) -> Uuid {
         self.epoch
     }
+    pub fn cursor(&self) -> u64 {
+        self.next_id
+    }
+    pub fn mutation_receipt(&self, affected_ids: Vec<u64>, cursor: u64) -> NotificationMutation {
+        NotificationMutation {
+            epoch: self.epoch,
+            cursor,
+            affected_count: affected_ids.len(),
+            affected_ids,
+        }
+    }
+    pub fn apply_mutation(
+        &mut self,
+        filter: &NotificationFilter,
+        kind: NotificationMutationKind,
+        through_id: Option<u64>,
+        expected_epoch: Option<Uuid>,
+    ) -> Result<NotificationMutation, AttentionError> {
+        if expected_epoch.is_some_and(|epoch| epoch != self.epoch) {
+            return Err(AttentionError::StaleEpoch);
+        }
+        if let NotificationFilter::Id(id) = filter
+            && !self.items.iter().any(|item| item.id == *id)
+        {
+            return Err(AttentionError::NotFound(*id));
+        }
+        let cursor = through_id.unwrap_or(self.next_id).min(self.next_id);
+        let affected_ids: Vec<_> = self
+            .items
+            .iter()
+            .filter(|item| item.id <= cursor && filter.matches(item))
+            .filter(|item| match kind {
+                NotificationMutationKind::MarkRead => !item.read,
+                NotificationMutationKind::DismissRead => item.read,
+                _ => true,
+            })
+            .map(|item| item.id)
+            .collect();
+        match kind {
+            NotificationMutationKind::MarkRead => {
+                for item in &mut self.items {
+                    if affected_ids.contains(&item.id) {
+                        acknowledge(item);
+                    }
+                }
+            }
+            _ => self.items.retain(|item| !affected_ids.contains(&item.id)),
+        }
+        Ok(self.mutation_receipt(affected_ids, cursor))
+    }
     pub fn notify_owned(
         &mut self,
         model: &Snapshot,
@@ -243,12 +399,18 @@ impl Attention {
         content: &NotificationContent,
         read: bool,
     ) -> Result<u64, AttentionError> {
-        let surface = model
+        let (workspace_id, surface) = model
             .workspaces
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| &p.surfaces)
-            .find(|surface| surface.id == surface_id)
+            .find_map(|workspace| {
+                workspace
+                    .root
+                    .panes()
+                    .into_iter()
+                    .flat_map(|pane| &pane.surfaces)
+                    .find(|surface| surface.id == surface_id)
+                    .map(|surface| (workspace.id, surface))
+            })
             .ok_or(AttentionError::InvalidOwner)?;
         if model.identity_namespace.is_nil() {
             return Err(AttentionError::InvalidOwner);
@@ -260,10 +422,11 @@ impl Attention {
             surface_id,
             session_id: surface.session_id,
         };
-        self.insert(surface_id, source, content, read, target)
+        self.insert(workspace_id, surface_id, source, content, read, target)
     }
     fn insert(
         &mut self,
+        workspace_id: WorkspaceId,
         surface_id: SurfaceId,
         source: &str,
         content: &NotificationContent,
@@ -323,6 +486,8 @@ impl Attention {
         self.items.push(Notification {
             id,
             surface_id,
+            identity_namespace: target.identity_namespace,
+            workspace_id,
             title,
             subtitle,
             body,
@@ -347,23 +512,28 @@ impl Attention {
             .iter_mut()
             .find(|n| n.id == id)
             .ok_or_else(|| format!("notification {id} does not exist"))?;
-        item.read = true;
-        if item.delivery.active() {
-            item.delivery.suppress("read");
-        }
+        acknowledge(item);
         Ok(())
-    }
-    pub fn dismiss(&mut self, id: u64) -> Result<(), String> {
-        self.find(id)?;
-        self.items.retain(|n| n.id != id);
-        Ok(())
-    }
-    pub fn clear(&mut self, through: u64) {
-        self.items.retain(|n| n.id > through);
     }
     pub fn reconcile(&mut self, model: &Snapshot) -> bool {
         let mut changed = false;
         for item in &mut self.items {
+            if let Some(target) = &item.target
+                && current_owner(model, self.epoch, target)
+                && let Some(workspace_id) = model.workspaces.iter().find_map(|workspace| {
+                    workspace
+                        .root
+                        .panes()
+                        .into_iter()
+                        .flat_map(|pane| &pane.surfaces)
+                        .any(|surface| surface.id == item.surface_id)
+                        .then_some(workspace.id)
+                })
+                && item.workspace_id != workspace_id
+            {
+                item.workspace_id = workspace_id;
+                changed = true;
+            }
             if item.delivery.active()
                 && item
                     .target
@@ -542,6 +712,12 @@ impl Attention {
             return Err(AttentionError::StaleAuthorization);
         }
         Ok(())
+    }
+}
+fn acknowledge(item: &mut Notification) {
+    item.read = true;
+    if item.delivery.active() {
+        item.delivery.suppress("read");
     }
 }
 fn same_origin(first: Option<&NotificationTarget>, second: Option<&NotificationTarget>) -> bool {
