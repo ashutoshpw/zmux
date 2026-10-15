@@ -26,7 +26,7 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
-use zmux_terminal_adapter::{Size, Terminal, Viewport};
+use zmux_terminal_adapter::{Size, Terminal, Viewport, Wheel};
 
 pub const INPUT_CHUNK_BYTES: usize = 4_096;
 pub const INPUT_QUEUE_CHUNKS: usize = 16;
@@ -82,14 +82,21 @@ pub struct Snapshot {
     pub failure: Option<String>,
 }
 
+enum Input {
+    Bytes(Vec<u8>),
+    Scroll(i32),
+    Wheel(Wheel),
+}
+
 struct Shared {
     stop: AtomicBool,
+    exited: AtomicBool,
     resize: Mutex<Option<Size>>,
     snapshot: Mutex<Arc<Snapshot>>,
 }
 
 pub struct Session {
-    input: SyncSender<Vec<u8>>,
+    input: SyncSender<Input>,
     wake: Mutex<UnixStream>,
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
@@ -233,6 +240,7 @@ impl Session {
         drop(pair.slave);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
             resize: Mutex::new(None),
             snapshot: Mutex::new(Arc::new(Snapshot {
                 state: State::Running,
@@ -262,8 +270,15 @@ impl Session {
                     pending: Vec::new(),
                     written: 0,
                 };
-                let result =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| worker.run()));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let state = worker.run()?;
+                    if state == State::Exited {
+                        worker.shared.exited.store(true, Ordering::Release);
+                        worker.publish(state, None);
+                        worker.review_history()?;
+                    }
+                    Ok::<State, SessionError>(state)
+                }));
                 worker.shared.stop.store(true, Ordering::Release);
                 match result {
                     Ok(Ok(state)) => worker.publish(state, None),
@@ -329,14 +344,36 @@ impl Session {
             return Err(SessionError::InputSize);
         }
         self.ensure_running()?;
-        self.input.try_send(bytes.to_vec()).map_err(|e| match e {
-            TrySendError::Full(_) => SessionError::QueueFull,
-            TrySendError::Disconnected(_) => SessionError::Closed,
-        })?;
+        self.input
+            .try_send(Input::Bytes(bytes.to_vec()))
+            .map_err(|e| match e {
+                TrySendError::Full(_) => SessionError::QueueFull,
+                TrySendError::Disconnected(_) => SessionError::Closed,
+            })?;
         // Enqueueing is the acknowledgment. A failed wake must not invite a duplicate resend;
         // the worker also checks queued work on its bounded idle timeout.
         if let Err(error) = self.wake() {
             eprintln!("zmux input accepted; scheduling wake failed: {error}");
+        }
+        Ok(())
+    }
+
+    /// History navigation shares the bounded input queue so typing and scrolling
+    /// preserve order. Only the session worker mutates the terminal parser.
+    pub fn scroll(&self, lines: i32) -> Result<(), SessionError> {
+        self.enqueue_navigation(Input::Scroll(lines.clamp(-1000, 1000)))
+    }
+    pub fn wheel(&self, event: Wheel) -> Result<(), SessionError> {
+        self.enqueue_navigation(Input::Wheel(event))
+    }
+    fn enqueue_navigation(&self, event: Input) -> Result<(), SessionError> {
+        self.ensure_available()?;
+        self.input.try_send(event).map_err(|e| match e {
+            TrySendError::Full(_) => SessionError::QueueFull,
+            TrySendError::Disconnected(_) => SessionError::Closed,
+        })?;
+        if let Err(error) = self.wake() {
+            eprintln!("zmux navigation accepted; scheduling wake failed: {error}");
         }
         Ok(())
     }
@@ -385,6 +422,12 @@ impl Session {
     }
 
     fn ensure_running(&self) -> Result<(), SessionError> {
+        if self.shared.exited.load(Ordering::Acquire) {
+            return Err(SessionError::Closed);
+        }
+        self.ensure_available()
+    }
+    fn ensure_available(&self) -> Result<(), SessionError> {
         if self.shared.stop.load(Ordering::Acquire)
             || self.worker.as_ref().is_none_or(JoinHandle::is_finished)
         {
@@ -421,7 +464,7 @@ struct Worker {
     wake: UnixStream,
     process: ProcessGuard,
     terminal: Terminal,
-    input: Receiver<Vec<u8>>,
+    input: Receiver<Input>,
     shared: Arc<Shared>,
     bytes_read: u64,
     exit_code: Option<u32>,
@@ -457,7 +500,7 @@ impl Worker {
                     .map_err(|e| SessionError::Failure(e.to_string()))?;
                 dirty = true;
             }
-            self.load_input();
+            dirty |= self.load_input();
             if !self.pending.is_empty() {
                 match self.io.write(&self.pending[self.written..]) {
                     Ok(0) => {
@@ -527,7 +570,7 @@ impl Worker {
                 dirty = false;
                 published = Instant::now();
             }
-            self.load_input();
+            dirty |= self.load_input();
             let mut fds = [
                 pollfd {
                     fd: if self.eof {
@@ -566,13 +609,76 @@ impl Worker {
         }
     }
 
-    fn load_input(&mut self) {
+    // Keep the parser on its worker after child exit so completed output can be
+    // inspected. Poll only the wake socket; a hung-up PTY must not busy-spin.
+    fn review_history(&mut self) -> Result<(), SessionError> {
+        while !self.shared.stop.load(Ordering::Acquire) {
+            let mut dirty = false;
+            for _ in 0..INPUT_QUEUE_CHUNKS {
+                let Ok(input) = self.input.try_recv() else {
+                    break;
+                };
+                match input {
+                    Input::Scroll(lines) => {
+                        self.terminal.scroll(lines);
+                        dirty = true;
+                    }
+                    Input::Wheel(event) => {
+                        // Completed processes cannot consume mouse/application input.
+                        self.terminal.scroll(event.lines);
+                        dirty = true;
+                    }
+                    Input::Bytes(_) => {}
+                }
+            }
+            if dirty {
+                self.publish(State::Exited, None);
+            }
+            let mut fds = [pollfd {
+                fd: self.wake.as_raw_file_descriptor(),
+                events: POLLIN,
+                revents: 0,
+            }];
+            match poll(&mut fds, Some(IDLE_WAIT)) {
+                Ok(_) => {}
+                Err(filedescriptor::Error::Poll(e)) if e.kind() == io::ErrorKind::Interrupted => {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(SessionError::Failure(format!("poll history wake: {error}")));
+                }
+            }
+            let mut wake = [0; 128];
+            match self.wake.read(&mut wake) {
+                Ok(_) => {}
+                Err(error) if retryable(&error) => {}
+                Err(error) => {
+                    return Err(SessionError::Failure(format!("read history wake: {error}")));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn load_input(&mut self) -> bool {
         if self.pending.is_empty()
             && let Ok(input) = self.input.try_recv()
         {
-            self.pending = input;
-            self.written = 0;
+            match input {
+                Input::Bytes(bytes) => {
+                    self.terminal.scroll(0);
+                    self.pending = bytes;
+                    self.written = 0;
+                }
+                Input::Scroll(lines) => self.terminal.scroll(lines),
+                Input::Wheel(event) => {
+                    self.pending = self.terminal.wheel(event);
+                    self.written = 0;
+                }
+            }
+            return true;
         }
+        false
     }
 
     fn publish(&self, state: State, failure: Option<String>) {

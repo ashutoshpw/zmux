@@ -148,3 +148,26 @@ fn exited_session_rejects_new_input_and_resize_requests() {
     ));
     session.shutdown(Duration::from_secs(3)).unwrap();
 }
+
+#[test]
+fn exited_process_history_remains_navigable_without_accepting_new_input() {
+    let mut session =
+        launch("i=0; while [ $i -lt 30 ]; do printf 'DONE_%02d\\n' $i; i=$((i+1)); done; exit 7");
+    let done = wait_for(&session, |s| s.state == State::Exited);
+    let bytes = done.bytes_read;
+    assert!(!done.viewport.contents.contains("DONE_00"));
+    session.scroll(1000).unwrap();
+    let history = wait_for(&session, |s| s.viewport.contents.contains("DONE_00"));
+    assert_eq!(history.state, State::Exited);
+    assert_eq!(history.exit_code, Some(7));
+    assert_eq!(history.bytes_read, bytes);
+    assert!(matches!(
+        session.send_input(b"must not execute"),
+        Err(SessionError::Closed)
+    ));
+    session.scroll(0).unwrap();
+    wait_for(&session, |s| {
+        s.viewport.scrollback_offset == 0 && s.viewport.contents.contains("DONE_29")
+    });
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}

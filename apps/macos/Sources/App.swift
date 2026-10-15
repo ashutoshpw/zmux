@@ -9,6 +9,8 @@ private enum UICommand: Sendable {
     case browser(String, UInt64?, UInt64?, String, String?)
     case input(UInt64, String)
     case resize(UInt64, Int, Int)
+    case scroll(UInt64, Int)
+    case wheel(UInt64, Int, Int, Int, Int, Bool)
 }
 
 @MainActor
@@ -90,6 +92,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.attention(operation, id: id, through: through, active: active)
                     case .input(let session, let text):
                         try await self.bridge.input(session: session, text: text)
+                    case .wheel(let session, let lines, let row, let col, let modifiers, let history):
+                        try await self.bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
+                    case .scroll(let session, let lines):
+                        try await self.bridge.scroll(session: session, lines: lines)
                     case .resize(let session, let rows, let cols):
                         try await self.bridge.resize(session: session, rows: rows, cols: cols)
                     }
@@ -522,6 +528,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 let terminal = terminals[session] ?? TerminalView(pane: pane)
                 terminal.pane = pane
                 terminal.onInput = { [weak self] text in self?.enqueue(.input(session, text)) }
+                terminal.onWheel = { [weak self] lines, row, col, modifiers, history in self?.enqueue(.wheel(session, lines, row, col, modifiers, history)) }
+                terminal.onScroll = { [weak self] lines in self?.enqueue(.scroll(session, lines)) }
                 terminal.onResize = { [weak self] rows, cols in self?.enqueue(.resize(session, rows, cols)) }
                 terminal.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
                 terminals[session] = terminal
@@ -770,6 +778,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
     private func updateNotifications(_ snapshot: DesktopSnapshot) {
         let unread = snapshot.notifications.filter { !$0.read }.count
+        NSApp.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
         notificationButton.image = NSImage(systemSymbolName: unread > 0 ? "bell.badge.fill" : "bell", accessibilityDescription: "Notifications")
         notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
         notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
@@ -868,6 +877,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard window.title == "build workspace", mainHeader.titleLabel.stringValue == "build workspace" else {
             throw BridgeFailure(message: "PTY title was not reflected in native window chrome")
         }
+        try await smokeHistoryNavigation()
         let cliURL = Bundle.main.resourceURL!.appendingPathComponent("bin/zmux")
         let cliData = try await Task.detached {
             let process = Process()
@@ -911,6 +921,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard let attentionTab = snapshot?.workspace?.root.panes.first?.selectedSurface else { throw BridgeFailure(message: "No attention test tab") }
         enqueue(.input(originalSession, "printf '\\033]777;notify;Agent ready;Review requested\\007'\r"))
         try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read } }
+        selectTab(originalPane.selectedSurface)
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface && $0.notifications.filter { $0.surfaceId == originalPane.selectedSurface }.allSatisfy { $0.read } }
+        selectTab(attentionTab)
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == attentionTab }
+        enqueue(.input(originalSession, "printf '\\033]777;notify;Agent ready;Second review\\007'\r"))
+        try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read && $0.body == "Second review" } }
         showNotifications()
         guard sidebarModes?.selectedSegment == 1, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
         if let item = snapshot?.notifications.last(where: { $0.surfaceId == originalPane.selectedSurface }) {
@@ -1025,6 +1041,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "reopen_tab_shortcut": true,
             "sibling_process_preserved": true,
             "sidebar_toggle": true,
+            "terminal_wheel_scrollback": true,
+            "terminal_keyboard_scrollback": true,
+            "terminal_input_returns_live": true,
+            "notification_focus_acknowledgement": true,
             "notification_inbox": true,
             "notification_target_routing": true,
             "embedded_webkit": true,
@@ -1041,6 +1061,37 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "source_sha": Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local"
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+    }
+
+    private func smokeHistoryNavigation() async throws {
+        guard let terminal = focusedTerminal else { throw BridgeFailure(message: "No terminal for history check") }
+        terminal.insertText("i=0; while [ $i -lt 180 ]; do printf 'SCROLL_%03d\\n' $i; i=$((i+1)); done\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.contents.components(separatedBy: "\n").contains("SCROLL_179") == true }
+        guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 5, wheel2: 0, wheel3: 0),
+              let event = NSEvent(cgEvent: wheel) else { throw BridgeFailure(message: "Could not create wheel event") }
+        terminal.scrollWheel(with: event)
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.scrollbackOffset ?? 0 > 0 }
+        guard let contents = snapshot?.frames.first?.snapshot?.viewport.contents,
+              terminal.accessibilityValue() as? String == contents else {
+            throw BridgeFailure(message: "Scrolled history did not reach the native view")
+        }
+        guard let top = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 0,
+                                         windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 115),
+              let bottom = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command], timestamp: 0,
+                                            windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 119) else {
+            throw BridgeFailure(message: "Could not create terminal history keys")
+        }
+        terminal.keyDown(with: top)
+        try await waitUntil { snapshot in
+            guard let viewport = snapshot.frames.first?.snapshot?.viewport else { return false }
+            return viewport.scrollbackOffset > 0 && viewport.scrollbackOffset == viewport.scrollbackLines
+        }
+        terminal.keyDown(with: bottom)
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.scrollbackOffset == 0 }
+        terminal.scrollWheel(with: event)
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.scrollbackOffset ?? 0 > 0 }
+        terminal.insertText("printf '\\nSCROLL_%s\\n' LIVE\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await waitUntil { $0.frames.first?.snapshot?.viewport.scrollbackOffset == 0 && $0.frames.first?.snapshot?.viewport.contents.components(separatedBy: "\n").contains("SCROLL_LIVE") == true }
     }
 
     private func performShortcut(_ key: String, modifiers: NSEvent.ModifierFlags) throws {

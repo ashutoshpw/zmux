@@ -72,6 +72,14 @@ pub enum Command {
         session_id: SessionId,
         text: String,
     },
+    Wheel {
+        session_id: SessionId,
+        event: zmux_terminal_adapter::Wheel,
+    },
+    Scroll {
+        session_id: SessionId,
+        lines: i32,
+    },
     Resize {
         session_id: SessionId,
         rows: u16,
@@ -372,6 +380,8 @@ impl Worker {
                             }
                             let changed = slot.cached.as_ref().is_none_or(|old| {
                                 old.bytes_read != snapshot.bytes_read
+                                    || old.viewport.scrollback_offset
+                                        != snapshot.viewport.scrollback_offset
                                     || old.state != snapshot.state
                                     || old.viewport.size != snapshot.viewport.size
                             });
@@ -469,7 +479,35 @@ impl Worker {
         self.last_request_id = request.request_id;
         let result = match request.payload {
             Command::Attention { action } => self.attention_action(action),
-            Command::Action { action } => self.action(action),
+            Command::Action { action } => {
+                let result = self.action(action);
+                if result.is_ok() {
+                    self.acknowledge_focused();
+                }
+                result
+            }
+            Command::Wheel { session_id, event } => self
+                .slots
+                .get(&session_id)
+                .and_then(|s| s.session.as_ref())
+                .ok_or_else(|| {
+                    DesktopError::Failure("terminal is starting or no longer exists".into())
+                })
+                .and_then(|s| {
+                    s.wheel(event)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))
+                }),
+            Command::Scroll { session_id, lines } => self
+                .slots
+                .get(&session_id)
+                .and_then(|s| s.session.as_ref())
+                .ok_or_else(|| {
+                    DesktopError::Failure("terminal is starting or no longer exists".into())
+                })
+                .and_then(|s| {
+                    s.scroll(lines)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))
+                }),
             Command::Input { session_id, text } => self
                 .slots
                 .get(&session_id)
@@ -498,6 +536,22 @@ impl Worker {
         let snapshot = self.publish(false);
         if let Some(sender) = envelope.acknowledgement {
             let _ = sender.try_send(Execution { result, snapshot });
+        }
+    }
+    fn acknowledge_focused(&mut self) {
+        // Capture existing IDs at the serialized mutation boundary. Future arrivals
+        // are evaluated independently; hidden surfaces keep their unread state.
+        let ids: Vec<_> = self
+            .attention
+            .items
+            .iter()
+            .filter(|n| !n.read && self.surface_is_visible(n.surface_id))
+            .map(|n| n.id)
+            .collect();
+        for id in ids {
+            if let Err(error) = self.attention.read(id) {
+                eprintln!("zmux attention acknowledgement: {error}");
+            }
         }
     }
     fn surface_is_visible(&self, id: SurfaceId) -> bool {
@@ -544,7 +598,12 @@ impl Worker {
                 AttentionCommand::Read { id } => self.attention.read(id)?,
                 AttentionCommand::Dismiss { id } => self.attention.dismiss(id)?,
                 AttentionCommand::Clear { through_id } => self.attention.clear(through_id),
-                AttentionCommand::AppActive { active } => self.app_active = active,
+                AttentionCommand::AppActive { active } => {
+                    self.app_active = active;
+                    if active {
+                        self.acknowledge_focused();
+                    }
+                }
                 AttentionCommand::Open { id } => {
                     let surface_id = self.attention.find(id)?.surface_id;
                     self.action(Action::SelectSurface { surface_id })

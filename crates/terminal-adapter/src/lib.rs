@@ -1,6 +1,6 @@
 //! Headless parser feasibility adapter, not a production renderer or full terminal engine.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -83,6 +83,9 @@ pub struct Viewport {
     pub application_cursor: bool,
     pub bracketed_paste: bool,
     pub hide_cursor: bool,
+    pub scrollback_offset: usize,
+    pub scrollback_lines: usize,
+    pub alternate_screen: bool,
 }
 
 #[derive(Default)]
@@ -93,11 +96,23 @@ enum ControlMode {
     String(usize),
 }
 
+/// Pointer coordinates are zero-based grid cells; history bypasses application tracking.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Wheel {
+    pub lines: i32,
+    pub row: u16,
+    pub col: u16,
+    pub modifiers: u8,
+    pub history: bool,
+}
+
 pub struct Terminal {
     parser: vt100::Parser<Metadata>,
     size: Size,
     control: ControlMode,
     failed: bool,
+    scrollback_lines: usize,
 }
 
 #[derive(Default)]
@@ -203,6 +218,7 @@ impl Terminal {
             size,
             control: ControlMode::Ground,
             failed: false,
+            scrollback_lines: 0,
         })
     }
 
@@ -230,6 +246,7 @@ impl Terminal {
             };
         }
         self.parser.process(bytes);
+        self.measure_history();
         Ok(())
     }
 
@@ -237,7 +254,82 @@ impl Terminal {
         let size = size.validate()?;
         self.parser.screen_mut().set_size(size.rows, size.cols);
         self.size = size;
+        self.measure_history();
         Ok(())
+    }
+
+    // Probe the parser's bounded extent without copying stored history. Restore the
+    // current anchor before publishing; live parsing remains worker-owned.
+    fn measure_history(&mut self) {
+        let screen = self.parser.screen_mut();
+        let offset = screen.scrollback();
+        screen.set_scrollback(MAX_SCROLLBACK_LINES);
+        self.scrollback_lines = screen.scrollback();
+        screen.set_scrollback(offset);
+    }
+
+    /// Positive lines move toward older output; zero returns to the live screen.
+    pub fn scroll(&mut self, lines: i32) {
+        let screen = self.parser.screen_mut();
+        let offset = if lines == 0 {
+            0
+        } else {
+            screen
+                .scrollback()
+                .saturating_add_signed(lines.clamp(-1000, 1000) as isize)
+        };
+        screen.set_scrollback(offset);
+    }
+
+    /// Resolve wheel routing against the authoritative parser mode, not a stale UI
+    /// frame. Return raw bytes: legacy mouse encoding is not necessarily UTF-8.
+    pub fn wheel(&mut self, event: Wheel) -> Vec<u8> {
+        let count = event.lines.unsigned_abs().min(32) as usize;
+        if count == 0 {
+            return Vec::new();
+        }
+        let screen = self.parser.screen();
+        if !event.history && screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None {
+            let code = (if event.lines > 0 { 64 } else { 65 }) + (event.modifiers & 28);
+            let x = event.col.min(self.size.cols - 1);
+            let y = event.row.min(self.size.rows - 1);
+            let report = match screen.mouse_protocol_encoding() {
+                vt100::MouseProtocolEncoding::Sgr => {
+                    format!("\x1b[<{code};{};{}M", x + 1, y + 1).into_bytes()
+                }
+                vt100::MouseProtocolEncoding::Default => vec![
+                    27,
+                    b'[',
+                    b'M',
+                    code + 32,
+                    x.min(222) as u8 + 33,
+                    y.min(222) as u8 + 33,
+                ],
+                vt100::MouseProtocolEncoding::Utf8 => {
+                    let mut text = String::from("\x1b[M");
+                    for scalar in [u32::from(code + 32), u32::from(x + 33), u32::from(y + 33)] {
+                        text.push(char::from_u32(scalar).expect("bounded mouse coordinate"));
+                    }
+                    text.into_bytes()
+                }
+            };
+            self.scroll(0);
+            report.repeat(count)
+        } else if !event.history && screen.alternate_screen() {
+            let report = [
+                27,
+                if screen.application_cursor() {
+                    b'O'
+                } else {
+                    b'['
+                },
+                if event.lines > 0 { b'A' } else { b'B' },
+            ];
+            report.repeat(count)
+        } else {
+            self.scroll(event.lines);
+            Vec::new()
+        }
     }
 
     fn runs(&self) -> Vec<Vec<Run>> {
@@ -305,6 +397,9 @@ impl Terminal {
             application_cursor: self.parser.screen().application_cursor(),
             bracketed_paste: self.parser.screen().bracketed_paste(),
             hide_cursor: self.parser.screen().hide_cursor(),
+            scrollback_offset: self.parser.screen().scrollback(),
+            scrollback_lines: self.scrollback_lines,
+            alternate_screen: self.parser.screen().alternate_screen(),
         }
     }
 }

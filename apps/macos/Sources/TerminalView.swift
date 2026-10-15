@@ -6,6 +6,9 @@ import AppKit
 final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var pane: Pane
     var onInput: ((String) -> Void)?
+    var onScroll: ((Int) -> Void)?
+    var onWheel: ((Int, Int, Int, Int, Bool) -> Void)?
+    private var wheelRemainder: CGFloat = 0
     var onResize: ((Int, Int) -> Void)?
     var onFocus: (() -> Void)?
     private var viewport: Viewport?
@@ -43,8 +46,8 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         let oldState = frameState
         frameState = frame.failure ?? frame.snapshot?.failure ?? (frame.starting ? "Starting shell…" : frame.snapshot?.state ?? "Unavailable")
         if let snapshot = frame.snapshot {
-            if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols { selection = nil }
-            let changed = lastBytes != snapshot.bytesRead || viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || oldState != frameState
+            if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection = nil }
+            let changed = lastBytes != snapshot.bytesRead || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset || viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || oldState != frameState
             viewport = snapshot.viewport
             lastBytes = snapshot.bytesRead
             setAccessibilityLabel(snapshot.viewport.title?.isEmpty == false ? snapshot.viewport.title : "Terminal")
@@ -83,10 +86,10 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             }
         }
         let cursor = NSRect(x: contentInset + CGFloat(viewport.cursorCol) * cellWidth, y: contentInset + CGFloat(viewport.cursorRow) * lineHeight, width: cellWidth, height: lineHeight)
-        if frameState == "running" && !viewport.hideCursor && window?.firstResponder === self {
+        if frameState == "running" && viewport.scrollbackOffset == 0 && !viewport.hideCursor && window?.firstResponder === self {
             NSColor.white.withAlphaComponent(0.4).setFill(); cursor.fill()
         }
-        if hasMarkedText() { marked.draw(at: cursor.origin) }
+        if hasMarkedText() && viewport.scrollbackOffset == 0 { marked.draw(at: cursor.origin) }
     }
     private func color(_ color: TerminalColor, foreground: Bool) -> NSColor {
         if let rgb = color.rgb, rgb.count == 3 { return NSColor(calibratedRed: CGFloat(rgb[0]) / 255, green: CGFloat(rgb[1]) / 255, blue: CGFloat(rgb[2]) / 255, alpha: 1) }
@@ -101,6 +104,23 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         let levels: [CGFloat] = [0,95,135,175,215,255]
         return NSColor(calibratedRed: levels[value / 36] / 255, green: levels[(value / 6) % 6] / 255, blue: levels[value % 6] / 255, alpha: 1)
     }
+    private func navigateHistory(_ lines: Int) {
+        selection = nil; needsDisplay = true
+        onScroll?(lines)
+    }
+    override func scrollWheel(with event: NSEvent) {
+        guard let viewport else { return }
+        if event.phase == .began { wheelRemainder = 0 }
+        wheelRemainder += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / lineHeight : event.scrollingDeltaY * 3
+        let lines = Int(max(-1000, min(1000, wheelRemainder)))
+        guard lines != 0 else { return }
+        wheelRemainder -= CGFloat(lines)
+        let (row, col) = gridPoint(event)
+        let modifiers = (event.modifierFlags.contains(.option) ? 8 : 0) | (event.modifierFlags.contains(.control) ? 16 : 0)
+        selection = nil; needsDisplay = true
+        onWheel?(lines, row, col, modifiers, event.modifierFlags.contains(.shift))
+    }
+
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self); onFocus?()
         let point = gridPoint(event)
@@ -144,6 +164,12 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         if let viewport { selection = ((0,0),(viewport.size.rows-1,viewport.size.cols)); needsDisplay = true }
     }
     override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) && (event.keyCode == 115 || event.keyCode == 119) {
+            navigateHistory(event.keyCode == 115 ? 1000 : 0); return
+        }
+        if event.modifierFlags.contains(.shift) && (event.keyCode == 116 || event.keyCode == 121) {
+            navigateHistory((event.keyCode == 116 ? 1 : -1) * max(1, (viewport?.size.rows ?? 2) - 1)); return
+        }
         if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
         if hasMarkedText() { interpretKeyEvents([event]); return }
         selection = nil

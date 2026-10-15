@@ -70,6 +70,12 @@ actor NativeBridge {
         }
         if !chunk.isEmpty { try await send(["command": "input", "session_id": session, "text": chunk]) }
     }
+    func wheel(session: UInt64, lines: Int, row: Int, col: Int, modifiers: Int, history: Bool) async throws {
+        try await send(["command": "wheel", "session_id": session, "event": ["lines": lines, "row": row, "col": col, "modifiers": modifiers, "history": history]])
+    }
+    func scroll(session: UInt64, lines: Int) async throws {
+        try await send(["command": "scroll", "session_id": session, "lines": lines])
+    }
     func resize(session: UInt64, rows: Int, cols: Int) async throws {
         try await send(["command": "resize", "session_id": session, "rows": rows, "cols": cols])
     }
