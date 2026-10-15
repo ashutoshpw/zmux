@@ -274,6 +274,7 @@ fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_
     let other = added.model.workspaces.last().unwrap().clone();
     let other_surface = other.root.panes()[0].selected_surface;
     let caller = |workspace_id: u64, surface_id: Option<u64>| CallerContext {
+        local_tmux: None,
         workspace: Some(format!("workspace:{workspace_id}").parse().unwrap()),
         surface: surface_id.map(|id| format!("surface:{id}").parse().unwrap()),
     };
@@ -640,6 +641,7 @@ fn global_history_operations_work_without_a_live_workspace_or_valid_caller() {
     let cutoff = notified.notification_cursor;
     app.action(Action::CloseWorkspace { workspace_id });
     let stale = CallerContext {
+        local_tmux: None,
         workspace: Some("workspace:999999".parse().unwrap()),
         surface: Some("surface:999999".parse().unwrap()),
     };

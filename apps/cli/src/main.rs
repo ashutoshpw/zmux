@@ -56,6 +56,7 @@ struct ClientOptions {
 enum Parsed {
     Offline(Offline),
     LocalMultiplexer(local_multiplexer::Invocation),
+    LocalTmuxApp(ControlCommand),
     App(ControlCommand),
     Browser(ControlCommand, Option<Duration>),
     BrowserProfile(ControlCommand),
@@ -112,6 +113,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
             Ok(0)
         }
         Parsed::LocalMultiplexer(invocation) => local_multiplexer::run(invocation),
+        Parsed::LocalTmuxApp(command) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&local_multiplexer::run_gui(&options, command)?)?
+            );
+            Ok(0)
+        }
         Parsed::BrowserProfile(command) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(

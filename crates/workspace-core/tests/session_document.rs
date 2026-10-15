@@ -343,7 +343,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
         })
         .unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 2);
+    assert_eq!(wire["version"], 3);
     assert_eq!(
         wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"],
         profile.to_string()
@@ -390,5 +390,76 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
             .selected()
             .browser_profile_id,
         Some(profile)
+    );
+}
+
+#[test]
+fn tmux_session_v3_preserves_only_immutable_identity_and_rejects_older_versions_or_commands() {
+    let mut store = fixture();
+    let pane = store.snapshot().workspaces[0].root.panes()[0].id;
+    let identity = zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity {
+        id: uuid::Uuid::new_v4(),
+        server_incarnation: uuid::Uuid::new_v4(),
+        tmux_session_id: "$7".into(),
+        created_at: 42,
+    };
+    store
+        .apply(Action::CreateLocalTmuxSurface {
+            pane_id: pane,
+            identity: identity.clone(),
+            focus: false,
+        })
+        .unwrap();
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    let content = &wire["workspaces"][0]["root"]["first"]["pane"]["surfaces"][2]["content"];
+    assert_eq!(content["kind"], "local_tmux_terminal");
+    assert_eq!(
+        content["identity"],
+        serde_json::to_value(&identity).unwrap()
+    );
+    assert_eq!(content.as_object().unwrap().len(), 2);
+    let validated = serde_json::from_value::<SessionDocument>(wire.clone())
+        .unwrap()
+        .validate(limits())
+        .unwrap();
+    let restored = WorkspaceStore::prepare_session_restore(
+        validated,
+        &[
+            SessionId(1000),
+            SessionId(1001),
+            SessionId(1002),
+            SessionId(1003),
+        ],
+    )
+    .unwrap();
+    assert!(
+        restored.store.snapshot().workspaces[0].root.panes()[0]
+            .surfaces
+            .iter()
+            .any(|s| s.local_tmux.as_ref() == Some(&identity))
+    );
+    assert!(restored.effects.iter().any(|effect|matches!(effect,Effect::StartSession {local_tmux:Some(saved),..} if saved.as_ref()==&identity)));
+    for version in [1, 2] {
+        let mut old = wire.clone();
+        old["version"] = json!(version);
+        assert!(
+            serde_json::from_value::<SessionDocument>(old)
+                .unwrap()
+                .validate(limits())
+                .is_err()
+        );
+    }
+    let mut injected = wire.clone();
+    injected["workspaces"][0]["root"]["first"]["pane"]["surfaces"][2]["content"]["command"] =
+        json!("do not replay");
+    assert!(serde_json::from_value::<SessionDocument>(injected).is_err());
+    let mut malformed = wire;
+    malformed["workspaces"][0]["root"]["first"]["pane"]["surfaces"][2]["content"]["identity"]["tmux_session_id"] =
+        json!("-unsafe");
+    assert!(
+        serde_json::from_value::<SessionDocument>(malformed)
+            .unwrap()
+            .validate(limits())
+            .is_err()
     );
 }

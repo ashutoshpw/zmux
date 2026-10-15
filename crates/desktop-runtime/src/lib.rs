@@ -4,6 +4,7 @@ pub mod browser;
 pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
+pub mod local_tmux;
 pub mod metadata;
 pub mod persistence;
 pub mod profiles;
@@ -86,6 +87,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    LocalTmux {
+        request: local_tmux::Request,
+    },
     Browser {
         request: BrowserRequest,
     },
@@ -191,6 +195,8 @@ pub struct Snapshot {
     pub uploads: Vec<TransferSnapshot>,
     pub persistence: sessions::PersistenceSnapshot,
     pub browser_profiles: profiles::ProfileSnapshot,
+    pub local_tmux_epoch: uuid::Uuid,
+    pub local_tmux_operations: Vec<local_tmux::Receipt>,
     pub browser_epoch: uuid::Uuid,
     pub browser_operations: Vec<BrowserReceipt>,
     pub browser_pending_requests: usize,
@@ -228,6 +234,7 @@ pub(crate) struct Execution {
     pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
     pub profile_operation_id: Option<u64>,
+    pub tmux_operation_id: Option<u64>,
     pub session_operation_id: Option<u64>,
     pub metadata_result: Option<metadata::WorkspaceMetadata>,
     pub notification_mutation: Option<NotificationMutation>,
@@ -260,24 +267,49 @@ pub struct NativeNotificationExecution {
     pub reply: Option<attention::NotificationReply>,
 }
 
+/// Native/embedded hosts select installation state and the opt-in tmux profile.
+/// Environment resolution remains deferred to background operation/launch workers.
+#[derive(Clone, Default)]
+pub struct DesktopOptions {
+    pub state_directory: Option<PathBuf>,
+    pub local_tmux_profile: local_tmux::Profile,
+}
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
-        Self::start(shell, None, None)
+        Self::with_options(shell, DesktopOptions::default())
     }
-
     pub fn with_persistence(shell: Shell, state_directory: PathBuf) -> Result<Self, DesktopError> {
-        let persistence = sessions::SessionPersistence::start(state_directory.clone())?;
-        Self::start(shell, Some(persistence), Some(state_directory))
+        Self::with_options(
+            shell,
+            DesktopOptions {
+                state_directory: Some(state_directory),
+                ..Default::default()
+            },
+        )
     }
-
+    pub fn with_options(shell: Shell, options: DesktopOptions) -> Result<Self, DesktopError> {
+        let persistence = options
+            .state_directory
+            .clone()
+            .map(sessions::SessionPersistence::start)
+            .transpose()?;
+        Self::start(
+            shell,
+            persistence,
+            options.state_directory,
+            options.local_tmux_profile,
+        )
+    }
     fn start(
         shell: Shell,
         persistence: Option<sessions::SessionPersistence>,
         profile_directory: Option<PathBuf>,
+        tmux_profile: local_tmux::Profile,
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
         let profiles = profiles::ProfileRuntime::start(profile_directory)?;
+        let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let attention = Attention::default();
         let persistence_snapshot = persistence
             .as_ref()
@@ -297,6 +329,8 @@ impl Desktop {
                 uploads: Vec::new(),
                 persistence: persistence_snapshot,
                 browser_profiles: profiles.snapshot.clone(),
+                local_tmux_epoch: local_tmux.epoch,
+                local_tmux_operations: Vec::new(),
                 browser_epoch: browser.epoch(),
                 browser_operations: Vec::new(),
                 browser_pending_requests: 0,
@@ -315,6 +349,8 @@ impl Desktop {
             .name("zmux-workspaces".into())
             .spawn(move || {
                 let mut worker = Worker {
+                    local_tmux,
+                    tmux_operation_id: None,
                     model,
                     browser,
                     profiles,
@@ -645,6 +681,7 @@ impl Drop for Desktop {
     }
 }
 struct Slot {
+    cancellation: Arc<AtomicBool>,
     launch_id: u64,
     session: Option<Session>,
     connection: Option<Arc<ManagedConnection>>,
@@ -654,11 +691,17 @@ struct Slot {
     resize: Option<Size>,
     last_notice: u64,
 }
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.cancellation.store(true, Ordering::Release);
+    }
+}
 struct Completion {
     launch_id: u64,
     id: SessionId,
     result: Result<Session, SessionError>,
     connection: Option<Arc<ManagedConnection>>,
+    cleanup: Option<Session>,
 }
 fn notification_filter(
     model: &Model,
@@ -726,6 +769,8 @@ fn notification_filter(
 }
 
 struct Worker {
+    local_tmux: local_tmux::Runtime,
+    tmux_operation_id: Option<u64>,
     profiles: profiles::ProfileRuntime,
     profile_operation_id: Option<u64>,
     model: WorkspaceStore,
@@ -853,6 +898,7 @@ impl Worker {
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
             dirty |= self.profiles.poll();
+            dirty |= self.poll_local_tmux();
             if !self.profiles.snapshot.loading {
                 dirty |= self.poll_sessions();
             }
@@ -875,9 +921,20 @@ impl Worker {
         self.browser
             .reset("desktop shutdown cancelled browser operations");
         self.cancel_replies();
+        self.local_tmux.cancel_all();
         self.attention
             .reset_native("desktop shutdown cancelled native notifications");
+        for slot in self.slots.values() {
+            slot.cancellation.store(true, Ordering::Release);
+        }
         let deadline = Instant::now() + Duration::from_secs(3);
+        while self.local_tmux.worker_count() != 0 && Instant::now() < deadline {
+            self.local_tmux.drain();
+            thread::sleep(Duration::from_millis(10));
+        }
+        if self.local_tmux.worker_count() != 0 {
+            self.cleanup_error=Some("local tmux workers exceeded shutdown deadline; owner creation outcome may be unknown".into());
+        }
         if let Err(error) = self.profiles.shutdown(deadline) {
             self.cleanup_error = Some(error.to_string());
         }
@@ -893,7 +950,10 @@ impl Worker {
         }
         while self.pending_launches != 0 && Instant::now() < deadline {
             match self.completion_rx.recv_timeout(Duration::from_millis(20)) {
-                Ok(completion) => {
+                Ok(mut completion) => {
+                    if let Some(session) = completion.cleanup.take() {
+                        self.retire(session);
+                    }
                     self.pending_launches -= 1;
                     if let Ok(session) = completion.result {
                         self.retire(session);
@@ -939,6 +999,7 @@ impl Worker {
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
         self.profile_operation_id = None;
+        self.tmux_operation_id = None;
         self.session_operation_id = None;
         self.notification_mutation = None;
         self.metadata_result = None;
@@ -1021,6 +1082,7 @@ impl Worker {
             let _ = sender.try_send(Execution {
                 result,
                 profile_operation_id: self.profile_operation_id,
+                tmux_operation_id: self.tmux_operation_id,
                 session_operation_id: self.session_operation_id,
                 metadata_result: self.metadata_result.take(),
                 notification_mutation: self.notification_mutation.take(),
@@ -1057,6 +1119,7 @@ impl Worker {
             ));
         }
         match command {
+            Command::LocalTmux { request } => self.local_tmux_command(request),
             Command::Profiles { action } => {
                 self.profile_operation_id = Some(self.profiles.admit(action)?);
                 Ok(())
@@ -1159,9 +1222,29 @@ impl Worker {
             },
         }
     }
-    fn targeted(&mut self, request: TargetRequest) -> Result<(), DesktopError> {
+    fn targeted(&mut self, mut request: TargetRequest) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
         request.validate_revision(&model)?;
+        if request.caller.local_tmux.is_some() {
+            let explicit = request.scope.workspace.is_some()
+                || request.scope.pane.is_some()
+                || request.scope.surface.is_some();
+            if explicit {
+                // Explicit notification workspace attribution may use a unique
+                // ambient surface, but ambiguity cannot veto the hard scope.
+                request.caller = if matches!(&request.operation, TargetOperation::Notify { .. })
+                    && request.scope.workspace.is_some()
+                    && request.scope.pane.is_none()
+                    && request.scope.surface.is_none()
+                {
+                    request.caller.bind_local_tmux(&model).unwrap_or_default()
+                } else {
+                    Default::default()
+                };
+            } else {
+                request.caller = request.caller.bind_local_tmux(&model)?;
+            }
+        }
         match request.operation {
             TargetOperation::Action { mut action } => {
                 if let zmux_workspace_core::targets::TargetAction::CreateBrowser {
@@ -1568,6 +1651,7 @@ impl Worker {
             .filter(|e| matches!(e, Effect::StartSession { .. }))
             .count();
         let owned = self.pending_launches
+            + self.local_tmux.reserved.len()
             + self.retired.len()
             + self.slots.values().filter(|s| s.session.is_some()).count();
         if starts > 0
@@ -1610,6 +1694,7 @@ impl Worker {
                     session_id,
                     cwd,
                     remote,
+                    local_tmux,
                     ..
                 } => {
                     // A preceding launch-worker failure can abort the whole restore group.
@@ -1629,9 +1714,11 @@ impl Worker {
                         .next_launch_id
                         .checked_add(1)
                         .expect("launch generation exhausted");
+                    let cancellation = Arc::new(AtomicBool::new(false));
                     self.slots.insert(
                         session_id,
                         Slot {
+                            cancellation: cancellation.clone(),
                             launch_id,
                             session: None,
                             connection: None,
@@ -1644,10 +1731,14 @@ impl Worker {
                     );
                     let sender = self.completion_tx.clone();
                     let mut shell = self.shell.clone();
-                    if let Some(cwd) = cwd.filter(|_| remote.is_none()) {
+                    if let Some(cwd) = cwd.filter(|_| remote.is_none() && local_tmux.is_none()) {
                         shell.cwd = Some(PathBuf::from(cwd));
                     }
-                    if let Some(cwd) = shell.cwd.as_ref().filter(|_| remote.is_none()) {
+                    if let Some(cwd) = shell
+                        .cwd
+                        .as_ref()
+                        .filter(|_| remote.is_none() && local_tmux.is_none())
+                    {
                         self.launch_model_mut()
                             .set_session_cwd(session_id, cwd.to_string_lossy().into_owned());
                     }
@@ -1661,11 +1752,55 @@ impl Worker {
                             ])
                         })
                     }).expect("live terminal has an owning surface");
+                    let tmux_profile = self.local_tmux.profile.clone();
+                    let binding = model
+                        .workspaces
+                        .iter()
+                        .find_map(|w| {
+                            w.root.panes().into_iter().find_map(|p| {
+                                p.surfaces
+                                    .iter()
+                                    .find(|s| s.session_id == Some(session_id))
+                                    .map(|s| zmux_remote_runtime::local_multiplexer::GuiBinding {
+                                        identity_namespace: model.identity_namespace,
+                                        workspace: model.object_uuid(
+                                            zmux_workspace_core::targets::TargetKind::Workspace,
+                                            w.id.0,
+                                        ),
+                                        surface: model.object_uuid(
+                                            zmux_workspace_core::targets::TargetKind::Surface,
+                                            s.id.0,
+                                        ),
+                                    })
+                            })
+                        })
+                        .expect("live terminal has binding");
                     self.pending_launches += 1;
                     let result = thread::Builder::new()
                         .name(format!("zmux-launch-{}", session_id.0))
                         .spawn(move || {
+                            let mut failed_client = None;
                             let result = (|| {
+                                if let Some(identity) = local_tmux {
+                                    if remote.is_some() {
+                                        return Err(SessionError::Failure(
+                                            "terminal cannot be both SSH and local tmux".into(),
+                                        ));
+                                    }
+                                    return match local_tmux::launch_client(
+                                        tmux_profile,
+                                        *identity,
+                                        &context,
+                                        binding,
+                                        cancellation,
+                                    ) {
+                                        Ok(session) => Ok((session, None)),
+                                        Err(failure) => {
+                                            failed_client = failure.cleanup;
+                                            Err(failure.error)
+                                        }
+                                    };
+                                }
                                 let connection = remote
                                     .map(|remote| {
                                         let descriptor = remote.validate().map_err(|e| {
@@ -1683,7 +1818,17 @@ impl Worker {
                                     shell.program = "/usr/bin/ssh".into();
                                     shell.args = process.args;
                                 }
-                                let session = Session::spawn_with_resource(
+                                // An app launched from a persistent shell still owns a
+                                // fresh ordinary/SSH terminal, not the parent's tmux pane.
+                                // Keep the executable override as user configuration.
+                                let removals = [
+                                    "TMUX",
+                                    "TMUX_PANE",
+                                    "ZMUX_LOCAL_TMUX",
+                                    "ZMUX_LOCAL_TMUX_PROFILE",
+                                ]
+                                .map(std::ffi::OsString::from);
+                                let session = Session::spawn_with_resource_and_removals(
                                     Launch {
                                         program: shell.program,
                                         args: shell.args,
@@ -1691,6 +1836,7 @@ impl Worker {
                                         size: zmux_session_runtime::default_size(),
                                     },
                                     &context,
+                                    &removals,
                                     connection.clone(),
                                 )?;
                                 Ok((session, connection))
@@ -1705,6 +1851,7 @@ impl Worker {
                                 id: session_id,
                                 result,
                                 connection,
+                                cleanup: failed_client,
                             }) {
                                 drop(error.0);
                             }
@@ -1726,8 +1873,12 @@ impl Worker {
             }
         }
     }
-    fn complete(&mut self, completion: Completion) {
+    fn complete(&mut self, mut completion: Completion) {
+        if let Some(session) = completion.cleanup.take() {
+            self.retire(session);
+        }
         self.pending_launches -= 1;
+        self.complete_local_tmux(&completion);
         if self
             .slots
             .get(&completion.id)
@@ -1832,6 +1983,8 @@ impl Worker {
                 .map(|p| p.snapshot.clone())
                 .unwrap_or_default(),
             browser_profiles: self.profiles.snapshot.clone(),
+            local_tmux_epoch: self.local_tmux.epoch,
+            local_tmux_operations: self.local_tmux.receipts.clone(),
             browser_epoch: self.browser.epoch(),
             browser_operations: self.browser.receipts(),
             browser_pending_requests: self.browser.pending_request_count(),

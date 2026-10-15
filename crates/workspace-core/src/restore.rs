@@ -1,14 +1,15 @@
 //! Versioned topology descriptors. No process state, input, filesystem or network I/O.
 //!
-//! V1 preserves selections; V2 adds explicit browser profile identity with a V1 reader.
-//! Neither version preserves undo-close or WebKit navigation history. Browser query
+//! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
+//! descriptors. Earlier versions retain explicit readers.
+//! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
 //! Page state and native split ratios need their own future schema version.
 use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 2;
+pub const SESSION_DOCUMENT_VERSION: u32 = 3;
 const FORMAT: &str = "zmux.session";
 // Retain room for an ordinary four-ID create-workspace action after restoration.
 const MAX_NEXT_ID: u64 = u64::MAX - 4;
@@ -65,6 +66,9 @@ pub struct SavedSurface {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SavedContent {
+    LocalTmuxTerminal {
+        identity: zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity,
+    },
     LocalTerminal {
         cwd: Option<String>,
     },
@@ -238,6 +242,15 @@ impl Validation {
                     valid_name(surface.title.clone())
                         .map_err(|_| invalid("invalid surface title"))?;
                     match &surface.content {
+                        SavedContent::LocalTmuxTerminal { identity } => {
+                            if self.version < 3 {
+                                return Err(invalid(
+                                    "local tmux descriptors require session version 3",
+                                ));
+                            }
+                            identity.validate().map_err(|e| invalid(e.to_string()))?;
+                            self.terminals += 1;
+                        }
                         SavedContent::LocalTerminal { cwd } => {
                             if cwd.as_ref().is_some_and(|cwd| {
                                 !cwd.starts_with('/')
@@ -258,7 +271,7 @@ impl Validation {
                         }
                         SavedContent::Browser { url, profile_id } => {
                             if (self.version == 1 && profile_id.present)
-                                || (self.version == 2 && !profile_id.present)
+                                || (self.version >= 2 && !profile_id.present)
                                 || profile_id.id.is_some_and(|id| id.is_nil())
                             {
                                 return Err(invalid(
@@ -290,7 +303,7 @@ impl Validation {
 impl SessionDocument {
     /// Byte-length and parse-recursion limits belong to the persistence worker before this call.
     pub fn validate(self, limits: RestoreLimits) -> Result<ValidatedSessionDocument, RestoreError> {
-        if self.format != FORMAT || !matches!(self.version, 1 | SESSION_DOCUMENT_VERSION) {
+        if self.format != FORMAT || !matches!(self.version, 1 | 2 | SESSION_DOCUMENT_VERSION) {
             return Err(invalid("unsupported format or version"));
         }
         if self.identity_namespace.is_nil() {
@@ -361,6 +374,14 @@ impl SavedTree {
                                 surface.title.clone()
                             },
                             content: match surface.kind {
+                                SurfaceKind::Terminal if surface.local_tmux.is_some() => {
+                                    SavedContent::LocalTmuxTerminal {
+                                        identity: surface
+                                            .local_tmux
+                                            .clone()
+                                            .expect("checked descriptor"),
+                                    }
+                                }
                                 SurfaceKind::Terminal => match &surface.remote {
                                     Some(remote) => SavedContent::SshTerminal {
                                         connection: remote.into(),
@@ -417,13 +438,17 @@ impl SavedTree {
                             title: saved.title,
                             cwd: None,
                             remote: None,
+                            local_tmux: None,
                         },
                         content => {
                             let session_id = ids.next().expect("validated injected session count");
-                            let (cwd, remote) = match content {
-                                SavedContent::LocalTerminal { cwd } => (cwd, None),
+                            let (cwd, remote, local_tmux) = match content {
+                                SavedContent::LocalTmuxTerminal { identity } => {
+                                    (None, None, Some(identity))
+                                }
+                                SavedContent::LocalTerminal { cwd } => (cwd, None, None),
                                 SavedContent::SshTerminal { connection } => {
-                                    (None, Some(SshConnectionConfig::from(&connection)))
+                                    (None, Some(SshConnectionConfig::from(&connection)), None)
                                 }
                                 _ => unreachable!(),
                             };
@@ -432,11 +457,13 @@ impl SavedTree {
                                 session_id,
                                 cwd: cwd.clone(),
                                 remote: remote.clone(),
+                                local_tmux: local_tmux.clone().map(Box::new),
                             });
                             let mut surface = Surface::terminal(saved.id, session_id);
                             surface.title = saved.title;
                             surface.cwd = cwd;
                             surface.remote = remote;
+                            surface.local_tmux = local_tmux;
                             surface
                         }
                     })

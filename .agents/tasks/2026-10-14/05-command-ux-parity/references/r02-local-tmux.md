@@ -126,3 +126,141 @@ separate gates. No user app process was launched, replaced or terminated.
 
 Parent isolated full validation passes 202 Rust tests, strict Clippy, formatting, notices
 and C ABI. CI explicitly installs real tmux on Linux/macOS; hosted execution pending.
+
+## R02b app-bound lifecycle (authorized 2026-10-15, in progress)
+
+Implement authenticated app-bound CLI start/attach, client reuse/replacement, and
+identity-only reopen/session restore. Settings remains a later entrypoint. Coordinate
+model5/sessionv3 after B01 model4/sessionv2; never overwrite the browser worker's schema.
+
+- [x] Typed immutable tmux identity and exact saved-identity/pane resolution APIs.
+- [x] Bounded background operation owner and receipts; no process/profile work on
+  the UI or serialized workspace executor. Report owner creation separately from
+  client attachment, including partial failure.
+- [x] Pure terminal descriptors/effects plus sessionv3 readers/writers, retaining
+  v1/v2 compatibility. Never persist shell commands, environment or executable paths.
+- [x] Actual GUI terminal PTY attach, exact client reuse and explicit additional client,
+  stable workspace targeting/focus policy, close/reopen and app restore.
+- [x] Managed-pane caller resolution survives new surface IDs; ambiguous hosts require
+  explicit targeting. Owned launch environment strips ambient tmux/app identities and
+  passwords before applying current client context.
+- [x] Real CLI/socket/tmux acceptance proves stable shell PID and one startup execution
+  across close/reopen and desktop save/restore. Failure/security cases cover stale
+  server identity, auth/capacity before spawning, target closure and client cleanup.
+
+Test authoring boundary: real remote-runtime tmux tests own immutable/pane binding;
+actual CLI/socket/desktop/PTY tests own lifecycle and routing; session document tests
+own version/validation/privacy. Existing headless tests cannot reach app launch,
+caller rebinding or persistence. No fake tmux protocol executable and no test-only
+production seam will be added.
+
+
+### R02b implementation and validation checkpoint
+
+Production source frozen for independent review. GUI CLI start/attach enter the
+normal authenticated socket policy; the direct headless lifecycle stays separate.
+`DesktopOptions` selects the installation state directory and a tmux profile
+(environment default or explicit validated profile), without process-global mutation.
+The new runtime owner admits at most four pending operations and four physical jobs,
+uses bounded completion channels, and retains 32 epoch-scoped receipts. Timeouts
+signal worker cancellation while the receipt retains its capacity charge until the
+actual outcome arrives. Startup side effects and client attachment outcomes are
+reported separately; target loss after successful start leaves an explicitly reported
+live owner. Launch/registry/process waits run on background workers. Shutdown cancels
+operation and launcher tokens and reports a cleanup deadline failure rather than
+claiming that an unknown owner was removed.
+
+Core model5/sessionv3 use a distinct immutable local-tmux terminal descriptor. Explicit
+v1/v2 readers remain, new descriptors are rejected under older versions, and browser
+profile-presence validation remains intact. Exported tmux content contains only the
+four-field identity; it has no shell command, cwd, executable, socket or environment.
+Reopen receives fresh client/surface IDs; app restore retains topology IDs but creates
+fresh client sessions. Every launch regenerates an exact guarded tmux attach request,
+then confirms the spawned client PID on the expected immutable session before success.
+Closing/shutdown only cancel clients; they never kill the durable owner.
+
+Default GUI attachment reuses an exact live client; `--new-client` explicitly creates
+another. Saved routing hints are stable UUIDs validated against the current desktop.
+A still-live exact surface follows workspace moves. Reuse refreshes the hint on a
+separately bounded background worker before its receipt completes. A missing surface
+can be replaced in its verified workspace; a stale namespace/workspace requires
+`--workspace`, with no title/cwd fallback. The moved-surface public regression failed
+before this repair (a duplicate client appeared in the old workspace) and passed after.
+
+Durable shells export only owned tmux profile/executable context plus the opt-in
+marker; inherited app/terminal identities and credentials are stripped. Caller routing
+validates the actual owned `TMUX` socket and `%N` pane, resolves its current immutable
+managed session, and matches exactly one app surface. This also follows pane moves
+between managed sessions. Multiple app hosts fail implicit targeting; explicit targets
+override inherited caller state. No startup shell environment is rewritten on reattach.
+
+Validation on Linux with real tmux 3.2a:
+
+- `CARGO_TARGET_DIR=/tmp/zmux-metadata-review-target cargo test -p zmux -p zmux-desktop-runtime -p zmux-remote-runtime -p zmux-session-runtime -p zmux-workspace-core --locked`: all 205 tests passed. A later added four-operation resource-bound acceptance test also passed independently.
+- Public local-tmux acceptance: 8 tests passed, including authenticated socket/PTY
+  start, focus preservation, reuse/additional client, ambiguous caller refusal,
+  close/reopen, moved-surface reuse, actual CLI caller rebinding despite stale app
+  environment, durable save/shutdown/restore with the same owner PID and startup count
+  one, stale receipt epoch rejection, read-only/capacity rejection before owner creation,
+  target closure during a real registry-lock wait with an honest surviving-owner
+  receipt, four blocked starts rejecting a fifth while workspace actions remain
+  responsive, and replaced-server restore failure without command replay or retargeting.
+- Remote owner acceptance: 6 real tmux tests passed, including exact saved-identity,
+  owned-pane movement, unmanaged refusal and durable GUI-hint checks. Core session
+  document acceptance: 7 tests passed, including v1/v2/v3 rules, identity validation
+  and command injection refusal.
+- `CARGO_TARGET_DIR=/tmp/zmux-metadata-review-target cargo clippy -p zmux -p zmux-desktop-runtime -p zmux-remote-runtime -p zmux-session-runtime -p zmux-workspace-core --all-targets --locked -- -D warnings`: passed.
+
+Native AppKit rendering/dogfood, packaged macOS tmux acceptance, Settings entrypoint,
+individual-client detach and full R02/V01 parity remain separate gates. This checkpoint
+adds no native execution claim and never touches the user's running cmux application.
+
+
+### Independent review repairs
+
+The review found two additional caller entrypoints that bypassed the intended scope:
+implicit `list-panes` mistook a managed caller for an external global request, and
+explicit-workspace `notify` let ambiguous ambient attribution veto its hard scope.
+One actual CLI-inside-tmux regression independently observed both failures before
+repair: list succeeded globally while the explicitly scoped notification failed.
+After repair, implicit reads require exact caller binding; explicit workspace
+notification attribution uses a unique ambient surface when available and otherwise
+retains the explicit workspace. A moved caller's pane listing contains only its current
+workspace.
+
+A related audit found default `clear-notifications` could choose global scope because
+durable shells intentionally lack a legacy workspace variable. The two-workspace
+public regression failed here and in the independent review snapshot, deleting the
+other workspace's notification. The parser now recognizes managed context before
+reading legacy workspace variables, defers workspace resolution to the immutable caller,
+and preserves the other workspace's notification. Explicit global/exact-ID operations
+remain caller-independent.
+
+Failed post-spawn confirmation/registry writes now return the owned client Session
+through `Completion.cleanup`. Both normal and shutdown handlers move it to tracked
+retirement before releasing the pending launch credit. This is a source ownership
+invariant. The real failure-path acceptance fills a valid registry to 128 KiB minus
+16 bytes: guarded attachment succeeds, its GUI-hint write fails, the new client is
+cleaned up, and the original client PID/owner/registry bytes survive. That acceptance
+proves actual client cleanup and owner preservation; it does not make a scheduler-timing
+claim that distinguishes retained retirement from an asynchronous destructor.
+
+Ordinary/SSH app terminals remove inherited parent `TMUX`, `TMUX_PANE`, opt-in marker
+and profile context, preventing an app launched from a managed shell from misattributing
+its new ordinary terminal. The intentional tmux executable override remains available
+as user configuration. Local-tmux clients already strip inherited app/tmux context.
+
+### Final portable receipt
+
+After the review repairs, the same five-package test command passed all 207 tests
+(exit 0; `/tmp/zmux-r02b-final-tests.log`). The independent frozen snapshot also
+passed all eight public tmux and seven session-schema tests. An independent actual
+Desktop/PTY probe verified inherited parent tmux context removal while preserving
+owned workspace/surface IDs and the configured executable override. Removing the
+ordinary launch removal call in that private snapshot made the same probe fail on
+inherited `TMUX`, and restoring it returned green. No repository test-only API was
+introduced for that probe.
+
+Parent acceptance: frozen index snapshot on528be92 passed full `scripts/check`
+(Rust workspace tests, formatting, strict Clippy, notices and C ABI). Native packaged
+attachment/restore acceptance remains pending; portable tests do not close R02/V01.

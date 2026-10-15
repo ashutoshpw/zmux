@@ -39,11 +39,21 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         ));
     }
     if ![
-        "start", "attach", "list", "status", "detach", "close", "cleanup",
+        "start",
+        "attach",
+        "list",
+        "status",
+        "detach",
+        "close",
+        "cleanup",
+        "operation-status",
     ]
     .contains(&verb)
     {
         return Err(CliError(format!("unknown local-tmux operation {verb}")));
+    }
+    if verb == "operation-status" {
+        return operation_status(&args[1..]);
     }
     let mut id = None;
     let mut name = None;
@@ -53,6 +63,9 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     let mut headless = false;
     let mut all = false;
     let mut prune = false;
+    let mut workspace = None;
+    let mut focus = None;
+    let mut new_client = false;
     let mut seen = HashSet::new();
     let mut index = 1;
     let mut literal = false;
@@ -91,7 +104,19 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
                 "--prune" if verb == "cleanup" => prune = true,
                 "--json" if matches!(verb, "list" | "status") => (),
                 "--client" if verb == "detach" => return Err(CliError("individual --client detach is not implemented; use --all to detach every client explicitly".into())),
-                "--workspace" | "--focus" | "--new-client" if verb == "attach" => return Err(CliError("GUI-bound local tmux attachment is not implemented; use --headless without GUI target options".into())),
+                "--workspace" if matches!(verb,"start"|"attach") => {
+                    index+=1;
+                    workspace=Some(args.get(index).ok_or_else(||CliError("--workspace requires a target".into()))?.parse().map_err(|e:zmux_workspace_core::targets::TargetError|CliError(e.to_string()))?);
+                }
+                "--focus" if matches!(verb,"start"|"attach") => {
+                    index+=1;
+                    let value=match args.get(index).map(String::as_str) {Some("true")=>true,Some("false")=>false,_=>return Err(CliError("--focus requires true or false".into()))};
+                    if focus.replace(value).is_some() {return Err(CliError("repeated/conflicting focus option".into()));}
+                }
+                "--no-focus" if matches!(verb,"start"|"attach") => {
+                    if focus.replace(false).is_some() {return Err(CliError("repeated/conflicting focus option".into()));}
+                }
+                "--new-client" if verb=="attach" => new_client=true,
                 _ => return Err(CliError(format!("unknown or irrelevant local-tmux {verb} option {flag}"))),
             }
         } else if name.replace(args[index].clone()).is_some() {
@@ -123,11 +148,17 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
             ));
         }
     };
+    if (detached || headless) && (workspace.is_some() || focus.is_some() || new_client) {
+        return Err(CliError(
+            "headless/detached forms do not accept GUI workspace/focus/client options".into(),
+        ));
+    }
+    let scope = zmux_workspace_core::targets::TargetScope {
+        workspace: workspace.clone(),
+        ..Default::default()
+    };
     let invocation = match verb {
         "start" => {
-            if !detached {
-                return Err(CliError("app-bound local-tmux start is not implemented; add --detached to create the durable owner".into()));
-            }
             let SessionSelector::Name(name) = selector else {
                 return Err(CliError("start requires a session name".into()));
             };
@@ -137,6 +168,21 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
             } else {
                 env::current_dir()?.join(cwd)
             };
+            if !detached {
+                return Ok(Parsed::LocalTmuxApp(ControlCommand::LocalTmux {
+                    request: zmux_desktop_runtime::local_tmux::Request {
+                        operation: zmux_desktop_runtime::local_tmux::Operation::Start {
+                            name,
+                            cwd,
+                            command: shell,
+                        },
+                        workspace,
+                        caller: targets::caller(&scope)?,
+                        focus: focus.unwrap_or(true),
+                        new_client: true,
+                    },
+                }));
+            }
             Invocation::Start {
                 name,
                 cwd,
@@ -145,7 +191,15 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         }
         "attach" => {
             if !headless {
-                return Err(CliError("app-bound local-tmux attach is not implemented; add --headless for direct terminal attachment".into()));
+                return Ok(Parsed::LocalTmuxApp(ControlCommand::LocalTmux {
+                    request: zmux_desktop_runtime::local_tmux::Request {
+                        operation: zmux_desktop_runtime::local_tmux::Operation::Attach { selector },
+                        workspace,
+                        caller: targets::caller(&scope)?,
+                        focus: focus.unwrap_or(true),
+                        new_client,
+                    },
+                }));
             }
             Invocation::Attach(selector)
         }
@@ -188,4 +242,110 @@ pub(super) fn run(invocation: Invocation) -> Result<u8, Box<dyn Error>> {
     };
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(0)
+}
+
+fn operation_status(args: &[String]) -> Result<Parsed, CliError> {
+    let (mut id, mut epoch) = (None, None);
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        index += 1;
+        let value = args
+            .get(index)
+            .ok_or_else(|| CliError(format!("{flag} requires a value")))?;
+        match flag {
+            "--id" if id.is_none() => {
+                id = Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| CliError("operation --id must be positive".into()))?,
+                )
+            }
+            "--epoch" if epoch.is_none() => {
+                epoch = Some(
+                    value
+                        .parse()
+                        .map_err(|_| CliError("operation --epoch requires a UUID".into()))?,
+                )
+            }
+            _ => {
+                return Err(CliError(format!(
+                    "unknown/repeated local-tmux operation-status option {flag}"
+                )));
+            }
+        }
+        index += 1;
+    }
+    Ok(Parsed::LocalTmuxApp(ControlCommand::LocalTmuxStatus {
+        operation_id: id.ok_or_else(|| CliError("operation-status requires --id".into()))?,
+        epoch: epoch.ok_or_else(|| CliError("operation-status requires --epoch".into()))?,
+    }))
+}
+pub(super) fn run_gui(
+    options: &ClientOptions,
+    command: ControlCommand,
+) -> Result<serde_json::Value, CliError> {
+    let status_only = matches!(command, ControlCommand::LocalTmuxStatus { .. });
+    let deadline = Instant::now() + options.timeout;
+    let mut receipt = response_result(request(options, command)?)?;
+    if status_only {
+        return Ok(receipt);
+    }
+    let id = receipt["operation_id"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| CliError("missing tmux operation ID".into()))?;
+    let epoch_text = receipt["epoch"]
+        .as_str()
+        .ok_or_else(|| CliError("missing tmux operation epoch".into()))?
+        .to_owned();
+    let epoch = epoch_text
+        .parse()
+        .map_err(|_| CliError("invalid tmux operation epoch".into()))?;
+    loop {
+        if receipt["operation_id"].as_u64() != Some(id)
+            || receipt["epoch"].as_str() != Some(epoch_text.as_str())
+        {
+            return Err(CliError("mismatched tmux receipt identity".into()));
+        }
+        match receipt["state"].as_str() {
+            Some("completed") => return Ok(receipt),
+            Some("failed") => {
+                return Err(CliError(format!(
+                    "{} (owner_outcome={}, identity={}); inspect local-tmux operation-status --id {id} --epoch {epoch}",
+                    receipt["error"]
+                        .as_str()
+                        .unwrap_or("tmux attachment failed"),
+                    receipt["owner_outcome"],
+                    receipt["identity"]
+                )));
+            }
+            Some("pending") => (),
+            _ => return Err(CliError("invalid tmux receipt state".into())),
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(CliError(format!(
+                "tmux attachment deadline elapsed; outcome is unknown; inspect local-tmux operation-status --id {id} --epoch {epoch}; do not replay start"
+            )));
+        }
+        thread::sleep(Duration::from_millis(20).min(remaining));
+        let budget = ClientOptions {
+            socket: options.socket.clone(),
+            password: options.password.clone(),
+            timeout: deadline.saturating_duration_since(Instant::now()),
+        };
+        if budget.timeout.is_zero() {
+            continue;
+        }
+        receipt = response_result(request(
+            &budget,
+            ControlCommand::LocalTmuxStatus {
+                operation_id: id,
+                epoch,
+            },
+        )?)?;
+    }
 }

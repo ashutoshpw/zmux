@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- R02b app-bound tmux attachment, reuse, persistence/reopen and typed caller routing
+  pass full parent scripts/check and independent real-tmux/schema review. Model5 and
+  sessionv3 retain old session readers. Native acceptance and remote tmux remain open.
+- Browser profile presentation/menu and bounded browser runner committed/pushed528be92.
+  Parent isolated scripts/check passed; nine subprocess lifecycle cases and35 Chromium
+  DOM cases passed. Native38764217483 is pending; this repairs the missing-datastore
+  Swift constructor exposed by38762433983, but native success is not yet established.
 - Full V01 and its GitHub Actions macOS artifact remain the objective. Intermediate
   archives are diagnostic/acceptance evidence, not full-parity delivery.
 - B01 explicit profiles committed94725f1 after207 portable tests, strict Clippy,

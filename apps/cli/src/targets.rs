@@ -440,6 +440,9 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
         "clear-notifications" => {
             let notification_scope = match explicit_notification_scope(&mut scope)? {
                 Some(scope) => scope,
+                None if env::var("ZMUX_LOCAL_TMUX").ok().as_deref() == Some("1") => {
+                    NotificationScope::Workspace
+                }
                 None => match environment_target("ZMUX_WORKSPACE_ID")? {
                     Some(workspace) => {
                         scope.workspace = Some(workspace);
@@ -558,12 +561,22 @@ fn request(
         // An explicit workspace constrains notification attribution. Preserve
         // terminal evidence separately so the executor can accept a live caller
         // in that workspace without borrowing the workspace's selected tab.
-        CallerContext {
-            workspace: None,
-            surface: match environment_target("ZMUX_SURFACE_ID")? {
-                Some(surface) => Some(surface),
-                None => environment_target("ZMUX_TAB_ID")?,
-            },
+        if env::var("ZMUX_LOCAL_TMUX").ok().as_deref() == Some("1") {
+            // This is optional surface attribution inside an explicit hard
+            // workspace scope. An unavailable ambient pane falls back to it.
+            match managed_tmux_caller() {
+                Ok(Some(caller)) => caller,
+                _ => CallerContext::default(),
+            }
+        } else {
+            CallerContext {
+                local_tmux: None,
+                workspace: None,
+                surface: match environment_target("ZMUX_SURFACE_ID")? {
+                    Some(surface) => Some(surface),
+                    None => environment_target("ZMUX_TAB_ID")?,
+                },
+            }
         }
     } else {
         caller(&scope)?
@@ -580,7 +593,11 @@ fn request(
 pub(super) fn caller(scope: &TargetScope) -> Result<CallerContext, CliError> {
     Ok(
         if scope.workspace.is_none() && scope.pane.is_none() && scope.surface.is_none() {
+            if let Some(caller) = managed_tmux_caller()? {
+                return Ok(caller);
+            }
             CallerContext {
+                local_tmux: None,
                 workspace: environment_target("ZMUX_WORKSPACE_ID")?,
                 surface: match environment_target("ZMUX_SURFACE_ID")? {
                     Some(surface) => Some(surface),
@@ -591,6 +608,33 @@ pub(super) fn caller(scope: &TargetScope) -> Result<CallerContext, CliError> {
             CallerContext::default()
         },
     )
+}
+fn managed_tmux_caller() -> Result<Option<CallerContext>, CliError> {
+    if env::var("ZMUX_LOCAL_TMUX").ok().as_deref() != Some("1") {
+        return Ok(None);
+    }
+    let context = env::var("TMUX").map_err(|_| {
+        CliError("managed tmux caller is missing TMUX; supply an explicit target".into())
+    })?;
+    let socket = context
+        .rsplitn(3, ',')
+        .nth(2)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| CliError("managed tmux caller has invalid TMUX socket metadata".into()))?;
+    let pane = env::var("TMUX_PANE")
+        .map_err(|_| CliError("managed tmux caller is missing TMUX_PANE".into()))?;
+    let identity = zmux_remote_runtime::local_multiplexer::LocalTmux::for_caller_environment()
+        .and_then(|owner| owner.pane_identity(std::path::Path::new(socket), &pane))
+        .map_err(|e| {
+            CliError(format!(
+                "managed tmux caller: {e}; supply an explicit target"
+            ))
+        })?;
+    Ok(Some(CallerContext {
+        workspace: None,
+        surface: None,
+        local_tmux: Some(identity),
+    }))
 }
 fn environment_target(name: &str) -> Result<Option<TargetRef>, CliError> {
     match env::var(name) {

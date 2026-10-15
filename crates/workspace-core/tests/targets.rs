@@ -46,6 +46,7 @@ fn target_identity_survives_reorder_and_move_but_closed_surface_does_not_retarge
         (second.id, second.focused_pane, surface)
     );
     let inherited = CallerContext {
+        local_tmux: None,
         workspace: Some(
             model
                 .object_uuid(TargetKind::Workspace, first.id.0)
@@ -93,6 +94,7 @@ fn scoped_targets_and_position_indices_reject_wrong_kind_and_cross_owner_without
     let workspace: TargetRef = format!("workspace:{}", first.id.0).parse().unwrap();
     let pane: TargetRef = format!("pane:{}", first.focused_pane.0).parse().unwrap();
     let caller = CallerContext {
+        local_tmux: None,
         workspace: Some(format!("workspace:{}", second.id.0).parse().unwrap()),
         surface: None,
     };
