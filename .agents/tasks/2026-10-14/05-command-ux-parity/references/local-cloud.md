@@ -101,3 +101,32 @@ Parent isolated `scripts/check` passes287 Rust tests, strict Clippy, notices and
 The final script-only cleanup changes also pass actual PostgreSQL failure-path checks.
 Interrupted creation is always a failure: attempted cleanup does not establish server
 completion when the transport itself was interrupted; the private log records that limit.
+
+## H01 transaction ownership — implementation and local evidence
+
+Unify code exchange, token revocation and expired credential maintenance under one
+transaction owner. Every owned transaction has a five-second statement bound and a
+bounded lock wait. A failed rollback discards the physical client and preserves both
+errors, instead of returning a potentially aborted connection to the pool. Invalid
+expired authorization codes retain their existing committed deletion behavior.
+
+Acceptance: real PostgreSQL commit/rollback and statement deadline; forced physical
+connection termination must preserve the primary/rollback errors and allow a one-slot
+pool to obtain a fresh usable backend. Existing HTTP auth/device/cleanup integration
+checks must still pass. No test-only production configuration or mock database owner.
+
+The disposable PostgreSQL suite now passes15 tests, including the three transaction
+owner cases. The forced-backend termination case initially failed with an unhandled
+`Connection terminated unexpectedly` event: the owner now captures asynchronous errors
+until physical release, preserves both the primary/rollback failures, and the same
+one-slot pool successfully obtains a different backend. The five-second statement
+cancel test verifies SQLSTATE57014 and a usable subsequent query. Typecheck passes.
+The persistent service database was not used for these tests. Production service refresh
+and hosted current-head checks remain separate; limits are per statement, not a network
+deadline or total transaction duration.
+
+Independent source review accepted client ownership, actual pg-pool release/listener
+ordering, committed invalid-code cleanup and the three distinct PostgreSQL test boundaries.
+Parent isolated `scripts/check` also passes287 tests, strict Clippy, notices and C ABI.
+Current macOS workflow shutdown-test failures are tracked separately in F04; this cloud
+slice does not establish native or full-product acceptance.
