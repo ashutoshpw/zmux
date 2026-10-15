@@ -1234,11 +1234,31 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                   let up = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: point.x + 64, y: point.y), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0) else {
                 throw BridgeFailure(message: "Unable to create native sidebar drag events")
             }
+            @MainActor func responderDescription(_ responder: NSResponder?) -> String {
+                guard let responder else { return "nil" }
+                return "\(String(reflecting: type(of: responder)))@\(ObjectIdentifier(responder))"
+            }
+            @MainActor func sidebarHitTarget(_ location: NSPoint) -> String {
+                guard let content = window.contentView else { return "no-content-view" }
+                let pointInParent = content.superview?.convert(location, from: nil) ?? location
+                return responderDescription(content.hitTest(pointInParent))
+            }
+            let downHit = sidebarHitTarget(point)
+            let beforeMouseResponder = responderDescription(window.firstResponder)
             window.sendEvent(down)
+            let afterDownResponder = responderDescription(window.firstResponder)
             window.sendEvent(drag)
+            let afterDragResponder = responderDescription(window.firstResponder)
             window.sendEvent(up)
             guard abs(sidebarContainer.bounds.width - 264) < 1, window.firstResponder === savedResponder else {
-                throw BridgeFailure(message: "Sidebar dragging did not resize while retaining input focus")
+                let diagnostics = [
+                    "width=\(sidebarContainer.bounds.width), expected=264, preference=\(sidebarLayout.preferredWidth)",
+                    "responders before=\(beforeMouseResponder), down=\(afterDownResponder), drag=\(afterDragResponder), up=\(responderDescription(window.firstResponder)), expected=\(responderDescription(savedResponder))",
+                    "downPoint=\(point), downHit=\(downHit), dragPoint=\(drag.locationInWindow), dragHit=\(sidebarHitTarget(drag.locationInWindow))",
+                    "dividerFrame=\(sidebarDivider.frame), dividerBounds=\(sidebarDivider.bounds), hidden=\(sidebarDivider.isHiddenOrHasHiddenAncestor)",
+                    "windowFrame=\(window.frame), contentBounds=\(String(describing: window.contentView?.bounds)), key=\(window.isKeyWindow), currentEvent=\(String(describing: NSApp.currentEvent?.type))"
+                ].joined(separator: "; ")
+                throw BridgeFailure(message: "Sidebar dragging did not resize while retaining input focus: " + diagnostics)
             }
             window.recalculateKeyViewLoop()
             for _ in 0..<256 {
