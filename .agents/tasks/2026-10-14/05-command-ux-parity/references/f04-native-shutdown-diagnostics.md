@@ -123,3 +123,36 @@ all48 Git source hashes, both3-case modes and four actual ECHILD child identitie
 `41175235a3404a78d06b95a872cdf10886fcdc7b1e2a6397bf52442693ef5049`.
 The fixture repair is accepted within that scope. Older graceful Timeout and
 native app/default-engine gates remain separate.
+
+## Retained-child exit transition repair
+
+Optional engine run38822344346 at `924cd89` failed the unchanged causal-reply
+deadline case: SIGKILL returned EPERM, getpgid returned ESRCH, and both the
+nonreaping observation and immediate physical child try_wait had no exit status.
+The worker correctly retained a cleanup failure instead of claiming success.
+
+The repair observes only this exact EPERM/ESRCH case through the retained child
+handle for at most200ms. Its first deadline survives Drop retries, and every
+sleep is clamped against the current explicit shared close deadline. It sends no
+additional signals within that observation. Only an actual child reap succeeds;
+timeout and observation errors remain failures with attempt/elapsed diagnostics.
+The separate shutdown observer timeout and graceful drain reserve are unchanged.
+
+The unchanged default Session20 and linked Session24 tests pass locally, including
+actual ECHILD cleanup errors and zero-duration join followed by later physical
+cleanup. Full `scripts/check` passes293 Rust tests, strict workspace Clippy,
+notices and the C ABI. No Linux reproduction of the Darwin transition is claimed.
+Freeze SHA256: `e1ecab4f4d8b01ef7ee56ee1cefc8d4cc760be22eecc9aba5bd6b64e732ae549`.
+Parent independent source/evidence review SHA256:
+`de6c494873aa9ce9265aef3d8693bca5f9a25f87f004f217316e4eab9cacd02e`.
+
+Committed Darwin execution is still required. A green rerun without observing
+the pending-to-reaped fallback establishes regression coverage, not proof of
+repairing the rare race. Native-host semantic input, the older graceful timeout
+and full terminal fidelity remain separate gates.
+
+A final isolated check uses committed `986600f` plus only the frozen runtime
+repair. All165 validation input hashes are identical before and after; all293
+tests, strict Clippy, notices and the C ABI pass. Receipt SHA256:
+`73fada3be689bf70b59a4cd1bbf55ce33597e95a1f5658ac50352c22b3d2a984`.
+Concurrent metadata implementation was excluded from this validation tree.

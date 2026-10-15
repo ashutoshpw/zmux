@@ -5,6 +5,18 @@
 
 ## Active implementation
 
+- R03 `986600f` separates structured Cargo stdout from download diagnostics.
+  Actual cold-Cargo red/green, seven stream/lifecycle checks, fresh producer, owner,
+  13 negative-package cases and independent review pass. Exact isolated
+  `scripts/check` passes; both-host packaging38823056442 is running.
+
+- Published `924cd89`: explicit optional terminal engine and worker-owned semantic
+  key/paste input (`7f125f2`) pass parent isolated `scripts/check` (293 tests, strict
+  Clippy, notices and C ABI). Optional Darwin38822344346 stops at process cleanup
+  before native host execution; retained-child reap repair is in progress. Default
+  native38822345401 separately validates the document-focus fixture repair.
+  Neither result establishes full terminal fidelity or V01 acceptance.
+
 - H01 authenticator/recovery API and web UI pass 17 real PostgreSQL tests and
   15 real Chrome checks, including pre-fix sign-out red/repaired green. Independent
   review, TypeScript, production Docker image and parent core checks pass.

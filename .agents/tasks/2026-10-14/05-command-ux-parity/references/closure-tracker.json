@@ -93,16 +93,21 @@
       "exit_gate": "No engine choice from language preference alone; pinned license/provenance review and named Mac results; explicit gaps for graphics/keyboard/Unicode/reflow; bounded memory and latency budgets recorded before expanding limits.",
       "implemented_slices": [
         "Bounded native resource sampler executed at5f5005e; controlled budgets/engine decision remain open",
-        "Isolated pinned Ghostty C/Rust feasibility and Viewport exporter committed3ac6fa4; Linux x86_64 and Mac arm64 exporter execution passes in38761104404; production engine unchanged"
+        "Isolated pinned Ghostty C/Rust feasibility and Viewport exporter committed3ac6fa4; Linux x86_64 and Mac arm64 exporter execution passes in38761104404; production engine unchanged",
+        "7f125f2 explicit opt-in native engine configuration and worker-owned semantic key/paste encoding; default vt100 retained"
       ],
       "verification_receipts": [
         "f04-native-resource-sampler.md",
-        "f04-engine-evaluation.md"
+        "f04-engine-evaluation.md",
+        "f04-production-linkage.md",
+        "f04-native-opt-in.md",
+        "f04-native-shutdown-diagnostics.md"
       ],
       "remaining_gates": [
         "Exact history and enforceable memory policy",
         "Named controlled Mac workload budgets",
-        "Production engine decision and complete terminal fidelity"
+        "Production engine decision and complete terminal fidelity",
+        "924cd89 optional Darwin run38822344346 failed retained-child cleanup before native host; actual native semantic input acceptance pending"
       ]
     },
     {

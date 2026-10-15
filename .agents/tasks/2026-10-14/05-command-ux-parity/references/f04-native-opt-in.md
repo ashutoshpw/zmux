@@ -154,3 +154,22 @@ remain pending the committed, independently reviewed source dispatch. Normal
 full text/Kitty key protocol/IME behavior, application mouse, full styling and
 selection/VoiceOver, named Mac workloads and numeric product/performance budgets
 remain open after this bounded native gate as well.
+
+## Committed execution update
+
+Implementation `7f125f2` is published; parent isolated validation passes all293
+default Rust tests, strict Clippy, notices and the C ABI. Independent Rust/C and
+Swift reviews accepted the frozen implementation. Optional native run38822344346
+at `924cd89` passes four ARM adapter tests but fails the Session deadline cleanup
+case with SIGKILL EPERM, observed group ESRCH and no immediate child reap. The
+native host has not executed. The retained-child lifecycle repair is tracked
+separately; no native input or full-parity acceptance follows from this run.
+
+Parent startup review also found that `AppStartup.prepare` forwarded the existing
+`--terminal-engine-smoke` flag to the bundled CLI, before AppDelegate could enter
+the native fixture. The one-line repair admits this flag alongside the existing
+native fixtures. Ordinary CLI, explicit `--cli`, empty arguments and Launch Services
+`-psn_` handling retain their previous paths. The existing helper invokes the real
+packaged executable and requires child observations and shared shutdown, so it owns
+the pending native startup proof; no additional source-mirroring test was added.
+Startup source SHA256: `12bd1ebc3a55e511f13668d76c13fbb5818dae1eddd611241bf5a7f02862464e`.
