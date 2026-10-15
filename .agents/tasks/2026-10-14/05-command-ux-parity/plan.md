@@ -22,7 +22,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## Steps
 - [x] Review source and establish initial command/UX gap inventory.
-- [ ] P0: trace every command/UI entrypoint through its owner, effects and failure paths; record option contracts and resource budgets.
+- [x] Complete broader source-family audit and reconcile initial command/shortcut ledgers.
+- [ ] P0: turn audited gaps into executable per-leaf/option contracts, shared registry and measured resource budgets.
 - [ ] Priority journey: managed SSH plus remote file/image drop and paste; independent of cloud hosting.
 - [ ] P1: topology, ⌘T tabs, ⇧⌘T/recently-closed recovery, focus history and navigation.
 - [ ] P2: collapsible sidebar, attention inbox/badges and notification automation.
@@ -45,6 +46,15 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Whole-product audit](references/full-parity-audit.md) — current source comparison, principal gaps, evidence boundaries and delivery sequence.
+- [CLI/shared contracts](references/audit-cli-contract.md) — grammar, targeting, authentication, output and lifecycle comparison.
+- [Terminal/topology audit](references/audit-terminal-ux.md) / [rows](references/audit-terminal-ux.json) — input, rendering, tabs/windows, restore, gestures and accessibility.
+- [Browser/content audit](references/audit-browser-content.md) / [rows](references/audit-browser-content.json) — browser leaves, viewers, files/search and customization.
+- [Agents/remote audit](references/audit-agents-remote.md) / [rows](references/audit-agents-remote.json) — remote sessions/transfers, hooks/messages and attention/automation.
+- [Cloud/platform audit](references/audit-cloud-platform.md) / [rows](references/audit-cloud-platform.json) — cloud/VM, mobile/simulator, security, distribution and PR #1.
+- [Audit reconciliation](references/audit-reconciliation.json) — review routing for all 428 initial command and 171 shortcut rows.
+- [Cross-cutting audit](references/audit-cross-cutting.md) / [rows](references/audit-cross-cutting.json) — Computer Use, managed policy, project pane and quit lifecycle.
+- [Source catalog](references/audit-source-catalog.json) — CLI dispatch candidates and RPC identifiers; discovery is not runtime evidence.
 - [Managed SSH and transfer comparison](references/ssh-transfer-contract.md) — traced source contracts, coupled delivery and acceptance gates.
 - [Scrolling and attention repair](references/scroll-attention-repair.md) — corrective slice and concrete CLI parity backlog.
 - [Native delivery receipt](references/native-delivery.md) — accepted artifact, checksums, screenshots and remaining gates.
@@ -54,7 +64,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [Full UX parity](references/ux-parity.md) — interaction audit and required undo-close semantics.
 - [UI action inventory](references/ui-action-inventory.json) — source-discovered shortcut actions, pending behavioral audit.
 - [Source review](references/source-review.md) — findings, WebKit decision and provenance.
-- [Command inventory](references/command-inventory.json) — 428 initial tracked entries; nested audit remains.
+- [Command inventory](references/command-inventory.json) — historical 428-entry baseline; current comparison is in the audit reconciliation.
 - [Phases](references/phases.md) — dependencies, ownership, implementation scope and exit gates.
 - [Verification](references/verification.md) — contract fields, evidence and commit cadence.
 - [Original roadmap](../01-build-zmux/references/delivery-roadmap.md) — retained M0–M7 scope.

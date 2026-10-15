@@ -75,3 +75,32 @@ from successful GitHub Actions, with source/checksum/architecture/smoke receipts
 P1/P2/P3a provide early usable UX artifacts; these are explicitly intermediate deliveries.
 Full parity requires all ledger rows/options verified and no unresolved wildcard families,
 unless the user explicitly changes scope. Hosting deferral does not waive cloud command scope.
+
+## Broader source audit receipt — 2026-10-15
+
+Compared cmux `3ba653b9e5afb11d0bc578031142950d6136697e` with zmux
+`69342a8f036037736c6eb9a500e479ac41e32d93`. The
+[whole-product audit](full-parity-audit.md) and its linked area reports are the
+current comparison; original discovery ledger status fields are retained as history.
+
+- `scripts/check`: passed (45 Rust tests, formatting, clippy, dependency notice
+  inventory and C ABI harness). The inventory still reports two notices needing
+  upstream text review; no new dependencies were introduced.
+- Audit JSON parses; feature identifiers are unique within each area. Reconciliation
+  contains exactly the original 428 command IDs and 171 shortcut IDs, each routed to
+  an existing report. Routing is not a per-leaf execution assertion.
+- The five area ledgers contain 172 feature-family records. All 217 top-level CLI
+  candidates have an explicit classification and existing review owner. The 571 RPC
+  identifiers remain discovery metadata, with source anchor bounds validated.
+- Structured feature source references checked for existing repository files and
+  in-bounds line numbers. Relative report links checked. These mechanical checks
+  establish reference integrity, not semantic correctness; source review remains
+  necessary and its limitations are described in each report.
+- Changes are task documentation and identifier metadata only. No runtime code,
+  dependencies, CI workflow or cloud deployment changed. No fresh macOS artifact,
+  remote connection, transfer, browser permission journey or cloud sign-in was run.
+- Independent read-only coverage review initially returned `fix-first` for omitted
+  Computer Use, managed-device policy and project-pane contracts. Added those plus
+  explicit quit lifecycle, repaired open-folder routing, and classified every discovered
+  top-level candidate. Re-review returned `ship`, with no remaining material coverage,
+  accuracy or status findings. Per-option/native/remote/production evidence remains open.

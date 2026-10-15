@@ -5,6 +5,13 @@
 
 ## Delivered slices
 
+- Broader whole-product source-family audit completed at cmux `3ba653b9` / zmux
+  `69342a8`: CLI/global contracts, terminal/topology/native UX, browser/content/settings,
+  agents/attention/automation/remote, cloud/platform/security/distribution. All 428 initial
+  command rows and 171 shortcut rows have review routing; source-only namespaces and RPC
+  declarations are separately cataloged. See [audit](references/full-parity-audit.md).
+  This completes the requested broad audit, not implementation or per-option runtime proof.
+
 - Corrective slice: terminal wheel/history navigation, typed-input return to live screen,
   worker-owned mouse protocol routing and exited-process history; focus/activation attention
   acknowledgement and Dock unread count. Local regression and workspace checks pass;
@@ -28,9 +35,9 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 
 ## Open scope
 
-- P0 exhaustive menu/gesture/dispatcher/options audit, shared command registry, UUID/typed refs,
-  caller defaults/auth contracts and measured Mac resource budgets remain open. Initial ledgers
-  contain 428 command entries and 171 source-discovered UI actions; they are not completion counts.
+- P0 executable per-leaf/option contracts, shared command registry, UUID/typed refs,
+  caller defaults/auth implementation and measured Mac resource budgets remain open.
+  The broad source comparison is complete; discovery and source review are not completion counts.
 - Whole P1/P2/P3 phases remain incomplete: multiwindow/focus history/groups, original pane restore
   anchors, richer attention/hook/status operations, browser automation/profiles/downloads and
   remaining UX/command contracts are tracked in their references and phase plan.
@@ -47,8 +54,9 @@ User correction on 2026-10-15: incremental builds must not substitute for full s
 parity. Prioritize the managed SSH + remote file/image transfer journey and complete owner/
 effect/error tracing for every family. SSH is not blocked by cloud hosting. See the
 [SSH/transfer comparison](references/ssh-transfer-contract.md). No runtime SSH support
-was added in this comparison; the whole-product audit remains incomplete.
+was added in this comparison. The broader audit is now recorded in the reports above.
 
-Continue P0 command registry/target contracts and remaining P1 navigation/window/recovery actions;
+Implement the audited P0 command registry/target contracts and the managed SSH/transfer
+priority journey, alongside remaining P1 navigation/window/recovery actions;
 then close P2 attention and P3 browser gaps against the linked ledgers. Preserve native artifact
 and visual gates, and commit cohesive validated slices. Full parity is still the objective.

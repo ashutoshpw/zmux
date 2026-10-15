@@ -4337,5 +4337,8 @@
       "implementation_status": "not-verified",
       "evidence": []
     }
-  ]
+  ],
+  "current_source_audit": "full-parity-audit.md",
+  "current_inventory_reconciliation": "audit-reconciliation.json",
+  "historical_fields_note": "Original baseline statuses are preserved as history. Consult the current source audit for the 2026-10-15 comparison; review routing is not runtime parity."
 }

@@ -5,6 +5,11 @@ validated commit on main and updated receipts; user-facing phases publish a macO
 artifact. Keep implementation changes out of this planning task until implementation begins.
 Existing roadmap M0–M7 and PR #1 requirements remain linked dependencies, not replaced goals.
 
+The [2026-10-15 whole-product audit](full-parity-audit.md) now supplies the source-family
+comparison and reconciles the initial ledgers. Per-leaf executable contracts, implementation
+and runtime acceptance below remain open. Area-ledger P0/P1/P2 priority values mean urgency,
+not completion of these delivery phases.
+
 ## P0 — Freeze the contract and measure the baseline
 
 Owner: CLI/protocol and acceptance workstream. Depends on no new runtime work.
@@ -36,6 +41,10 @@ Owner: CLI/protocol and acceptance workstream. Depends on no new runtime work.
 Exit: no unexplained catalog omissions; every known leaf/option has a contract and phase;
 registry/help drift check specified; measured baseline and approved numerical budgets recorded.
 A command with an unavailable dependency remains incomplete, even if its error is useful.
+
+- Cross-cutting managed policy (see `audit-cross-cutting.md`) must share capability
+  ownership, config/env precedence and live client revocation; include Computer Use and
+  project panes in the later P5/P6/P8 implementation scope.
 
 ## P1 — Window, pane and surface model; real terminal tabs
 
