@@ -443,6 +443,7 @@ fn default_socket_path() -> Result<PathBuf, CliError> {
 }
 
 fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlResponse, CliError> {
+    let deadline = Instant::now() + options.timeout;
     let request_id = request_id();
     let request = ControlRequest {
         version: CONTROL_VERSION,
@@ -457,7 +458,13 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
             "request exceeds {MAX_CONTROL_REQUEST_BYTES} bytes"
         )));
     }
-    let mut stream = UnixStream::connect(&options.socket).map_err(|error| {
+    let connect = || -> io::Result<UnixStream> {
+        let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+        let address = socket2::SockAddr::unix(&options.socket)?;
+        socket.connect_timeout(&address, socket_budget(deadline)?)?;
+        Ok(socket.into())
+    };
+    let mut stream = connect().map_err(|error| {
         let guidance = match error.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
                 "; start zmux and try again"
@@ -470,12 +477,13 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
             options.socket.display()
         ))
     })?;
-    stream.set_read_timeout(Some(options.timeout))?;
-    stream.set_write_timeout(Some(options.timeout))?;
-    stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
-    stream.write_all(&bytes)?;
+    write_before(&mut stream, &(bytes.len() as u32).to_be_bytes(), deadline)
+        .and_then(|()| write_before(&mut stream, &bytes, deadline))
+        .map_err(|error| CliError(format!(
+            "sending zmux request failed: {error}; its outcome may be unknown and the command was not retried"
+        )))?;
     let mut response_length = [0_u8; 4];
-    stream.read_exact(&mut response_length).map_err(|error| {
+    read_before(&mut stream, &mut response_length, deadline).map_err(|error| {
         CliError(format!(
             "waiting for zmux at {} failed: {error}; the command was not retried",
             options.socket.display()
@@ -488,12 +496,20 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
         ));
     }
     let mut response = vec![0; response_length];
-    stream.read_exact(&mut response).map_err(|error| {
+    read_before(&mut stream, &mut response, deadline).map_err(|error| {
         CliError(format!(
             "reading zmux response failed: {error}; the command was not retried"
         ))
     })?;
-    let response: ControlResponse = serde_json::from_slice(&response)
+    decode_response(&response, request_id, deadline)
+}
+
+fn decode_response(
+    bytes: &[u8],
+    request_id: u64,
+    deadline: Instant,
+) -> Result<ControlResponse, CliError> {
+    let response: ControlResponse = serde_json::from_slice(bytes)
         .map_err(|error| CliError(format!("running app returned invalid JSON: {error}")))?;
     if response.version != CONTROL_VERSION {
         return Err(CliError(format!(
@@ -506,7 +522,59 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
             "running app returned a mismatched request ID".into(),
         ));
     }
+    // Byte-bounded JSON decoding is not preemptible. Reject an expired decoded
+    // response before exposing success; subsequent output rendering has its own
+    // CPU and stdout costs and is outside this response-acceptance deadline.
+    socket_budget(deadline).map_err(|_| CliError(
+        "decoding zmux response exceeded the request deadline; its outcome may be unknown and the command was not retried".into()
+    ))?;
     Ok(response)
+}
+
+fn socket_budget(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "request deadline elapsed"))
+}
+
+// Recompute the remaining total budget for each partial transfer. read_exact and
+// write_all with a single SO_RCVTIMEO/SO_SNDTIMEO restart that timeout after each
+// successful partial I/O, allowing a trickling peer to extend the request forever.
+fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) -> io::Result<()> {
+    while !bytes.is_empty() {
+        stream.set_read_timeout(Some(socket_budget(deadline)?))?;
+        match stream.read(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "incomplete zmux response",
+                ));
+            }
+            Ok(count) => bytes = &mut bytes[count..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    socket_budget(deadline).map(|_| ())
+}
+
+fn write_before(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    while !bytes.is_empty() {
+        stream.set_write_timeout(Some(socket_budget(deadline)?))?;
+        match stream.write(bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "incomplete zmux request",
+                ));
+            }
+            Ok(count) => bytes = &bytes[count..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    socket_budget(deadline).map(|_| ())
 }
 
 fn response_result(response: ControlResponse) -> Result<serde_json::Value, CliError> {
@@ -601,4 +669,25 @@ fn run_prototype(args: Vec<String>) -> Result<u8, Box<dyn Error>> {
         return Err(failure.clone().into());
     }
     Ok(snapshot.exit_code.unwrap_or(1).min(255) as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoded_response_acceptance_requires_a_remaining_deadline() {
+        let bytes = br#"{"version":2,"request_id":42,"ok":true,"result":{"answer":7}}"#;
+        let valid = decode_response(bytes, 42, Instant::now() + Duration::from_secs(5)).unwrap();
+        assert_eq!(valid.result.unwrap()["answer"], 7);
+
+        let expired =
+            decode_response(bytes, 42, Instant::now() - Duration::from_secs(1)).unwrap_err();
+        assert!(
+            expired
+                .0
+                .contains("decoding zmux response exceeded the request deadline")
+        );
+        assert!(expired.0.contains("not retried"));
+    }
 }

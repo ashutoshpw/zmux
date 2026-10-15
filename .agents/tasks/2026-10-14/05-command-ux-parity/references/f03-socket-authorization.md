@@ -70,3 +70,21 @@ checks (including the framing regression), universal native compilation and pack
 default-mode smoke. This does not verify native password-mode configuration journeys,
 Intel runtime, physical input, deployed services or whole parity. No archive is shared
 as the requested artifact.
+
+## Client response deadline repair
+
+One monotonic deadline now covers Unix socket connect, partial request writes, partial
+response reads, and response acceptance after bounded JSON decoding/validation. The
+existing pinned socket2 dependency supplies bounded connect; no timeout worker or command
+replay is introduced. CPU decoding cannot be preempted, but an expired decoded response
+cannot be accepted as success. Output rendering follows response acceptance.
+
+Real Unix-wire slow header/body/staged cases failed before repair and pass after. A
+940 KB response exposed decode finishing after expiry; manual wire evidence and a
+negative control of the genuine production acceptance owner verify the fix. CI uses a
+deterministic expired Instant rather than assuming a particular CPU parsing speed.
+
+Parent isolated full verification and fresh review precede the repair commit. Hosted
+Darwin verification remains required. Browser receipt fixtures retain an exact runtime
+error check, with a 4-second positive budget and unchanged 2-second stalled-receipt
+negative control; both old-reserve red/current-reserve green runs were reproduced.

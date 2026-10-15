@@ -332,6 +332,186 @@ fn incompatible_app_protocol_reports_an_upgrade_without_retrying_the_command() {
 }
 
 #[test]
+fn socket_deadline_spans_fragmented_header_body_and_response_stages_without_replay() {
+    let mut unexpected = Vec::new();
+    for scenario in ["ordinary", "slow_header", "slow_body", "split_stages"] {
+        let socket = socket_path();
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let peer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut bytes).unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            let response = serde_json::to_vec(&serde_json::json!({
+                "version":2,"request_id":request["request_id"],"ok":true,
+                "result":{"transport":"complete"}
+            }))
+            .unwrap();
+            let header = (response.len() as u32).to_be_bytes();
+            let pause = Duration::from_millis(120);
+            let packets: Vec<(Duration, Vec<u8>)> = match scenario {
+                "slow_header" => header
+                    .iter()
+                    .enumerate()
+                    .map(|(index, byte)| {
+                        (if index == 0 { Duration::ZERO } else { pause }, vec![*byte])
+                    })
+                    .chain(std::iter::once((Duration::ZERO, response)))
+                    .collect(),
+                "slow_body" => std::iter::once((Duration::ZERO, header.to_vec()))
+                    .chain(response.chunks(response.len().div_ceil(4)).enumerate().map(
+                        |(index, chunk)| {
+                            (
+                                if index == 0 { Duration::ZERO } else { pause },
+                                chunk.to_vec(),
+                            )
+                        },
+                    ))
+                    .collect(),
+                "split_stages" => vec![
+                    (Duration::from_millis(180), header.to_vec()),
+                    (Duration::from_millis(180), response),
+                ],
+                _ => vec![
+                    (Duration::ZERO, header[..2].to_vec()),
+                    (Duration::from_millis(10), header[2..].to_vec()),
+                    (Duration::from_millis(10), response),
+                ],
+            };
+            for (delay, bytes) in packets {
+                thread::sleep(delay);
+                if let Err(error) = stream.write_all(&bytes) {
+                    assert!(
+                        matches!(
+                            error.kind(),
+                            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                        ),
+                        "{error}"
+                    );
+                    break;
+                }
+            }
+            (listener, request)
+        });
+        let started = Instant::now();
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .arg("--socket")
+            .arg(&socket)
+            .args(["--timeout", "300", "new-workspace", "One admission"])
+            .output()
+            .unwrap();
+        let elapsed = started.elapsed();
+        let (listener, request) = peer.join().unwrap();
+        assert_eq!(request["command"]["method"], "new_workspace");
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "CLI replayed a mutation"
+        );
+        if scenario == "ordinary" {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output.stdout).unwrap()["transport"],
+                "complete"
+            );
+        } else if output.status.success() {
+            unexpected.push(format!(
+                "{scenario} exceeded the total deadline but succeeded after {elapsed:?}"
+            ));
+        } else {
+            let error = String::from_utf8_lossy(&output.stderr);
+            let phase = if scenario == "slow_header" {
+                "waiting for zmux"
+            } else {
+                "reading zmux response"
+            };
+            assert!(
+                error.contains(phase) && error.contains("not retried"),
+                "{scenario}: {error}"
+            );
+            assert!(output.stdout.is_empty());
+            assert!(
+                elapsed < Duration::from_millis(550),
+                "{scenario} extended the total deadline: {elapsed:?}"
+            );
+        }
+        fs::remove_file(&socket).unwrap();
+        fs::remove_dir(socket.parent().unwrap()).unwrap();
+    }
+    assert!(unexpected.is_empty(), "{}", unexpected.join("; "));
+}
+
+#[test]
+fn a_large_valid_response_with_an_ample_deadline_is_rendered_completely() {
+    // A valid response below the public byte limit. This exercises public-wire
+    // acceptance and rendering without assumptions about a runner's CPU speed.
+    let values = "0,".repeat(469_999) + "0";
+    let socket = socket_path();
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    let values = values.clone();
+    let peer = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+        stream.read_exact(&mut bytes).unwrap();
+        let request: Value = serde_json::from_slice(&bytes).unwrap();
+        let response = format!(
+            "{{\"version\":2,\"request_id\":{},\"ok\":true,\"result\":[{values}]}}",
+            request["request_id"]
+        );
+        assert!(response.len() < zmux_desktop_runtime::control::MAX_CONTROL_RESPONSE_BYTES);
+        stream
+            .write_all(&(response.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(response.as_bytes()).unwrap();
+        listener
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["--timeout", "5000", "status"])
+        .output()
+        .unwrap();
+    let listener = peer.join().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        470_000
+    );
+    fs::remove_file(&socket).unwrap();
+    fs::remove_dir(socket.parent().unwrap()).unwrap();
+}
+
+#[test]
 fn local_socket_credentials_and_live_access_changes_protect_real_mutations() {
     use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy, SocketPassword};
     let socket = socket_path();
