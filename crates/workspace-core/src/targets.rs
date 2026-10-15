@@ -369,6 +369,8 @@ pub enum TargetAction {
     CloseOtherSurfaces,
     CreateBrowser {
         url: String,
+        #[serde(default = "crate::default_focus")]
+        focus: bool,
     },
     NavigateBrowser {
         url: String,
@@ -462,9 +464,10 @@ impl TargetAction {
             Self::CloseOtherSurfaces => Action::CloseOtherSurfaces {
                 surface_id: target.surface,
             },
-            Self::CreateBrowser { url } => Action::CreateBrowser {
+            Self::CreateBrowser { url, focus } => Action::CreateBrowser {
                 pane_id: target.pane,
                 url,
+                focus,
             },
             Self::NavigateBrowser { url } => Action::NavigateBrowser {
                 surface_id: target.surface,

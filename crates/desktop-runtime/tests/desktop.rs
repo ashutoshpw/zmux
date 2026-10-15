@@ -775,6 +775,7 @@ fn browser_metadata_never_allocates_a_terminal_and_has_independent_capacity() {
             id,
             Command::Action {
                 action: Action::CreateBrowser {
+                    focus: true,
                     pane_id: pane,
                     url: "about:blank".into(),
                 },
@@ -792,6 +793,7 @@ fn browser_metadata_never_allocates_a_terminal_and_has_independent_capacity() {
         99,
         Command::Action {
             action: Action::CreateBrowser {
+                focus: true,
                 pane_id: pane,
                 url: "about:blank".into(),
             },

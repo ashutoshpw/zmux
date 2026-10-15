@@ -139,6 +139,26 @@ enum BrowserHostEvent: Encodable, Sendable {
 enum BrowserAutomationScript {
     static let isolatedWorld = WKContentWorld.world(name: "app.w3dev.zmux.automation")
     static let resultBytes = 60 * 1024
+    // This fixed probe receives no user script. A policy decision is made before
+    // user code starts, so a script's own CSP-looking exception cannot cause retry.
+    static let evalPreflight = #"""
+    try {
+      return (0, eval)('0') === 0 ? 'allowed' : 'unsupported';
+    } catch (error) {
+      const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+      const policy = message.includes('unsafe-eval') && (message.includes('content security policy') || message.includes('csp') || message.includes('refused'));
+      return error.name === 'EvalError' && policy ? 'csp_blocked' : 'unsupported';
+    }
+    """#
+
+    static func isNativeCSPDenial(_ error: any Error) -> Bool {
+        let native = error as NSError
+        guard native.domain == WKError.errorDomain,
+              native.code == WKError.Code.javaScriptExceptionOccurred.rawValue,
+              let message = native.userInfo["WKJavaScriptExceptionMessage"] as? String else { return false }
+        let value = message.lowercased()
+        return value.contains("unsafe-eval") && (value.contains("content security policy") || value.contains("csp") || value.contains("refused"))
+    }
     static let source = #"""
     const input = JSON.parse(payload);
     const req = input.action;

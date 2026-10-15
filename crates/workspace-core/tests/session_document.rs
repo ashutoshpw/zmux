@@ -23,6 +23,7 @@ fn fixture() -> WorkspaceStore {
     let last = store.snapshot().workspaces[0].focused_pane;
     store
         .apply(Action::CreateBrowser {
+            focus: true,
             pane_id: last,
             url: "https://example.org/docs?token=secret#private".into(),
         })

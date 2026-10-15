@@ -29,6 +29,11 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     } else {
         None
     };
+    let browser_focus = if browser_verb.as_deref() == Some("open") {
+        extract_browser_focus(&mut args)?
+    } else {
+        true
+    };
     let mut scope = TargetScope::default();
     let mut expected_model_revision = None;
     let mut cursor = 0;
@@ -154,6 +159,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         "browser" => match browser_verb.as_deref() {
             Some("open") => TargetAction::CreateBrowser {
                 url: target_and_value(values, &mut scope.pane, "pane and URL")?,
+                focus: browser_focus,
             },
             Some("navigate" | "goto") => TargetAction::NavigateBrowser {
                 url: target_and_value(values, &mut scope.surface, "surface and URL")?,
@@ -263,6 +269,57 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         expected_model_revision,
         TargetOperation::Action { action },
     )
+}
+fn extract_browser_focus(args: &mut Vec<String>) -> Result<bool, CliError> {
+    let mut focus = None;
+    let mut retained = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--" => {
+                retained.extend_from_slice(&args[index..]);
+                break;
+            }
+            "--no-focus" => {
+                if focus.replace(false).is_some() {
+                    return Err(CliError(
+                        "repeated or conflicting browser focus option".into(),
+                    ));
+                }
+                index += 1;
+            }
+            "--focus" => {
+                if focus.is_some() {
+                    return Err(CliError(
+                        "repeated or conflicting browser focus option".into(),
+                    ));
+                }
+                focus = Some(match args.get(index + 1).map(String::as_str) {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => return Err(CliError("--focus requires true or false".into())),
+                });
+                index += 2;
+            }
+            "--workspace" | "--pane" | "--surface" | "--tab" | "--expect-revision" => {
+                retained.push(args[index].clone());
+                index += 1;
+                if let Some(value) = args.get(index) {
+                    retained.push(value.clone());
+                    index += 1;
+                }
+            }
+            other if other.starts_with('-') => {
+                return Err(CliError(format!("unknown browser open option `{other}`")));
+            }
+            _ => {
+                retained.push(args[index].clone());
+                index += 1;
+            }
+        }
+    }
+    *args = retained;
+    Ok(focus.unwrap_or(true))
 }
 fn request(
     scope: TargetScope,

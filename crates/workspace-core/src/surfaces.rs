@@ -179,7 +179,11 @@ impl WorkspaceStore {
             _ => {}
         }
         match action {
-            Action::CreateBrowser { pane_id, url } => {
+            Action::CreateBrowser {
+                pane_id,
+                url,
+                focus,
+            } => {
                 validate_browser_url(&url)?;
                 let wi = self.workspace_index(pane_id)?;
                 let pane = self.pane(pane_id)?;
@@ -196,9 +200,11 @@ impl WorkspaceStore {
                     remote: None,
                 };
                 let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
-                pane.selected_surface = id;
                 pane.surfaces.push(surface);
-                self.focus(wi, pane_id);
+                if focus {
+                    pane.selected_surface = id;
+                    self.focus(wi, pane_id);
+                }
             }
             Action::NavigateBrowser { surface_id, url }
             | Action::ObserveBrowser {
