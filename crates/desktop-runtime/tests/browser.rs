@@ -979,3 +979,94 @@ fn full_owner_reattach_recovers_lost_document_events_without_reviving_or_hijacki
         BrowserOperationState::Failed
     );
 }
+
+#[test]
+fn locator_admission_rejects_unbounded_and_conflicting_queries_before_dispatch() {
+    let (model, surface) = fixture();
+    let now = Instant::now();
+    let mut runtime = BrowserRuntime::default();
+    attach(&mut runtime, &model, surface, now);
+    for locator in [
+        json!({"kind":"role","query":"two tokens"}),
+        json!({"kind":"text","query":"x".repeat(MAX_SELECTOR_BYTES + 1)}),
+        json!({"kind":"label","query":"ok","name":"irrelevant"}),
+        json!({"kind":"first","selector":"button","exact":true}),
+        json!({"kind":"nth","selector":"button","index":4096}),
+        json!({"kind":"nth","selector":"button"}),
+    ] {
+        let action = serde_json::from_value(json!({"action":"find","locator":locator})).unwrap();
+        assert!(matches!(
+            runtime.admit(&model.snapshot(), request(&model, surface, action), now),
+            Err(BrowserError::Invalid(_))
+        ));
+        assert_eq!(runtime.pending_request_count(), 0);
+    }
+}
+
+#[test]
+fn admitted_wait_expires_or_cancels_on_navigation_without_uncertain_mutation() {
+    let (mut model, surface) = fixture();
+    let now = Instant::now();
+    let mut runtime = BrowserRuntime::default();
+    let owner = attach(&mut runtime, &model, surface, now);
+    let mut wait = request(
+        &model,
+        surface,
+        BrowserAction::Wait {
+            selector: "#ready".into(),
+            state: WaitState::Visible,
+        },
+    );
+    wait.timeout_ms = 100;
+    let expired = runtime.admit(&model.snapshot(), wait.clone(), now).unwrap();
+    assert_eq!(
+        runtime
+            .drain_requests(&model.snapshot(), now)
+            .requests
+            .len(),
+        1
+    );
+    runtime.reconcile(&model.snapshot(), now + Duration::from_millis(100));
+    let error = runtime.receipt(expired).unwrap().error.as_ref().unwrap();
+    assert_eq!(error.code, "browser_timeout");
+    assert!(!error.outcome_unknown);
+    let cancelled = runtime.admit(&model.snapshot(), wait, now).unwrap();
+    runtime.drain_requests(&model.snapshot(), now);
+    model
+        .apply(Action::NavigateBrowser {
+            surface_id: surface,
+            url: "https://example.net/ready".into(),
+        })
+        .unwrap();
+    runtime.reconcile(&model.snapshot(), now);
+    assert_eq!(
+        runtime.receipt(cancelled).unwrap().state,
+        BrowserOperationState::Failed
+    );
+    assert!(
+        !runtime
+            .receipt(cancelled)
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .outcome_unknown
+    );
+    assert!(
+        runtime
+            .host_event(
+                &model.snapshot(),
+                BrowserHostEvent::Complete {
+                    operation_id: cancelled,
+                    owner,
+                    result: json!({"value":{"matched":true}})
+                },
+                now
+            )
+            .is_err()
+    );
+    assert_eq!(
+        runtime.receipt(cancelled).unwrap().state,
+        BrowserOperationState::Failed
+    );
+}

@@ -31,6 +31,15 @@ struct BrowserSnapshotOptions: Codable, Sendable {
     var maxDepth: UInt32? = nil
 }
 
+struct BrowserLocator: Codable, Sendable {
+    let kind: String
+    let query: String?
+    let name: String?
+    let exact: Bool
+    let selector: String?
+    let index: UInt32?
+}
+
 enum BrowserAction: Codable, Sendable {
     case back(snapshotAfter: Bool)
     case forward(snapshotAfter: Bool)
@@ -38,8 +47,10 @@ enum BrowserAction: Codable, Sendable {
     case eval(script: String)
     case snapshot(options: BrowserSnapshotOptions)
     case get(kind: String, selector: String?, attribute: String?, property: String?)
+    case find(locator: BrowserLocator)
+    case wait(selector: String, state: String)
 
-    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property }
+    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .action) {
@@ -48,6 +59,8 @@ enum BrowserAction: Codable, Sendable {
         case "reload": self = .reload(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "eval": self = .eval(script: try c.decode(String.self, forKey: .script))
         case "snapshot": self = .snapshot(options: try c.decodeIfPresent(BrowserSnapshotOptions.self, forKey: .options) ?? .init())
+        case "find": self = .find(locator: try c.decode(BrowserLocator.self, forKey: .locator))
+        case "wait": self = .wait(selector: try c.decode(String.self, forKey: .selector), state: try c.decode(String.self, forKey: .state))
         case "get": self = .get(kind: try c.decode(String.self, forKey: .kind), selector: try c.decodeIfPresent(String.self, forKey: .selector), attribute: try c.decodeIfPresent(String.self, forKey: .attribute), property: try c.decodeIfPresent(String.self, forKey: .property))
         default: throw DecodingError.dataCorruptedError(forKey: .action, in: c, debugDescription: "Unsupported browser action")
         }
@@ -61,6 +74,9 @@ enum BrowserAction: Codable, Sendable {
             try c.encode(name, forKey: .action); try c.encode(after, forKey: .snapshotAfter)
         case .eval(let script): try c.encode("eval", forKey: .action); try c.encode(script, forKey: .script)
         case .snapshot(let options): try c.encode("snapshot", forKey: .action); try c.encode(options, forKey: .options)
+        case .find(let locator): try c.encode("find", forKey: .action); try c.encode(locator, forKey: .locator)
+        case .wait(let selector, let state):
+            try c.encode("wait", forKey: .action); try c.encode(selector, forKey: .selector); try c.encode(state, forKey: .state)
         case .get(let kind, let selector, let attribute, let property):
             try c.encode("get", forKey: .action); try c.encode(kind, forKey: .kind)
             try c.encodeIfPresent(selector, forKey: .selector); try c.encodeIfPresent(attribute, forKey: .attribute); try c.encodeIfPresent(property, forKey: .property)
@@ -69,6 +85,7 @@ enum BrowserAction: Codable, Sendable {
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
     var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval: true; default: false } }
+    var isWait: Bool { if case .wait = self { return true }; return false }
 }
 
 indirect enum BrowserJSON: Codable, Sendable {
@@ -201,6 +218,117 @@ enum BrowserAutomationScript {
       const style = getComputedStyle(node), box = node.getBoundingClientRect();
       return style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse' && box.width > 0 && box.height > 0;
     };
+    const normalized = value => String(value ?? '').replace(/[\p{White_Space}\uFEFF]+/gu, ' ').trim();
+    const matchesText = (value, query, exact) => exact ? normalized(value) === normalized(query) : normalized(value).toLowerCase().includes(normalized(query).toLowerCase());
+    const elements = () => {
+      if (!document.documentElement) return [];
+      const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ALL), nodes = [];
+      let node = document.documentElement, visited = 0, characters = 0;
+      while (node) {
+        if (++visited > 16384) fault('dom_scan_limit', 'Locator enumeration exceeds 16384 DOM nodes');
+        if (node.nodeType === 3) characters += node.length;
+        if (characters > 1048576) fault('dom_scan_limit', 'Locator enumeration exceeds its text budget');
+        if (node.nodeType === 1) {
+          if (nodes.length === 4096) fault('dom_scan_limit', 'Locator enumeration exceeds 4096 elements');
+          nodes.push(node);
+        }
+        node = walker.nextNode();
+      }
+      return nodes;
+    };
+    const matching = selector => {
+      if (selector.startsWith('@')) return [resolve(selector)];
+      elements(); // Bound document enumeration before allocating a CSS result set.
+      try { return Array.from(document.querySelectorAll(selector)); }
+      catch (_) { fault('invalid_selector', 'Invalid CSS selector'); }
+    };
+    const role = node => {
+      const explicit = normalized(node.getAttribute('role'));
+      if (explicit) return explicit.split(' ')[0].toLowerCase();
+      if (/^H[1-6]$/.test(node.tagName)) return 'heading';
+      if (node.tagName === 'A') return node.hasAttribute('href') ? 'link' : '';
+      if (node.tagName === 'INPUT') {
+        const type = node.type.toLowerCase();
+        if (type === 'hidden') return '';
+        return ({text:'textbox',email:'textbox',tel:'textbox',url:'textbox',checkbox:'checkbox',radio:'radio',range:'slider',number:'spinbutton',search:'searchbox',button:'button',submit:'button',reset:'button',image:'button'})[type] ?? '';
+      }
+      if (node.tagName === 'SELECT') return node.multiple || node.size > 1 ? 'listbox' : 'combobox';
+      return ({BUTTON:'button',TEXTAREA:'textbox',IMG:'image',UL:'list',OL:'list',LI:'listitem',OPTION:'option',PROGRESS:'progressbar'})[node.tagName] ?? '';
+    };
+    const labels = node => {
+      const ids = normalized(node.getAttribute('aria-labelledby'));
+      const labelled = ids ? normalized(ids.split(' ').map(id => document.getElementById(id)?.textContent ?? '').join(' ')) : '';
+      return labelled || normalized(node.getAttribute('aria-label')) || normalized(Array.from(node.labels ?? []).map(label => label.textContent).join(' '));
+    };
+    const accessibleName = node => {
+      const label = labels(node);
+      if (label) return label;
+      if (node.tagName === 'IMG' || (node.tagName === 'INPUT' && node.type === 'image')) return normalized(node.getAttribute('alt')) || normalized(node.getAttribute('title'));
+      if (node.tagName === 'INPUT' && ['button','submit','reset'].includes(node.type) && node.value) return normalized(node.value);
+      if (['button','link'].includes(role(node))) return normalized(node.textContent) || normalized(node.getAttribute('title'));
+      return normalized(node.getAttribute('title'));
+    };
+    const enabled = node => !node.matches(':disabled') && node.getAttribute('aria-disabled') !== 'true';
+    const checked = node => Boolean(node.checked) || node.getAttribute('aria-checked') === 'true';
+    const descriptor = node => ({ref:reference(node), role:text(role(node),256), name:text(accessibleName(node),256), text:text(normalized(node.textContent),384)});
+    const find = locator => {
+      let nodes;
+      if (['first','last','nth'].includes(locator.kind)) {
+        nodes = matching(locator.selector);
+        const index = locator.kind === 'first' ? 0 : locator.kind === 'last' ? nodes.length - 1 : locator.index;
+        if (!nodes[index]) fault('element_not_found', 'Locator index did not match an element');
+        return descriptor(nodes[index]);
+      }
+      nodes = elements().filter(node => !node.closest('script,style,noscript,template'));
+      // Build text once from the bounded enumeration. Excluded subtrees cannot
+      // reappear as an ancestor match merely because textContent includes them.
+      const contents = new Map();
+      if (locator.kind === 'text') {
+        for (let index = nodes.length - 1; index >= 0; index--) {
+          const node = nodes[index];
+          contents.set(node, Array.from(node.childNodes, child => child.nodeType === 3 ? child.data : contents.get(child) ?? '').join(''));
+        }
+      }
+      const query = locator.query;
+      nodes = nodes.filter(node => {
+        switch (locator.kind) {
+        case 'role': return role(node) === query.toLowerCase() && (locator.name == null || matchesText(accessibleName(node), locator.name, locator.exact));
+        case 'text': return matchesText(contents.get(node), query, locator.exact);
+        case 'label': return labels(node) !== '' && matchesText(labels(node), query, locator.exact);
+        case 'placeholder': case 'alt': case 'title': case 'testid': {
+          const attribute = locator.kind === 'testid' ? 'data-testid' : locator.kind;
+          return node.hasAttribute(attribute) && matchesText(node.getAttribute(attribute), query, locator.exact);
+        }
+        default: fault('invalid_argument', 'Unknown semantic locator');
+        }
+      });
+      if (locator.kind === 'text') {
+        const parents = new Set();
+        for (const node of nodes) { let parent = node.parentElement; while (parent) { parents.add(parent); parent = parent.parentElement; } }
+        nodes = nodes.filter(node => !parents.has(node));
+      }
+      if (!nodes.length) fault('element_not_found', 'Locator did not match an element');
+      if (nodes.length !== 1) fault('ambiguous_locator', 'Locator matched multiple elements; use first/last/nth explicitly');
+      return descriptor(nodes[0]);
+    };
+    const wait = () => {
+      const nodes = matching(req.selector);
+      if (nodes.length > 1) fault('ambiguous_locator', 'Wait selector matched multiple elements');
+      const node = nodes[0] ?? null;
+      let matched;
+      switch (req.state) {
+      case 'attached': matched = node !== null; break;
+      case 'detached': matched = node === null; break;
+      case 'visible': matched = node !== null && visible(node); break;
+      case 'hidden': matched = node === null || !visible(node); break;
+      case 'enabled': matched = node !== null && enabled(node); break;
+      case 'disabled': matched = node !== null && !enabled(node); break;
+      case 'checked': matched = node !== null && checked(node); break;
+      case 'unchecked': matched = node !== null && !checked(node); break;
+      default: fault('invalid_argument', 'Unknown wait state');
+      }
+      return {matched,state:req.state,ref:matched && node ? reference(node) : null};
+    };
     const snapshot = options => {
       const root = resolve(options.selector);
       if (!root) fault('element_not_found', 'Snapshot root was not found');
@@ -261,8 +389,8 @@ enum BrowserAutomationScript {
         return result;
       }
       case 'visible': return visible(node);
-      case 'enabled': return !node.matches(':disabled') && node.getAttribute('aria-disabled') !== 'true';
-      case 'checked': return Boolean(node.checked) || node.getAttribute('aria-checked') === 'true';
+      case 'enabled': return enabled(node);
+      case 'checked': return checked(node);
       default: fault('unsupported_action', 'Unsupported browser getter');
       }
     };
@@ -296,6 +424,8 @@ enum BrowserAutomationScript {
       if (req.action === 'eval') value = normalize(await (0, eval)(req.script));
       else if (req.action === 'snapshot') value = snapshot(req.options ?? {});
       else if (req.action === 'get') value = get();
+      else if (req.action === 'find') value = find(req.locator);
+      else if (req.action === 'wait') value = wait();
       else fault('unsupported_action', 'Unsupported browser action');
       const result = JSON.stringify({value, truncated});
       if (new TextEncoder().encode(result).length > 58000) fault('result_too_large', 'Browser result exceeds the byte limit; narrow the selector');

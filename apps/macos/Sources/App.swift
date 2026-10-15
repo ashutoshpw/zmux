@@ -1531,6 +1531,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "remote_file_url_symlink": true,
             "remote_file_url_directory_refusal": true,
             "browser_cli_automation": true,
+            "browser_locators_waits": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
             "browser_title_observation": true,
@@ -1800,6 +1801,45 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             try await waitUntil { $0.model.focusedWorkspace == foregroundWorkspace }
         }
     }
+    /// Public bundled-CLI assertions on a never-selected WebKit document. Fixture
+    /// DOM writes are explicit eval; no synthetic input is presented as pointer parity.
+    private func smokeBrowserLocators(surface: UInt64) async throws {
+        let target = ["--surface", String(surface)]
+        guard let button = try await browserCLIValue(["browser"] + target + ["find", "role", "button", "--name", "Continue", "--exact"]) as? [String: Any],
+              let reference = button["ref"] as? String,
+              try await browserCLIValue(["browser", "get", "text", reference] + target) as? String == "Continue",
+              try await browserCLIValue(["browser", "is", "visible", reference] + target) as? Bool == true else {
+            throw BridgeFailure(message: "Native semantic locator did not produce a reusable live ref")
+        }
+        _ = try await browserCLIValue(["browser", "eval", "const fixture = document.createElement('section'); fixture.id = 'zmux-locators'; fixture.innerHTML = '<label for=zmux-locator-input>Account name</label><input id=zmux-locator-input placeholder=Account data-testid=account><span class=zmux-duplicate>Duplicate locator</span><span class=zmux-duplicate>Duplicate locator</span><div id=zmux-ready style=display:none>Delayed readiness</div>'; document.body.append(fixture); null"] + target)
+        guard let label = try await browserCLIValue(["browser", "find", "label", "Account name", "--exact"] + target) as? [String: Any],
+              let labelledRef = label["ref"] as? String,
+              let attribute = try await browserCLIValue(["browser", "find", "testid", "account", "--exact"] + target) as? [String: Any],
+              attribute["ref"] as? String == labelledRef,
+              let hidden = try await browserCLIValue(["browser", "wait", "--selector", "#zmux-ready", "--state", "hidden", "--timeout-ms", "1000"] + target) as? [String: Any],
+              hidden["matched"] as? Bool == true else {
+            throw BridgeFailure(message: "Native labels, test ids or hidden wait returned unrelated results")
+        }
+        let ambiguous = try await nativeCLI(["browser", "find", "text", "Duplicate locator", "--exact"] + target, expectFailure: true)
+        guard String(decoding: ambiguous, as: UTF8.self).contains("ambiguous_locator") else {
+            throw BridgeFailure(message: "Native locator ambiguity failed for an unrelated reason")
+        }
+        _ = try await browserCLIValue(["browser", "eval", "setTimeout(() => document.getElementById('zmux-ready').style.display = 'block', 700); null"] + target)
+        guard let ready = try await browserCLIValue(["browser"] + target + ["wait", "--selector", "#zmux-ready", "--timeout-ms", "3000"]) as? [String: Any],
+              ready["matched"] as? Bool == true, let readyRef = ready["ref"] as? String,
+              try await browserCLIValue(["browser", "get", "text", readyRef] + target) as? String == "Delayed readiness" else {
+            throw BridgeFailure(message: "Native wait failed to observe the delayed page transition")
+        }
+        let timedOut = try await nativeCLI(["browser", "wait", "--selector", "#zmux-never-present", "--timeout-ms", "300"] + target, expectFailure: true)
+        guard String(decoding: timedOut, as: UTF8.self).contains("browser_timeout") else {
+            throw BridgeFailure(message: "Native wait timeout had an unrelated failure: " + String(decoding: timedOut.prefix(1024), as: UTF8.self))
+        }
+        _ = try await browserCLIValue(["browser", "eval", "document.getElementById('zmux-locators').remove(); null"] + target)
+        let stale = try await nativeCLI(["browser", "wait", "--selector", readyRef, "--state", "hidden", "--timeout-ms", "1000"] + target, expectFailure: true)
+        guard String(decoding: stale, as: UTF8.self).contains("stale_reference") else {
+            throw BridgeFailure(message: "Disconnected native wait ref was silently retargeted")
+        }
+    }
     private func smokeBrowserAutomation(report: URL, surface: UInt64, pane: Pane, terminalSession: UInt64) async throws {
         let data = try Data(contentsOf: report.deletingLastPathComponent().appendingPathComponent("native-browser-fixture.json"))
         guard let fixture = try JSONSerialization.jsonObject(with: data) as? [String: String], let origin = fixture["origin"] else {
@@ -1823,6 +1863,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               let hiddenNodes = hiddenTree["nodes"] as? [[String: Any]],
               hiddenNodes.contains(where: { $0["role"] as? String == "button" }) else {
             throw BridgeFailure(message: "Never-selected browser lacks a viewport or stole focus")
+        }
+        try await smokeBrowserLocators(surface: hiddenID)
+        guard snapshot?.model.focusedWorkspace == originalWorkspace, focusedPane?.selectedSurface == surface else {
+            throw BridgeFailure(message: "Locator/wait commands changed hidden browser focus")
         }
         _ = try await nativeCLI(["close-surface", "--surface", String(hiddenID)])
         _ = try await nativeCLI(["browser", "goto"] + target + [origin + "/first"])

@@ -1,34 +1,62 @@
 //! Browser automation submits once, then polls bounded native execution receipts.
 use super::*;
 use zmux_desktop_runtime::browser::{
-    BrowserAction, BrowserRequest, DEFAULT_OPERATION_TIMEOUT_MS, GetKind, MAX_OPERATION_TIMEOUT_MS,
-    SnapshotOptions,
+    BrowserAction, BrowserLocator, BrowserRequest, DEFAULT_OPERATION_TIMEOUT_MS, GetKind,
+    LocatorKind, MAX_OPERATION_TIMEOUT_MS, SnapshotOptions, WaitState,
 };
 use zmux_workspace_core::targets::{TargetRef, TargetScope};
 
 pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
-    let args = utf8_args(tail)?;
+    let mut args = utf8_args(tail)?;
     if help_requested(tail) || args.as_slice() == ["help"] {
         return help();
     }
+    let mut prefix = Vec::new();
+    while args.first().is_some_and(|flag| {
+        matches!(
+            flag.as_str(),
+            "--workspace" | "--pane" | "--surface" | "--tab" | "--expect-revision"
+        )
+    }) {
+        let flag = args[0].clone();
+        let target = value(&args, 0, &flag)?.to_owned();
+        prefix.extend([flag, target]);
+        args.drain(..2);
+    }
+    // Legacy open/navigation consumes leading target options before its URL.
+    // Automation consumes options anywhere before the literal operand delimiter.
+    let prefix_at = if args
+        .first()
+        .is_some_and(|verb| matches!(verb.as_str(), "open" | "navigate" | "goto"))
+    {
+        1
+    } else {
+        args.iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(args.len())
+    };
+    args.splice(prefix_at..prefix_at, prefix);
     let Some(verb) = args.first().map(String::as_str) else {
         return Err(CliError(
             "browser requires a subcommand; run `zmux help browser`".into(),
         ));
     };
     if matches!(verb, "open" | "navigate" | "goto") {
-        return targets::parse("browser", tail);
+        return targets::parse(
+            "browser",
+            &args.iter().map(OsString::from).collect::<Vec<_>>(),
+        );
     }
     if !matches!(
         verb,
-        "get" | "eval" | "snapshot" | "back" | "forward" | "reload"
+        "get" | "is" | "find" | "wait" | "eval" | "snapshot" | "back" | "forward" | "reload"
     ) {
         return Err(CliError(format!("unknown browser subcommand `{verb}`")));
     }
     if help_requested(&tail[1..]) {
         return help();
     }
-    let (kind, values_start) = if verb == "get" {
+    let (kind, values_start) = if verb == "get" || verb == "is" {
         let value = args
             .get(1)
             .ok_or_else(|| CliError("browser get requires a kind".into()))?;
@@ -42,14 +70,34 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             "count" => GetKind::Count,
             "box" => GetKind::Box,
             "styles" => GetKind::Styles,
+            "visible" => GetKind::Visible,
+            "enabled" => GetKind::Enabled,
+            "checked" => GetKind::Checked,
             _ => return Err(CliError(format!("unknown browser get kind `{value}`"))),
         };
+        if verb == "is" && !matches!(kind, GetKind::Visible | GetKind::Enabled | GetKind::Checked) {
+            return Err(CliError(
+                "browser is requires visible, enabled or checked".into(),
+            ));
+        }
         if help_requested(&tail[2..]) {
             return help();
         }
         (Some(kind), 2)
     } else {
         (None, 1)
+    };
+    let locator_kind = if verb == "find" {
+        Some(match args.get(1).map(String::as_str) {
+            Some("role") => LocatorKind::Role, Some("text") => LocatorKind::Text,
+            Some("label") => LocatorKind::Label, Some("placeholder") => LocatorKind::Placeholder,
+            Some("alt") => LocatorKind::Alt, Some("title") => LocatorKind::Title,
+            Some("testid") => LocatorKind::Testid, Some("first") => LocatorKind::First,
+            Some("last") => LocatorKind::Last, Some("nth") => LocatorKind::Nth,
+            _ => return Err(CliError("browser find requires role, text, label, placeholder, alt, title, testid, first, last or nth".into())),
+        })
+    } else {
+        None
     };
     let mut scope = TargetScope::default();
     let mut revision = None;
@@ -62,8 +110,13 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     let mut cursor = false;
     let mut compact = false;
     let mut snapshot_after = false;
+    let mut name = None;
+    let mut exact = false;
+    let mut locator_index = None;
+    let mut wait_state = None;
+    let mut wait_timeout = None;
     let mut values = Vec::new();
-    let mut index = values_start;
+    let mut index = if verb == "find" { 2 } else { values_start };
     while index < args.len() {
         let flag = args[index].as_str();
         if flag == "--" {
@@ -98,8 +151,56 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 })?);
                 index += 2;
             }
-            "--selector" if verb == "get" || verb == "snapshot" => {
+            "--selector" if matches!(verb, "get" | "is" | "snapshot" | "find" | "wait") => {
                 set(&mut selector, value(&args, index, flag)?, flag)?;
+                index += 2;
+            }
+            "--name" if verb == "find" => {
+                set(&mut name, value(&args, index, flag)?, flag)?;
+                index += 2;
+            }
+            "--exact" if verb == "find" => {
+                flag_once(&mut exact, flag)?;
+                index += 1;
+            }
+            "--index" if verb == "find" => {
+                if locator_index.is_some() {
+                    return Err(CliError("repeated --index".into()));
+                }
+                locator_index = Some(
+                    value(&args, index, flag)?
+                        .parse::<u32>()
+                        .map_err(|_| CliError("--index must be 0..4095".into()))?,
+                );
+                index += 2;
+            }
+            "--state" if verb == "wait" => {
+                if wait_state.is_some() {
+                    return Err(CliError("repeated --state".into()));
+                }
+                wait_state = Some(match value(&args, index, flag)? {
+                    "attached" => WaitState::Attached,
+                    "detached" => WaitState::Detached,
+                    "visible" => WaitState::Visible,
+                    "hidden" => WaitState::Hidden,
+                    "enabled" => WaitState::Enabled,
+                    "disabled" => WaitState::Disabled,
+                    "checked" => WaitState::Checked,
+                    "unchecked" => WaitState::Unchecked,
+                    _ => return Err(CliError("unknown browser wait state".into())),
+                });
+                index += 2;
+            }
+            "--timeout-ms" if verb == "wait" => {
+                if wait_timeout.is_some() {
+                    return Err(CliError("repeated --timeout-ms".into()));
+                }
+                let millis = value(&args, index, flag)?
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| (1..=30000).contains(n))
+                    .ok_or_else(|| CliError("--timeout-ms must be 1..30000".into()))?;
+                wait_timeout = Some(Duration::from_millis(millis));
                 index += 2;
             }
             "--script" if verb == "eval" => {
@@ -152,6 +253,35 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         }
     }
     let action = match verb {
+        "find" => {
+            if values.len() > 1 {
+                return Err(CliError("browser find accepts one query".into()));
+            }
+            BrowserAction::Find {
+                locator: BrowserLocator {
+                    kind: locator_kind.expect("parsed find kind"),
+                    query: values.pop(),
+                    name,
+                    exact,
+                    selector,
+                    index: locator_index,
+                },
+            }
+        }
+        "wait" => {
+            if selector.is_none() && values.len() == 1 {
+                selector = values.pop();
+            }
+            if !values.is_empty() {
+                return Err(CliError("conflicting browser wait selectors".into()));
+            }
+            BrowserAction::Wait {
+                selector: selector.ok_or_else(|| {
+                    CliError("browser wait requires --selector or a selector operand".into())
+                })?,
+                state: wait_state.unwrap_or_default(),
+            }
+        }
         "eval" => {
             if script.is_some() && !values.is_empty() {
                 return Err(CliError(
@@ -164,7 +294,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             }
             BrowserAction::Eval { script }
         }
-        "get" => {
+        "get" | "is" => {
             let kind = kind.expect("parsed get kind");
             if matches!(kind, GetKind::Url | GetKind::Title) {
                 if selector.is_some() || !values.is_empty() {
@@ -225,15 +355,18 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         .validate()
         .map_err(|error| CliError(format!("{}: {error}", error.code())))?;
     let caller = targets::caller(&scope)?;
-    Ok(Parsed::Browser(ControlCommand::Browser {
-        request: BrowserRequest {
-            scope,
-            caller,
-            expected_model_revision: revision,
-            action,
-            timeout_ms: DEFAULT_OPERATION_TIMEOUT_MS,
+    Ok(Parsed::Browser(
+        ControlCommand::Browser {
+            request: BrowserRequest {
+                scope,
+                caller,
+                expected_model_revision: revision,
+                action,
+                timeout_ms: DEFAULT_OPERATION_TIMEOUT_MS,
+            },
         },
-    }))
+        wait_timeout,
+    ))
 }
 
 fn help() -> Result<Parsed, CliError> {
@@ -261,6 +394,7 @@ fn flag_once(slot: &mut bool, flag: &str) -> Result<(), CliError> {
 pub(super) fn run(
     options: &ClientOptions,
     mut command: ControlCommand,
+    wait_timeout: Option<Duration>,
 ) -> Result<serde_json::Value, CliError> {
     let deadline = Instant::now() + options.timeout;
     if let ControlCommand::Browser { request } = &mut command {
@@ -276,6 +410,7 @@ pub(super) fn run(
             .min(budget / 2);
         request.timeout_ms = budget
             .saturating_sub(receipt_budget)
+            .min(wait_timeout.unwrap_or(Duration::MAX))
             .as_millis()
             .clamp(1, u128::from(MAX_OPERATION_TIMEOUT_MS)) as u64;
     }

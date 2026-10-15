@@ -88,6 +88,107 @@ pub enum BrowserAction {
         #[serde(default)]
         property: Option<String>,
     },
+    Find {
+        locator: BrowserLocator,
+    },
+    Wait {
+        selector: String,
+        #[serde(default)]
+        state: WaitState,
+    },
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocatorKind {
+    Role,
+    #[default]
+    Text,
+    Label,
+    Placeholder,
+    Alt,
+    Title,
+    Testid,
+    First,
+    Last,
+    Nth,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserLocator {
+    pub kind: LocatorKind,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub exact: bool,
+    #[serde(default)]
+    pub selector: Option<String>,
+    #[serde(default)]
+    pub index: Option<u32>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitState {
+    Attached,
+    Detached,
+    #[default]
+    Visible,
+    Hidden,
+    Enabled,
+    Disabled,
+    Checked,
+    Unchecked,
+}
+impl BrowserLocator {
+    pub fn validate(&self) -> Result<(), BrowserError> {
+        let ordered = matches!(
+            self.kind,
+            LocatorKind::First | LocatorKind::Last | LocatorKind::Nth
+        );
+        if ordered {
+            if self.query.is_some() || self.name.is_some() || self.exact || self.selector.is_none()
+            {
+                return Err(BrowserError::Invalid(
+                    "first/last/nth require only a selector and nth index",
+                ));
+            }
+            selector(self.selector.as_deref())?;
+        } else {
+            if self.selector.is_some()
+                || self.index.is_some()
+                || (self.kind != LocatorKind::Role && self.name.is_some())
+            {
+                return Err(BrowserError::Invalid("semantic locator options conflict"));
+            }
+            let query = self
+                .query
+                .as_deref()
+                .ok_or(BrowserError::Invalid("locator query is required"))?;
+            selector(Some(query))?;
+            if self.kind == LocatorKind::Role
+                && (query.len() > MAX_ATTRIBUTE_BYTES
+                    || !query
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-'))
+            {
+                return Err(BrowserError::Invalid(
+                    "role must be a token of at most 128 bytes",
+                ));
+            }
+            if let Some(name) = &self.name {
+                selector(Some(name))?;
+            }
+        }
+        if self.kind == LocatorKind::Nth {
+            if self.index.is_none_or(|index| index >= 4096) {
+                return Err(BrowserError::Invalid("nth index must be 0..4095"));
+            }
+        } else if self.index.is_some() {
+            return Err(BrowserError::Invalid("index is accepted only for nth"));
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,7 +222,10 @@ pub enum GetKind {
 }
 impl BrowserAction {
     pub fn is_read(&self) -> bool {
-        matches!(self, Self::Snapshot { .. } | Self::Get { .. })
+        matches!(
+            self,
+            Self::Snapshot { .. } | Self::Get { .. } | Self::Find { .. } | Self::Wait { .. }
+        )
     }
     fn is_navigation(&self) -> bool {
         matches!(
@@ -131,6 +235,10 @@ impl BrowserAction {
     }
     pub fn validate(&self) -> Result<(), BrowserError> {
         match self {
+            Self::Find { locator } => locator.validate()?,
+            Self::Wait {
+                selector: value, ..
+            } => selector(Some(value))?,
             Self::Eval { script }
                 if script.trim().is_empty()
                     || script.len() > MAX_SCRIPT_BYTES
