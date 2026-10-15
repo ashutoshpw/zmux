@@ -238,3 +238,12 @@ Run `38775942552` stopped at Swift6 compilation of the new alias-refusal fixture
 its MainActor closure crossed a nonisolated helper without Sendable. The helper
 now explicitly takes a Sendable async closure; its URL/UUID/actor captures support
 that contract. No assertions or production isolation were relaxed.
+
+Run `38776244720` at `eaf8cda` passed strict Darwin file-owner probes and universal
+app compilation, then timed out during packaged download interaction. The log
+showed NSSavePanel still selecting `/Users/runner/Documents/fixture.bin` in the
+same turn that the fixture assigned its temporary destination. The shared fixture
+helper now waits for the actual panel URL to match before OK, retaining exact-byte
+and CLI-history assertions. Timeout diagnostics skip a second app launch because
+the original Launch Services app may remain alive. Independent source review,
+Python syntax and scoped diff checks pass; AppKit execution remains pending.

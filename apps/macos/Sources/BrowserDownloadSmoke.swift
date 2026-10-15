@@ -23,6 +23,24 @@ enum BrowserDownloadSmoke {
             try await Task.sleep(for: .milliseconds(25))
         }
     }
+    private static func chooseDestination(_ destination: URL, panel: NSSavePanel) async throws {
+        let path = destination.path
+        guard let separator = path.lastIndex(of: "/") else { throw BridgeFailure(message: "Invalid fixture destination") }
+        panel.directoryURL = URL(fileURLWithPath: String(path[..<separator]), isDirectory: true)
+        panel.nameFieldStringValue = String(path[path.index(after: separator)...])
+        // Save panels use an asynchronous remote view. Setting these properties
+        // does not mean the selected URL has caught up in the same run-loop turn.
+        do {
+            try await wait("Save panel did not select the requested fixture destination") {
+                panel.url?.path == destination.path
+            }
+        } catch {
+            throw BridgeFailure(message: "Save panel selected " + (panel.url?.path ?? "nothing")
+                                + "; expected " + destination.path)
+        }
+        FileHandle.standardError.write(Data(("Confirmed download save panel URL: " + destination.path + "\n").utf8))
+        panel.ok(nil)
+    }
     private nonisolated static func removeFixture(_ root: URL) async throws {
         let removal = Task<Void, Error>.detached { try FileManager.default.removeItem(at: root) }
         try await removal.value
@@ -75,9 +93,7 @@ enum BrowserDownloadSmoke {
                 try await wait("Native download save sheet did not open") { window.attachedSheet is NSSavePanel && snapshot()?.downloads.contains { !prior.contains($0.downloadId) } == true }
                 guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Download did not use NSSavePanel") }
                 let destination = root.appendingPathComponent("saved-" + String(index) + ".bin")
-                panel.directoryURL = root; panel.nameFieldStringValue = destination.lastPathComponent
-                FileHandle.standardError.write(Data(("Download save panel URL: " + (panel.url?.path ?? "not selected") + "\n").utf8))
-                panel.ok(nil)
+                try await chooseDestination(destination, panel: panel)
                 try await wait("Native download never confirmed final publication") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "saved" && $0.cleanupComplete } == true }
                 let verify = Task<Data, Error>.detached { try Data(contentsOf: destination) }
                 guard try await verify.value == expected else { throw BridgeFailure(message: "WebKit saved different download bytes") }
@@ -102,9 +118,7 @@ enum BrowserDownloadSmoke {
             _ = try await cli(["browser", "goto"] + target + [origin + "/download-slow"], false)
             try await wait("Slow download save sheet did not open") { window.attachedSheet is NSSavePanel }
             guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Slow download lost its save sheet") }
-            panel.directoryURL = root; panel.nameFieldStringValue = "cancelled.bin"
-            FileHandle.standardError.write(Data(("Slow download save panel URL: " + (panel.url?.path ?? "not selected") + "\n").utf8))
-            panel.ok(nil)
+            try await chooseDestination(root.appendingPathComponent("cancelled.bin"), panel: panel)
             try await wait("Slow download did not start") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "downloading" } == true }
             guard let slow = snapshot()?.downloads.first(where: { !prior.contains($0.downloadId) }) else { throw BridgeFailure(message: "Slow download lost its owner") }
             _ = try await cli(["browser", "goto"] + target + [origin + "/second"], false)
