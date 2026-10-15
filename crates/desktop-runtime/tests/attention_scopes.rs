@@ -7,7 +7,7 @@ use std::{
 };
 use uuid::Uuid;
 use zmux_desktop_runtime::{
-    Command, Desktop, Request, Shell, Snapshot,
+    Command, Desktop, DesktopError, Request, Shell, Snapshot,
     attention::*,
     targets::{TargetOperation, TargetRequest},
 };
@@ -37,10 +37,10 @@ impl App {
     fn wait(&self, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(snapshot) = self.desktop.snapshot()
-                && predicate(&snapshot)
-            {
-                return snapshot;
+            match self.desktop.snapshot() {
+                Ok(snapshot) if predicate(&snapshot) => return snapshot,
+                Ok(_) | Err(DesktopError::Busy) => {}
+                Err(error) => panic!("desktop snapshot failed: {error}"),
             }
             assert!(
                 Instant::now() < deadline,
@@ -108,7 +108,7 @@ fn workspace(id: u64) -> TargetScope {
 #[test]
 fn notification_uuid_handles_open_read_and_dismiss_the_exact_admitted_generation() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let first = initial.model.workspaces[0].clone();
     let surface = first.root.panes()[0].selected_surface;
     app.action(Action::CreateWorkspace {
@@ -157,7 +157,7 @@ fn notification_uuid_handles_open_read_and_dismiss_the_exact_admitted_generation
 #[test]
 fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live_owner() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let first = initial.model.workspaces[0].clone();
     let oldest = app.notify(first.root.panes()[0].selected_surface, "Oldest reachable");
     let oldest_id = oldest.notifications.last().unwrap().id;
@@ -205,7 +205,7 @@ fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live
     assert_eq!(receipt["navigation"]["opened"], true);
     assert_eq!(receipt["navigation"]["notification_id"], live_id);
     assert_eq!(receipt["focused_workspace_id"], live_workspace.0);
-    let opened = app.desktop.snapshot().unwrap();
+    let opened = app.wait(|_| true);
     assert_ne!(opened.model.focused_workspace, foreground);
     assert!(
         opened
@@ -237,7 +237,7 @@ fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live
         serde_json::to_value(next).unwrap()["navigation"]["notification_id"],
         oldest_id
     );
-    let last_opened = app.desktop.snapshot().unwrap();
+    let last_opened = app.wait(|_| true);
     assert_eq!(last_opened.model.focused_workspace, Some(first.id));
     let action = serde_json::from_value(serde_json::json!({"action":"jump_to_unread"})).unwrap();
     let no_candidate = app.desktop.native_notification_action(action).unwrap();
@@ -245,7 +245,7 @@ fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live
         serde_json::to_value(no_candidate).unwrap()["navigation"]["opened"],
         false
     );
-    let unchanged = app.desktop.snapshot().unwrap();
+    let unchanged = app.wait(|_| true);
     assert_eq!(
         unchanged.model.focused_workspace,
         last_opened.model.focused_workspace
@@ -264,7 +264,7 @@ fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live
 #[test]
 fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_surfaces() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let first = initial.model.workspaces[0].clone();
     let caller_surface = first.root.panes()[0].selected_surface;
     app.action(Action::CreateSurface {
@@ -365,7 +365,7 @@ fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_
             "creation changed focus"
         );
     }
-    let count = app.desktop.snapshot().unwrap().notifications.len();
+    let count = app.wait(|_| true).notifications.len();
     for (name, scope, context) in [
         (
             "Invalid explicit workspace",
@@ -410,7 +410,7 @@ fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_
 #[test]
 fn active_workspace_acknowledges_workspace_rows_without_reading_hidden_surface_rows() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let first = initial.model.workspaces[0].clone();
     let hidden = first.root.panes()[0].selected_surface;
     app.action(Action::CreateSurface {
@@ -498,7 +498,7 @@ fn active_workspace_acknowledges_workspace_rows_without_reading_hidden_surface_r
 #[test]
 fn workspace_notification_open_survives_selected_surface_close_and_preserves_workspace_tab() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let first = initial.model.workspaces[0].clone();
     let original = first.root.panes()[0].selected_surface;
     let extra = app.action(Action::CreateSurface {
@@ -539,7 +539,7 @@ fn workspace_notification_open_survives_selected_surface_close_and_preserves_wor
         .unwrap();
     let receipt = serde_json::to_value(opened).unwrap();
     assert_eq!(receipt["focused_workspace_id"], first.id.0);
-    let state = app.desktop.snapshot().unwrap();
+    let state = app.wait(|_| true);
     assert_ne!(state.model.focused_workspace, Some(other));
     assert_eq!(state.model.focused_workspace, Some(first.id));
     assert_eq!(
@@ -560,7 +560,7 @@ fn workspace_notification_open_survives_selected_surface_close_and_preserves_wor
 #[test]
 fn moved_then_closed_surface_notifications_remain_scoped_to_the_last_live_workspace() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let source = &initial.model.workspaces[0];
     let source_workspace = source.id;
     let source_surface = source.root.panes()[0].selected_surface;
@@ -638,7 +638,7 @@ fn moved_then_closed_surface_notifications_remain_scoped_to_the_last_live_worksp
 #[test]
 fn global_history_operations_work_without_a_live_workspace_or_valid_caller() {
     let mut app = App::new();
-    let initial = app.desktop.snapshot().unwrap();
+    let initial = app.wait(|_| true);
     let workspace_id = initial.model.workspaces[0].id;
     let surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
     let notified = app.notify(surface, "Before closing desktop");
