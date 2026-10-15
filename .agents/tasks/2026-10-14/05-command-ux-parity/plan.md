@@ -51,6 +51,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — isolated real peer and transport checks; Darwin and production gates remain.
+- [R03 headless owner design](references/r03-local-zellij-owner-design.md) — proposed peer-fenced ownership and native acceptance gates.
 - [B01 browser downloads](references/b01-browser-downloads.md) — bounded native resource ownership, CLI list/wait and pending hosted acceptance.
 - [F04 integrated owner](references/f04-integrated-owner.md) — one bounded terminal/collector, aggregate accounting and failure-fenced publication acceptance.
 - [T03 multiwindow design](references/t03-multiwindow-design.md) — singleton model v6/session v4 foundation passes portable core/runtime checks; shared native coordinator, no-focus moves, caller/attention ownership and last-close recovery remain pending.
