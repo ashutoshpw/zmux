@@ -428,6 +428,7 @@ impl Worker {
                     let prepared = WorkspaceStore::prepare_session_restore(
                         loaded.document,
                         &loaded.session_ids,
+                        loaded.window_id,
                     );
                     match prepared {
                         Ok(mut prepared) => {

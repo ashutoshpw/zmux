@@ -421,7 +421,7 @@ impl WorkspaceStore {
     }
     pub(crate) fn focus(&mut self, wi: usize, pane_id: PaneId) {
         self.state.workspaces[wi].focused_pane = pane_id;
-        self.state.focused_workspace = Some(self.state.workspaces[wi].id);
+        self.focus_workspace(self.state.workspaces[wi].id);
     }
     pub(crate) fn focused(&self) -> Option<(WorkspaceId, PaneId, SurfaceId)> {
         let workspace = self
@@ -503,9 +503,7 @@ impl WorkspaceStore {
                 }
                 None => {
                     let workspace = self.state.workspaces.remove(wi);
-                    if self.state.focused_workspace == Some(workspace.id) {
-                        self.state.focused_workspace = self.state.workspaces.last().map(|w| w.id);
-                    }
+                    self.forget_workspace(workspace.id);
                 }
             }
         }
@@ -922,7 +920,7 @@ impl WorkspaceStore {
                 focused_pane: pane_id,
                 root: PaneTree::Leaf { pane },
             });
-            self.state.focused_workspace = Some(id);
+            self.own_workspace(id, true)?;
             self.remap_workspace(record.workspace_id, id);
         }
         self.remap_pane(old, pane_id);
@@ -946,7 +944,7 @@ impl WorkspaceStore {
             focused_pane,
             root,
         });
-        self.state.focused_workspace = Some(id);
+        self.own_workspace(id, true)?;
         Ok(())
     }
 

@@ -1,0 +1,140 @@
+//! Canonical main-window membership. Native lifecycle actions remain unavailable
+//! until the shared host coordinator can materialize more than one window.
+use crate::{ActionError, WindowId, WorkspaceId, WorkspaceStore};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+
+pub const MAX_WINDOWS: usize = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Window {
+    pub id: WindowId,
+    pub workspace_ids: Vec<WorkspaceId>,
+    pub selected_workspace: Option<WorkspaceId>,
+}
+
+pub(crate) fn validate_layout(
+    workspace_ids: &[WorkspaceId],
+    windows: &[Window],
+    focused_window: Option<WindowId>,
+) -> Result<Option<WorkspaceId>, &'static str> {
+    if windows.len() > MAX_WINDOWS {
+        return Err("window limit exceeded; multiple native windows are not available");
+    }
+    if windows.is_empty() != focused_window.is_none()
+        || focused_window.is_some_and(|id| !windows.iter().any(|window| window.id == id))
+    {
+        return Err("focused window does not belong to layout");
+    }
+    let mut membership = HashSet::new();
+    let mut window_ids = HashSet::new();
+    for window in windows {
+        if window.id.0 == 0 || !window_ids.insert(window.id) {
+            return Err("window IDs must be nonzero and unique");
+        }
+        if window.workspace_ids.is_empty() != window.selected_workspace.is_none()
+            || window
+                .selected_workspace
+                .is_some_and(|id| !window.workspace_ids.contains(&id))
+        {
+            return Err("selected workspace does not belong to window");
+        }
+        for id in &window.workspace_ids {
+            if !workspace_ids.contains(id) || !membership.insert(*id) {
+                return Err("workspace window membership must be unique and live");
+            }
+        }
+    }
+    if membership.len() != workspace_ids.len() {
+        return Err("every workspace must belong to a window");
+    }
+    Ok(windows
+        .iter()
+        .find(|window| Some(window.id) == focused_window)
+        .and_then(|window| window.selected_workspace))
+}
+
+impl WorkspaceStore {
+    fn ensure_window(&mut self) -> Result<(), ActionError> {
+        if self.state.windows.is_empty() {
+            let id = WindowId(self.reserve(1)?);
+            self.state.windows.push(Window {
+                id,
+                workspace_ids: Vec::new(),
+                selected_workspace: None,
+            });
+            self.state.focused_window = Some(id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn own_workspace(
+        &mut self,
+        id: WorkspaceId,
+        focus: bool,
+    ) -> Result<(), ActionError> {
+        self.ensure_window()?;
+        let window = &mut self.state.windows[0];
+        window.workspace_ids.push(id);
+        if focus || window.selected_workspace.is_none() {
+            window.selected_workspace = Some(id);
+        }
+        self.project_window_focus();
+        Ok(())
+    }
+
+    pub(crate) fn focus_workspace(&mut self, id: WorkspaceId) {
+        let window = self
+            .state
+            .windows
+            .iter_mut()
+            .find(|window| window.workspace_ids.contains(&id))
+            .expect("live workspace has an owning window");
+        window.selected_workspace = Some(id);
+        self.state.focused_window = Some(window.id);
+        self.project_window_focus();
+    }
+
+    pub(crate) fn forget_workspace(&mut self, id: WorkspaceId) {
+        let window = self
+            .state
+            .windows
+            .iter_mut()
+            .find(|window| window.workspace_ids.contains(&id))
+            .expect("removed workspace has an owning window");
+        window.workspace_ids.retain(|existing| *existing != id);
+        if window.selected_workspace == Some(id) {
+            // Preserve the existing singleton close-selection behavior.
+            window.selected_workspace = window.workspace_ids.last().copied();
+        }
+        self.project_window_focus();
+    }
+
+    pub(crate) fn project_window_focus(&mut self) {
+        self.state.focused_workspace = self
+            .state
+            .windows
+            .iter()
+            .find(|window| Some(window.id) == self.state.focused_window)
+            .and_then(|window| window.selected_workspace);
+    }
+
+    pub(crate) fn check_window_layout(&self) -> Result<(), ActionError> {
+        let workspaces: Vec<_> = self
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id)
+            .collect();
+        let projection =
+            validate_layout(&workspaces, &self.state.windows, self.state.focused_window)
+                .map_err(|message| ActionError::InvalidOperation(message.into()))?;
+        if self.state.focused_workspace != projection {
+            return Err(ActionError::InvalidOperation(
+                "legacy focus differs from window selection".into(),
+            ));
+        }
+        Ok(())
+    }
+}

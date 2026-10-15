@@ -99,6 +99,7 @@ pub enum PersistenceError {
 pub struct LoadedSession {
     pub document: ValidatedSessionDocument,
     pub session_ids: Vec<SessionId>,
+    pub window_id: Option<zmux_workspace_core::WindowId>,
     pub allocation_start: u64,
     pub allocation_end: u64,
 }
@@ -562,12 +563,18 @@ fn load(
         &directory,
         document.identity_namespace(),
         document.next_id(),
-        ALLOCATION_BLOCK_IDS + document.terminal_count() as u64,
+        ALLOCATION_BLOCK_IDS
+            + document.terminal_count() as u64
+            + u64::from(document.requires_window_id()),
     )?;
     let session_end = reservation.start + document.terminal_count() as u64;
+    let window_id = document
+        .requires_window_id()
+        .then_some(zmux_workspace_core::WindowId(session_end));
     Ok(LoadedSession {
         document,
         session_ids: (reservation.start..session_end).map(SessionId).collect(),
+        window_id,
         allocation_start: reservation.start,
         allocation_end: reservation.end,
     })
@@ -619,7 +626,7 @@ fn reserve_allocation(
     let start = minimum_id.max(ledger.next_ids.get(&namespace).copied().unwrap_or(1));
     let end = start
         .checked_add(count)
-        .filter(|end| *end <= u64::MAX - 4)
+        .filter(|end| *end <= zmux_workspace_core::MAX_NEXT_IDENTIFIER)
         .ok_or(PersistenceError::GenerationExhausted)?;
     ledger.next_ids.insert(namespace, end);
     let bytes = serialize_bounded(&ledger, MAX_LEDGER_BYTES, "generation ledger")?;

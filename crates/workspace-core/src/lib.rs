@@ -5,11 +5,13 @@ use thiserror::Error;
 mod navigation;
 mod restore;
 mod surfaces;
+mod windows;
 pub use restore::{
-    PreparedSessionRestore, RestoreError, RestoreLimits, SESSION_DOCUMENT_VERSION, SavedContent,
-    SavedPane, SavedSshConnection, SavedSurface, SavedTree, SavedWorkspace, SessionDocument,
-    ValidatedSessionDocument,
+    MAX_NEXT_IDENTIFIER, PreparedSessionRestore, RestoreError, RestoreLimits,
+    SESSION_DOCUMENT_VERSION, SavedContent, SavedPane, SavedSshConnection, SavedSurface, SavedTree,
+    SavedWindowLayout, SavedWorkspace, SessionDocument, ValidatedSessionDocument,
 };
+pub use windows::{MAX_WINDOWS, Window};
 pub mod targets;
 pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Navigation};
 use surfaces::PendingRestore;
@@ -31,8 +33,9 @@ identifier!(WorkspaceId);
 identifier!(PaneId);
 identifier!(SessionId);
 identifier!(SurfaceId);
+identifier!(WindowId);
 
-pub const MODEL_VERSION: u32 = 5;
+pub const MODEL_VERSION: u32 = 6;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
 pub const MAX_CLOSED_ITEMS: usize = 32;
 
@@ -171,6 +174,9 @@ pub struct Snapshot {
     pub model_version: u32,
     pub revision: u64,
     pub closed_items: Vec<ClosedItem>,
+    pub windows: Vec<Window>,
+    pub focused_window: Option<WindowId>,
+    /// Compatibility projection of the focused window's selected workspace.
     pub focused_workspace: Option<WorkspaceId>,
     pub workspaces: Vec<Workspace>,
 }
@@ -182,6 +188,8 @@ impl Default for Snapshot {
             model_version: MODEL_VERSION,
             revision: 0,
             closed_items: Vec::new(),
+            windows: Vec::new(),
+            focused_window: None,
             focused_workspace: None,
             workspaces: Vec::new(),
         }
@@ -390,6 +398,7 @@ impl WorkspaceStore {
         let prior = candidate.focused();
         let is_history_navigation = matches!(action, Action::NavigateFocus { .. });
         let result = candidate.apply_inner(action)?;
+        candidate.check_window_layout()?;
         candidate.record_focus(prior, is_history_navigation);
         *self = candidate;
         Ok(result)
@@ -520,8 +529,7 @@ impl WorkspaceStore {
         let added_id = pane.id;
         workspace.root.split(pane_id, axis, pane, before);
         if focus {
-            workspace.focused_pane = added_id;
-            self.state.focused_workspace = Some(workspace.id);
+            self.focus(index, added_id);
         }
         Ok(())
     }
@@ -568,9 +576,7 @@ impl WorkspaceStore {
             focused_pane: pane.id,
             root: PaneTree::Leaf { pane },
         });
-        if focus || self.state.focused_workspace.is_none() {
-            self.state.focused_workspace = Some(workspace_id);
-        }
+        self.own_workspace(workspace_id, focus)?;
         Ok(())
     }
 
