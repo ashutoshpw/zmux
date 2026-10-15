@@ -318,8 +318,8 @@ final class WorkspaceMetadataViewController: NSViewController {
         text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         text.isVerticallyResizable = true; text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]
-        text.minSize = .zero; text.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
-        text.textContainer?.containerSize = NSSize(width: 420, height: .greatestFiniteMagnitude)
+        text.minSize = .zero; text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.textContainer?.containerSize = NSSize(width: 420, height: CGFloat.greatestFiniteMagnitude)
         text.textContainer?.widthTracksTextView = true
         text.textContainerInset = NSSize(width: 14, height: 12)
         scroll.documentView = text
