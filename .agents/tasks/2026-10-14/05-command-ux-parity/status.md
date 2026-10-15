@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Same-pane tab reordering now uses shared final-position planning, explicit
+  focus (defaultfalse), CLI anchors/legacy syntax, native menu/shortcut/context
+  actions and guarded same-pane drag. Isolated fullcheck passes271 Rust tests
+  and standard checks; parent core/real-socket/focus/persistence checks pass.
+  Swift/native execution and physical AppKit drag remain pending.
+- Native `38794349738` at `9a30dec` passes universal build and final-close save
+  with completed asynchronous shutdown. Reopen then stalls with an empty model;
+  startup/restore diagnosis is active. Packaged acceptance remains failed.
+
 - Darwin terminal artifact recipe independently passes17 integrity/real Clang
   Mach-O checks, source recipe verification and isolated full `scripts/check`
   (`/tmp/zmux-darwin-parent-check.log`). Manual workflow retains two thin macOS14

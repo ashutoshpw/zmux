@@ -52,6 +52,7 @@ fn tabs_move_and_reorder_without_restarting_sessions_and_close_only_their_owner(
     assert!(
         store
             .apply(Action::ReorderSurface {
+                focus: true,
                 surface_id: second.id,
                 index: 0
             })
@@ -277,6 +278,7 @@ fn batch_close_has_one_history_entry_and_invalid_moves_and_capacity_are_atomic()
             index: 0,
         },
         Action::ReorderSurface {
+            focus: true,
             surface_id: first,
             index: MAX_SURFACES_PER_PANE,
         },
@@ -310,6 +312,7 @@ fn close_history_evicts_old_entries_and_single_tab_reorder_is_safe() {
     assert!(
         store
             .apply(Action::ReorderSurface {
+                focus: true,
                 surface_id: first,
                 index: 0
             })

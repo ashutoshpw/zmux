@@ -49,6 +49,9 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    SurfaceOrder {
+        request: crate::surface_order::OrderRequest,
+    },
     WorkspaceOrder {
         request: crate::workspace_order::OrderRequest,
     },
@@ -597,6 +600,16 @@ fn dispatch(
                     "window operation expired or belongs to another runtime".into(),
                 ))
         }
+        ControlCommand::SurfaceOrder {
+            request: order_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::SurfaceOrder {
+                request: order_request,
+            },
+        ),
         ControlCommand::WorkspaceOrder {
             request: order_request,
         } => mutate(
@@ -997,6 +1010,9 @@ fn mutate(
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(order) = execution.surface_order_result {
+        return Ok(order);
+    }
     if let Some(order) = execution.workspace_order_result {
         return Ok(order);
     }

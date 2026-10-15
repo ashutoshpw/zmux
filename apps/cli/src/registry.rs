@@ -463,8 +463,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "navigate",
         true,
         true,
-        "reorder-surface [SURFACE] INDEX",
-        "Move a tab to a zero-based final position in its pane."
+        "reorder-surface [--surface HANDLE | HANDLE] (--index INTEGER | --before HANDLE | --after HANDLE) [--workspace HANDLE] [--window HANDLE] [--focus true|false]",
+        "Reorder within one pane without focus by default. Signed final indices clamp; self anchors are no-ops. Legacy [SURFACE] INDEX is retained."
     ),
     command!(
         "move-surface",

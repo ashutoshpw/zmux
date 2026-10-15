@@ -133,6 +133,36 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    let mut surface_order = contract(
+        "reorder-surface",
+        &["surface:1", "--index", "0"],
+        {
+            let mut args = target_arguments();
+            args.extend(focus_arguments());
+            args.extend([
+                positional("subject", ValueKind::Target, false),
+                option("index", &["--index"], ValueKind::SignedInteger),
+                option(
+                    "before",
+                    &["--before", "--before-surface"],
+                    ValueKind::Target,
+                ),
+                option("after", &["--after", "--after-surface"], ValueKind::Target),
+            ]);
+            args
+        },
+        "surface_order",
+    );
+    surface_order.route = "surface_order";
+    surface_order.focus = "conditional_on_focus_argument";
+    surface_order.output = "json_order_committed_with_separate_native_focus";
+    surface_order.defaults = json!({"focus":false});
+    surface_order
+        .default_pointers
+        .push(("focus", "/request/focus"));
+    surface_order.argument_rules.push(json!({"exactly_one":["index","before","after"], "subject":"one positional or --surface; legacy [SURFACE] INDEX retained", "mutually_exclusive":["focus","no_focus"]}));
+    surface_order.limitations = "Same pane only. Signed final index clamps; both self anchors are no-ops. Default focus false also applies to legacy [SURFACE] INDEX. Native focus failure leaves committed order; never replay after uncertainty. Full frozen text/error/protocol compatibility remains unverified.";
+    result.push(surface_order);
     let mut single = contract(
         "reorder-workspace",
         &["workspace:1", "--index", "0"],
@@ -759,6 +789,7 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
     let (route, command) = match parsed {
         Parsed::App(command) => ("app", command),
         Parsed::WorkspaceMove(command) => ("workspace_move", command),
+        Parsed::SurfaceOrder(command) => ("surface_order", command),
         Parsed::Browser(command, _) => ("browser", command),
         Parsed::BrowserDownload(command, _) => ("browser_download", command),
         _ => {

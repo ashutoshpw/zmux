@@ -12,6 +12,7 @@ pub mod persistence;
 pub mod profiles;
 mod replies;
 pub mod sessions;
+pub mod surface_order;
 pub mod targets;
 pub mod transfers;
 pub mod windows;
@@ -91,6 +92,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    SurfaceOrder {
+        request: surface_order::OrderRequest,
+    },
     WorkspaceOrder {
         request: workspace_order::OrderRequest,
     },
@@ -277,6 +281,7 @@ pub(crate) struct Execution {
     pub download_result: Option<serde_json::Value>,
     pub window_result: Option<serde_json::Value>,
     pub workspace_order_result: Option<serde_json::Value>,
+    pub surface_order_result: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -410,6 +415,7 @@ impl Desktop {
                     windows,
                     window_result: None,
                     workspace_order_result: None,
+                    surface_order_result: None,
                     download_result: None,
                     profiles,
                     profile_operation_id: None,
@@ -901,6 +907,7 @@ struct Worker {
     windows: windows::WindowRuntime,
     window_result: Option<serde_json::Value>,
     workspace_order_result: Option<serde_json::Value>,
+    surface_order_result: Option<serde_json::Value>,
     download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
     browser_dispatch: Option<BrowserDispatchBatch>,
@@ -1145,6 +1152,7 @@ impl Worker {
         self.download_result = None;
         self.window_result = None;
         self.workspace_order_result = None;
+        self.surface_order_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if acknowledgement.is_some()
@@ -1231,6 +1239,7 @@ impl Worker {
                 download_result: self.download_result.take(),
                 window_result: self.window_result.take(),
                 workspace_order_result: self.workspace_order_result.take(),
+                surface_order_result: self.surface_order_result.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -1287,6 +1296,7 @@ impl Worker {
             command @ (Command::Windows { .. } | Command::NativeWindow { .. }) => {
                 self.execute_window_command(command)
             }
+            Command::SurfaceOrder { request } => self.surface_order(request),
             Command::WorkspaceOrder { request } => self.workspace_order(request),
             Command::LocalTmux { request } => self.local_tmux_command(request),
             Command::Downloads { request } => {

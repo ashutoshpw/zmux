@@ -91,6 +91,16 @@ actor NativeBridge {
                      "placement":["placement":"index", "index":index]]
         ]])
     }
+    func reorderSurface(namespace: UUID, surface: UInt64, pane: UInt64, value: Int, relative: Bool, revision: UInt64?) async throws {
+        var request: [String: Any] = [
+            "identity_namespace": namespace.uuidString.lowercased(),
+            "scope": ["surface": "surface:\(surface)", "pane": "pane:\(pane)"],
+            "focus": true,
+            "placement": ["placement": relative ? "offset" : "index", relative ? "offset" : "index": value]
+        ]
+        if let revision { request["expected_model_revision"] = revision }
+        try await send(["command": "surface_order", "request": request])
+    }
     func moveWorkspace(_ workspace: UUID, destination: UUID, focus: Bool) async throws {
         try await send(["command":"targeted", "request":[
             "scope":["workspace":workspace.uuidString.lowercased()],

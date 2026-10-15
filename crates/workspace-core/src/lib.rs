@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 mod navigation;
 mod restore;
+pub mod surface_order;
 mod surfaces;
 mod windows;
 pub mod workspace_order;
@@ -276,6 +277,8 @@ pub enum Action {
     ReorderSurface {
         surface_id: SurfaceId,
         index: usize,
+        #[serde(default)]
+        focus: bool,
     },
     MoveSurface {
         surface_id: SurfaceId,
@@ -441,7 +444,9 @@ impl WorkspaceStore {
         );
         let record_current = !matches!(
             action,
-            Action::MoveWorkspaceToWindow { focus: false, .. } | Action::ReorderWorkspaces { .. }
+            Action::MoveWorkspaceToWindow { focus: false, .. }
+                | Action::ReorderWorkspaces { .. }
+                | Action::ReorderSurface { focus: false, .. }
         );
         let result = candidate.apply_inner(action)?;
         candidate.check_window_layout()?;

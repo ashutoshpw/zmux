@@ -385,6 +385,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         previous.keyEquivalentModifierMask = [.command]; previous.target = self
         let navigationItems: [(String, Selector, String, NSEvent.ModifierFlags)] = [
             ("Last Tab", #selector(lastTab), "", NSEvent.ModifierFlags.command),
+            ("Move Tab Left", #selector(moveTabLeft), "{", [.command, .option]),
+            ("Move Tab Right", #selector(moveTabRight), "}", [.command, .option]),
             ("Next Workspace", #selector(nextWorkspace), "]", [.command, .control]),
             ("Previous Workspace", #selector(previousWorkspace), "[", [.command, .control]),
             ("Last Workspace", #selector(lastWorkspace), "", .command),
@@ -642,7 +644,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         didSetInitialTerminalFocus = false
         canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
         if let workspace = snapshot.workspace {
-            let root = paneView(workspace.root)
+            let root = paneView(workspace.root, namespace: snapshot.model.identityNamespace)
             root.frame = canvas.bounds
             root.autoresizingMask = [.width, .height]
             canvas.addSubview(root)
@@ -673,7 +675,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         canvas.layoutSubtreeIfNeeded()
     }
 
-    private func paneView(_ tree: PaneTree) -> NSView {
+    private func paneView(_ tree: PaneTree, namespace: UUID) -> NSView {
         switch tree {
         case .leaf(let pane):
             let view: NSView
@@ -707,7 +709,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             }
             view.removeFromSuperview()
             let container = BackgroundView(color: ZmuxPalette.terminal)
-            let tabs = TerminalTabBar(pane: pane, owner: self)
+            let tabs = TerminalTabBar(pane: pane, namespace: namespace, owner: self)
             tabs.translatesAutoresizingMaskIntoConstraints = false
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(tabs)
@@ -727,7 +729,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let workspace = snapshot?.workspace?.id
             let split = PaneSplitView(key: tree.geometryKey, vertical: axis == "horizontal",
                 fraction: workspace.map { coordinator.splitLayouts.fraction(workspace: $0, split: tree.geometryKey) } ?? 0.5,
-                first: paneView(first), second: paneView(second))
+                first: paneView(first, namespace: namespace), second: paneView(second, namespace: namespace))
             split.onFractionChanged = { [weak self] fraction in
                 guard let self, let workspace else { return }
                 self.coordinator.splitLayouts.remember(workspace: workspace, split: tree.geometryKey, fraction: fraction)
@@ -936,8 +938,28 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         alert.addButton(withTitle: "Close"); alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
-    func reorderTab(_ id: UInt64, in paneID: UInt64, to index: Int) {
-        enqueue(.surface("move_surface", id, paneID, index, nil))
+    @objc func moveTabLeft() { moveFocusedTab(offset: -1) }
+    @objc func moveTabRight() { moveFocusedTab(offset: 1) }
+    private func moveFocusedTab(offset: Int) {
+        guard let snapshot, let pane = focusedPane else { return }
+        moveTab(pane.selectedSurface, in: pane.id, namespace: snapshot.model.identityNamespace, offset: offset)
+    }
+    func moveTab(_ id: UInt64, in paneID: UInt64, namespace: UUID, offset: Int) {
+        guard surfaceDragRevision(id, in: paneID, namespace: namespace) != nil else { return }
+        enqueue(.surfaceOrder(namespace, id, paneID, offset, true, nil))
+    }
+    func surfaceDragRevision(_ id: UInt64, in paneID: UInt64, namespace: UUID) -> UInt64? {
+        guard let snapshot, snapshot.model.identityNamespace == namespace,
+              snapshot.workspace?.root.panes.contains(where: { $0.id == paneID && $0.surfaces.contains(where: { $0.id == id }) }) == true else { return nil }
+        return snapshot.model.revision
+    }
+    func reorderTab(_ id: UInt64, from sourcePane: UInt64, in paneID: UInt64, namespace: UUID, revision: UInt64, to index: Int) {
+        guard surfaceDragRevision(id, in: sourcePane, namespace: namespace) == revision else { return }
+        if sourcePane == paneID {
+            enqueue(.surfaceOrder(namespace, id, paneID, index, false, revision))
+        } else {
+            enqueue(.surface("move_surface", id, paneID, index, nil))
+        }
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === browserProfilesMenu {
@@ -978,7 +1000,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         case #selector(newBrowser), #selector(focusBrowserAddress): return focusedPane != nil
         case #selector(newBrowserWithProfile(_:)):
             return focusedPane != nil && profileForMenuItem(item) != nil
-        case #selector(nextTab), #selector(previousTab), #selector(lastTab): return (focusedPane?.surfaces.count ?? 0) > 1
+        case #selector(moveTabLeft), #selector(moveTabRight), #selector(nextTab), #selector(previousTab), #selector(lastTab): return (focusedPane?.surfaces.count ?? 0) > 1
         case #selector(nextWorkspace), #selector(previousWorkspace), #selector(lastWorkspace): return (snapshot?.model.workspaces.count ?? 0) > 1
         case #selector(nextPane), #selector(previousPane), #selector(lastPane), #selector(focusPaneLeft), #selector(focusPaneRight), #selector(focusPaneUp), #selector(focusPaneDown): return (snapshot?.workspace?.root.panes.count ?? 0) > 1
         case #selector(focusBack), #selector(focusForward): return snapshot?.model.focusedWorkspace != nil
@@ -1560,6 +1582,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "kernel_resize": true,
             "workspace_switch": true,
             "workspace_order": true,
+            "surface_order": true,
             "workspace_number": true,
             "pane_close": true,
             "terminal_tab_shortcut": true,
@@ -2112,6 +2135,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await BrowserInteractionSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
         try await WorkspaceNumberSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         try await WorkspaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, rows: { self.workspaceList.arrangedSubviews.compactMap { $0 as? WorkspaceRowView } }, terminals: { self.terminals }, browser: { self.browsers[$0] })
+        @MainActor func nativeTabs(_ view: NSView) -> [TerminalTabControl] {
+            if let tab = view as? TerminalTabControl { return [tab] }
+            return view.subviews.flatMap { nativeTabs($0) }
+        }
+        try await SurfaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, tabs: { nativeTabs(self.canvas) }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
               let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }

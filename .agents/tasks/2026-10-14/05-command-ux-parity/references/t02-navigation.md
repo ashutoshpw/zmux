@@ -54,3 +54,44 @@ Swift 6 compilation and executed native evidence are pending GitHub Actions. Fre
 Directional selection currently uses equal-share topology, not native divider ratios.
 Histories and close descriptors are in-memory only. Multiwindow, persisted layouts,
 remaining surface/tab actions and physical input/accessibility/resource gates remain open.
+
+## Same-pane surface reorder subset, 2026-10-15
+
+The shared Rust placement planner resolves signed final indices, same-pane before/after
+anchors and bounded native offsets. Signed indices clamp to the first/last tab; both
+self anchors are no-ops. The strict unsigned raw action keeps its historical bounds.
+Reorder now mutates the existing pane in place and defaults to no focus, including the
+omitted action field and retained legacy `[SURFACE] INDEX` CLI. Cross-pane `MoveSurface`
+behavior is unchanged.
+
+Canonical CLI accepts one subject and exactly one `--index`, `--before`/`--before-surface`
+or `--after`/`--after-surface` placement, scoped selectors, optional revision and explicit
+`--focus true|false`. Focus true reserves a fresh exact native receipt before model
+commit; host/capacity failure rejects without mutation. Native focus failure or timeout
+reports that order is already committed and never retries or rolls it back. Read-only
+sockets deny all reorder requests. Native left/right menus and Command-Shift-Option
+brackets use the same planner; same-pane drag also routes through it with captured
+namespace, source pane and revision. Cross-pane drag retains the move action.
+
+Behavior research used only the pinned cmux `3ba653b9e5afb11d0bc578031142950d6136697e`
+CLI/native contracts and exact Bonsplit dependency `d67d1b114fd20edba7a19f76cc39e35bde43c2d8`
+to resolve signed bounds and self anchors. No source, tests or assets were imported or
+translated. Frozen CMD-071 is a local counterpart with compatibility unverified.
+
+The owner regression failed before the repair because a background reorder focused its
+workspace; the same focused core test command now passes. Core placement tables cover
+adjacent movement, both self anchors, extreme signed bounds and non-wrapping offsets.
+Actual CLI/socket tests cover canonical/legacy grammar, target fencing, focus defaults,
+policy, exact native acknowledgements, failure and uncertainty without replay. Runtime
+preflight covers unregistered native hosts and the full exact-focus queue. Real PTY and
+filesystem save/restart tests retain live session/PID identities during reorder, persist
+the exact order and restore fresh ordinary shell sessions; namespace/revision guards
+reject captured stale targets atomically.
+
+An isolated full `scripts/check` on baseline `692b12c` plus only this slice passed 271
+Rust tests, formatting, Clippy with denied warnings, dependency inventory and C ABI.
+Evidence lives in `/tmp/zmux-t02-surface-order-{red,green,socket,persistence,preflight}.log`
+and `/tmp/zmux-t02-surface-order-isolated-check-final.log`. Native smoke is authored for actual
+CLI/menu/key-equivalent paths, tab-strip order, key/responder and terminal/browser host
+retention. Swift compilation, executed macOS smoke and physical AppKit drag acceptance
+remain pending; portable evidence does not establish native acceptance or V01 closure.

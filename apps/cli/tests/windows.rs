@@ -865,3 +865,249 @@ fn reorder_cli_resolves_caller_objects_and_never_borrows_another_window() {
     );
     assert_eq!(fixture.desktop.snapshot().unwrap().model, current);
 }
+
+#[test]
+fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy() {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
+    let fixture = Fixture::new();
+    let initial = fixture.desktop.snapshot().unwrap();
+    let pane = initial.model.workspaces[0].root.panes()[0].id;
+    for _ in 0..2 {
+        fixture.value(&["new-surface", &pane.0.to_string()]);
+    }
+    fixture.value(&["new-workspace", "foreground"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let before = loop {
+        let s = fixture.desktop.snapshot().unwrap();
+        if s.control_frames.len() == 4 && s.control_frames.iter().all(|f| f.process_id.is_some()) {
+            break s;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    };
+    let tabs = &before.model.workspaces[0].root.panes()[0].surfaces;
+    let ids: Vec<_> = tabs.iter().map(|s| s.id).collect();
+    let subject = ids[0].0.to_string();
+    let mut explicit = fixture.command(&[
+        "reorder-surface",
+        "--surface",
+        &subject,
+        "--after-surface",
+        &ids[1].0.to_string(),
+    ]);
+    explicit.env("ZMUX_SURFACE_ID", "bad inherited context");
+    let receipt = value(explicit.output().unwrap());
+    assert_eq!(receipt["state"], "order_committed");
+    assert_eq!(receipt["from_index"], 0);
+    assert_eq!(
+        receipt["to_index"], 1,
+        "adjacent downward placement must move"
+    );
+    assert_eq!(receipt["focus_requested"], false);
+    assert!(receipt["native_focus"].is_null());
+    let after = fixture.desktop.snapshot().unwrap();
+    assert_eq!(
+        after.model.focused_workspace,
+        before.model.focused_workspace
+    );
+    assert_eq!(
+        after.model.workspaces[0].root.panes()[0].selected_surface,
+        before.model.workspaces[0].root.panes()[0].selected_surface
+    );
+    assert_eq!(
+        after
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id.0, f.process_id))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id.0, f.process_id))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    );
+    assert_eq!(
+        after.model.workspaces[0].root.panes()[0]
+            .surfaces
+            .iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>(),
+        vec![ids[1], ids[0], ids[2]]
+    );
+    assert_eq!(
+        fixture.value(&["reorder-surface", &subject, "--after", &subject])["to_index"],
+        1
+    );
+    assert_eq!(
+        fixture.value(&["reorder-surface", "--tab", &subject, "--before", &subject])["to_index"],
+        1
+    );
+    assert_eq!(
+        fixture.value(&["reorder-surface", &subject, "-9223372036854775808"])["to_index"],
+        0
+    );
+    let mut ambient = fixture.command(&["reorder-surface", "9223372036854775807"]);
+    ambient.env("ZMUX_SURFACE_ID", &subject);
+    let ambient = value(ambient.output().unwrap());
+    assert_eq!(ambient["to_index"], 2);
+    assert_eq!(ambient["focus_requested"], false);
+    let model = fixture.desktop.snapshot().unwrap().model.clone();
+    let foreign = model.workspaces[1].root.panes()[0].selected_surface;
+    for args in [
+        vec![
+            "reorder-surface".into(),
+            subject.clone(),
+            "--before".into(),
+            foreign.0.to_string(),
+        ],
+        vec![
+            "reorder-surface".into(),
+            subject.clone(),
+            "--index".into(),
+            "0".into(),
+            "--expect-revision".into(),
+            (model.revision - 1).to_string(),
+        ],
+    ] {
+        assert!(
+            !fixture
+                .command(&args.iter().map(String::as_str).collect::<Vec<_>>())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert_eq!(fixture.desktop.snapshot().unwrap().model, model);
+    }
+    fixture
+        .server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let denied = fixture
+        .command(&["reorder-surface", &subject, "--index", "0"])
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    assert_eq!(fixture.desktop.snapshot().unwrap().model, model);
+}
+
+#[test]
+fn surface_order_waits_for_exact_native_focus_and_never_replays_committed_order() {
+    let fixture = Fixture::new();
+    let pane = fixture.desktop.snapshot().unwrap().model.workspaces[0]
+        .root
+        .panes()[0]
+        .id;
+    fixture.value(&["new-surface", &pane.0.to_string()]);
+    let initial = fixture.desktop.snapshot().unwrap();
+    let id = initial.model.workspaces[0].root.panes()[0].surfaces[0]
+        .id
+        .0
+        .to_string();
+    let mut first = fixture.spawn(&["reorder-surface", &id, "--index", "1", "--focus", "true"]);
+    let pending = fixture.pending(WindowKind::Focus);
+    assert!(
+        first.try_wait().unwrap().is_none(),
+        "logical order is not native completion"
+    );
+    fixture
+        .desktop
+        .native_window_event(NativeWindowEvent::Failed {
+            epoch: pending.epoch,
+            operation_id: pending.operation_id,
+            message: "deliberate focus failure".into(),
+        })
+        .unwrap();
+    let failed = finish(first);
+    assert!(!failed.status.success());
+    let error = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        error.contains("already committed") && error.contains("not replayed or rolled back"),
+        "{error}"
+    );
+    assert_eq!(
+        fixture.desktop.snapshot().unwrap().model.workspaces[0]
+            .root
+            .panes()[0]
+            .surfaces[1]
+            .id
+            .0
+            .to_string(),
+        id
+    );
+    let second = fixture.spawn(&["reorder-surface", &id, "--index", "0", "--focus", "true"]);
+    let success = fixture.pending(WindowKind::Focus);
+    assert_ne!(success.operation_id, pending.operation_id);
+    fixture.acknowledge(&success);
+    let completed = value(finish(second));
+    assert_eq!(
+        completed["native_focus"]["operation_id"],
+        success.operation_id.to_string()
+    );
+    assert_eq!(completed["native_focus"]["state"], "completed");
+    let timed = fixture.spawn(&[
+        "--timeout",
+        "100",
+        "reorder-surface",
+        &id,
+        "--index",
+        "1",
+        "--focus",
+        "true",
+    ]);
+    let unknown = fixture.pending(WindowKind::Focus);
+    let timed = finish(timed);
+    assert!(!timed.status.success());
+    assert!(String::from_utf8_lossy(&timed.stderr).contains("already committed"));
+    let snapshot = fixture.desktop.snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .window_requests
+            .iter()
+            .filter(|r| r.kind == WindowKind::Focus)
+            .count(),
+        1
+    );
+    assert_eq!(
+        snapshot.model.workspaces[0].root.panes()[0].surfaces[1]
+            .id
+            .0
+            .to_string(),
+        id
+    );
+    fixture.acknowledge(&unknown);
+}
+
+#[test]
+fn surface_reorder_invalid_placements_fail_before_connecting() {
+    for args in [
+        vec!["reorder-surface"],
+        vec!["reorder-surface", "--index", "1"],
+        vec!["reorder-surface", "1", "--index", "1", "--before", "2"],
+        vec!["reorder-surface", "1", "--before", "2", "--after", "2"],
+        vec!["reorder-surface", "1", "--index", "9223372036854775808"],
+        vec![
+            "reorder-surface",
+            "1",
+            "--index",
+            "0",
+            "--focus",
+            "true",
+            "--no-focus",
+        ],
+        vec!["reorder-surface", "1", "--surface", "2", "--index", "0"],
+        vec!["reorder-surface", "1", "--index", "0", "--dry-run"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .args(["--socket", "/missing-surface-order.sock"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("cannot connect"),
+            "{args:?}"
+        );
+    }
+}

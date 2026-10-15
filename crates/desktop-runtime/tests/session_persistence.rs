@@ -1148,3 +1148,114 @@ fn reordered_membership_survives_real_save_restart_without_replacing_live_ptys()
     }));
     restarted.shutdown(Duration::from_secs(5)).unwrap();
 }
+
+#[test]
+fn surface_order_keeps_live_pty_identity_and_persists_exact_tab_order_with_fresh_restored_sessions()
+{
+    use zmux_desktop_runtime::surface_order::{OrderPlacement, OrderRequest};
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    let initial = wait(&desktop, ready);
+    let pane = initial.model.workspaces[0].root.panes()[0].id;
+    for id in 1..=2 {
+        send(
+            &desktop,
+            id,
+            Command::Action {
+                action: Action::CreateSurface { pane_id: pane },
+            },
+        );
+        wait(&desktop, |s| {
+            s.last_request_id == id
+                && s.pending_launches == 0
+                && s.control_frames.len() == id as usize + 1
+                && s.control_frames.iter().all(|f| f.process_id.is_some())
+        });
+    }
+    let before = desktop.snapshot().unwrap();
+    let pane_before = before.model.workspaces[0].root.panes()[0];
+    let ids: Vec<_> = pane_before.surfaces.iter().map(|s| s.id).collect();
+    let order = OrderRequest {
+        scope: zmux_workspace_core::targets::TargetScope {
+            surface: Some(ids[0].0.to_string().parse().unwrap()),
+            pane: Some(pane.0.to_string().parse().unwrap()),
+            ..Default::default()
+        },
+        caller: Default::default(),
+        identity_namespace: Some(before.model.identity_namespace),
+        expected_model_revision: Some(before.model.revision),
+        focus: false,
+        placement: OrderPlacement::Index { index: i64::MAX },
+    };
+    send(
+        &desktop,
+        3,
+        Command::SurfaceOrder {
+            request: order.clone(),
+        },
+    );
+    let after = wait(&desktop, |s| s.last_request_id == 3);
+    assert!(after.last_error.is_none(), "{:?}", after.last_error);
+    assert_eq!(
+        after
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id.0, f.process_id))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        before
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id.0, f.process_id))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    );
+    assert_eq!(
+        after.model.workspaces[0].root.panes()[0]
+            .surfaces
+            .iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>(),
+        vec![ids[1], ids[2], ids[0]]
+    );
+    // Stale captured native views and observed indices must reject before order/focus.
+    let mut wrong_namespace = order.clone();
+    wrong_namespace.identity_namespace = Some(uuid::Uuid::new_v4());
+    wrong_namespace.expected_model_revision = None;
+    send(
+        &desktop,
+        4,
+        Command::SurfaceOrder {
+            request: wrong_namespace,
+        },
+    );
+    let rejected = wait(&desktop, |s| s.last_request_id == 4);
+    assert!(rejected.last_error.as_ref().unwrap().contains("namespace"));
+    assert_eq!(rejected.model, after.model);
+    send(&desktop, 5, Command::SurfaceOrder { request: order });
+    let stale = wait(&desktop, |s| s.last_request_id == 5);
+    assert!(stale.last_error.is_some());
+    assert_eq!(stale.model, after.model);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let reopened = directory.desktop();
+    let restored = wait(&reopened, |s| {
+        ready(s)
+            && s.control_frames.len() == 3
+            && s.control_frames.iter().all(|f| f.process_id.is_some())
+    });
+    let pane_restored = restored.model.workspaces[0].root.panes()[0];
+    assert_eq!(
+        pane_restored
+            .surfaces
+            .iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>(),
+        vec![ids[1], ids[2], ids[0]]
+    );
+    assert_eq!(pane_restored.selected_surface, pane_before.selected_surface);
+    assert!(restored.control_frames.iter().all(|f| {
+        before
+            .control_frames
+            .iter()
+            .all(|old| old.session_id != f.session_id)
+    }));
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+}

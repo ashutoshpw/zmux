@@ -504,8 +504,8 @@
       "inventory_id": "CMD-071",
       "reference_command": "reorder-surface",
       "review_owner": "audit-terminal-ux.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "reorder-surface"
     },
     {
       "inventory_id": "CMD-072",

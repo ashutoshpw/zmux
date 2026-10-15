@@ -512,14 +512,16 @@ final class CloudFooterView: BackgroundView {
 @MainActor
 final class TerminalTabBar: BackgroundView {
     private let pane: Pane
+    private let namespace: UUID
     private weak var owner: MainWindowHost?
     private let scroll = NSScrollView()
     private let strip = NSView()
     private var tabs: [TerminalTabControl] = []
     private static let dragType = NSPasteboard.PasteboardType("app.zmux.terminal-surface")
 
-    init(pane: Pane, owner: MainWindowHost) {
+    init(pane: Pane, namespace: UUID, owner: MainWindowHost) {
         self.pane = pane
+        self.namespace = namespace
         self.owner = owner
         super.init(color: ZmuxPalette.chrome)
         scroll.drawsBackground = false
@@ -531,7 +533,7 @@ final class TerminalTabBar: BackgroundView {
         scroll.documentView = strip
         strip.frame = NSRect(x: 0, y: 0, width: pane.surfaces.count * 160, height: 32)
         for (index, surface) in pane.surfaces.enumerated() {
-            let tab = TerminalTabControl(surface: surface, selected: surface.id == pane.selectedSurface, owner: owner)
+            let tab = TerminalTabControl(surface: surface, paneID: pane.id, namespace: namespace, selected: surface.id == pane.selectedSurface, owner: owner)
             tab.frame = NSRect(x: index * 160, y: 0, width: 160, height: 32)
             strip.addSubview(tab)
             tabs.append(tab)
@@ -566,17 +568,18 @@ final class TerminalTabBar: BackgroundView {
     }
     @objc private func addTab() { owner?.newTerminalInPane(pane.id) }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner else { return [] }
+        guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner, tab.namespace == namespace else { return [] }
         return .move
     }
     override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { draggingEntered(sender) == .move }
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner,
-              let value = sender.draggingPasteboard.string(forType: Self.dragType), let id = UInt64(value), id == tab.surface.id else { return false }
+        guard let tab = sender.draggingSource as? TerminalTabControl, tab.owner === owner, tab.namespace == namespace,
+              let value = sender.draggingPasteboard.string(forType: Self.dragType), let id = UInt64(value), id == tab.surface.id, let revision = tab.dragRevision,
+              owner?.surfaceDragRevision(id, in: tab.paneID, namespace: tab.namespace) == revision else { return false }
         let x = strip.convert(sender.draggingLocation, from: nil).x
         var index = min(pane.surfaces.count, max(0, Int((x + 80) / 160)))
         if let oldIndex = pane.surfaces.firstIndex(where: { $0.id == id }), oldIndex < index { index -= 1 }
-        owner?.reorderTab(id, in: pane.id, to: index)
+        owner?.reorderTab(id, from: tab.paneID, in: pane.id, namespace: tab.namespace, revision: revision, to: index)
         return true
     }
 }
@@ -584,12 +587,17 @@ final class TerminalTabBar: BackgroundView {
 @MainActor
 final class TerminalTabControl: BackgroundView, NSDraggingSource {
     var surface: Surface
+    let paneID: UInt64
+    let namespace: UUID
+    private(set) var dragRevision: UInt64?
     weak var owner: MainWindowHost?
     private var mouseOrigin: NSPoint?
     private let titleLabel = NSTextField(labelWithString: "")
 
-    init(surface: Surface, selected: Bool, owner: MainWindowHost) {
+    init(surface: Surface, paneID: UInt64, namespace: UUID, selected: Bool, owner: MainWindowHost) {
         self.surface = surface
+        self.paneID = paneID
+        self.namespace = namespace
         self.owner = owner
         super.init(color: selected ? ZmuxPalette.terminal : ZmuxPalette.chrome)
         let icon = NSImageView(image: NSImage(systemSymbolName: surface.kind == "browser" ? "globe" : "terminal", accessibilityDescription: nil) ?? NSImage())
@@ -616,7 +624,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         setAccessibilityLabel(surface.title)
         setAccessibilitySelected(selected)
         let menu = NSMenu()
-        for (label, action) in [("Rename Tab…", #selector(renameTab)), ("Close Tab", #selector(closeTab)), ("Close Other Tabs…", #selector(closeOthers))] {
+        for (label, action) in [("Rename Tab…", #selector(renameTab)), ("Move Left", #selector(moveLeft)), ("Move Right", #selector(moveRight)), ("Close Tab", #selector(closeTab)), ("Close Other Tabs…", #selector(closeOthers))] {
             let item = menu.addItem(withTitle: label, action: action, keyEquivalent: ""); item.target = self
         }
         self.menu = menu
@@ -640,6 +648,8 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     override func mouseDragged(with event: NSEvent) {
         guard let origin = mouseOrigin, hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 5 else { return }
         mouseOrigin = nil
+        guard let revision = owner?.surfaceDragRevision(surface.id, in: paneID, namespace: namespace) else { return }
+        dragRevision = revision
         let item = NSPasteboardItem()
         item.setString(String(surface.id), forType: NSPasteboard.PasteboardType("app.zmux.terminal-surface"))
         let dragging = NSDraggingItem(pasteboardWriter: item)
@@ -656,6 +666,8 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         titleLabel.textColor = unread > 0 ? .systemOrange : .labelColor
         setAccessibilityLabel(surface.title + (unread > 0 ? ", \(unread) unread" : ""))
     }
+    @objc private func moveLeft() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: -1) }
+    @objc private func moveRight() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: 1) }
     @objc private func closeTab() { owner?.closeTerminalTab(surface.id) }
     @objc private func renameTab() { owner?.renameTerminalTab(surface.id) }
     @objc private func closeOthers() { owner?.closeOtherTabs(surface.id) }

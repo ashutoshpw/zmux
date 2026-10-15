@@ -169,6 +169,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         "reorder-surface" => {
             let index = target_and_value(values, &mut scope.surface, "surface and index")?;
             TargetAction::ReorderSurface {
+                focus: false,
                 index: index
                     .parse()
                     .map_err(|_| CliError("index must be a nonnegative integer".into()))?,

@@ -26,6 +26,7 @@ mod local_multiplexer;
 mod registry;
 mod session;
 mod ssh;
+mod surface_order;
 mod targets;
 mod windows;
 mod workspace_move;
@@ -69,6 +70,7 @@ enum Parsed {
     BrowserDownload(ControlCommand, Option<Duration>),
     Window(ControlCommand),
     WorkspaceMove(ControlCommand),
+    SurfaceOrder(ControlCommand),
 }
 
 enum Offline {
@@ -121,6 +123,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
         Parsed::Offline(Offline::Doctor) => {
             let options = client_options(socket_override, timeout, password)?;
             doctor(&options)?;
+            Ok(0)
+        }
+        Parsed::SurfaceOrder(command) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&surface_order::run(&options, command)?)?
+            );
             Ok(0)
         }
         Parsed::WorkspaceMove(command) => {
@@ -244,6 +254,16 @@ fn parse(
             timeout,
             password,
         ));
+    }
+    if command == Some("reorder-surface") {
+        let parsed = surface_order::parse(tail)?;
+        if !explicit_timeout
+            && let Parsed::SurfaceOrder(request) = &parsed
+            && surface_order::wants_focus(request)
+        {
+            timeout = windows::NATIVE_RECEIPT_BUDGET;
+        }
+        return Ok((parsed, socket, timeout, password));
     }
     if command == Some("move-workspace-to-window") {
         let parsed = workspace_move::parse(tail)?;

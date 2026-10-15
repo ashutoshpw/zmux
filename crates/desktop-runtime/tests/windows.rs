@@ -642,3 +642,84 @@ fn numbered_workspace_requests_share_selection_action_and_consume_missing_rows_w
     );
     desktop.shutdown(Duration::from_secs(3)).unwrap();
 }
+
+#[test]
+fn surface_order_preflights_host_and_exact_focus_capacity_before_committing() {
+    use zmux_desktop_runtime::surface_order::{OrderPlacement, OrderRequest};
+    let desktop = Desktop::new(Shell {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        cwd: None,
+    })
+    .unwrap();
+    let initial = wait(&desktop, |s| {
+        !s.model.workspaces.is_empty() && !s.window_requests.is_empty()
+    });
+    let window = initial.model.windows[0].id;
+    let pane = initial.model.workspaces[0].root.panes()[0].id;
+    let surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
+    send(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CreateSurface { pane_id: pane },
+        },
+    );
+    let two = wait(&desktop, |s| s.last_request_id == 1);
+    let order = |index| Command::SurfaceOrder {
+        request: OrderRequest {
+            scope: TargetScope {
+                surface: Some(surface.0.to_string().parse().unwrap()),
+                pane: Some(pane.0.to_string().parse().unwrap()),
+                ..Default::default()
+            },
+            caller: CallerContext::default(),
+            identity_namespace: Some(initial.model.identity_namespace),
+            expected_model_revision: None,
+            focus: true,
+            placement: OrderPlacement::Index { index },
+        },
+    };
+    send(&desktop, 2, order(1));
+    let unhosted = wait(&desktop, |s| s.last_request_id == 2);
+    assert!(
+        unhosted
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("native window host is not ready"))
+    );
+    assert_eq!(unhosted.model, two.model);
+    acknowledge(
+        &desktop,
+        &unhosted,
+        window,
+        WindowKind::Open,
+        Uuid::new_v4(),
+    );
+    for sequence in 0..32 {
+        send(
+            &desktop,
+            sequence + 3,
+            order(if sequence % 2 == 0 { 1 } else { 0 }),
+        );
+        let s = wait(&desktop, |s| s.last_request_id == sequence + 3);
+        assert!(s.last_error.is_none(), "{:?}", s.last_error);
+    }
+    let full = desktop.snapshot().unwrap();
+    assert_eq!(
+        full.window_requests.len(),
+        32,
+        "each order needs a fresh exact focus receipt"
+    );
+    send(&desktop, 35, order(1));
+    let rejected = wait(&desktop, |s| s.last_request_id == 35);
+    assert!(
+        rejected
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("request capacity is full"))
+    );
+    assert_eq!(rejected.model, full.model);
+    assert_eq!(rejected.window_requests.len(), 32);
+    desktop.shutdown(Duration::from_secs(3)).unwrap();
+}
