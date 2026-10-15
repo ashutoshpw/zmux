@@ -173,3 +173,24 @@ native fixtures. Ordinary CLI, explicit `--cli`, empty arguments and Launch Serv
 packaged executable and requires child observations and shared shutdown, so it owns
 the pending native startup proof; no additional source-mirroring test was added.
 Startup source SHA256: `12bd1ebc3a55e511f13668d76c13fbb5818dae1eddd611241bf5a7f02862464e`.
+
+## Executed native subset at9594b98
+
+Optional run38823543450 executes four ARM adapter and four ARM Session cases,
+then builds and runs the actual ARM app. The retained child receives exactly
+16,405 bytes: two application arrows, one16KiB bracketed clipboard frame and
+one composed-text END suffix. Its independent digest is
+`0e0bf7a3af9721fdaaf7cb24d2b60db5f4aff4ca11c43a01f27dbb495e871a5c`.
+The native process exits0 after shared shutdown. Intel remains compile/link only.
+
+Parent verified all357 retained source entries against commit9594b98, the app
+archive digest, matching app/child reports and the expected complete input bytes.
+Independent receipt SHA256:
+`de47b1280966af49e34ae101cda343be6d9e60181d3ac62e8fcd5a79e9ba6b05`.
+
+The whole workflow fails afterward: the completed helper report omitted the
+strict reader's required schema_version. The one-line producer repair adds
+schema_version1 without loosening the reader. Existing29 policy tests pass
+(one native-only skip), and both helper/child Python sources parse. The committed
+whole-lane rerun remains required. Physical input/full IME, mouse, styling,
+VoiceOver, performance budgets and default-engine migration remain open.

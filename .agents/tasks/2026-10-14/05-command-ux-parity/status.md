@@ -5,6 +5,19 @@
 
 ## Active implementation
 
+- Optional native38823543450 at9594b98 executes the repaired pending-to-reaped
+  Darwin transition and actual ARM app semantic input/shared shutdown successfully.
+  Parent verifies357 exact source entries and complete child-input digest. The
+  overall workflow fails afterward on the helper report's missing schema version;
+  producer-only schema repair retains the strict consumer and awaits full rerun.
+
+- Published `52736fc` includes runtime/startup repair `9594b98` and failure-only
+  browser keyboard diagnostics. Default native38822345401 at924cd89 passed the
+  browser-focus round trip and reached keyboard input, then failed its snapshot
+  ordering assertion. Default native38823748479 and optional engine38823543450
+  are running. Shutdown diagnostics38823545800 pass parallel/serial cases with
+  actual ECHILD; they did not observe the rare EPERM/ESRCH fallback.
+
 - R03 `986600f` separates structured Cargo stdout from download diagnostics.
   Actual cold-Cargo red/green, seven stream/lifecycle checks, fresh producer, owner,
   13 negative-package cases and independent review pass. Exact isolated

@@ -156,3 +156,13 @@ repair. All165 validation input hashes are identical before and after; all293
 tests, strict Clippy, notices and the C ABI pass. Receipt SHA256:
 `73fada3be689bf70b59a4cd1bbf55ce33597e95a1f5658ac50352c22b3d2a984`.
 Concurrent metadata implementation was excluded from this validation tree.
+
+## Observed Darwin pending-to-reaped transition
+
+Run38823543450 at9594b98 exercises the repaired EPERM/ESRCH branch: owned child
+3631 becomes reapable on attempt2 after3.7855ms, with SIGHUP exit status1.
+The unchanged four Session cases pass. Parent independently verified the log and
+all357 retained current-source entries against Git. This establishes the narrow
+observed race repair; broader descendant extinction and earlier unrelated
+graceful-timeout behavior are not inferred. Separate shutdown38823545800 passes
+parallel3/serial3 cases and actual ECHILD error assertions.
