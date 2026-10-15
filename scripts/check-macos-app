@@ -184,10 +184,13 @@ with local_tmux_fixture() as native_environment, browser_fixture(), fixture_modu
                             str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=180)
         finally:
             sampler.stop()
-    except Exception:
+    except Exception as error:
         for path in [stdout,stderr]:
             if path.exists(): print(path.read_text())
-        diagnose_startup(native_environment)
+        if isinstance(error, subprocess.TimeoutExpired):
+            print("Launch Services smoke timed out; its app may remain alive. Skipping a second app launch to preserve the original failure.")
+        else:
+            diagnose_startup(native_environment)
         raise
     if not report.exists():
         for path in [stdout,stderr]:
