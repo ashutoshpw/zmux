@@ -171,6 +171,15 @@ The owner helper otherwise selects its own private Cargo target directory.
 Receipts bind source, patch, toolchain, input hashes, configuration hashes, binary,
 actual owner results and upstream prebuilt WASM inventory. Those WASM files are not
 rebuilt. The workflow uploads immutable source inputs, logs, receipts and notices;
-it excludes the compiled executable. Full binary distribution notices, verified
-Darwin acceptance, native integration and a product acquisition decision remain
+it excludes the compiled executable. Full binary distribution notices, packaged
+native acceptance and a product acquisition decision remain
 separate gates.
+
+Patched-source run [38811822523](https://github.com/ashutoshpw/zmux/actions/runs/38811822523)
+passed all 27 production CLI owner checks on Linux X64 and macOS 15.7.9 ARM64,
+including real suspend/resume input and detach/reattach. Source/receipt/log hashes
+were independently verified. This establishes that host-specific CLI boundary;
+retained distributable binaries, complete notices, native app integration and
+default acquisition remain separate. The
+[dependency package audit](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/r03-dependency-package.md)
+describes the proposed source-built plugin and notice package before binary uploads.
