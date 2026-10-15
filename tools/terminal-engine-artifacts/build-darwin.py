@@ -10,7 +10,8 @@ import platform
 import shutil
 import sys
 
-from darwin_platform import inspect_darwin_archive, inspect_macho
+from darwin_platform import (CONSUMER_MINIMUM, LIBRARY_MINIMUM,
+                             inspect_darwin_archive, inspect_macho)
 from verify import (HERE, REPO, Rejected, checked_file, digest, document,
                     read_bounded, verify_notice_review, verify_notices)
 
@@ -28,10 +29,22 @@ def sha(path):
     return digest(read_bounded(path, 128 * 1024 * 1024))
 
 
+def deployment_policy():
+    policy = document(HERE / "darwin-deployment-policy.json")
+    if (policy["library_object_minimum_macos"] != list(LIBRARY_MINIMUM)
+            or policy["consumer_minimum_macos"] != list(CONSUMER_MINIMUM)
+            or policy["requested_zig_target_minimum_macos"] != list(CONSUMER_MINIMUM)
+            or policy["upstream_override"]["path"] != "src/build/Config.zig"
+            or policy["upstream_override"]["sha256"] != "e15abd51f767a70c92faac2bc8bf86fbb096db6680bca3de7388b9a4568fd739"):
+        raise Rejected("unsupported Darwin effective deployment policy")
+    return policy
+
+
 def sources():
     candidate = document(HERE / "candidate.json")
     pins = document(BASE / "pins.json")
     recipe = document(HERE / "darwin-recipe.json")
+    deployment_policy()
     if recipe["recipe_version"] != 1 or (recipe["xcode_version"], recipe["sdk_version"], recipe["minimum_macos"]) != ("16.4", "15.5", "14.0"):
         raise Rejected("unsupported Xcode/SDK/minimum macOS recipe")
     if recipe["zig_version"] != pins["zig"]["version"] or recipe["rust_version"] != pins["rust_version"]:
@@ -70,6 +83,7 @@ def main():
     if args.check_recipe:
         recipe, _, frozen, _ = sources()
         print(json.dumps({"state": "recipe_verified", "recipe": recipe,
+                          "deployment_policy": deployment_policy(),
                           "frozen_inputs": len(frozen), "engine_built": False,
                           "darwin_execution_verified": False}, indent=2))
         return 0
@@ -85,6 +99,7 @@ def main():
     try:
         recipe, pins, frozen, linux_symbols = sources()
         receipt.update(recipe=recipe, pins=pins, source_sha256=frozen)
+        receipt["deployment_policy"] = deployment_policy()
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise Rejected("this recipe requires a macOS arm64 host; no cross-runtime substitution")
         spec = importlib.util.spec_from_file_location("accepted_runner", BASE / "run.py")
@@ -128,6 +143,8 @@ def main():
         for patch in ("resource.patch", "metadata.patch"):
             run(["git", "apply", "--check", str(BASE / patch)], patch + "-check", cwd=source)
             run(["git", "apply", str(BASE / patch)], patch + "-apply", cwd=source)
+        override = receipt["deployment_policy"]["upstream_override"]
+        override_source = checked_file(source, override["path"], override["sha256"])
         upstream = document(HERE / "upstream-inputs.json")
         for name, expected in upstream["patched_header_sha256"].items():
             checked_file(source, name, expected)
@@ -140,6 +157,10 @@ def main():
         bundle.mkdir()
         retained_sources = bundle / "sources/repository"
         retained_sources.mkdir(parents=True)
+        upstream_sources = bundle / "sources/upstream"
+        upstream_sources.mkdir()
+        (upstream_sources / "Config.zig").write_bytes(override_source)
+        shutil.copyfile(HERE / "darwin-deployment-policy.json", bundle / "deployment-policy.json")
         for name, expected in frozen.items():
             relative = (REPO / name).resolve().relative_to(REPO)
             target_path = retained_sources / relative
@@ -176,6 +197,9 @@ def main():
             directory = bundle / arch
             directory.mkdir()
             result = {"architecture": arch, "zig_target": target["zig"], "rust_target": target["rust"],
+                      "requested_zig_target_minimum_macos": list(CONSUMER_MINIMUM),
+                      "effective_library_minimum_macos": list(LIBRARY_MINIMUM),
+                      "consumer_minimum_macos": list(CONSUMER_MINIMUM),
                       "execution": "not_run_cross_architecture", "state": "starting"}
             receipt["targets"].append(result)
             library = directory / "libghostty-vt.a"
@@ -226,6 +250,9 @@ def main():
             command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + str(sdk),
                         "-C", "link-arg=-mmacosx-version-min=" + recipe["minimum_macos"], "-o", str(binary)]
             run(command, "rust-c-abi-link-" + arch)
+            result["binary_inventories"] = {p.name: inspect_macho(
+                read_bounded(p, 64 * 1024 * 1024), arch, executable=True)
+                for p in (c_probe, binary)}
             result["binaries_sha256"] = {p.name: sha(p) for p in (c_probe, binary)}
             result["state"] = "compiled_linked_inspected"
             if target["execute"]:
@@ -243,7 +270,7 @@ def main():
         if any(sha(REPO / name) != expected for name, expected in frozen.items()):
             raise Rejected("source inputs changed during artifact production")
         receipt["state"] = "complete"
-        receipt["scope"] = "two thin macOS artifacts with declared minOS/C ABI links; arm64 execution only; independent Darwin inventory review still required"
+        receipt["scope"] = "two thin macOS libraries declaring upstream minOS 13.0, C consumers deployed at 14.0; arm64 execution only; independent Darwin inventory review still required"
     except Exception as error:
         receipt.update(state="failed", error=f"{type(error).__name__}: {error}")
     finally:

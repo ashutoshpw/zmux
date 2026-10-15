@@ -2,7 +2,9 @@
 
 This manual prerequisite produces retained arm64 and x86_64 archives from the
 reviewed minimal source graph. It leaves the feasibility/PTY source locks and
-application engine unchanged. Hosted execution of this new recipe is pending.
+application engine unchanged. The first hosted run retained an arm64 library but
+failed the original exact-14 archive assertion; the corrected policy and reuse
+run remain pending.
 
 ```sh
 # Portable source/notice/recipe validation; no download or build:
@@ -18,12 +20,31 @@ python3 -B tools/terminal-engine-artifacts/build-darwin.py \
 ```
 
 The manual `Terminal engine Darwin artifacts` workflow has one macos-15 arm64 job.
+Its explicit `reuse_retained_arm64` input defaults to reusing the arm64 library
+from failed run `38797303343`. The download helper pins repository, run, source
+SHA, immutable artifact ID/digest, original receipt SHA and library SHA. It checks
+bounded metadata/download time and retained file/byte counts, and leaves the
+original failed receipt intact. Expired, missing or changed inputs fail without
+silently rebuilding arm64. Disable this input only for an explicitly approved
+fresh two-slice build.
 It selects `/Applications/Xcode_16.4.app/Contents/Developer`, requires Xcode 16.4 and
 SDK 15.5, and records Xcode build identity, SDK settings hash and compiler versions.
 `darwin-recipe.json` fixes Zig 0.16.0, Rust 1.95.0, ReleaseSafe, two build jobs,
 SIMD false and the existing explicit VT feature list. Exactly two thin targets
-are built: `aarch64-macos.14.0` and `x86_64-macos.14.0`. There is no Linux engine
+are requested: `aarch64-macos.14.0` and `x86_64-macos.14.0`. There is no Linux engine
 rebuild, feature matrix, Rosetta installation or universal assembly.
+
+The pinned upstream `src/build/Config.zig:94-98` replaces native Darwin target
+queries with `genericMacOSTarget`; its `osVersionMin`/helper at lines 789-797 and
+820-829 select **13.0**, discarding the requested version. The exact Config SHA
+is checked and its original bytes are bundled under `sources/upstream/Config.zig`.
+`darwin-deployment-policy.json` separately requires exact **13.0 library object
+declarations** and **14.0 C shim/linked consumer declarations**. Unexpected lower
+versions, 14.0 library objects, and anything above the 14.0 consumer ceiling reject.
+This preserves compatibility with the app's 14.0 deployment floor without claiming
+library objects declare 14.0 or that macOS 13/14 was executed. The actual compiler
+recipe remains unchanged, so policy evidence does not bypass exact reuse comparison
+of any compiler input, patch, SDK, toolchain or header.
 
 The driver uses the pinned upstream archives, original resource then metadata
 patches and all 32 reviewed source inputs. A nested Git root and checked patched
@@ -37,7 +58,8 @@ equal source hashes alone do not establish every platform artifact's acceptance.
 `darwin_platform.py` shares the bounded regular GNU/BSD archive reader with the
 existing verifier. Every payload must be a relocatable Mach-O64 object of the
 requested generic CPU subtype (specialized x86_64h/arm64e is rejected). Bounded load-command parsing checks macOS platform and an
-exact declared minimum of 14.0 for every archive member and C shim. It rejects
+exact declared minimum of 13.0 for every archive member and 14.0 for every C shim
+and linked C/Rust fixture executable. It rejects
 missing, duplicate, truncated, iOS/other-platform or mismatched declarations.
 An object's SDK field can be zero (unspecified) or 15.5; zero is recorded explicitly
 and does not prove the SDK. The actual build SDK is checked separately. Tests use

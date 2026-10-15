@@ -2,9 +2,15 @@ name: Terminal engine Darwin artifacts
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_retained_arm64:
+        description: Reuse the hash-pinned arm64 library from failed run 38797303343; build only missing x86_64
+        type: boolean
+        default: true
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: terminal-engine-artifacts-${{ github.ref }}
@@ -28,8 +34,20 @@ jobs:
         run: python3 -B -m unittest discover -s tools/terminal-engine-artifacts -p 'test_*.py' -v
       - name: Verify the bounded two-slice recipe
         run: python3 -B tools/terminal-engine-artifacts/build-darwin.py --check-recipe
+      - name: Download and verify the immutable retained arm64 slice
+        if: ${{ inputs.reuse_retained_arm64 }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/terminal-engine-artifacts/download-darwin-reuse.py --output "$RUNNER_TEMP/terminal-engine-reuse"
       - name: Build retained thin slices, inspect deployment and execute arm64 only
-        run: python3 -B tools/terminal-engine-artifacts/build-darwin.py --output "$RUNNER_TEMP/terminal-engine-artifacts"
+        env:
+          REUSE_RETAINED_ARM64: ${{ inputs.reuse_retained_arm64 }}
+        run: |
+          if [ "$REUSE_RETAINED_ARM64" = "true" ]; then
+            python3 -B tools/terminal-engine-artifacts/build-darwin.py --reuse-artifacts "$RUNNER_TEMP/terminal-engine-reuse" --output "$RUNNER_TEMP/terminal-engine-artifacts"
+          else
+            python3 -B tools/terminal-engine-artifacts/build-darwin.py --output "$RUNNER_TEMP/terminal-engine-artifacts"
+          fi
       - name: Retain completed slices and diagnostics even after a later failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -39,5 +57,7 @@ jobs:
             ${{ runner.temp }}/terminal-engine-artifacts/receipt.json
             ${{ runner.temp }}/terminal-engine-artifacts/*.log
             ${{ runner.temp }}/terminal-engine-artifacts/bundle/
+            ${{ runner.temp }}/terminal-engine-reuse/receipt.json
+            ${{ runner.temp }}/terminal-engine-reuse/download-identity.json
           if-no-files-found: warn
           retention-days: 7

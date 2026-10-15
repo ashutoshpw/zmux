@@ -85,7 +85,10 @@ Viewport/input conversion or named-Mac performance and memory workloads. Those
 remain separate gates. No running cmux application is touched.
 
 The separate [two-slice Darwin recipe](DARWIN_ARTIFACTS.md) adds manual retained
-artifact production and Mach-O deployment checks. Its hosted execution is pending;
+artifact production and Mach-O deployment checks. Its first hosted run retained
+arm64 bytes and exposed upstream's native target override to macOS 13.0. The
+corrected policy separately checks exact library 13.0 and consumer 14.0 declarations,
+with hash-pinned reuse of that completed library; the reuse/remaining-slice run is pending.
 it does not change this Linux candidate or the frozen feasibility/PTY inputs.
 
 The focused suite has ten tests on the host retaining the exact candidate. Two

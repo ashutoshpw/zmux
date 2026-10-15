@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "library_object_minimum_macos": [13, 0, 0],
+  "consumer_minimum_macos": [14, 0, 0],
+  "requested_zig_target_minimum_macos": [14, 0, 0],
+  "upstream_override": {
+    "path": "src/build/Config.zig",
+    "sha256": "e15abd51f767a70c92faac2bc8bf86fbb096db6680bca3de7388b9a4568fd739",
+    "evidence": "Config.init lines 94-98 replaces the requested native Darwin target with genericMacOSTarget; lines 789-797 and 820-829 select macOS 13.0 without preserving the requested version."
+  },
+  "scope": "Exact upstream library declaration 13.0, compatible with consumers deployed at 14.0. The compiler recipe remains requested-target 14.0. No archive-14.0 declaration or execution on macOS 13/14 is claimed."
+}
