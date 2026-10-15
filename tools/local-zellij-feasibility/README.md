@@ -91,3 +91,12 @@ harness hashes, download hashes/version, real peers, buffered-byte/connection pe
 rejections and physical cleanup. It labels its scope `host_public_peer_process_api_and_real_opaque_transport_only`
 and semantic GUI attachment `not_tested`. A successful host run is evidence for that
 host/API/binary combination only.
+
+The raw transport regression uses a real child that closes its read half before
+sending 256 KiB through the broker. The independent sink verifies exact ordered
+bytes; receipts separate read, forwarded, discarded and pending bytes. A reverse
+write failure no longer discards upstream input, and drain time remains bounded.
+The PTY wrapper reserves distinct exit statuses for arguments (64), terminal
+acquisition (71), exec ENOENT (127) and other exec failure (126); the missing-exec
+case verifies unreaped and reaped status rather than requiring transient PTY stderr
+to survive a child exit on every host.

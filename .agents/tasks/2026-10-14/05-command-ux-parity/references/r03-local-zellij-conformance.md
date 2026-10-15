@@ -202,3 +202,20 @@ from the public process API and compares that exact file; it does not trust a
 peer-supplied path or skip image validation. This accommodates framework launcher
 paths without weakening binary identity. Complete Linux rerun passes at
 `/tmp/zmux-zellij-interpreter-parent-20261015/receipt.json`; Darwin remains pending.
+
+### Directional relay regression
+
+Run `38777058699` showed exec-stage111 with an empty PTY transcript, then a live
+daemon after close-helper exit0. Relay receipts counted bytes read, not delivered,
+and recorded ENOTCONN. A new real socket regression independently reproduced
+queued upstream loss after reverse-side close: old relay delivered0/262144 bytes;
+repaired relay delivers all262144 bytes with exact hash and zero upstream discard.
+Socket shutdown errors are scoped to their direction; upstream backpressure and
+a two-second reverse-close drain deadline remain. Distinct wrapper stage statuses
+verify actual exec ENOENT without relying on transient PTY stderr.
+
+Parent independent source review and complete pinned Linux run pass at
+`/tmp/zmux-zellij-directional-parent-20261015/receipt.json`, with two real terminal
+clients and original daemon exit confirmed. Author full run and old-relay negative
+control also pass for their intended outcomes. Darwin cause/repair still requires
+exact-source hosted execution.
