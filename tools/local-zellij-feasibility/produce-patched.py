@@ -195,6 +195,7 @@ def main():
                "producer_sha256": digest(Path(__file__)), "cargo_target": str(target),
                "package_build_sha256": digest(HERE / "package_build.py"),
                "wasm_validator_sha256": digest(HERE / "validate-wasm.rs"),
+               "metadata_capture_sha256": digest(HERE / "capture-stdout.py"),
                "embedded_assets_rebuilt": args.rebuild_plugins,
                "shared_runner_sha256": digest(REPO / "tools/terminal-feasibility/run.py"),
                "process_group_sha256": digest(REPO / "scripts/process_group.py"),
@@ -264,8 +265,13 @@ def main():
             shutil.copy2(source / "LICENSE.md", output / "Zellij-LICENSE.md")
             receipt["license_sha256"] = digest(output / "Zellij-LICENSE.md")
             metadata_command = cargo + ["metadata", "--locked", "--format-version", "1", "--no-default-features", "--features", ",".join(lock["features"])]
-            receipt["steps"].append(run(metadata_command, source, environment, output / "dependency-metadata.json"))
-            receipt["dependency_metadata_sha256"] = digest(output / "dependency-metadata.json")
+            metadata_path = output / "dependency-metadata.json"
+            receipt["steps"].append(run([sys.executable, "-B", HERE / "capture-stdout.py", "--output", metadata_path, "--", *metadata_command],
+                                         source, environment, output / "dependency-metadata.log"))
+            metadata = json.loads(metadata_path.read_text())
+            if not isinstance(metadata, dict) or metadata.get("version") != 1 or not isinstance(metadata.get("packages"), list) or not isinstance(metadata.get("resolve"), dict):
+                raise RuntimeError("Cargo metadata stdout is not one complete dependency graph")
+            receipt["dependency_metadata_sha256"] = digest(metadata_path)
         if digest(source / "Cargo.lock") != receipt["cargo_lock_sha256"]:
             raise RuntimeError("upstream dependency lock changed")
         if any(digest(path) != sha for path, sha in cargo_configs.items()):

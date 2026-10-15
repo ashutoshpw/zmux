@@ -41,7 +41,8 @@ def main():
                   "shared_runner_sha256": ROOT / "tools/terminal-feasibility/run.py",
                   "process_group_sha256": ROOT / "scripts/process_group.py",
                   "package_build_sha256": HERE / "package_build.py",
-                  "wasm_validator_sha256": HERE / "validate-wasm.rs"}
+                  "wasm_validator_sha256": HERE / "validate-wasm.rs",
+                  "metadata_capture_sha256": HERE / "capture-stdout.py"}
         for key, path in inputs.items():
             if producer.digest(path) != artifact[key]:
                 raise RuntimeError(f"producer input no longer matches: {path}")

@@ -46,6 +46,8 @@ jobs:
           PYTHON
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Verify bounded structured-output capture
+        run: python3 -B tools/local-zellij-feasibility/test_capture_stdout.py
       - name: Build pinned source and prove real stdin interruption repair
         env:
           DEPENDENCY_PACKAGE: ${{ inputs.dependency_package }}
@@ -97,6 +99,8 @@ jobs:
             tools/local-zellij-feasibility/package_sources.py
             tools/local-zellij-feasibility/package_platform.py
             tools/local-zellij-feasibility/validate-wasm.rs
+            tools/local-zellij-feasibility/capture-stdout.py
+            tools/local-zellij-feasibility/test_capture_stdout.py
             tools/local-zellij-feasibility/notice-policy.json
             tools/local-zellij-feasibility/licenses/components/*
             tools/local-zellij-feasibility/patched-producer-lock.json
