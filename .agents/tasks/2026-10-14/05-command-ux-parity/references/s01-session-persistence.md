@@ -39,3 +39,31 @@ repaired without weakening production path or allocation checks.
 This is not full session parity. Explicit import requires an empty desktop; additive
 window import, channels, multiwindow, native divider ratios, undo/navigation histories,
 full browser history/state and running-job resurrection remain open. Safe preflight quit cancellation and native failure-alert interaction remain open. The full V01 artifact gate stays open.
+
+## Concurrent lock-open repair (2026-10-15)
+
+macOS run `38771925429` at `93daf02` failed the unchanged concurrent restoration
+contract before native compilation: `open persistence generation lock` returned
+ENOENT, although diagnostics subsequently observed both the lock and ledger in the
+private UUID fixture. No lock-unlink path or early fixture teardown was found.
+The failure is observed; an APFS/kernel root cause is not established.
+
+A dedicated dispatch-only workflow compiles that existing test once and runs it
+against 128 fresh fixtures, retaining the first failure without weakening expected
+outcomes. Pre-fix run `38773075613` at `dd7a090` completed 128 successful attempts
+(`no_failure_observed`), downloaded to
+`/tmp/zmux-persistence-concurrency-prefixed-38773075613`. This nonreproduction does
+not invalidate the earlier hosted failure. The initial workflow configuration was
+rejected for using runner context in job environment; `dd7a090` resolves the target
+directory inside the executing step.
+
+The repair retries only ENOENT, at most three times, on the same anchored directory
+and unchanged no-follow/nonblocking/close-on-exec open flags. Descriptor ownership
+validation and exclusive lock admission still precede any ledger read/write.
+Persistent disappearance and other failures retain their explicit errors. Existing
+and dangling lock symlinks are refused without creating/changing targets or a ledger.
+All 14 focused persistence tests and strict Clippy pass locally. Parent independent
+`scripts/check` passes in `/tmp/zmux-lock-retry-parent-verify-ef2fsvhd` with a fresh
+private Cargo target (log `/tmp/zmux-lock-retry-parent-check.log`). Source review
+accepts the bounded retry without weakening lock ownership. Identical hosted
+post-fix/native validation remains pending.
