@@ -17,64 +17,11 @@ use zmux_desktop_runtime::control::{
 };
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis};
+mod registry;
 mod targets;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
-const TOP_HELP: &str = r#"zmux — control a running zmux app or run a headless PTY
-
-Usage: zmux [OPTIONS] <COMMAND>
-
-Options:
-  --socket <PATH>       Absolute local-control socket path
-  --timeout <MILLIS>    Client deadline in milliseconds (50–30000)
-  -h, --help            Print help
-  -V, --version         Print version
-
-Commands:
-  doctor                Check the socket path and running app protocol
-  status                Show running app and workspace counts
-  list-workspaces       List workspaces and their stable IDs
-  list-panes            List panes, sessions, processes, and states
-  new-workspace         Create and focus a workspace
-  rename-workspace      Rename a workspace by ID
-  focus-pane            Focus a pane by ID
-  split-pane            Split a pane horizontally or vertically
-  close-pane            Close a pane and all its tabs
-  new-surface           Create a terminal tab in a pane
-  browser               Open or navigate an embedded browser tab
-  list-pane-surfaces    List every terminal tab in a pane
-  select-surface        Select a tab and focus its pane
-  close-surface         Close one tab; preserve sibling sessions
-  rename-tab            Rename a terminal tab
-  reorder-surface       Reorder a tab (zero-based index)
-  move-surface          Move a live tab to another pane
-  close-other-tabs      Close other tabs in a pane
-  close-workspace       Close a workspace as one recoverable item
-  reopen-closed         Reopen the last or selected closed item
-  recently-closed       List bounded in-process close history
-  notify                Send attention to a terminal surface
-  list-notifications    List notification IDs, targets and unread state
-  mark-notification-read Mark one notification read
-  open-notification     Focus its terminal and mark the exact notification read
-  dismiss-notification  Remove one notification
-  clear-notifications   Clear history through an observed notification ID
-  send-text             Send exact UTF-8 text to a pane
-  read-screen           Read a pane's current visible screen
-  prototype             Run a standalone PTY command without the app
-  help                  Print this help or help for one command
-
-Targets:
-  Target arguments accept UUIDs, positive legacy IDs, or typed refs such as pane:2.
-  Use index:N for a one-based position; tab:N is an alias for surface:N.
-  Leading --workspace/--pane/--surface options constrain target ownership.
-  --expect-revision guards a previously observed model_revision.
-  Omitted targets use ZMUX_WORKSPACE_ID/ZMUX_SURFACE_ID, then the focused object.
-  Explicit selectors override inherited caller defaults. UUIDs survive tab moves and
-  reordering; reopened terminals receive new UUIDs. Numeric IDs remain supported.
-
-Local-control results are printed as JSON. Run `zmux help <COMMAND>` for details.
-"#;
 
 #[derive(Debug)]
 struct CliError(String);
@@ -108,6 +55,8 @@ enum Offline {
     Version,
     Doctor,
     Prototype(Vec<String>),
+    Guide,
+    Catalog,
 }
 
 fn main() -> ExitCode {
@@ -125,6 +74,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
     match parsed {
         Parsed::Offline(Offline::Help(command)) => {
             print_help(command.as_deref())?;
+            Ok(0)
+        }
+        Parsed::Offline(Offline::Guide) => {
+            print!("{}", registry::guide());
+            Ok(0)
+        }
+        Parsed::Offline(Offline::Catalog) => {
+            println!("{}", serde_json::to_string_pretty(&registry::catalog())?);
             Ok(0)
         }
         Parsed::Offline(Offline::Version) => {
@@ -181,10 +138,13 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
             _ => break,
         }
     }
-    let command = args.get(index).and_then(|value| value.to_str());
+    let command = args
+        .get(index)
+        .and_then(|value| value.to_str())
+        .map(|name| registry::find(name).map_or(name, |spec| spec.name));
     let tail = &args[(index + 1).min(args.len())..];
     if let Some(command) = command
-        && targets::COMMANDS.contains(&command)
+        && registry::find(command).is_some_and(|spec| spec.targeted)
     {
         return Ok((targets::parse(command, tail)?, socket, timeout));
     }
@@ -205,6 +165,10 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
                 None => None,
             }))
         }
+        Some("guide") => help_or_no_args("guide", tail, Offline::Guide)?,
+        Some("commands") => help_or_no_args("commands", tail, Offline::Catalog)?,
+        Some("version") => help_or_no_args("version", tail, Offline::Version)?,
+        Some("capabilities") => app_no_args("capabilities", tail, ControlCommand::Capabilities)?,
         Some("doctor") => help_or_no_args("doctor", tail, Offline::Doctor)?,
         Some("status") => app_no_args("status", tail, ControlCommand::Status)?,
         Some("list-workspaces") => {
@@ -277,7 +241,10 @@ fn parse(args: Vec<OsString>) -> Result<(Parsed, Option<PathBuf>, Duration), Cli
             }
         }
         Some(other) => {
-            return Err(CliError(format!("unknown command `{other}`\n\n{TOP_HELP}")));
+            return Err(CliError(format!(
+                "unknown command `{other}`\n\n{}",
+                registry::top_help()
+            )));
         }
     };
     Ok((parsed, socket, timeout))
@@ -505,104 +472,7 @@ fn doctor(options: &ClientOptions) -> Result<(), CliError> {
 }
 
 fn print_help(command: Option<&str>) -> Result<(), CliError> {
-    let text = match command {
-        None => TOP_HELP,
-        Some("doctor") => {
-            "Usage: zmux [OPTIONS] doctor\n\nChecks the socket path, connection, protocol version, and running app status.\n"
-        }
-        Some("status") => {
-            "Usage: zmux [OPTIONS] status\n\nShows protocol version, revision, workspace/pane counts, and session state counts.\n"
-        }
-        Some("list-workspaces") => {
-            "Usage: zmux [OPTIONS] list-workspaces\n\nLists every workspace with its stable ID, name, pane tree, and focused pane.\n"
-        }
-        Some("list-panes") => {
-            "Usage: zmux [OPTIONS] list-panes [--workspace WORKSPACE_ID]\n\nLists pane/session IDs, owning workspaces, process IDs, startup state, and failures.\n"
-        }
-        Some("new-workspace") => {
-            "Usage: zmux [OPTIONS] new-workspace NAME\n\nCreates a workspace through the same Rust action used by the native app.\n"
-        }
-        Some("rename-workspace") => {
-            "Usage: zmux [OPTIONS] rename-workspace WORKSPACE_ID NAME\n\nRenames an existing workspace. Names are trimmed and must contain 1–128 non-control characters.\n"
-        }
-        Some("focus-pane") => {
-            "Usage: zmux [OPTIONS] focus-pane PANE_ID\n\nFocuses the pane and its owning workspace.\n"
-        }
-        Some("split-pane") => {
-            "Usage: zmux [OPTIONS] split-pane PANE_ID <horizontal|vertical>\n\nSplits the pane and focuses the newly created pane.\n"
-        }
-        Some("close-pane") => {
-            "Usage: zmux [OPTIONS] close-pane PANE_ID\n\nCloses the pane and cancels all its terminal tabs. Closing the last pane removes its workspace.\n"
-        }
-        Some("send-text") => {
-            "Usage: zmux [OPTIONS] send-text PANE_ID <TEXT|--stdin>\n\nSends exact UTF-8 bytes in order. No newline is added; shell input usually ends with a carriage return. Input is limited to 4096 bytes and is never retried after an uncertain result.\n"
-        }
-        Some("read-screen") => {
-            "Usage: zmux [OPTIONS] read-screen PANE_ID\n\nReads the current bounded visible screen, cursor, size, process state, and exit metadata.\n"
-        }
-        Some("browser") => {
-            "Usage: zmux browser open PANE_ID URL\n       zmux browser navigate SURFACE_ID URL\n\nCreates or navigates a real embedded WebKit surface. Allowed addresses: http, https and about:blank. Opening does not allocate a PTY. Native UI supplies back/forward/reload/address controls. Browser automation, persistent profiles and downloads remain pending.\n"
-        }
-        Some("notify") => {
-            "Usage: zmux notify --surface SURFACE_ID --title TITLE [--body TEXT]\n\nAdds bounded in-app attention for an exact live terminal. Ordinary output does not notify.\n"
-        }
-        Some("list-notifications") => {
-            "Usage: zmux list-notifications\n\nLists retained notification IDs, surface targets, read state and omitted-event count.\n"
-        }
-        Some("mark-notification-read") => {
-            "Usage: zmux mark-notification-read --id ID\n\nMarks only this notification generation read.\n"
-        }
-        Some("open-notification") => {
-            "Usage: zmux open-notification --id ID\n\nSelects its live terminal then marks it read. A closed target fails without changing unread state.\n"
-        }
-        Some("dismiss-notification") => {
-            "Usage: zmux dismiss-notification --id ID\n\nRemoves one notification.\n"
-        }
-        Some("clear-notifications") => {
-            "Usage: zmux clear-notifications --through ID\n\nClears notifications up to an observed ID; newer arrivals survive.\n"
-        }
-        Some("new-surface") => {
-            "Usage: zmux new-surface PANE_ID\n\nCreates and selects an independent local terminal tab without splitting.\n"
-        }
-        Some("list-pane-surfaces") => {
-            "Usage: zmux list-pane-surfaces PANE_ID\n\nLists all tabs, stable IDs, selected state and process readiness, including hidden tabs.\n"
-        }
-        Some("select-surface") => {
-            "Usage: zmux select-surface SURFACE_ID\n\nSelects a live tab and focuses its pane/workspace.\n"
-        }
-        Some("close-surface") => {
-            "Usage: zmux close-surface SURFACE_ID\n\nCloses only this tab and records a restore descriptor. An empty pane/workspace collapses.\n"
-        }
-        Some("rename-tab") => {
-            "Usage: zmux rename-tab SURFACE_ID TITLE\n\nSets a terminal tab title.\n"
-        }
-        Some("reorder-surface") => {
-            "Usage: zmux reorder-surface SURFACE_ID INDEX\n\nMoves a tab to a zero-based final index in its pane.\n"
-        }
-        Some("move-surface") => {
-            "Usage: zmux move-surface SURFACE_ID PANE_ID INDEX\n\nMoves the live session to another pane at a zero-based final index. No shell is respawned.\n"
-        }
-        Some("close-other-tabs") => {
-            "Usage: zmux close-other-tabs SURFACE_ID\n\nCloses sibling tabs as one recoverable group. This explicit CLI command does not prompt.\n"
-        }
-        Some("close-workspace") => {
-            "Usage: zmux close-workspace WORKSPACE_ID\n\nCloses all workspace terminals as one recoverable layout. This explicit CLI command does not prompt.\n"
-        }
-        Some("reopen-closed") => {
-            "Usage: zmux reopen-closed [CLOSED_ID]\n\nStarts restoration of the latest or selected item. Completion is asynchronous; check recently-closed and tab readiness. Local shells start fresh at the saved cwd; commands are never replayed. Failed launches retain history for retry. Removed panes fall back to a new workspace.\n"
-        }
-        Some("recently-closed") => {
-            "Usage: zmux recently-closed\n\nLists up to 32 in-process closed items and their restore state, oldest first. History is cleared when zmux exits.\n"
-        }
-        Some("prototype") => {
-            "Usage: zmux prototype [--timeout SECONDS] -- PROGRAM [ARG ...]\n\nRuns a standalone local Unix PTY and prints its final visible screen as JSON. It does not require the native app.\n"
-        }
-        Some("help") => {
-            "Usage: zmux help [COMMAND]\n\nPrints top-level help or detailed help for one implemented command.\n"
-        }
-        Some(other) => return Err(CliError(format!("unknown command `{other}`"))),
-    };
-    print!("{text}");
+    print!("{}", registry::help(command)?);
     Ok(())
 }
 

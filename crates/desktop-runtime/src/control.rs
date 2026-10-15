@@ -48,6 +48,7 @@ pub enum ControlCommand {
         request: TargetRequest,
     },
     Status,
+    Capabilities,
     /// Shared action transport; the same enum is used by the native bridge.
     Action {
         action: Action,
@@ -496,6 +497,18 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
             let snapshot = current_snapshot(desktop)?;
             list_surfaces(&snapshot, pane_id)
         }
+        ControlCommand::Capabilities => Ok(json!({
+            "protocol": "zmux-local-control", "version": CONTROL_VERSION,
+            "model_version": zmux_workspace_core::MODEL_VERSION,
+            "authorization": "same_uid", "remote_relay": false,
+            "target_kinds": ["workspace", "pane", "surface"],
+            "target_formats": ["uuid", "typed_ref", "legacy_id", "index"],
+            "revision_guard": "expected_model_revision",
+            "max_request_bytes": MAX_CONTROL_REQUEST_BYTES,
+            "max_response_bytes": MAX_CONTROL_RESPONSE_BYTES,
+            "max_terminals": crate::MAX_TERMINALS,
+            "max_browsers": crate::MAX_BROWSERS,
+        })),
         ControlCommand::Status => {
             let snapshot = current_snapshot(desktop)?;
             Ok(status(&snapshot))
