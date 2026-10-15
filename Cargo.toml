@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "apps/cli", "crates/native-bridge", "crates/desktop-runtime", "crates/remote-runtime", "crates/ghostty-vt"]
+members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "crates/session-runtime/test-support", "apps/cli", "crates/native-bridge", "crates/desktop-runtime", "crates/remote-runtime", "crates/ghostty-vt"]
 exclude = ["vendor/darwin-libproc"]
 
 [patch.crates-io]
