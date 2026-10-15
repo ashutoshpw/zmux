@@ -30,6 +30,8 @@ pub const MAX_BROWSER_RESULT_BYTES: usize = 64 * 1024;
 pub const MAX_BROWSER_RETAINED_RESULT_BYTES: usize = 256 * 1024;
 pub const MAX_OBSERVED_TITLE_BYTES: usize = 4096;
 pub const MAX_OBSERVED_URL_BYTES: usize = 8192;
+pub const MIN_PAGE_ZOOM: f64 = 0.25;
+pub const MAX_PAGE_ZOOM: f64 = 5.0;
 fn default_timeout() -> u64 {
     DEFAULT_OPERATION_TIMEOUT_MS
 }
@@ -72,6 +74,9 @@ pub enum BrowserAction {
         #[serde(default)]
         snapshot_after: bool,
     },
+    Zoom {
+        operation: BrowserZoom,
+    },
     Eval {
         script: String,
     },
@@ -96,6 +101,14 @@ pub enum BrowserAction {
         #[serde(default)]
         state: WaitState,
     },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BrowserZoom {
+    In,
+    Out,
+    Reset,
+    Set { factor: f64 },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -235,6 +248,11 @@ impl BrowserAction {
     }
     pub fn validate(&self) -> Result<(), BrowserError> {
         match self {
+            Self::Zoom {
+                operation: BrowserZoom::Set { factor },
+            } if !factor.is_finite() => {
+                return Err(BrowserError::Invalid("browser zoom factor must be finite"));
+            }
             Self::Find { locator } => locator.validate()?,
             Self::Wait {
                 selector: value, ..

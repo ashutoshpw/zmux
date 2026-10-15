@@ -22,9 +22,15 @@ def validate_saved(profile, prepared, prepared_path):
     assert len(saved["workspaces"]) == 1
     workspace = saved["workspaces"][0]
     assert workspace["id"] == prepared["workspace"]
-    pane = workspace["root"]["pane"]
+    def leaves(tree):
+        if tree["kind"] == "leaf":
+            return [tree["pane"]]
+        return leaves(tree["first"]) + leaves(tree["second"])
+    panes = leaves(workspace["root"])
+    assert len(panes) == 2, "Move journey must retain its native split topology"
+    pane = next(pane for pane in panes if pane["id"] == workspace["focused_pane"])
     assert pane["selected_surface"] == prepared["surface"]
-    assert pane["surfaces"][0]["id"] == prepared["surface"]
+    assert any(surface["id"] == prepared["surface"] for surface in pane["surfaces"])
     assert path.stat().st_mtime_ns >= prepared_path.stat().st_mtime_ns, "No final save after close preparation"
 
 
@@ -42,6 +48,26 @@ def main():
     prepared_path = directory / "prepared.json"
     socket = directory / "control.sock"
     print(f"Native window fixture: {directory}", flush=True)
+    def preserve_phase(phase, inspect_processes=False):
+        parts = ["fixture_directory=" + str(directory)]
+        for name in [f"{phase}-stdout.log", f"{phase}-stderr.log", "prepared.json", "prepared.json.trace.log", "prepared.json.reopened.json"]:
+            path = directory / name
+            if path.is_file():
+                with path.open("rb") as stream:
+                    stream.seek(max(0, path.stat().st_size - 65536))
+                    data = stream.read(65536)
+                target = dist / ("native-window-" + name)
+                target.write_bytes(data)
+                parts.append(name + "\n" + data.decode(errors="replace"))
+        if inspect_processes:
+            try:
+                processes = subprocess.run(["/bin/ps", "-A", "-o", "pid=,ppid=,stat=,comm="],
+                                           capture_output=True, text=True, check=True, timeout=5)
+                parts.append("public_process_snapshot\n" + "\n".join(line for line in processes.stdout.splitlines() if "zmux-app" in line)[-65536:])
+            except Exception as error:
+                parts.append("process_snapshot_failed=" + repr(error))
+        (dist / ("native-window-" + phase + "-diagnostics.log")).write_text("\n".join(parts)[-262144:])
+
     for phase in ["close", "reopen"]:
         stdout = directory / f"{phase}-stdout.log"
         stderr = directory / f"{phase}-stderr.log"
@@ -51,25 +77,28 @@ def main():
         try:
             subprocess.run(command, check=True, timeout=150)
         except Exception:
+            preserve_phase(phase, inspect_processes=True)
             for path in [stdout, stderr]:
                 if path.exists():
-                    print(path.read_text(errors="replace"))
+                    print(path.read_text(errors="replace")[-65536:])
             print(f"Native window phase {phase} failed; profile retained at {directory}. No second app was launched.")
             raise
+        preserve_phase(phase)
         if phase == "close":
             if not prepared_path.is_file():
+                preserve_phase(phase, inspect_processes=True)
                 for path in [stdout, stderr]:
                     if path.exists():
-                        print(path.read_text(errors="replace"))
+                        print(path.read_text(errors="replace")[-65536:])
                 raise RuntimeError("The native close journey produced no preparation receipt; no second app was launched")
             prepared = json.loads(prepared_path.read_text())
             assert prepared["sourceSHA"] == metadata["source_sha"]
-            for key in ["noFocus", "independentResize", "nativeInput", "nativeClose", "emptyWindow", "cliClose"]:
+            for key in ["noFocus", "independentResize", "nativeInput", "nativeClose", "emptyWindow", "cliClose", "workspaceMove"]:
                 assert prepared[key] is True, key
             validate_saved(profile, prepared, prepared_path)
     reopened = json.loads(Path(str(prepared_path) + ".reopened.json").read_text())
     assert reopened["source_sha"] == metadata["source_sha"]
-    for key in ["success", "fresh_process", "native_input"]:
+    for key in ["success", "fresh_process", "native_input", "workspace_split_ratio_restored"]:
         assert reopened[key] is True, key
     evidence = {"success": True, "source_sha": metadata["source_sha"], "prepared": prepared,
                 "last_close_saved": True, "reopened": reopened, "fixture_directory": str(directory),

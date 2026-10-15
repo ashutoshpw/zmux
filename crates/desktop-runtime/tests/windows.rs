@@ -369,3 +369,139 @@ fn close_before_open_ack_drains_both_requests_and_late_open_cannot_revive_the_ho
     }
     desktop.shutdown(Duration::from_secs(3)).unwrap();
 }
+
+#[test]
+fn workspace_moves_preflight_native_destination_and_preserve_two_real_sessions() {
+    let desktop = Desktop::new(Shell {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        cwd: None,
+    })
+    .unwrap();
+    let initial = wait(&desktop, |s| {
+        s.frames.first().is_some_and(|f| f.process_id.is_some()) && !s.window_requests.is_empty()
+    });
+    let source = initial.model.windows[0].id;
+    let moving = initial.model.workspaces[0].clone();
+    let source_host = Uuid::new_v4();
+    let source_token = acknowledge(&desktop, &initial, source, WindowKind::Open, source_host);
+    desktop
+        .native_window_event(NativeWindowEvent::Key {
+            token: source_token,
+            key: true,
+        })
+        .unwrap();
+    send(
+        &desktop,
+        1,
+        request(WindowAction::New { focus: false }, None),
+    );
+    let two = wait(&desktop, |s| {
+        s.last_request_id == 1
+            && s.control_frames.len() == 2
+            && s.control_frames.iter().all(|f| f.process_id.is_some())
+    });
+    let destination = two.model.windows[1].id;
+    let movement = |destination, focus| Command::Action {
+        action: Action::MoveWorkspaceToWindow {
+            workspace_id: moving.id,
+            destination_window_id: destination,
+            index: None,
+            focus,
+        },
+    };
+    send(&desktop, 2, movement(destination, false));
+    let denied = wait(&desktop, |s| s.last_request_id == 2);
+    assert!(
+        denied
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("native host is not ready"))
+    );
+    assert_eq!(denied.model, two.model);
+    let destination_host = Uuid::new_v4();
+    acknowledge(
+        &desktop,
+        &denied,
+        destination,
+        WindowKind::Open,
+        destination_host,
+    );
+    send(&desktop, 3, movement(destination, false));
+    let moved = wait(&desktop, |s| s.last_request_id == 3);
+    assert_eq!(moved.model.focused_window, Some(source));
+    assert_eq!(moved.model.focused_workspace, None);
+    assert_eq!(moved.observed_key_window, Some(source));
+    assert!(moved.window_requests.is_empty());
+    assert_eq!(
+        moved.model.windows[1].selected_workspace,
+        two.model.windows[1].selected_workspace
+    );
+    assert_eq!(
+        moved
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect::<Vec<_>>(),
+        two.control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect::<Vec<_>>()
+    );
+    send(
+        &desktop,
+        4,
+        Command::Targeted {
+            request: zmux_desktop_runtime::targets::TargetRequest {
+                caller: CallerContext {
+                    window: Some(format!("window:{}", source.0).parse().unwrap()),
+                    surface: Some(
+                        format!("surface:{}", moving.root.panes()[0].selected_surface.0)
+                            .parse()
+                            .unwrap(),
+                    ),
+                    ..Default::default()
+                },
+                operation: zmux_desktop_runtime::targets::TargetOperation::SendText {
+                    text: "printf '\\nMOVED_ORIGINAL_SHELL\\n'\n".into(),
+                },
+                ..Default::default()
+            },
+        },
+    );
+    wait(&desktop, |s| {
+        s.last_request_id == 4
+            && s.control_frames.iter().any(|f| {
+                f.snapshot.as_ref().is_some_and(|t| {
+                    t.viewport
+                        .contents
+                        .lines()
+                        .any(|l| l == "MOVED_ORIGINAL_SHELL")
+                })
+            })
+    });
+    // A move needs its own exact focus operation, never an older coalesced one.
+    // Saturation must reject before committing the 33rd topology change.
+    for sequence in 0..32_u64 {
+        let target = if sequence % 2 == 0 {
+            source
+        } else {
+            destination
+        };
+        send(&desktop, sequence + 5, movement(target, true));
+        let focused = wait(&desktop, |s| s.last_request_id == sequence + 5);
+        assert!(focused.last_error.is_none(), "{:?}", focused.last_error);
+    }
+    let full = desktop.snapshot().unwrap();
+    assert_eq!(full.window_requests.len(), 32);
+    send(&desktop, 40, movement(source, true));
+    let rejected = wait(&desktop, |s| s.last_request_id == 40);
+    assert!(
+        rejected
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("request capacity is full"))
+    );
+    assert_eq!(rejected.model, full.model);
+    desktop.shutdown(Duration::from_secs(3)).unwrap();
+}

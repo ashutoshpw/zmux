@@ -19,6 +19,171 @@ use zmux_desktop_runtime::{
     windows::{NativeWindowEvent, NativeWindowRequest, WindowHostToken, WindowKind},
 };
 static NEXT: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_topology() {
+    let fixture = Fixture::new();
+    let before = fixture.desktop.snapshot().unwrap();
+    let source = before.model.windows[0].id;
+    let workspace = before.model.workspaces[0].id;
+    let surface = before.model.workspaces[0].root.panes()[0].selected_surface;
+    let child = fixture.spawn(&["new-window", "--no-focus"]);
+    let open = fixture.pending(WindowKind::Open);
+    fixture.acknowledge(&open);
+    let created = value(child.wait_with_output().unwrap());
+    let destination = format!("window:{}", created["window_id"]);
+    let moved = fixture.value(&[
+        "move-workspace-to-window",
+        "--window",
+        &destination,
+        "--workspace",
+        &format!("workspace:{}", workspace.0),
+    ]);
+    assert_eq!(moved["state"], "topology_committed");
+    assert_eq!(moved["source_window_id"], source.0);
+    assert_eq!(moved["destination_window_id"], open.window_id.0);
+    assert_eq!(moved["native_focus"], Value::Null);
+    let snapshot = fixture.desktop.snapshot().unwrap();
+    assert_eq!(snapshot.model.focused_window, Some(source));
+    assert_eq!(snapshot.model.focused_workspace, None);
+    let current = value(
+        fixture
+            .command(&["current-window"])
+            .env("ZMUX_WINDOW_ID", format!("window:{}", source.0))
+            .env("ZMUX_SURFACE_ID", format!("surface:{}", surface.0))
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(
+        current["window_id"], open.window_id.0,
+        "surviving caller must override its inherited old window"
+    );
+    let moving = fixture.spawn(&[
+        "move-workspace-to-window",
+        "--workspace",
+        &workspace.0.to_string(),
+        "--window",
+        &format!("window:{}", source.0),
+        "--focus",
+        "true",
+    ]);
+    let focus = fixture.pending(WindowKind::Focus);
+    fixture
+        .desktop
+        .native_window_event(NativeWindowEvent::Failed {
+            epoch: focus.epoch,
+            operation_id: focus.operation_id,
+            message: "native focus deliberately unavailable".into(),
+        })
+        .unwrap();
+    let failed = moving.wait_with_output().unwrap();
+    assert!(!failed.status.success());
+    let message = String::from_utf8_lossy(&failed.stderr);
+    assert!(message.contains("topology already committed"), "{message}");
+    assert!(message.contains("not replayed or rolled back"), "{message}");
+    let committed = fixture.desktop.snapshot().unwrap();
+    assert!(
+        committed.model.windows[0]
+            .workspace_ids
+            .contains(&workspace)
+    );
+    assert!(
+        !committed.model.windows[1]
+            .workspace_ids
+            .contains(&workspace)
+    );
+    let revision = committed.model.revision;
+    let stale = fixture
+        .command(&[
+            "move-workspace-to-window",
+            "--workspace",
+            &workspace.0.to_string(),
+            "--window",
+            &destination,
+            "--expect-revision",
+            &(revision - 1).to_string(),
+            "--no-focus",
+        ])
+        .output()
+        .unwrap();
+    assert!(!stale.status.success());
+    assert_eq!(fixture.desktop.snapshot().unwrap().model, committed.model);
+    let success = fixture.spawn(&[
+        "move-workspace-to-window",
+        "--focus",
+        "true",
+        "--workspace",
+        &workspace.0.to_string(),
+        "--window",
+        &destination,
+    ]);
+    let native = fixture.pending(WindowKind::Focus);
+    fixture.acknowledge(&native);
+    let completed = value(success.wait_with_output().unwrap());
+    assert_eq!(completed["state"], "topology_committed");
+    assert_eq!(completed["native_focus"]["state"], "completed");
+    assert_eq!(
+        completed["native_focus"]["operation_id"],
+        native.operation_id.to_string()
+    );
+    let selected = fixture.desktop.snapshot().unwrap().model.clone();
+    let same = fixture.value(&[
+        "move-workspace-to-window",
+        "--workspace",
+        &workspace.0.to_string(),
+        "--window",
+        &destination,
+    ]);
+    assert_eq!(same["changed_window"], false);
+    assert_eq!(same["focus_requested"], false);
+    assert_eq!(same["native_focus"], Value::Null);
+    let unchanged = fixture.desktop.snapshot().unwrap().model.clone();
+    assert_eq!(unchanged.windows, selected.windows);
+    assert_eq!(unchanged.focused_window, selected.focused_window);
+    for args in [
+        vec!["move-workspace-to-window"],
+        vec!["move-workspace-to-window", "--workspace", "1"],
+        vec!["move-workspace-to-window", "--window", "1"],
+        vec![
+            "move-workspace-to-window",
+            "--workspace",
+            "1",
+            "--window",
+            "2",
+            "--focus",
+            "true",
+            "--no-focus",
+        ],
+        vec![
+            "move-workspace-to-window",
+            "--workspace",
+            "1",
+            "--window",
+            "2",
+            "--focus",
+            "maybe",
+        ],
+        vec![
+            "move-workspace-to-window",
+            "--workspace",
+            "1",
+            "--window",
+            "2",
+            "--no-focus",
+            "--no-focus",
+        ],
+    ] {
+        assert!(!fixture.command(&args).output().unwrap().status.success());
+    }
+    assert!(
+        fixture
+            .command(&["help", "move-workspace-to-window"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+}
 struct Fixture {
     root: PathBuf,
     socket: PathBuf,

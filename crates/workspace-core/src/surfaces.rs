@@ -970,7 +970,7 @@ impl WorkspaceStore {
         let prior = self.focused();
         let prior_window = self.state.focused_window;
         let effects = self.finish_restore_inner(session, success);
-        self.record_focus(prior, prior_window, false);
+        self.record_focus(prior, prior_window, false, true);
         effects
     }
 

@@ -13,6 +13,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private unowned let coordinator: ApplicationCoordinator
     private(set) var identity: MainWindowIdentity?
     private(set) var nativeToken: WindowHostToken?
+    private(set) var windowUUID: UUID?
     var nativeReady = false
     private var authorizedClose = false
     private var bridge: NativeBridge { coordinator.bridge }
@@ -48,7 +49,6 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private lazy var cloudFooter = CloudFooterView(target: self, action: #selector(showCloudSettings))
     private var actionButtons: [IconButton] = []
     private var layoutKey = ""
-    private var splitFractions: [String: CGFloat] = [:]
     private var modelRevision: UInt64 = .max
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
     private var workspaceRowsNamespace: UUID?
@@ -85,6 +85,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     func bind(_ token: WindowHostToken, windowUUID: UUID, inheritLegacy: Bool) {
         nativeToken = token
+        self.windowUUID = windowUUID
         let uuid = token.identityNamespace.uuidString.lowercased() + "." + windowUUID.uuidString.lowercased()
         sidebarWidthKey = "window." + uuid + ".sidebarWidth"
         sidebarCollapsedKey = "window." + uuid + ".sidebarCollapsed"
@@ -102,11 +103,18 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     func detachLayoutIfNeeded(_ snapshot: DesktopSnapshot, identity: MainWindowIdentity) {
         guard layoutKey != (snapshot.workspace?.root.key ?? "empty") || self.identity != identity || self.snapshot?.browserEpoch != snapshot.browserEpoch else { return }
+        releaseContentResponder()
         canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
         layoutKey = ""
         didSetInitialTerminalFocus = false
     }
+    private func releaseContentResponder() {
+        if let responder = window.firstResponder as? NSView, responder.isDescendant(of: canvas) {
+            window.makeFirstResponder(nil)
+        }
+    }
     func detachContent() {
+        releaseContentResponder()
         canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
         layoutKey = ""
     }
@@ -441,8 +449,6 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         updateHeader(snapshot)
         updateNotifications(snapshot)
         updateTerminalLayoutIfNeeded(snapshot)
-        let liveSplits = Set(snapshot.model.workspaces.flatMap { $0.root.splitKeys })
-        splitFractions = splitFractions.filter { liveSplits.contains($0.key) }
 
         updateTabAttention(canvas, snapshot: snapshot)
         return (selectionChanged, layoutChanged)
@@ -692,13 +698,22 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             ])
             return container
         case .split(let axis, let first, let second):
-            return PaneSplitView(key: tree.geometryKey, vertical: axis == "horizontal",
-                fraction: splitFractions[tree.geometryKey] ?? 0.5, first: paneView(first), second: paneView(second))
+            let workspace = snapshot?.workspace?.id
+            let split = PaneSplitView(key: tree.geometryKey, vertical: axis == "horizontal",
+                fraction: workspace.map { coordinator.splitLayouts.fraction(workspace: $0, split: tree.geometryKey) } ?? 0.5,
+                first: paneView(first), second: paneView(second))
+            split.onFractionChanged = { [weak self] fraction in
+                guard let self, let workspace else { return }
+                self.coordinator.splitLayouts.remember(workspace: workspace, split: tree.geometryKey, fraction: fraction)
+            }
+            return split
         }
     }
 
     private func rememberSplits(_ view: NSView) {
-        if let split = view as? PaneSplitView { splitFractions[split.geometryKey] = split.fraction }
+        if let split = view as? PaneSplitView, let workspace = snapshot?.workspace?.id {
+            coordinator.splitLayouts.remember(workspace: workspace, split: split.geometryKey, fraction: split.fraction)
+        }
         view.subviews.forEach(rememberSplits)
     }
     private func initializeSplits(_ view: NSView) {
@@ -711,6 +726,20 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let rename = menu.addItem(withTitle: "Rename Workspace…", action: #selector(renameWorkspaceFromMenu(_:)), keyEquivalent: "")
         rename.target = self
         rename.representedObject = NSNumber(value: workspace.id)
+        if let shared = coordinator.snapshot,
+           let workspaceUUID = shared.workspaceIdentities.first(where: { $0.workspaceId == workspace.id })?.uuid {
+            let move = NSMenu(title: "Move to Window")
+            for (index, window) in shared.model.windows.enumerated() where !window.workspaceIds.contains(workspace.id) {
+                guard let destination = coordinator.mainWindowHosts[MainWindowIdentity(namespace: shared.model.identityNamespace, windowId: window.id)]?.windowUUID else { continue }
+                for focus in [true, false] {
+                    let title = "Window \(index + 1)" + (focus ? "" : " Without Focusing")
+                    let item = move.addItem(withTitle: title, action: #selector(moveWorkspaceFromMenu(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = WorkspaceMoveTarget(namespace: shared.model.identityNamespace, workspace: workspaceUUID, destination: destination, focus: focus)
+                }
+            }
+            if !move.items.isEmpty { menu.addItem(withTitle: "Move to Window", action: nil, keyEquivalent: "").submenu = move }
+        }
         let close = menu.addItem(withTitle: "Close Workspace", action: #selector(closeWorkspaceFromMenu(_:)), keyEquivalent: "")
         close.target = self
         close.representedObject = NSNumber(value: workspace.id)
@@ -721,6 +750,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let identity else { showError("Window startup is still pending"); return }
         workspaceCount += 1
         enqueue(.workspaceCreate(identity.windowId, "Workspace \(workspaceCount)"))
+    }
+    @objc private func moveWorkspaceFromMenu(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? WorkspaceMoveTarget,
+              coordinator.snapshot?.model.identityNamespace == target.namespace else { return }
+        enqueue(.workspaceMove(target.workspace, target.destination, target.focus))
     }
     @objc private func newMainWindow() { enqueue(.window("new", nil, true)) }
     @objc private func closeMainWindow() { if let identity { enqueue(.window("close", identity.windowId, nil)) } }
@@ -736,9 +770,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     @objc private func browserBack() { focusedBrowser?.requestNavigation(.back(snapshotAfter: false)) }
     @objc private func browserForward() { focusedBrowser?.requestNavigation(.forward(snapshotAfter: false)) }
     @objc private func browserReload() { focusedBrowser?.requestNavigation(.reload(snapshotAfter: false)) }
-    @objc private func browserZoomIn() { focusedBrowser?.adjustZoom(0.1) }
-    @objc private func browserZoomOut() { focusedBrowser?.adjustZoom(-0.1) }
-    @objc private func browserZoomReset() { focusedBrowser?.resetZoom() }
+    @objc private func browserZoomIn() { focusedBrowser?.requestZoom(.in) }
+    @objc private func browserZoomOut() { focusedBrowser?.requestZoom(.out) }
+    @objc private func browserZoomReset() { focusedBrowser?.requestZoom(.reset) }
     @objc private func browserFind() { focusedBrowser?.findInPage() }
     @objc func newBrowser() {
         guard let pane = focusedPane else { return }
@@ -1457,6 +1491,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "browser_profiles_isolation_reopen": true,
             "browser_profile_menu": true,
             "browser_profile_management": true,
+            "browser_page_zoom": true,
             "browser_downloads_native": true,
             "local_tmux_cli_native_reopen": true,
             "browser_never_selected_viewport": true,
@@ -2013,6 +2048,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
         try await smokePublishedBrowserTitle(surface: surface, title: "CSP fixture")
         try await smokeBrowserProfiles(origin: origin, pane: pane.id, privateSurface: surface)
+        try await BrowserZoomSmoke.validate(surface: surface, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
               let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }
@@ -2347,9 +2383,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        WindowLifecycleSmoke.trace("delegate entered before coordinator construction")
         let coordinator = ApplicationCoordinator()
         self.coordinator = coordinator
+        WindowLifecycleSmoke.trace("coordinator constructed; constructing initial presenter")
         let controller = coordinator.mainWindowHost
+        WindowLifecycleSmoke.trace("initial presenter constructed; scheduling startup")
         Task {
             do {
                 if CommandLine.arguments.contains("--smoke-test") {
@@ -2364,14 +2403,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
                 } else { storage = .applicationSupport }
+                WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage)
+                WindowLifecycleSmoke.trace("after coordinator.start")
                 if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
+                        WindowLifecycleSmoke.trace("enter fixture phase " + CommandLine.arguments[index + 3])
                         try await WindowLifecycleSmoke.run(coordinator: coordinator, report: report, phase: CommandLine.arguments[index + 3])
+                        WindowLifecycleSmoke.trace("fixture returned; before explicit shutdown")
                         try await coordinator.shutdown()
                         exit(0)
                     } catch {
+                        WindowLifecycleSmoke.trace("fixture failed: " + error.localizedDescription)
                         FileHandle.standardError.write(Data("Native window lifecycle failed: \(error)\n".utf8))
                         do { try await coordinator.shutdown() } catch {
                             FileHandle.standardError.write(Data("Native window cleanup failed: \(error)\n".utf8))
@@ -2419,8 +2463,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let coordinator else { return .terminateNow }
         if terminating { return .terminateLater }
         terminating = true
+        WindowLifecycleSmoke.trace("application termination requested; before shared shutdown")
         Task {
-            do { try await coordinator.shutdown() } catch {
+            do { try await coordinator.shutdown(); WindowLifecycleSmoke.trace("termination shutdown complete") } catch {
                 FileHandle.standardError.write(Data("zmux shutdown: \(error)\n".utf8))
                 if CommandLine.arguments.contains("--window-lifecycle-smoke") { exit(1) }
                 // Teardown has already stopped sessions. Do not offer a misleading

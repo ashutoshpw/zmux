@@ -96,6 +96,7 @@ pub enum NativeWindowEvent {
         key: bool,
     },
 }
+#[derive(Clone)]
 pub(crate) struct WindowRuntime {
     pub epoch: Uuid,
     namespace: Option<Uuid>,
@@ -174,10 +175,30 @@ impl WindowRuntime {
         kind: WindowKind,
         focus: bool,
     ) -> Result<WindowReceipt, DesktopError> {
-        if let Some(existing) = self
-            .requests
-            .iter()
-            .find(|r| r.window_id == window && r.kind == kind)
+        self.request_inner(model, window, kind, focus, true)
+    }
+    /// A move's focus receipt must not reuse an older, possibly already-executed
+    /// focus request for the same host. Reserve this on a candidate before commit.
+    pub(crate) fn request_move_focus(
+        &mut self,
+        model: &Snapshot,
+        window: WindowId,
+    ) -> Result<WindowReceipt, DesktopError> {
+        self.request_inner(model, window, WindowKind::Focus, true, false)
+    }
+    fn request_inner(
+        &mut self,
+        model: &Snapshot,
+        window: WindowId,
+        kind: WindowKind,
+        focus: bool,
+        coalesce: bool,
+    ) -> Result<WindowReceipt, DesktopError> {
+        if coalesce
+            && let Some(existing) = self
+                .requests
+                .iter()
+                .find(|r| r.window_id == window && r.kind == kind)
         {
             return self
                 .receipts

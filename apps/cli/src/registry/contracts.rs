@@ -133,6 +133,40 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    let mut movement = contract(
+        "move-workspace-to-window",
+        &["--workspace", "workspace:1", "--window", "window:2"],
+        vec![
+            option("workspace", &["--workspace"], ValueKind::Target),
+            option("destination_window", &["--window"], ValueKind::Target),
+            option("no_focus", &["--no-focus"], ValueKind::Flag),
+            option("focus", &["--focus"], ValueKind::Choice(&["true", "false"])),
+            option(
+                "expected_model_revision",
+                &["--expect-revision"],
+                ValueKind::Integer(0, u64::MAX),
+            ),
+        ],
+        "targeted",
+    );
+    movement.arguments[0].required = true;
+    movement.arguments[1].required = true;
+    movement.defaults = json!({"focus":false});
+    movement
+        .default_pointers
+        .push(("focus", "/request/operation/action/focus"));
+    movement
+        .argument_rules
+        .push(json!({"mutually_exclusive":["focus", "no_focus"]}));
+    movement.route = "workspace_move";
+    movement.expected.push((
+        "/request/operation/action/action",
+        "move_workspace_to_window",
+    ));
+    movement.focus = "conditional_on_focus_argument";
+    movement.output = "json_topology_committed_with_separate_native_focus";
+    movement.limitations = "Two existing main windows. Required source and destination; no groups/canvas. Same-window no-op parity remains unresolved. Native focus failure does not undo committed topology; never replay a move after uncertainty. Split ratios are native preferences, not session-export geometry.";
+    result.push(movement);
     for (name, command) in [
         ("list-workspaces", "list_workspaces"),
         ("list-notifications", "list_notifications"),
@@ -376,6 +410,39 @@ fn definitions() -> Vec<Contract> {
         c.limitations = "Built-in isolated-world DOM read. Main-document CSS/ref selector; bounded results, no frame/shadow traversal. Selector/attribute requirements depend on kind; full grammar remains unresolved.";
         result.push(c);
     }
+    for operation in ["in", "out", "reset", "<factor>"] {
+        let mut c = contract(
+            &format!("browser zoom {operation}"),
+            &["--surface", "1"],
+            target_arguments(),
+            "browser",
+        );
+        if operation == "<factor>" {
+            c.probe = ["browser", "zoom", "1.25", "--surface", "1"]
+                .into_iter()
+                .map(String::from)
+                .collect();
+            c.arguments
+                .push(positional("factor", ValueKind::Number, true));
+        }
+        c.route = "browser";
+        c.requirements = &["running_app", "native_webkit_host"];
+        c.expected.push(("/request/action/action", "zoom"));
+        c.expected.push((
+            "/request/action/operation/kind",
+            if operation == "<factor>" {
+                "set"
+            } else {
+                operation
+            },
+        ));
+        c.default_pointers
+            .push(("operation_timeout_ms", "/request/timeout_ms"));
+        c.argument_rules
+            .push(json!({"finite_factor_clamp": [browser::MIN_PAGE_ZOOM, browser::MAX_PAGE_ZOOM]}));
+        c.limitations = "Live public WKWebView page zoom mutation; read-only clients reject. In/out step 0.1; explicit finite factors and step results clamp to 0.25..5. Reset selects 1; reset to a configured default is unresolved. Completion reports the actual native factor and exact host/document identity. Preserves selection; no persistence, viewport emulation or replay after uncertainty. Historical compatibility remains unverified.";
+        result.push(c);
+    }
     for verb in ["wait", "snapshot", "eval", "back", "forward", "reload"] {
         let mut operands = vec!["--surface", "1"];
         if verb == "wait" {
@@ -517,6 +584,7 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
         .map_err(|error| failure(format!("{}: {}", c.name, error)))?;
     let (route, command) = match parsed {
         Parsed::App(command) => ("app", command),
+        Parsed::WorkspaceMove(command) => ("workspace_move", command),
         Parsed::Browser(command, _) => ("browser", command),
         Parsed::BrowserDownload(command, _) => ("browser_download", command),
         _ => {

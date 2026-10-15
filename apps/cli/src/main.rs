@@ -28,6 +28,7 @@ mod session;
 mod ssh;
 mod targets;
 mod windows;
+mod workspace_move;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -66,6 +67,7 @@ enum Parsed {
     BrowserProfile(ControlCommand),
     BrowserDownload(ControlCommand, Option<Duration>),
     Window(ControlCommand),
+    WorkspaceMove(ControlCommand),
 }
 
 enum Offline {
@@ -118,6 +120,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
         Parsed::Offline(Offline::Doctor) => {
             let options = client_options(socket_override, timeout, password)?;
             doctor(&options)?;
+            Ok(0)
+        }
+        Parsed::WorkspaceMove(command) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&workspace_move::run(&options, command)?)?
+            );
             Ok(0)
         }
         Parsed::Window(command) => {
@@ -225,6 +235,13 @@ fn parse(
             timeout,
             password,
         ));
+    }
+    if command == Some("move-workspace-to-window") {
+        let parsed = workspace_move::parse(tail)?;
+        if !explicit_timeout {
+            timeout = windows::NATIVE_RECEIPT_BUDGET;
+        }
+        return Ok((parsed, socket, timeout, password));
     }
     if let Some(
         command @ ("list-windows" | "current-window" | "new-window" | "focus-window"

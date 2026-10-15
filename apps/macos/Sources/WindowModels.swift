@@ -28,3 +28,10 @@ struct NativeWindowEvent: Encodable, Sendable {
 /// Only for guards checked before any AppKit effect. ABI uncertainty must never
 /// be converted into a claim that an operation did not happen.
 struct NativeWindowPreflightFailure: Error { let message: String }
+
+struct WorkspaceMoveTarget {
+    let namespace: UUID
+    let workspace: UUID
+    let destination: UUID
+    let focus: Bool
+}

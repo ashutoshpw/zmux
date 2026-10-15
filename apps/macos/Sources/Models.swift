@@ -145,7 +145,9 @@ struct BrowserProfileState: Decodable, Sendable {
     let operations: [BrowserProfileReceipt]
     let error: String?
 }
+struct WorkspaceIdentity: Decodable, Sendable { let workspaceId: UInt64; let uuid: UUID }
 struct DesktopSnapshot: Decodable, Sendable {
+    let workspaceIdentities: [WorkspaceIdentity]
     let windowEpoch: UUID
     let windowRequests: [NativeWindowRequest]
     let windowHosts: [WindowHostToken]

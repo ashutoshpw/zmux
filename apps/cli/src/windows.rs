@@ -77,10 +77,19 @@ pub(super) fn run(
     };
     let deadline = Instant::now() + options.timeout;
     let budget = remaining(options, deadline)?;
-    let mut result = response_result(request(&budget, command)?)?;
+    let result = response_result(request(&budget, command)?)?;
     if !mutation {
         return Ok(result);
     }
+    wait_receipt(options, result, expected_kind, deadline)
+}
+
+pub(super) fn wait_receipt(
+    options: &ClientOptions,
+    mut result: serde_json::Value,
+    expected_kind: &str,
+    deadline: Instant,
+) -> Result<serde_json::Value, CliError> {
     let operation_id = result.get("operation_id").and_then(|id| id.as_str()).ok_or_else(|| CliError("Window admission omitted its operation UUID; outcome is unknown and mutation was not replayed".into()))?.parse().map_err(|_| CliError("Invalid window operation UUID; mutation was not replayed".into()))?;
     let epoch = result
         .get("epoch")
@@ -164,7 +173,10 @@ pub(super) fn run(
         .map_err(|error| unknown(error.to_string()))?;
     }
 }
-fn remaining(options: &ClientOptions, deadline: Instant) -> Result<ClientOptions, CliError> {
+pub(super) fn remaining(
+    options: &ClientOptions,
+    deadline: Instant,
+) -> Result<ClientOptions, CliError> {
     let timeout = deadline
         .checked_duration_since(Instant::now())
         .filter(|time| !time.is_zero())

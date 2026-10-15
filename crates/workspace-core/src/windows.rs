@@ -1,5 +1,4 @@
-//! Canonical main-window membership. Native lifecycle actions remain unavailable
-//! until the shared host coordinator can materialize more than one window.
+//! Canonical main-window membership, selection and identity-preserving moves.
 use crate::{Action, ActionError, Effect, WindowId, WorkspaceId, WorkspaceStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -56,6 +55,65 @@ pub(crate) fn validate_layout(
 }
 
 impl WorkspaceStore {
+    pub(crate) fn move_workspace_to_window(
+        &mut self,
+        workspace: WorkspaceId,
+        destination: WindowId,
+        index: Option<usize>,
+        focus: bool,
+    ) -> Result<(), ActionError> {
+        let source = self
+            .state
+            .windows
+            .iter()
+            .position(|window| window.workspace_ids.contains(&workspace))
+            .ok_or(ActionError::UnknownWorkspace(workspace))?;
+        let target = self
+            .state
+            .windows
+            .iter()
+            .position(|window| window.id == destination)
+            .ok_or_else(|| {
+                ActionError::InvalidOperation("destination window does not exist".into())
+            })?;
+        if source == target && index.is_none() {
+            return Ok(());
+        }
+        let length = self.state.windows[target].workspace_ids.len() - usize::from(source == target);
+        let index = index.unwrap_or(length);
+        if index > length {
+            return Err(ActionError::InvalidOperation(
+                "workspace insertion index is out of range".into(),
+            ));
+        }
+        let source_index = self.state.windows[source]
+            .workspace_ids
+            .iter()
+            .position(|id| *id == workspace)
+            .expect("canonical source membership");
+        self.state.windows[source]
+            .workspace_ids
+            .remove(source_index);
+        self.state.windows[target]
+            .workspace_ids
+            .insert(index, workspace);
+        if source != target && self.state.windows[source].selected_workspace == Some(workspace) {
+            self.state.windows[source].selected_workspace = self.state.windows[source]
+                .workspace_ids
+                .get(source_index)
+                .copied()
+                .or_else(|| self.state.windows[source].workspace_ids.last().copied());
+        }
+        if focus || self.state.windows[target].selected_workspace.is_none() {
+            self.state.windows[target].selected_workspace = Some(workspace);
+        }
+        if focus {
+            self.state.focused_window = Some(destination);
+        }
+        self.project_window_focus();
+        Ok(())
+    }
+
     pub(crate) fn focus_window(&mut self, id: WindowId) -> Result<(), ActionError> {
         if !self.state.windows.iter().any(|window| window.id == id) {
             return Err(ActionError::InvalidOperation(

@@ -1,8 +1,8 @@
 //! Browser automation submits once, then polls bounded native execution receipts.
 use super::*;
 use zmux_desktop_runtime::browser::{
-    BrowserAction, BrowserLocator, BrowserRequest, DEFAULT_OPERATION_TIMEOUT_MS, GetKind,
-    LocatorKind, MAX_OPERATION_TIMEOUT_MS, SnapshotOptions, WaitState,
+    BrowserAction, BrowserLocator, BrowserRequest, BrowserZoom, DEFAULT_OPERATION_TIMEOUT_MS,
+    GetKind, LocatorKind, MAX_OPERATION_TIMEOUT_MS, SnapshotOptions, WaitState,
 };
 use zmux_workspace_core::targets::{TargetRef, TargetScope};
 
@@ -86,7 +86,16 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     }
     if !matches!(
         verb,
-        "get" | "is" | "find" | "wait" | "eval" | "snapshot" | "back" | "forward" | "reload"
+        "get"
+            | "is"
+            | "find"
+            | "wait"
+            | "eval"
+            | "snapshot"
+            | "back"
+            | "forward"
+            | "reload"
+            | "zoom"
     ) {
         return Err(CliError(format!("unknown browser subcommand `{verb}`")));
     }
@@ -279,6 +288,10 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 flag_once(&mut snapshot_after, flag)?;
                 index += 1;
             }
+            other if verb == "zoom" && other.parse::<f64>().is_ok() => {
+                values.push(args[index].clone());
+                index += 1;
+            }
             other if other.starts_with('-') => {
                 return Err(CliError(format!(
                     "unknown browser {verb} option `{other}`; use -- before literal text"
@@ -291,6 +304,27 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         }
     }
     let action = match verb {
+        "zoom" => {
+            if values.len() != 1 {
+                return Err(CliError(
+                    "browser zoom requires in, out, reset or one factor".into(),
+                ));
+            }
+            let operation = match values[0].to_ascii_lowercase().as_str() {
+                "in" => BrowserZoom::In,
+                "out" => BrowserZoom::Out,
+                "reset" => BrowserZoom::Reset,
+                factor => BrowserZoom::Set {
+                    factor: factor.parse::<f64>().map_err(|_| {
+                        CliError(
+                            "browser zoom requires in, out, reset or a finite numeric factor"
+                                .into(),
+                        )
+                    })?,
+                },
+            };
+            BrowserAction::Zoom { operation }
+        }
         "find" => {
             if values.len() > 1 {
                 return Err(CliError("browser find accepts one query".into()));
