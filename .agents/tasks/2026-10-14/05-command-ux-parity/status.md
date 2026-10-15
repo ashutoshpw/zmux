@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- T03 singleton ownership committed8705dea and integrated terminal experiment
+  committed93daf02; both pushed. Parent isolated full checks pass. Foundation
+  38771928593 passes. macOS38771925429 fails before Swift compilation in the existing
+  concurrent persistence lock test (ENOENT opening generation lock); focused owner
+  investigation is active. Do not weaken lock outcomes or call this native acceptance.
+- Integrated hosted experiment38771957372 passed Linux/macOS arm64; parent verified
+  all23 input hashes against93daf02. Independent Linux rerun also accepted30 normal
+  stages and five intentional assertion failures. Production engine remains unchanged.
+
 - Native d6d9cc8 run38769334202 and Foundation38769333991 passed. Downloaded
   diagnostic archive/source/checksum and three images verified; profile manager,
   terminal keys/scrolling and durable tmux reopen now have hosted native receipts.

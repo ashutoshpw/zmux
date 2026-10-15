@@ -159,3 +159,19 @@ Parent `scripts/check` passed in `/tmp/zmux-integrated-parent-verify-llt5l_v4`
 The nine existing runner lifecycle tests pass independently. GitHub Actions gains
 an opt-in integrated experiment that also enables the required resource experiment;
 its hosted run remains pending.
+
+## Hosted integrated acceptance
+
+Run `38771957372` at `93daf02260f730a42a7e9370df42bd069dc01a50` passed
+Linux x86_64 and macOS 15.7.9 arm64. Parent downloaded both artifacts to
+`/tmp/zmux-f04-integrated-hosted-38771957372` and matched all 23 input hashes
+against the commit. Receipts:
+- macOS SHA-256: `4260078a54498043b393de65650de8e5c22ca6a87f124bf3151d03e131e22d5c`
+- Linux SHA-256: `add7cacdd7940f1219ad9245357bc473fbe819b8210576b2ed4fcdbaadccc783`
+
+Both execute the single-owner history/callback/quota/render-failure and teardown
+fixtures. macOS reports RLIMIT_AS unavailable (ValueError); CPU/no-core limits are
+configured. The shim's quota accounting remains independently exercised. The raw
+library/probe compiled universally, while integrated execution is host-only. This
+does not establish an application memory bound, real PTY delivery or app engine
+replacement; metadata and native fidelity/performance gates remain open.
