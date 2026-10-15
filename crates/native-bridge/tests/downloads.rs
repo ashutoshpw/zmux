@@ -119,11 +119,91 @@ fn foreign_download_capacity_precedes_admission_and_callbacks_require_exact_owne
     let rejected = download(desktop.value, &stale);
     assert_eq!(rejected.status, 0);
     assert_eq!(consume(rejected.value)["ok"], false);
+    // Reserve final publication before shutdown; this reservation must win
+    // against cancellation while a second ordinary download is cancelled.
+    for request in [
+        json!({"operation":"destination","token":token,"filename":"abi.bin"}),
+        json!({"operation":"finalizing","token":token}),
+    ] {
+        let result = download(desktop.value, &request);
+        assert_eq!(result.status, 0);
+        assert_eq!(consume(result.value)["ok"], true);
+    }
+    let mut cancelled_token = token.clone();
+    cancelled_token["download_id"] = json!(Uuid::new_v4());
+    let mut another = begin.clone();
+    another["token"] = cancelled_token.clone();
+    let result = download(desktop.value, &another);
+    assert_eq!(result.status, 0);
+    assert_eq!(consume(result.value)["ok"], true);
+    // Real native owners remain charged while the common deadline expires.
+    // Trusted cleanup acknowledgments must still execute after normal admission stops.
+    let shutdown = zmux_desktop_shutdown_begin(desktop.value, 1, 1);
+    assert_eq!(shutdown.status, 0);
+    let started = consume(shutdown.value);
+    let ticket = started["ticket"].as_u64().unwrap();
+    std::thread::sleep(Duration::from_millis(10));
+    let repeated = zmux_desktop_shutdown_begin(desktop.value, 30_000, 0);
+    assert_eq!(repeated.status, 0);
+    let repeated = consume(repeated.value);
+    assert_eq!(repeated["ticket"], ticket);
+    assert_eq!(repeated["remaining_ms"], 0);
+    assert_eq!(repeated["pending"]["native_cleanup"], true);
+    assert_eq!(repeated["physical_cleanup_complete"], false);
+    assert_eq!(zmux_desktop_shutdown_release(desktop.value, ticket), -4);
+    assert_eq!(zmux_desktop_destroy(desktop.value), -4);
+    let no_new_owner = download(desktop.value, &begin);
+    assert_eq!(no_new_owner.status, 0);
+    assert_eq!(consume(no_new_owner.value)["ok"], false);
     let cancelled = download(
         desktop.value,
-        &json!({"operation":"cancelled","token":token,"cleanup_complete":true}),
+        &json!({"operation":"cancelled","token":cancelled_token,"cleanup_complete":true}),
     );
     assert_eq!(cancelled.status, 0);
     assert_eq!(consume(cancelled.value)["ok"], true);
-    assert_eq!(zmux_desktop_destroy(desktop.value), 0);
+    let saved = download(
+        desktop.value,
+        &json!({"operation":"saved","token":token,"path":"/abi.bin","bytes":7,"cleanup_complete":true}),
+    );
+    assert_eq!(saved.status, 0);
+    assert_eq!(
+        consume(saved.value)["ok"],
+        true,
+        "shutdown revoked an existing final publication reservation"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let result = zmux_desktop_shutdown_status(desktop.value, ticket);
+        assert_eq!(result.status, 0);
+        let report = consume(result.value);
+        if report["runtime_cleanup_complete"] == true {
+            assert_eq!(report["pending"]["native_downloads"], 0);
+            assert_eq!(report["physical_cleanup_complete"], false);
+            break;
+        }
+        assert!(Instant::now() < deadline, "{report}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        zmux_desktop_shutdown_native_complete(desktop.value, ticket + 1),
+        -2
+    );
+    assert_eq!(
+        zmux_desktop_shutdown_native_complete(desktop.value, ticket),
+        0
+    );
+    loop {
+        let result = zmux_desktop_shutdown_status(desktop.value, ticket);
+        assert_eq!(result.status, 0);
+        let report = consume(result.value);
+        if report["physical_cleanup_complete"] == true {
+            assert_eq!(report["phase"], "complete");
+            assert_eq!(report["deadline_expired"], true);
+            break;
+        }
+        assert!(Instant::now() < deadline, "{report}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(zmux_desktop_shutdown_release(desktop.value, ticket), 0);
+    assert_eq!(zmux_desktop_snapshot(desktop.value, 0).status, -1);
 }

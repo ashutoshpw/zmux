@@ -52,6 +52,7 @@ enum Entry {
 struct NativeDesktop {
     runtime: Arc<Desktop>,
     control: Option<ControlServer>,
+    control_cleanup_failure: Mutex<Option<String>>,
 }
 struct Registry {
     next: u64,
@@ -382,7 +383,11 @@ fn create_desktop(state_directory: Option<PathBuf>) -> Result<u64, i32> {
             })
         })
         .transpose()?;
-    registry.insert(Entry::Desktop(Arc::new(NativeDesktop { runtime, control })))
+    registry.insert(Entry::Desktop(Arc::new(NativeDesktop {
+        runtime,
+        control,
+        control_cleanup_failure: Mutex::new(None),
+    })))
 }
 /// # Safety
 /// Request storage must remain readable for length bytes throughout the call.
@@ -688,28 +693,161 @@ pub extern "C" fn zmux_desktop_snapshot(id: u64, revision: u64) -> ZmuxResult {
         reservation.publish(serde_json::to_vec(&*snapshot).map_err(|_| INTERNAL)?)
     })
 }
-/// Shutdown can wait up to five seconds; native hosts must call it off the AppKit thread.
+fn shutdown_report(
+    desktop: &NativeDesktop,
+    ticket: u64,
+) -> Result<zmux_desktop_runtime::shutdown::Report, i32> {
+    let mut report = desktop
+        .runtime
+        .shutdown_status(ticket)
+        .map_err(|_| INVALID_ARGUMENT)?;
+    let mut failure = desktop
+        .control_cleanup_failure
+        .lock()
+        .map_err(|_| INTERNAL)?;
+    let control_pending = if failure.is_some() {
+        true
+    } else if let Some(control) = &desktop.control {
+        match control.shutdown(std::time::Duration::ZERO) {
+            Ok(()) => false,
+            Err(zmux_desktop_runtime::control::ControlServerError::ShutdownTimeout) => true,
+            Err(error) => {
+                *failure = Some(error.to_string());
+                true
+            }
+        }
+    } else {
+        false
+    };
+    if control_pending {
+        report.pending.control = 1;
+        report.runtime_cleanup_complete = false;
+        report.physical_cleanup_complete = false;
+        if report.phase == zmux_desktop_runtime::shutdown::Phase::Complete {
+            report.phase = zmux_desktop_runtime::shutdown::Phase::Draining;
+        }
+    }
+    if let Some(message) = failure.as_ref() {
+        if report.issues.len() < 16 {
+            report.issues.push(message.chars().take(512).collect());
+        } else {
+            report.issues_dropped = report.issues_dropped.saturating_add(1);
+        }
+    }
+    Ok(report)
+}
+fn shutdown_buffer(
+    report: &zmux_desktop_runtime::shutdown::Report,
+    reservation: Reservation,
+) -> Result<u64, i32> {
+    reservation.publish(serde_json::to_vec(report).map_err(|_| INTERNAL)?)
+}
+/// Begin exactly once. Only the first call may register a real native cleanup barrier.
 #[unsafe(no_mangle)]
-pub extern "C" fn zmux_desktop_destroy(id: u64) -> i32 {
+pub extern "C" fn zmux_desktop_shutdown_begin(
+    id: u64,
+    budget_ms: u64,
+    native_cleanup_required: u8,
+) -> ZmuxResult {
+    guard(|| {
+        if budget_ms > 30_000 || native_cleanup_required > 1 {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = native_desktop(id)?;
+        let reservation = Reservation::new()?;
+        let report = desktop
+            .runtime
+            .begin_shutdown(
+                std::time::Duration::from_millis(budget_ms),
+                native_cleanup_required == 1,
+            )
+            .map_err(|_| INTERNAL)?;
+        if let Some(control) = &desktop.control {
+            control.request_shutdown();
+        }
+        shutdown_buffer(&shutdown_report(&desktop, report.ticket)?, reservation)
+    })
+}
+/// Polling Pending does not renew the one root deadline or release ownership.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_shutdown_status(id: u64, ticket: u64) -> ZmuxResult {
     guard(|| {
         let desktop = native_desktop(id)?;
-        if let Some(control) = &desktop.control {
-            control
-                .shutdown(std::time::Duration::from_secs(2))
-                .map_err(|error| {
-                    eprintln!("zmux local control shutdown failed: {error}");
-                    INTERNAL
-                })?;
+        let reservation = Reservation::new()?;
+        shutdown_buffer(&shutdown_report(&desktop, ticket)?, reservation)
+    })
+}
+/// Off-UI bounded wait, clamped to the root budget. Pending is a JSON report.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_shutdown_wait(id: u64, ticket: u64, wait_ms: u64) -> ZmuxResult {
+    guard(|| {
+        if wait_ms > 30_000 {
+            return Err(INVALID_ARGUMENT);
         }
+        let desktop = native_desktop(id)?;
+        let reservation = Reservation::new()?;
         desktop
             .runtime
-            .shutdown(std::time::Duration::from_secs(5))
-            .map_err(|_| INTERNAL)?;
+            .wait_shutdown(ticket, std::time::Duration::from_millis(wait_ms))
+            .map_err(|_| INVALID_ARGUMENT)?;
+        shutdown_buffer(&shutdown_report(&desktop, ticket)?, reservation)
+    })
+}
+/// Trusted native owner acknowledgment, after physical cleanup. Idempotent.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_shutdown_native_complete(id: u64, ticket: u64) -> i32 {
+    guard(|| {
+        native_desktop(id)?
+            .runtime
+            .shutdown_native_complete(ticket)
+            .map_err(|_| INVALID_ARGUMENT)?;
+        Ok(0)
+    })
+    .status
+}
+/// Release only after all physical owners and the coordinator have joined.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_shutdown_release(id: u64, ticket: u64) -> i32 {
+    guard(|| {
+        let desktop = native_desktop(id)?;
+        if !shutdown_report(&desktop, ticket)?.physical_cleanup_complete {
+            return Err(BUSY);
+        }
         let mut registry = registry().try_lock().map_err(lock_status)?;
         if !matches!(registry.entries.get(&id), Some(Entry::Desktop(_))) {
             return Err(INVALID_HANDLE);
         }
         registry.entries.remove(&id);
+        Ok(0)
+    })
+    .status
+}
+/// Compatibility bounded wait. Never release a desktop with pending physical owners.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_destroy(id: u64) -> i32 {
+    guard(|| {
+        let desktop = native_desktop(id)?;
+        let report = desktop
+            .runtime
+            .begin_shutdown(std::time::Duration::from_secs(5), false)
+            .map_err(|_| INTERNAL)?;
+        if let Some(control) = &desktop.control {
+            control.request_shutdown();
+        }
+        desktop
+            .runtime
+            .wait_shutdown(report.ticket, std::time::Duration::from_secs(5))
+            .map_err(|_| INTERNAL)?;
+        if !shutdown_report(&desktop, report.ticket)?.physical_cleanup_complete {
+            return Err(BUSY);
+        }
+        if !shutdown_report(&desktop, report.ticket)?.issues.is_empty() {
+            return Err(INTERNAL);
+        }
+        let status = zmux_desktop_shutdown_release(id, report.ticket);
+        if status != OK {
+            return Err(status);
+        }
         Ok(0)
     })
     .status

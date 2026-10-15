@@ -318,6 +318,11 @@ impl ControlServer {
         })
     }
 
+    /// Stop accepting new external commands without waiting for the listener.
+    pub fn request_shutdown(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
+
     pub fn shutdown(&self, timeout: Duration) -> Result<(), ControlServerError> {
         self.stop.store(true, Ordering::Release);
         let deadline = Instant::now() + timeout;

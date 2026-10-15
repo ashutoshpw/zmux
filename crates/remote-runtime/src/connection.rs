@@ -9,7 +9,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
         mpsc::{self, SyncSender},
     },
@@ -188,20 +188,45 @@ impl Drop for ManagedConnection {
                 if let Err(error) =
                     sender.try_send(Cleanup::Paths(self.control_path.clone(), self.root.clone()))
                 {
-                    eprintln!(
-                        "zmux SSH cleanup queue rejected {}: {error}",
+                    record_cleanup_issue(format!(
+                        "SSH cleanup queue rejected {}: {error}",
                         self.root.display()
-                    );
+                    ));
                 }
             }
-            Err(error) => eprintln!("zmux SSH cleanup unavailable: {error}"),
+            Err(error) => record_cleanup_issue(format!(
+                "SSH cleanup unavailable for {}: {error}",
+                self.root.display()
+            )),
         }
     }
 }
 
 enum Cleanup {
     Paths(PathBuf, PathBuf),
-    Barrier(SyncSender<()>),
+    Barrier(SyncSender<CleanupReport>),
+}
+/// Process-wide bounded sticky diagnostics. A barrier proves preceding queued
+/// work finished, not successful deletion; rejected or failed paths stay reported.
+#[derive(Clone, Debug, Default)]
+pub struct CleanupReport {
+    pub issues: Vec<String>,
+    pub issues_dropped: u64,
+}
+static CLEANUP_ISSUES: Mutex<CleanupReport> = Mutex::new(CleanupReport {
+    issues: Vec::new(),
+    issues_dropped: 0,
+});
+fn record_cleanup_issue(message: String) {
+    eprintln!("zmux {message}");
+    let mut report = CLEANUP_ISSUES
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if report.issues.len() < 16 {
+        report.issues.push(message.chars().take(512).collect());
+    } else {
+        report.issues_dropped = report.issues_dropped.saturating_add(1);
+    }
 }
 static CLEANUP: OnceLock<Result<SyncSender<Cleanup>, String>> = OnceLock::new();
 fn cleanup_sender() -> Result<&'static SyncSender<Cleanup>, String> {
@@ -215,7 +240,11 @@ fn cleanup_sender() -> Result<&'static SyncSender<Cleanup>, String> {
                         let (socket, root) = match message {
                             Cleanup::Paths(socket, root) => (socket, root),
                             Cleanup::Barrier(ack) => {
-                                let _ = ack.try_send(());
+                                let report = CLEANUP_ISSUES
+                                    .lock()
+                                    .unwrap_or_else(|poison| poison.into_inner())
+                                    .clone();
+                                let _ = ack.try_send(report);
                                 continue;
                             }
                         };
@@ -226,10 +255,10 @@ fn cleanup_sender() -> Result<&'static SyncSender<Cleanup>, String> {
                             if let Err(error) = result
                                 && error.kind() != io::ErrorKind::NotFound
                             {
-                                eprintln!(
-                                    "zmux SSH cleanup failed for {}: {error}",
+                                record_cleanup_issue(format!(
+                                    "SSH cleanup failed for {}: {error}",
                                     path.display()
-                                );
+                                ));
                             }
                         }
                     }
@@ -243,14 +272,28 @@ fn cleanup_sender() -> Result<&'static SyncSender<Cleanup>, String> {
 
 /// Wait for previously queued cleanup only from a shutdown/background worker.
 pub fn drain_cleanup(timeout: std::time::Duration) -> Result<(), ConnectionError> {
+    let report = request_cleanup_barrier()?
+        .recv_timeout(timeout)
+        .map_err(|e| ConnectionError::CleanupWorker(e.to_string()))?;
+    if report.issues.is_empty() && report.issues_dropped == 0 {
+        Ok(())
+    } else {
+        Err(ConnectionError::CleanupWorker(format!(
+            "process-wide prior cleanup failures: {:?}; additional={}",
+            report.issues, report.issues_dropped
+        )))
+    }
+}
+
+/// Retain this one barrier while polling; sending a replacement cannot acknowledge
+/// the original cleanup operation. No wait occurs on the action executor.
+pub fn request_cleanup_barrier() -> Result<mpsc::Receiver<CleanupReport>, ConnectionError> {
     let sender = cleanup_sender().map_err(ConnectionError::CleanupWorker)?;
     let (ack, receiver) = mpsc::sync_channel(1);
     sender
         .try_send(Cleanup::Barrier(ack))
         .map_err(|e| ConnectionError::CleanupWorker(e.to_string()))?;
-    receiver
-        .recv_timeout(timeout)
-        .map_err(|e| ConnectionError::CleanupWorker(e.to_string()))
+    Ok(receiver)
 }
 
 #[cfg(unix)]

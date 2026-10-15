@@ -181,40 +181,58 @@ while pending: pending=pending[os.write(1,pending):]
 
 #[test]
 fn graceful_deadline_escalates_only_the_retained_child_and_reports_forced_cleanup() {
-    let fixture = Fixture::new();
     let script = "import os,pathlib,signal,sys\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\npathlib.Path(sys.argv[1],'ready').write_text('ready')\nwhile True: os.write(1,b'x'*4096)\n";
-    let mut session = Session::spawn_with_shutdown_policy(
-        fixture.launch(script),
-        &[],
-        &[],
-        ShutdownPolicy::Graceful {
-            timeout: Duration::from_millis(100),
-        },
-        (),
-    )
-    .unwrap();
-    wait_file(&fixture.0.join("ready"));
-    let pid = session.process_id();
-    assert!(
-        matches!(session.shutdown(Duration::from_secs(3)), Err(SessionError::Failure(ref failure)) if failure.contains("graceful shutdown deadline"))
-    );
-    assert!(
-        session.is_finished(),
-        "forced cleanup retained physical worker ownership"
-    );
-    let snapshot = session.snapshot().unwrap();
-    assert_eq!(snapshot.state, State::Failed);
-    assert!(
-        snapshot.bytes_read > 0,
-        "forced cleanup must remain bounded under output flood"
-    );
-    assert!(
-        snapshot
-            .failure
-            .as_ref()
-            .is_some_and(|failure| failure.contains("graceful shutdown deadline"))
-    );
-    assert!(
-        matches!(observe_child(pid, false), Err(ref error) if error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32))
-    );
+    for (timeout, shared_budget, join_wait) in [
+        (Duration::from_millis(100), None, Duration::from_secs(3)),
+        (
+            Duration::from_secs(3),
+            Some(Duration::from_millis(2100)),
+            Duration::from_secs(1),
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let mut session = Session::spawn_with_shutdown_policy(
+            fixture.launch(script),
+            &[],
+            &[],
+            ShutdownPolicy::Graceful { timeout },
+            (),
+        )
+        .unwrap();
+        wait_file(&fixture.0.join("ready"));
+        let pid = session.process_id();
+        if let Some(budget) = shared_budget {
+            session
+                .request_close_until(Instant::now() + budget)
+                .unwrap();
+            // An observer cannot extend the installed deadline by asking again.
+            session
+                .request_close_until(Instant::now() + Duration::from_secs(20))
+                .unwrap();
+        }
+        let outcome = session.shutdown(join_wait);
+        assert!(
+            matches!(outcome, Err(SessionError::Failure(ref failure)) if failure.contains("graceful shutdown deadline")),
+            "{outcome:?}"
+        );
+        assert!(
+            session.is_finished(),
+            "forced cleanup retained physical worker ownership"
+        );
+        let snapshot = session.snapshot().unwrap();
+        assert_eq!(snapshot.state, State::Failed);
+        assert!(
+            snapshot.bytes_read > 0,
+            "forced cleanup must remain bounded under output flood"
+        );
+        assert!(
+            snapshot
+                .failure
+                .as_ref()
+                .is_some_and(|failure| failure.contains("graceful shutdown deadline"))
+        );
+        assert!(
+            matches!(observe_child(pid, false), Err(ref error) if error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32))
+        );
+    }
 }

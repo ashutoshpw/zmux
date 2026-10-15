@@ -203,3 +203,40 @@ fn config_value<'a>(config: &'a str, key: &str) -> Option<&'a str> {
         .find_map(|line| line.split_once(' ').filter(|(name, _)| *name == key))
         .map(|(_, value)| value)
 }
+
+#[test]
+fn asynchronous_cleanup_barrier_retains_failed_path_removal_diagnostics() {
+    let connection = ManagedConnection::create(descriptor("host")).unwrap();
+    let root = connection.control_path().parent().unwrap().to_owned();
+    let unexpected = root.join("keep");
+    fs::write(&unexpected, b"must survive failed cleanup").unwrap();
+    drop(connection);
+    let report = zmux_remote_runtime::connection::request_cleanup_barrier()
+        .unwrap()
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap();
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| issue.contains(root.to_str().unwrap())),
+        "barrier hid failed cleanup: {report:?}"
+    );
+    assert_eq!(
+        fs::read(&unexpected).unwrap(),
+        b"must survive failed cleanup"
+    );
+    // Later queue drainage cannot erase an unresolved cleanup failure.
+    let repeated = zmux_remote_runtime::connection::request_cleanup_barrier()
+        .unwrap()
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap();
+    assert!(
+        repeated
+            .issues
+            .iter()
+            .any(|issue| issue.contains(root.to_str().unwrap()))
+    );
+    fs::remove_file(unexpected).unwrap();
+    fs::remove_dir(root).unwrap();
+}

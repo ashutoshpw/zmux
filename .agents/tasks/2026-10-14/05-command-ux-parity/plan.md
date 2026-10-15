@@ -51,9 +51,11 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Shared shutdown](references/s01-shared-shutdown.md) — one deadline, physical owner barriers and pending native lifecycle acceptance.
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.
 - [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — pinned MIT 0.43.0 lifecycle and passed public-API Darwin fixture; separate production native gate pending.
 - [R03 headless owner design](references/r03-local-zellij-owner-design.md) — implemented foreground consumer, shared child lifecycle, peer-fenced broker, Linux evidence and remaining native gates.
+- [R03 native launch consumer](references/r03-native-launch.md) — explicit foreground PTY consumer, authenticated owner receipts, shared shutdown and remaining native identity gates.
 
 - [B01 browser downloads](references/b01-browser-downloads.md) — independent native resource owner, list/wait contract, safe publication and pending native acceptance.
 - [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.

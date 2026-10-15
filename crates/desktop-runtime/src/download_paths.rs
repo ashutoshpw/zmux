@@ -99,6 +99,14 @@ impl PathObservers {
             Err(TryRecvError::Disconnected) => Err("download path observer stopped".into()),
         }
     }
+    pub(crate) fn request_shutdown(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
+    pub(crate) fn is_finished(&self) -> bool {
+        self.worker
+            .as_ref()
+            .is_none_or(|worker| worker.is_finished())
+    }
     pub fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
         self.stop.store(true, Ordering::Release);
         while self

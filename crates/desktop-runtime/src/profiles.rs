@@ -242,6 +242,19 @@ impl ProfileRuntime {
         }
         changed
     }
+    pub(crate) fn poll_shutdown(&mut self) -> Result<bool, crate::persistence::PersistenceError> {
+        self.shutting_down = true;
+        self.poll();
+        let Some(io) = &mut self.io else {
+            return Ok(true);
+        };
+        io.request_shutdown();
+        if !io.is_finished() {
+            return Ok(false);
+        }
+        self.shutdown(std::time::Instant::now())?;
+        Ok(true)
+    }
     pub fn shutdown(
         &mut self,
         deadline: std::time::Instant,
