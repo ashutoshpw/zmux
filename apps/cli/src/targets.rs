@@ -507,6 +507,21 @@ fn request(
         }
     ) {
         CallerContext::default()
+    } else if matches!(&operation, TargetOperation::Notify { .. })
+        && scope.workspace.is_some()
+        && scope.pane.is_none()
+        && scope.surface.is_none()
+    {
+        // An explicit workspace constrains notification attribution. Preserve
+        // terminal evidence separately so the executor can accept a live caller
+        // in that workspace without borrowing the workspace's selected tab.
+        CallerContext {
+            workspace: None,
+            surface: match environment_target("ZMUX_SURFACE_ID")? {
+                Some(surface) => Some(surface),
+                None => environment_target("ZMUX_TAB_ID")?,
+            },
+        }
     } else {
         caller(&scope)?
     };

@@ -671,7 +671,7 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         attention
             .notifications
             .iter()
-            .all(|n| n.surface_id == first.id && !n.read)
+            .all(|n| n.surface_id == Some(first.id) && !n.read)
     );
     let bell = attention.notifications[0].id;
     let agent = attention.notifications[1].id;

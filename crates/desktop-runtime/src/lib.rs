@@ -10,9 +10,9 @@ pub mod targets;
 pub mod transfers;
 use attention::{
     Attention, AttentionCommand, DismissSelection, NativeAttentionAction, NativeNotificationEvent,
-    NativeNotificationSnapshot, Notification, NotificationAction, NotificationContent,
-    NotificationFilter, NotificationMutation, NotificationMutationKind, NotificationScope,
-    NotificationSelection,
+    NativeNotificationSnapshot, Notification, NotificationAction, NotificationAddress,
+    NotificationContent, NotificationFilter, NotificationMutation, NotificationMutationKind,
+    NotificationScope, NotificationSelection,
 };
 use browser::{
     BrowserDispatchBatch, BrowserHostEvent, BrowserReceipt, BrowserRequest, BrowserRuntime,
@@ -239,6 +239,7 @@ pub struct TransferExecutionError {
 pub struct NativeNotificationExecution {
     pub revision: u64,
     /// Native presentation may activate its window only after confirmed Open.
+    pub focused_workspace_id: Option<zmux_workspace_core::WorkspaceId>,
     pub focused_surface_id: Option<SurfaceId>,
 }
 
@@ -462,10 +463,9 @@ impl Desktop {
         &self,
         action: NativeAttentionAction,
     ) -> Result<NativeNotificationExecution, DesktopError> {
-        let focused_surface_id = match &action {
-            NativeAttentionAction::Open { target }
-            | NativeAttentionAction::OpenInbox { target } => Some(target.surface_id),
-            NativeAttentionAction::Dismiss { .. } => None,
+        let opens = match &action {
+            NativeAttentionAction::Open { .. } | NativeAttentionAction::OpenInbox { .. } => true,
+            NativeAttentionAction::Dismiss { .. } => false,
             NativeAttentionAction::Event { .. } => {
                 return Err(DesktopError::Failure(
                     "use native_notification_event for notification observations".into(),
@@ -475,9 +475,29 @@ impl Desktop {
         let execution =
             self.execute_native(Command::NativeAttention { action }, NATIVE_COMMAND_TIMEOUT)?;
         execution.result?;
+        let focused = opens
+            .then(|| {
+                execution
+                    .snapshot
+                    .model
+                    .workspaces
+                    .iter()
+                    .find(|workspace| {
+                        Some(workspace.id) == execution.snapshot.model.focused_workspace
+                    })
+            })
+            .flatten();
         Ok(NativeNotificationExecution {
             revision: execution.snapshot.revision,
-            focused_surface_id,
+            focused_workspace_id: focused.map(|workspace| workspace.id),
+            focused_surface_id: focused.and_then(|workspace| {
+                workspace
+                    .root
+                    .panes()
+                    .into_iter()
+                    .find(|pane| pane.id == workspace.focused_pane)
+                    .map(|pane| pane.selected_surface)
+            }),
         })
     }
     fn execute_native(
@@ -1072,14 +1092,17 @@ impl Worker {
                 body,
                 desktop,
             } => {
-                let target = request.scope.resolve(&model, &request.caller)?;
-                self.attention_action(AttentionCommand::Notify {
-                    surface_id: target.surface,
-                    title,
-                    subtitle,
-                    body,
-                    desktop,
-                })
+                let address =
+                    targets::notification_address(&model, &request.scope, &request.caller)?;
+                self.notify_notification(
+                    address,
+                    NotificationContent {
+                        title,
+                        subtitle,
+                        body,
+                        desktop,
+                    },
+                )
             }
             TargetOperation::Notifications { action } => {
                 self.scoped_notifications(&model, &request.scope, &request.caller, action)
@@ -1118,8 +1141,10 @@ impl Worker {
             .iter()
             .filter(|n| {
                 !n.read
-                    && self.surface_is_visible(n.surface_id)
-                    && self.attention.open_target(&model, n.id).is_ok()
+                    && self
+                        .attention
+                        .open_target(&model, n.id)
+                        .is_ok_and(|address| self.notification_is_visible(address))
             })
             .map(|n| n.id)
             .collect();
@@ -1144,6 +1169,37 @@ impl Worker {
                 })
                 .any(|p| p.selected_surface == id)
     }
+    fn notification_is_visible(&self, address: NotificationAddress) -> bool {
+        match address {
+            NotificationAddress::Workspace(id) => {
+                self.app_active && self.model.snapshot().focused_workspace == Some(id)
+            }
+            NotificationAddress::Surface(id) => self.surface_is_visible(id),
+        }
+    }
+    fn select_notification(&mut self, address: NotificationAddress) -> Result<(), DesktopError> {
+        self.action(match address {
+            NotificationAddress::Workspace(workspace_id) => {
+                Action::SelectWorkspace { workspace_id }
+            }
+            NotificationAddress::Surface(surface_id) => Action::SelectSurface { surface_id },
+        })
+    }
+    fn notify_notification(
+        &mut self,
+        address: NotificationAddress,
+        content: NotificationContent,
+    ) -> Result<(), DesktopError> {
+        let read = self.notification_is_visible(address);
+        let id =
+            self.attention
+                .notify_owned(&self.model.snapshot(), address, "cli", &content, read)?;
+        self.notification_mutation = Some(
+            self.attention
+                .mutation_receipt(vec![id], self.attention.cursor()),
+        );
+        Ok(())
+    }
     fn attention_action(&mut self, command: AttentionCommand) -> Result<(), DesktopError> {
         match command {
             AttentionCommand::Notify {
@@ -1153,23 +1209,15 @@ impl Worker {
                 body,
                 desktop,
             } => {
-                let model = self.model.snapshot();
-                let id = self.attention.notify_owned(
-                    &model,
-                    surface_id,
-                    "cli",
-                    &NotificationContent {
+                self.notify_notification(
+                    NotificationAddress::Surface(surface_id),
+                    NotificationContent {
                         title,
                         subtitle,
                         body,
                         desktop,
                     },
-                    self.surface_is_visible(surface_id),
                 )?;
-                self.notification_mutation = Some(
-                    self.attention
-                        .mutation_receipt(vec![id], self.attention.cursor()),
-                );
             }
             AttentionCommand::Read { id } => {
                 self.notification_mutation = Some(self.attention.apply_mutation(
@@ -1202,8 +1250,8 @@ impl Worker {
                 }
             }
             AttentionCommand::Open { id } => {
-                let surface_id = self.attention.open_target(&self.model.snapshot(), id)?;
-                self.action(Action::SelectSurface { surface_id })?;
+                let address = self.attention.open_target(&self.model.snapshot(), id)?;
+                self.select_notification(address)?;
                 self.notification_mutation = Some(self.attention.apply_mutation(
                     &NotificationFilter::Id(id),
                     NotificationMutationKind::MarkRead,
@@ -1307,13 +1355,13 @@ impl Worker {
         match action {
             NativeAttentionAction::Event { event } => self.attention.native_event(&model, event)?,
             NativeAttentionAction::Open { target } => {
-                let surface_id = self.attention.native_open_target(&model, &target)?;
-                self.action(Action::SelectSurface { surface_id })?;
+                let address = self.attention.native_open_target(&model, &target)?;
+                self.select_notification(address)?;
                 self.attention.native_dismiss(&target)?;
             }
             NativeAttentionAction::OpenInbox { target } => {
-                let surface_id = self.attention.native_inbox_target(&model, &target)?;
-                self.action(Action::SelectSurface { surface_id })?;
+                let address = self.attention.native_inbox_target(&model, &target)?;
+                self.select_notification(address)?;
                 self.attention.native_dismiss(&target)?;
             }
             NativeAttentionAction::Dismiss { target } => {

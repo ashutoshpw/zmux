@@ -60,3 +60,60 @@ impl TargetRequest {
         Ok(())
     }
 }
+
+/// Notification attribution must not borrow mutable pane selection when only a
+/// workspace has been proven. Other target operations keep their usual defaults.
+pub(crate) fn notification_address(
+    model: &Snapshot,
+    scope: &TargetScope,
+    caller: &CallerContext,
+) -> Result<crate::attention::NotificationAddress, TargetError> {
+    use crate::attention::NotificationAddress;
+    if scope.surface.is_some() || scope.pane.is_some() {
+        return scope
+            .resolve(model, &CallerContext::default())
+            .map(|target| NotificationAddress::Surface(target.surface));
+    }
+    if scope.workspace.is_some() {
+        let workspace = scope.resolve(model, &CallerContext::default())?.workspace;
+        if let Some(surface) = &caller.surface {
+            let constrained = TargetScope {
+                workspace: scope.workspace.clone(),
+                surface: Some(surface.clone()),
+                ..Default::default()
+            };
+            // An ambient surface may identify a pane inside the explicit
+            // workspace, but stale or moved claims cannot cross its hard scope.
+            if let Ok(target) = constrained.resolve(model, &CallerContext::default()) {
+                return Ok(NotificationAddress::Surface(target.surface));
+            }
+        }
+        return Ok(NotificationAddress::Workspace(workspace));
+    }
+    let mut surface_error = None;
+    if let Some(surface) = &caller.surface {
+        let scope = TargetScope {
+            surface: Some(surface.clone()),
+            ..Default::default()
+        };
+        match scope.resolve(model, &CallerContext::default()) {
+            Ok(target) => return Ok(NotificationAddress::Surface(target.surface)),
+            Err(error) => surface_error = Some(error),
+        }
+    }
+    if let Some(workspace) = &caller.workspace {
+        let scope = TargetScope {
+            workspace: Some(workspace.clone()),
+            ..Default::default()
+        };
+        return scope
+            .resolve(model, &CallerContext::default())
+            .map(|target| NotificationAddress::Workspace(target.workspace));
+    }
+    if let Some(error) = surface_error {
+        return Err(error);
+    }
+    scope
+        .resolve(model, &CallerContext::default())
+        .map(|target| NotificationAddress::Workspace(target.workspace))
+}
