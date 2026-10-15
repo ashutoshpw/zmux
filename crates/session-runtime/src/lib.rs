@@ -322,9 +322,16 @@ impl ProcessGuard {
         match killpg(Pid::from_raw(self.pid as i32), signal) {
             Ok(()) | Err(Errno::ESRCH) => Ok(()),
             Err(Errno::EPERM) if self.poll_exit()? => Ok(()),
-            Err(error) => Err(SessionError::Failure(format!(
-                "terminate PTY process group: {error}"
-            ))),
+            Err(error) => {
+                // Retain the failed signal and independent owned-child state.
+                // Observation errors grant no authority or successful cleanup.
+                let group = nix::unistd::getpgid(Some(Pid::from_raw(self.pid as i32)));
+                let status = child::observe_child(self.pid, true);
+                Err(SessionError::Failure(format!(
+                    "terminate PTY process group: {error}; signal={signal:?}; owned_child_pid={}; observed_group={group:?}; owned_child_status={status:?}",
+                    self.pid
+                )))
+            }
         }
     }
     fn stop(&mut self) -> Result<(), SessionError> {
@@ -952,7 +959,11 @@ impl Worker {
                 Ok(mut slot) => {
                     let mut last = (**slot).clone();
                     last.state = State::Failed;
-                    last.failure = Some(error.to_string());
+                    let cleanup = format!("PTY cleanup failed: {error}");
+                    last.failure = Some(match last.failure.take() {
+                        Some(primary) => format!("{primary}; {cleanup}"),
+                        None => cleanup,
+                    });
                     *slot = Arc::new(last);
                 }
                 Err(error) => eprintln!("zmux cleanup publication failed: {error}"),
