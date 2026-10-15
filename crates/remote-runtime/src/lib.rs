@@ -17,6 +17,8 @@ pub mod upload;
 
 pub use config::{JumpConfig, SshConnectionConfig};
 
+pub mod local_multiplexer;
+
 use std::{fmt, net::IpAddr};
 use thiserror::Error;
 

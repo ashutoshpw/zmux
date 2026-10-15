@@ -5,7 +5,10 @@ original work under MIT and disclose any imported code, assets or substantive re
 Keep required third-party notices and record pinned versions in `docs/dependencies.md`.
 Do not use cmux source as a translation or copy template.
 
-Use `scripts/check` for portable validation. Add behavioral coverage at the module that
+Use `scripts/check` for portable validation. Real SSH and local multiplexer tests require
+OpenSSH server tools and `tmux` on PATH; they use private temporary servers, never your
+default tmux server. On Linux install `openssh-server tmux`; on macOS install `tmux`
+with Homebrew (system OpenSSH supplies the SSH tools). Add behavioral coverage at the module that
 owns the contract. Native linkage, UI, signing and real-device checks require their own
 evidence. Record results, limitations and next gates in the task's implementation notes.
 

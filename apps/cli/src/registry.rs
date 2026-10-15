@@ -39,6 +39,22 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "local-tmux",
+        "remote",
+        false,
+        false,
+        "local-tmux start NAME --detached [--cwd PATH] [--command SHELL]\n       zmux local-tmux attach <NAME | --id UUID> --headless\n       zmux local-tmux list [--json]\n       zmux local-tmux status <NAME | --id UUID> [--json]\n       zmux local-tmux detach <NAME | --id UUID> [--all]\n       zmux local-tmux close <NAME | --id UUID>\n       zmux local-tmux cleanup [--prune]",
+        "Manage opt-in user-owned local tmux sessions without an app control socket. Detached sessions survive CLI/app exit while their tmux server remains alive; reboot/server termination ends processes. Requires tmux on PATH or an absolute ZMUX_LOCAL_TMUX_BIN. Private state lives in ~/.config/zmux/local-tmux. Names: 1–128 ASCII letters, digits, underscores or hyphens. Start's --command is explicit shell code; it is not saved in the registry. Headless attach requires terminal stdin/stdout and directly executes a tmux client. List/status return JSON and include stale records; list also reports unmanaged sessions. Detach refuses multiple clients unless --all is explicit. Close terminates only an exact live managed session. Cleanup previews stale records; --prune removes only those records and never kills unknown live sessions. GUI-bound attachment/start, individual --client detach, Settings integration and app-session restoration remain unavailable."
+    ),
+    command!(
+        "tmux",
+        "remote",
+        false,
+        false,
+        "tmux attach <NAME | --id UUID> --headless",
+        "Attach-only compatibility spelling of local-tmux attach --headless. Requires terminal stdin/stdout; other lifecycle verbs use local-tmux."
+    ),
+    command!(
         "set-status",
         "automation",
         true,
