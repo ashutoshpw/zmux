@@ -63,7 +63,7 @@ final class SidebarDividerView: NSView {
         NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height).fill()
         if window?.firstResponder === self {
             NSGraphicsContext.saveGraphicsState()
-            NSSetFocusRingStyle(.only)
+            NSFocusRingPlacement.only.set()
             bounds.insetBy(dx: 1, dy: 1).fill()
             NSGraphicsContext.restoreGraphicsState()
         }
