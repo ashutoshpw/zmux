@@ -2,8 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+mod navigation;
 mod surfaces;
 pub mod targets;
+pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Navigation};
 use surfaces::PendingRestore;
 pub use surfaces::{ClosedContent, ClosedItem, Surface, SurfaceKind};
 
@@ -100,20 +102,27 @@ impl PaneTree {
         }
     }
 
-    fn split(&mut self, id: PaneId, axis: Axis, new_pane: Pane) {
+    fn split(&mut self, id: PaneId, axis: Axis, new_pane: Pane, before: bool) {
         match self {
             Self::Leaf { pane } if pane.id == id => {
+                let original = Box::new(Self::Leaf { pane: pane.clone() });
+                let added = Box::new(Self::Leaf { pane: new_pane });
+                let (first, second) = if before {
+                    (added, original)
+                } else {
+                    (original, added)
+                };
                 *self = Self::Split {
                     axis,
-                    first: Box::new(Self::Leaf { pane: pane.clone() }),
-                    second: Box::new(Self::Leaf { pane: new_pane }),
+                    first,
+                    second,
                 };
             }
             Self::Split { first, second, .. } => {
                 if first.depth_of(id, 0).is_some() {
-                    first.split(id, axis, new_pane);
+                    first.split(id, axis, new_pane, before);
                 } else {
-                    second.split(id, axis, new_pane);
+                    second.split(id, axis, new_pane, before);
                 }
             }
             Self::Leaf { .. } => unreachable!("pane validated before mutation"),
@@ -234,6 +243,34 @@ pub enum Action {
         workspace_id: WorkspaceId,
         name: String,
     },
+    SelectWorkspace {
+        workspace_id: WorkspaceId,
+    },
+    NavigateWorkspace {
+        workspace_id: WorkspaceId,
+        direction: Navigation,
+    },
+    NavigateSurface {
+        surface_id: SurfaceId,
+        direction: Navigation,
+    },
+    NavigatePane {
+        pane_id: PaneId,
+        direction: Navigation,
+    },
+    FocusPaneDirection {
+        pane_id: PaneId,
+        direction: Direction,
+    },
+    NavigateFocus {
+        direction: FocusHistoryDirection,
+    },
+    SplitPaneDirectional {
+        pane_id: PaneId,
+        direction: Direction,
+        #[serde(default)]
+        focus: bool,
+    },
     FocusPane {
         pane_id: PaneId,
     },
@@ -293,6 +330,8 @@ pub struct WorkspaceStore {
     state: Snapshot,
     next_id: u64,
     pending_restores: Vec<PendingRestore>,
+    focus_history: navigation::FocusHistory,
+    restore_placements: std::collections::HashMap<u64, Vec<surfaces::SplitAnchor>>,
     restored_panes: std::collections::HashMap<PaneId, PaneId>,
     restored_workspaces: std::collections::HashMap<WorkspaceId, WorkspaceId>,
 }
@@ -303,6 +342,8 @@ impl Default for WorkspaceStore {
             state: Snapshot::default(),
             next_id: 1,
             pending_restores: Vec::new(),
+            focus_history: Default::default(),
+            restore_placements: Default::default(),
             restored_panes: Default::default(),
             restored_workspaces: Default::default(),
         }
@@ -329,7 +370,10 @@ impl WorkspaceStore {
     /// Rejected actions do not change state, identifiers, or the revision.
     pub fn apply(&mut self, action: Action) -> Result<Transition, ActionError> {
         let mut candidate = self.clone();
+        let prior = candidate.focused();
+        let is_history_navigation = matches!(action, Action::NavigateFocus { .. });
         let result = candidate.apply_inner(action)?;
+        candidate.record_focus(prior, is_history_navigation);
         *self = candidate;
         Ok(result)
     }
@@ -367,58 +411,101 @@ impl WorkspaceStore {
             }
             Action::FocusPane { pane_id } => {
                 let index = self.workspace_index(pane_id)?;
-                self.state.workspaces[index].focused_pane = pane_id;
-                self.state.focused_workspace = Some(self.state.workspaces[index].id);
+                self.focus(index, pane_id);
             }
             Action::SplitPane { pane_id, axis } => {
-                let index = self.workspace_index(pane_id)?;
-                let workspace = &self.state.workspaces[index];
-                if workspace.root.panes().len() == MAX_PANES_PER_WORKSPACE {
-                    return Err(ActionError::Capacity {
-                        resource: "panes",
-                        limit: MAX_PANES_PER_WORKSPACE,
-                    });
-                }
-                if workspace.root.depth_of(pane_id, 0).expect("validated pane") >= MAX_SPLIT_DEPTH {
-                    return Err(ActionError::Capacity {
-                        resource: "split depth",
-                        limit: MAX_SPLIT_DEPTH,
-                    });
-                }
-                let selected = workspace
-                    .root
-                    .panes()
-                    .into_iter()
-                    .find(|p| p.id == pane_id)
-                    .expect("validated pane")
-                    .selected();
-                let cwd = selected.cwd.clone().filter(|_| selected.remote.is_none());
-                let remote = selected.remote.as_ref().map(|remote| remote.for_restore());
-                let ids = self.reserve(3)?;
-                let mut surface = Surface::terminal(SurfaceId(ids + 2), SessionId(ids + 1));
-                surface.cwd = cwd.clone();
-                surface.remote = remote.clone();
-                let pane = Pane {
-                    id: PaneId(ids),
-                    selected_surface: SurfaceId(ids + 2),
-                    surfaces: vec![surface],
-                };
-                effects.push(Effect::StartSession {
-                    pane_id: pane.id,
-                    session_id: pane.session_id().expect("new terminal pane"),
-                    cwd,
-                    remote,
-                });
-                let workspace = &mut self.state.workspaces[index];
-                workspace.focused_pane = pane.id;
-                workspace.root.split(pane_id, axis, pane);
-                self.state.focused_workspace = Some(workspace.id);
+                self.split_pane(pane_id, axis, false, true, &mut effects)?;
             }
+            Action::SplitPaneDirectional {
+                pane_id,
+                direction,
+                focus,
+            } => {
+                self.split_pane(
+                    pane_id,
+                    direction.axis(),
+                    direction.before(),
+                    focus,
+                    &mut effects,
+                )?;
+            }
+            Action::SelectWorkspace { workspace_id } => self.select_workspace(workspace_id)?,
+            Action::NavigateWorkspace {
+                workspace_id,
+                direction,
+            } => self.navigate_workspace(workspace_id, direction)?,
+            Action::NavigateSurface {
+                surface_id,
+                direction,
+            } => self.navigate_surface(surface_id, direction)?,
+            Action::NavigatePane { pane_id, direction } => {
+                self.navigate_pane(pane_id, direction)?
+            }
+            Action::FocusPaneDirection { pane_id, direction } => {
+                self.focus_pane_direction(pane_id, direction)?
+            }
+            Action::NavigateFocus { direction } => self.navigate_focus(direction)?,
             Action::ClosePane { pane_id } => self.close_pane(pane_id, &mut effects)?,
             action => self.surface_action(action, &mut effects)?,
         }
         self.state.revision = revision;
         Ok(Transition { revision, effects })
+    }
+
+    fn split_pane(
+        &mut self,
+        pane_id: PaneId,
+        axis: Axis,
+        before: bool,
+        focus: bool,
+        effects: &mut Vec<Effect>,
+    ) -> Result<(), ActionError> {
+        let index = self.workspace_index(pane_id)?;
+        let workspace = &self.state.workspaces[index];
+        if workspace.root.panes().len() == MAX_PANES_PER_WORKSPACE {
+            return Err(ActionError::Capacity {
+                resource: "panes",
+                limit: MAX_PANES_PER_WORKSPACE,
+            });
+        }
+        if workspace.root.depth_of(pane_id, 0).expect("validated pane") >= MAX_SPLIT_DEPTH {
+            return Err(ActionError::Capacity {
+                resource: "split depth",
+                limit: MAX_SPLIT_DEPTH,
+            });
+        }
+        let selected = workspace
+            .root
+            .panes()
+            .into_iter()
+            .find(|p| p.id == pane_id)
+            .expect("validated pane")
+            .selected();
+        let cwd = selected.cwd.clone().filter(|_| selected.remote.is_none());
+        let remote = selected.remote.as_ref().map(|remote| remote.for_restore());
+        let ids = self.reserve(3)?;
+        let mut surface = Surface::terminal(SurfaceId(ids + 2), SessionId(ids + 1));
+        surface.cwd = cwd.clone();
+        surface.remote = remote.clone();
+        let pane = Pane {
+            id: PaneId(ids),
+            selected_surface: SurfaceId(ids + 2),
+            surfaces: vec![surface],
+        };
+        effects.push(Effect::StartSession {
+            pane_id: pane.id,
+            session_id: pane.session_id().expect("new terminal pane"),
+            cwd,
+            remote,
+        });
+        let workspace = &mut self.state.workspaces[index];
+        let added_id = pane.id;
+        workspace.root.split(pane_id, axis, pane, before);
+        if focus {
+            workspace.focused_pane = added_id;
+            self.state.focused_workspace = Some(workspace.id);
+        }
+        Ok(())
     }
 
     fn create_workspace(

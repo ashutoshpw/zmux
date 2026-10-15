@@ -179,10 +179,12 @@ fn upload(
     let mut total = 0;
     for path in paths {
         check(shared, deadline)?;
+        // Follow a selected file alias, as nonrecursive SCP does. Inspect the opened
+        // descriptor rather than the path, so a rename cannot substitute another source.
         // O_NONBLOCK prevents a FIFO from blocking before the regular-file check.
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+            .custom_flags(nix::libc::O_NONBLOCK)
             .open(&path)
             .map_err(|e| failure("open upload source", e))?;
         let metadata = file
@@ -190,7 +192,7 @@ fn upload(
             .map_err(|e| failure("inspect upload source", e))?;
         if !metadata.is_file() {
             return Err(UploadError(
-                "uploads currently require regular files; directories and symlinks are unavailable"
+                "upload source must be a regular file; directories and special files are unavailable"
                     .into(),
             ));
         }

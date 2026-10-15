@@ -3,6 +3,19 @@
 - **State:** in-progress
 - **Updated:** 2026-10-15
 
+## Active implementation
+
+- User requires continued implementation through full V01 and a GitHub Actions macOS
+  artifact; phase completion is not task completion. New implementation/review delegates
+  use requested `gpt-6.1-sol` at high effort. Runtime model telemetry is unavailable.
+- Working changes: source-baseline regular-file symlink transfers and explicit nonrecursive
+  directory refusal; shared directional split/navigation and bounded focus history.
+  CLI/native integration and original split restoration are implemented; parent full checks
+  pass (98 Rust tests plus C ABI). Navigation review passed; remote-image harness review
+  found file-publication and SSH-child cleanup races, repaired with atomic publication and
+  owned-process-tree cleanup. Fresh repair review passed. Native Actions execution is
+  pending; V01 remains open.
+
 ## Delivered slices
 
 - R01d committed/pushed (`c260185`, compiler repair `ee8952f`): raw image paste/drop
@@ -115,8 +128,12 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
   behavior remain open. Reopening creates fresh local shells or remote logins; job/session resurrection remains open.
 - Interactive drag/IME/VoiceOver, Intel runtime, actual HTTP/TLS/permission journeys and numerical
   resource/remote-stress evidence remain open. Cloud callback smoke is not live cloud sign-in.
-- Cloud is not deployed. Origin is https://zmux.w3dev.app; provider/database selection is deferred.
-  All deployments must use GitHub Actions.
+- User revised cloud hosting on 2026-10-15: hosted workflow deployment is postponed;
+  run locally via Docker/PM2 and derive the service port with `bunx path-to-port`.
+  Local Docker service is healthy at http://127.0.0.1:3530 with PostgreSQL over validated
+  TLS on loopback port 3531. Parent checked /health, /ready and /v1/config. The user will
+  map https://zmux.w3dev.app through Cloudflare Tunnel; public routing/auth remains unverified.
+  VM, relay and email capabilities remain unavailable. Local setup changes await review.
 
 ## Next action
 

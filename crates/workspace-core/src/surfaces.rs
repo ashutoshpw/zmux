@@ -70,6 +70,71 @@ pub(crate) struct PendingRestore {
     prior_focus: Option<(WorkspaceId, PaneId, SurfaceId)>,
 }
 
+// Only IDs and orientation are retained. Sibling sets along one leaf's ancestor path
+// are disjoint, so a history entry retains at most MAX_PANES_PER_WORKSPACE - 1 IDs.
+#[derive(Clone, Debug)]
+pub(crate) struct SplitAnchor {
+    axis: Axis,
+    before: bool,
+    siblings: Vec<PaneId>,
+}
+
+impl PaneTree {
+    fn close_anchors(&self, target: PaneId, anchors: &mut Vec<SplitAnchor>) -> bool {
+        match self {
+            Self::Leaf { pane } => pane.id == target,
+            Self::Split {
+                axis,
+                first,
+                second,
+            } => {
+                let (sibling, before) = if first.close_anchors(target, anchors) {
+                    (second, true)
+                } else if second.close_anchors(target, anchors) {
+                    (first, false)
+                } else {
+                    return false;
+                };
+                anchors.push(SplitAnchor {
+                    axis: *axis,
+                    before,
+                    siblings: sibling.panes().into_iter().map(|p| p.id).collect(),
+                });
+                true
+            }
+        }
+    }
+
+    // Find the smallest live subtree containing the surviving sibling IDs. Wrapping
+    // that subtree preserves its axes, tab selection, and all live session identities.
+    fn anchor_path(&self, siblings: &[PaneId], path: &mut Vec<bool>) {
+        if let Self::Split { first, second, .. } = self {
+            for (next, is_second) in [(first, false), (second, true)] {
+                if siblings.iter().all(|id| next.depth_of(*id, 0).is_some()) {
+                    path.push(is_second);
+                    next.anchor_path(siblings, path);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn subtree_mut(&mut self, path: &[bool]) -> &mut Self {
+        if let Some((is_second, rest)) = path.split_first() {
+            let Self::Split { first, second, .. } = self else {
+                unreachable!("validated anchor path")
+            };
+            if *is_second {
+                second.subtree_mut(rest)
+            } else {
+                first.subtree_mut(rest)
+            }
+        } else {
+            self
+        }
+    }
+}
+
 impl WorkspaceStore {
     pub(crate) fn surface_action(
         &mut self,
@@ -178,15 +243,7 @@ impl WorkspaceStore {
                 pane.surfaces.insert(index, surface);
                 self.focus(wi, pane_id);
             }
-            Action::SelectSurface { surface_id } => {
-                let (wi, pane_id, _) = self.location(surface_id)?;
-                self.state.workspaces[wi]
-                    .root
-                    .pane_mut(pane_id)
-                    .unwrap()
-                    .selected_surface = surface_id;
-                self.focus(wi, pane_id);
-            }
+            Action::SelectSurface { surface_id } => self.select_surface(surface_id)?,
             Action::RenameSurface { surface_id, name } => {
                 let name = valid_name(name)?;
                 let (wi, pane_id, index) = self.location(surface_id)?;
@@ -298,7 +355,7 @@ impl WorkspaceStore {
         Ok(())
     }
 
-    fn pane(&self, id: PaneId) -> Result<&Pane, ActionError> {
+    pub(crate) fn pane(&self, id: PaneId) -> Result<&Pane, ActionError> {
         self.state
             .workspaces
             .iter()
@@ -306,7 +363,7 @@ impl WorkspaceStore {
             .find(|p| p.id == id)
             .ok_or(ActionError::UnknownPane(id))
     }
-    fn location(&self, id: SurfaceId) -> Result<(usize, PaneId, usize), ActionError> {
+    pub(crate) fn location(&self, id: SurfaceId) -> Result<(usize, PaneId, usize), ActionError> {
         for (wi, workspace) in self.state.workspaces.iter().enumerate() {
             for pane in workspace.root.panes() {
                 if let Some(index) = pane.surfaces.iter().position(|s| s.id == id) {
@@ -316,11 +373,11 @@ impl WorkspaceStore {
         }
         Err(ActionError::UnknownSurface(id))
     }
-    fn focus(&mut self, wi: usize, pane_id: PaneId) {
+    pub(crate) fn focus(&mut self, wi: usize, pane_id: PaneId) {
         self.state.workspaces[wi].focused_pane = pane_id;
         self.state.focused_workspace = Some(self.state.workspaces[wi].id);
     }
-    fn focused(&self) -> Option<(WorkspaceId, PaneId, SurfaceId)> {
+    pub(crate) fn focused(&self) -> Option<(WorkspaceId, PaneId, SurfaceId)> {
         let workspace = self
             .state
             .workspaces
@@ -454,6 +511,16 @@ impl WorkspaceStore {
     ) -> Result<(), ActionError> {
         let id = self.reserve(1)?;
         let workspace = &self.state.workspaces[wi];
+        let mut anchors = Vec::new();
+        match &content {
+            ClosedContent::Pane { pane } => {
+                workspace.root.close_anchors(pane.id, &mut anchors);
+            }
+            ClosedContent::Tabs { pane_id, .. } => {
+                workspace.root.close_anchors(*pane_id, &mut anchors);
+            }
+            ClosedContent::Workspace { .. } => {}
+        }
         let item = ClosedItem {
             id,
             title,
@@ -476,6 +543,7 @@ impl WorkspaceStore {
             self.state.closed_items.remove(index);
         }
         self.state.closed_items.push(item);
+        self.restore_placements.insert(id, anchors);
         self.prune_restore_anchors();
         Ok(())
     }
@@ -508,7 +576,7 @@ impl WorkspaceStore {
         Ok(match old {
             PaneTree::Leaf { pane } => {
                 let pane_id = PaneId(self.reserve(1)?);
-                self.restored_panes.insert(pane.id, pane_id);
+                self.remap_pane(pane.id, pane_id);
                 let mut surfaces = Vec::new();
                 let selected_index = pane
                     .surfaces
@@ -575,37 +643,24 @@ impl WorkspaceStore {
                     .pane(*pane_id)
                     .or_else(|_| self.pane(recovered_pane))
                     .ok()
-                    .map(|p| p.id)
-                    .or_else(|| {
-                        self.state
-                            .workspaces
-                            .iter()
-                            .find(|w| w.id == recovered_workspace)
-                            .map(|w| w.focused_pane)
-                    });
+                    .map(|p| p.id);
+                let anchored = self.live_placement(&record).is_some();
+                let destination = destination.or_else(|| {
+                    (!anchored)
+                        .then(|| {
+                            self.state
+                                .workspaces
+                                .iter()
+                                .find(|w| w.id == recovered_workspace)
+                                .map(|w| w.focused_pane)
+                        })
+                        .flatten()
+                });
                 let pane_id = if let Some(id) = destination {
                     Self::check_tab_capacity(self.pane(id)?.surfaces.len() + tabs.len())?;
                     id
                 } else {
-                    self.check_workspace_capacity()?;
-                    let ids = self.reserve(2)?;
-                    let pane_id = PaneId(ids + 1);
-                    self.restored_panes.insert(original_pane, pane_id);
-                    self.restored_workspaces
-                        .insert(record.workspace_id, WorkspaceId(ids));
-                    self.state.workspaces.push(Workspace {
-                        id: WorkspaceId(ids),
-                        name: record.workspace_name.clone(),
-                        focused_pane: pane_id,
-                        root: PaneTree::Leaf {
-                            pane: Pane {
-                                id: pane_id,
-                                selected_surface: SurfaceId(0),
-                                surfaces: Vec::new(),
-                            },
-                        },
-                    });
-                    pane_id
+                    self.restore_pane_container(&record, original_pane)?
                 };
                 for tab in tabs {
                     let surface = self.fresh_surface(&tab.surface, pane_id, effects)?;
@@ -619,14 +674,21 @@ impl WorkspaceStore {
                 self.focus(wi, pane_id);
             }
             ClosedContent::Pane { pane } => {
-                // A removed split has no live anchor in this first slice. Restore its grouped
-                // tabs in a new workspace rather than displacing a surviving split or session.
-                self.restore_workspace(
-                    &record.workspace_name,
-                    &PaneTree::Leaf { pane: pane.clone() },
-                    0,
-                    effects,
-                )?;
+                let pane_id = self.restore_pane_container(&record, pane.id)?;
+                let selected_index = pane
+                    .surfaces
+                    .iter()
+                    .position(|s| s.id == pane.selected_surface)
+                    .unwrap();
+                let mut surfaces = Vec::new();
+                for old in &pane.surfaces {
+                    surfaces.push(self.fresh_surface(old, pane_id, effects)?);
+                }
+                let wi = self.workspace_index(pane_id)?;
+                let destination = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
+                destination.selected_surface = surfaces[selected_index].id;
+                destination.surfaces = surfaces;
+                self.focus(wi, pane_id);
             }
             ClosedContent::Workspace { workspace } => {
                 let selected = workspace
@@ -639,7 +701,7 @@ impl WorkspaceStore {
             }
         }
         if let Some(id) = self.state.focused_workspace {
-            self.restored_workspaces.insert(record.workspace_id, id);
+            self.remap_workspace(record.workspace_id, id);
         }
         let waiting: Vec<_> = effects
             .iter()
@@ -671,6 +733,153 @@ impl WorkspaceStore {
         self.state.closed_items[index].restoring = true;
         Ok(())
     }
+    fn remap_pane(&mut self, old: PaneId, new: PaneId) {
+        let previous = self.restored_panes.get(&old).copied();
+        for mapped in self.restored_panes.values_mut() {
+            if *mapped == old || Some(*mapped) == previous {
+                *mapped = new;
+            }
+        }
+        self.restored_panes.insert(old, new);
+    }
+
+    fn remap_workspace(&mut self, old: WorkspaceId, new: WorkspaceId) {
+        let previous = self.restored_workspaces.get(&old).copied();
+        for mapped in self.restored_workspaces.values_mut() {
+            if *mapped == old || Some(*mapped) == previous {
+                *mapped = new;
+            }
+        }
+        self.restored_workspaces.insert(old, new);
+    }
+
+    fn recovery_workspace(&self, record: &ClosedItem) -> Option<usize> {
+        let recovered = self
+            .restored_workspaces
+            .get(&record.workspace_id)
+            .copied()
+            .unwrap_or(record.workspace_id);
+        self.state
+            .workspaces
+            .iter()
+            .position(|w| w.id == record.workspace_id)
+            .or_else(|| self.state.workspaces.iter().position(|w| w.id == recovered))
+    }
+
+    fn live_placement(&self, record: &ClosedItem) -> Option<(usize, Vec<bool>, Axis, bool)> {
+        let wi = self.recovery_workspace(record)?;
+        let root = &self.state.workspaces[wi].root;
+        for anchor in self.restore_placements.get(&record.id)? {
+            let siblings: Vec<_> = anchor
+                .siblings
+                .iter()
+                .filter_map(|id| {
+                    if root.depth_of(*id, 0).is_some() {
+                        return Some(*id);
+                    }
+                    self.restored_panes
+                        .get(id)
+                        .copied()
+                        .filter(|id| root.depth_of(*id, 0).is_some())
+                })
+                .collect();
+            if !siblings.is_empty() {
+                let mut path = Vec::new();
+                root.anchor_path(&siblings, &mut path);
+                return Some((wi, path, anchor.axis, anchor.before));
+            }
+        }
+        None
+    }
+
+    fn restore_pane_container(
+        &mut self,
+        record: &ClosedItem,
+        old: PaneId,
+    ) -> Result<PaneId, ActionError> {
+        let placement = self.live_placement(record).or_else(|| {
+            self.recovery_workspace(record).map(|wi| {
+                let workspace = &self.state.workspaces[wi];
+                let mut path = Vec::new();
+                workspace
+                    .root
+                    .anchor_path(&[workspace.focused_pane], &mut path);
+                // If every saved sibling disappeared, use the live workspace's focused
+                // pane as a safe fallback while preserving its content and live sessions.
+                let (axis, before) = self
+                    .restore_placements
+                    .get(&record.id)
+                    .and_then(|anchors| anchors.first())
+                    .map(|a| (a.axis, a.before))
+                    .unwrap_or((Axis::Horizontal, false));
+                (wi, path, axis, before)
+            })
+        });
+        if let Some((wi, path, _, _)) = &placement {
+            let root = &self.state.workspaces[*wi].root;
+            if root.panes().len() >= MAX_PANES_PER_WORKSPACE {
+                return Err(ActionError::Capacity {
+                    resource: "panes",
+                    limit: MAX_PANES_PER_WORKSPACE,
+                });
+            }
+            // Inserting above a subtree deepens every leaf in it, not only its first pane.
+            let mut subtree = root;
+            for is_second in path {
+                let PaneTree::Split { first, second, .. } = subtree else {
+                    unreachable!("validated path")
+                };
+                subtree = if *is_second { second } else { first };
+            }
+            if subtree
+                .panes()
+                .iter()
+                .any(|p| root.depth_of(p.id, 0).unwrap() >= MAX_SPLIT_DEPTH)
+            {
+                return Err(ActionError::Capacity {
+                    resource: "split depth",
+                    limit: MAX_SPLIT_DEPTH,
+                });
+            }
+        } else {
+            self.check_workspace_capacity()?;
+        }
+        let pane_id = PaneId(self.reserve(1)?);
+        let pane = Pane {
+            id: pane_id,
+            selected_surface: SurfaceId(0),
+            surfaces: Vec::new(),
+        };
+        if let Some((wi, path, axis, before)) = placement {
+            let subtree = self.state.workspaces[wi].root.subtree_mut(&path);
+            let original = Box::new(subtree.clone());
+            let added = Box::new(PaneTree::Leaf { pane });
+            let (first, second) = if before {
+                (added, original)
+            } else {
+                (original, added)
+            };
+            *subtree = PaneTree::Split {
+                axis,
+                first,
+                second,
+            };
+            self.focus(wi, pane_id);
+        } else {
+            let id = WorkspaceId(self.reserve(1)?);
+            self.state.workspaces.push(Workspace {
+                id,
+                name: record.workspace_name.clone(),
+                focused_pane: pane_id,
+                root: PaneTree::Leaf { pane },
+            });
+            self.state.focused_workspace = Some(id);
+            self.remap_workspace(record.workspace_id, id);
+        }
+        self.remap_pane(old, pane_id);
+        Ok(pane_id)
+    }
+
     fn restore_workspace(
         &mut self,
         name: &str,
@@ -695,6 +904,13 @@ impl WorkspaceStore {
     /// Called only by the coordinator after a real PTY launch resolves. A failed grouped
     /// restore removes every provisional surface and leaves the descriptor available to retry.
     pub fn finish_restore(&mut self, session: SessionId, success: bool) -> Vec<Effect> {
+        let prior = self.focused();
+        let effects = self.finish_restore_inner(session, success);
+        self.record_focus(prior, false);
+        effects
+    }
+
+    fn finish_restore_inner(&mut self, session: SessionId, success: bool) -> Vec<Effect> {
         let Some(index) = self
             .pending_restores
             .iter()
@@ -767,9 +983,18 @@ impl WorkspaceStore {
                 }
             })
             .collect();
+        self.restore_placements
+            .retain(|id, _| self.state.closed_items.iter().any(|r| r.id == *id));
+        let anchor_panes: Vec<_> = self
+            .restore_placements
+            .values()
+            .flatten()
+            .flat_map(|anchor| anchor.siblings.iter().copied())
+            .collect();
         self.restored_workspaces
             .retain(|old, _| workspaces.contains(old));
-        self.restored_panes.retain(|old, _| panes.contains(old));
+        self.restored_panes
+            .retain(|old, _| panes.contains(old) || anchor_panes.contains(old));
     }
 
     /// Refresh restore metadata from the owning runtime. Never stores terminal input.

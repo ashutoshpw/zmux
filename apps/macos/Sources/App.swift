@@ -5,6 +5,7 @@ import WebKit
 private enum UICommand: Sendable {
     case action(String, UInt64?, String?, String?, UInt64?)
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
+    case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
     case attention(String, UInt64?, UInt64?, Bool?)
     case browser(String, UInt64?, UInt64?, String, String?)
     case pasteFiles(UInt64, [String])
@@ -96,6 +97,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
                     case .surface(let action, let surface, let pane, let index, let closed):
                         try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
+                    case .navigation(let action, let direction, let pane, let surface, let workspace, let focus):
+                        try await self.bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
                     case .browser(let operation, let surface, let pane, let url, let title):
                         try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title)
                     case .attention(let operation, let id, let through, let active):
@@ -332,6 +335,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             ("Notifications", #selector(showNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),
             ("Split Down", #selector(splitDown), "D"),
+            ("Split Left", #selector(splitLeft), ""),
+            ("Split Up", #selector(splitUp), ""),
             ("Rename Workspace", #selector(renameWorkspace), ""),
             ("Rename Tab…", #selector(renameTab), ""),
             ("Close Tab", #selector(closeTab), "w"),
@@ -345,11 +350,33 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         next.keyEquivalentModifierMask = [.command, .shift]; next.target = self
         let previous = workspaceMenu.addItem(withTitle: "Previous Tab", action: #selector(previousTab), keyEquivalent: "[")
         previous.keyEquivalentModifierMask = [.command, .shift]; previous.target = self
+        let navigationItems: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("Last Tab", #selector(lastTab), "", NSEvent.ModifierFlags.command),
+            ("Next Workspace", #selector(nextWorkspace), "]", [.command, .control]),
+            ("Previous Workspace", #selector(previousWorkspace), "[", [.command, .control]),
+            ("Last Workspace", #selector(lastWorkspace), "", .command),
+            ("Focus Pane Left", #selector(focusPaneLeft), String(UnicodeScalar(NSLeftArrowFunctionKey)!), [.command, .option]),
+            ("Focus Pane Right", #selector(focusPaneRight), String(UnicodeScalar(NSRightArrowFunctionKey)!), [.command, .option]),
+            ("Focus Pane Up", #selector(focusPaneUp), String(UnicodeScalar(NSUpArrowFunctionKey)!), [.command, .option]),
+            ("Focus Pane Down", #selector(focusPaneDown), String(UnicodeScalar(NSDownArrowFunctionKey)!), [.command, .option]),
+            ("Next Pane", #selector(nextPane), "", .command),
+            ("Previous Pane", #selector(previousPane), "", .command),
+            ("Last Pane", #selector(lastPane), "", .command)
+        ]
+        for (title, action, key, modifiers) in navigationItems {
+            let item = workspaceMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers; item.target = self
+        }
         workspaceItem.submenu = workspaceMenu
 
         let historyItem = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
         menu.addItem(historyItem)
         let history = NSMenu(title: "History")
+        for (title, action, key) in [("Focus Back", #selector(focusBack), "["), ("Focus Forward", #selector(focusForward), "]")] {
+            let item = history.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.target = self
+        }
+        history.addItem(.separator())
         let reopen = history.addItem(withTitle: "Reopen Last Closed", action: #selector(reopenClosed), keyEquivalent: "T")
         reopen.keyEquivalentModifierMask = [.command]; reopen.target = self
         let recent = history.addItem(withTitle: "Recently Closed", action: nil, keyEquivalent: "")
@@ -360,7 +387,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let browserItem = NSMenuItem(title: "Browser", action: nil, keyEquivalent: "")
         let browserMenu = NSMenu(title: "Browser")
         for (title, action, key) in [
-            ("Back", #selector(browserBack), "["), ("Forward", #selector(browserForward), "]"),
+            ("Back", #selector(browserBack), ""), ("Forward", #selector(browserForward), ""),
             ("Reload", #selector(browserReload), "r"), ("Find in Page…", #selector(browserFind), "f"),
             ("Zoom In", #selector(browserZoomIn), "+"), ("Zoom Out", #selector(browserZoomOut), "-"),
             ("Actual Size", #selector(browserZoomReset), "0")
@@ -384,6 +411,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func present(_ snapshot: DesktopSnapshot) {
+        let selectionChanged = self.snapshot?.model.focusedWorkspace != snapshot.model.focusedWorkspace
+            || self.snapshot?.workspace?.focusedPane != snapshot.workspace?.focusedPane
+            || focusedPane?.selectedSurface != snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane })?.selectedSurface
+        let layoutChanged = layoutKey != (snapshot.workspace?.root.key ?? "empty")
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
         let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
@@ -409,12 +440,14 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         updateTabAttention(canvas, snapshot: snapshot)
         if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }),
            let session = pane.sessionId, let terminal = terminals[session] {
-            if !didSetInitialTerminalFocus {
+            if selectionChanged || !didSetInitialTerminalFocus {
                 window.makeFirstResponder(terminal)
                 didSetInitialTerminalFocus = true
             } else if let responder = window.firstResponder as? TerminalView, responder !== terminal {
                 window.makeFirstResponder(terminal)
             }
+        } else if selectionChanged && !layoutChanged, let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
+            window.makeFirstResponder(browser.webView)
         }
     }
 
@@ -677,12 +710,38 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard let id = sender.representedObject as? NSNumber else { return }
         enqueue(.surface("reopen_closed", nil, nil, nil, id.uint64Value))
     }
-    @objc func nextTab() { cycleTab(1) }
-    @objc func previousTab() { cycleTab(-1) }
-    private func cycleTab(_ delta: Int) {
-        guard let pane = focusedPane, let index = pane.surfaces.firstIndex(where: { $0.id == pane.selectedSurface }) else { return }
-        selectTab(pane.surfaces[(index + delta + pane.surfaces.count) % pane.surfaces.count].id)
+    @objc func nextTab() { navigateTab("next") }
+    @objc func previousTab() { navigateTab("previous") }
+    @objc func lastTab() { navigateTab("last") }
+    private func navigateTab(_ direction: String) {
+        guard let pane = focusedPane else { return }
+        enqueue(.navigation("navigate_surface", direction, nil, pane.selectedSurface, nil, nil))
     }
+    @objc func nextWorkspace() { navigateWorkspace("next") }
+    @objc func previousWorkspace() { navigateWorkspace("previous") }
+    @objc func lastWorkspace() { navigateWorkspace("last") }
+    private func navigateWorkspace(_ direction: String) {
+        guard let workspace = snapshot?.workspace else { return }
+        enqueue(.navigation("navigate_workspace", direction, nil, nil, workspace.id, nil))
+    }
+    @objc func nextPane() { navigatePane("next") }
+    @objc func previousPane() { navigatePane("previous") }
+    @objc func lastPane() { navigatePane("last") }
+    private func navigatePane(_ direction: String) {
+        guard let pane = focusedPane else { return }
+        enqueue(.navigation("navigate_pane", direction, pane.id, nil, nil, nil))
+    }
+    @objc func focusPaneLeft() { focusPane("left") }
+    @objc func focusPaneRight() { focusPane("right") }
+    @objc func focusPaneUp() { focusPane("up") }
+    @objc func focusPaneDown() { focusPane("down") }
+    private func focusPane(_ direction: String) {
+        guard let pane = focusedPane else { return }
+        enqueue(.navigation("focus_pane_direction", direction, pane.id, nil, nil, nil))
+    }
+    // Focus history spans the desktop model; never attach the current pane/workspace as a scope.
+    @objc func focusBack() { enqueue(.navigation("navigate_focus", "back", nil, nil, nil, nil)) }
+    @objc func focusForward() { enqueue(.navigation("navigate_focus", "forward", nil, nil, nil, nil)) }
     @objc func renameTab() {
         if let surface = focusedPane?.selected { renameTerminalTab(surface.id) }
     }
@@ -732,22 +791,27 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         case #selector(reopenHistoryItem(_:)):
             guard let id = item.representedObject as? NSNumber else { return false }
             return snapshot?.model.closedItems.contains { $0.id == id.uint64Value && !$0.restoring } ?? false
-        case #selector(closeTab), #selector(closePane), #selector(renameTab), #selector(splitRight), #selector(splitDown): return focusedPane != nil
+        case #selector(closeTab), #selector(closePane), #selector(renameTab), #selector(splitRight), #selector(splitDown), #selector(splitLeft), #selector(splitUp): return focusedPane != nil
         case #selector(browserBack): return focusedBrowser?.webView.canGoBack == true
         case #selector(browserForward): return focusedBrowser?.webView.canGoForward == true
         case #selector(browserReload), #selector(browserFind), #selector(browserZoomIn), #selector(browserZoomOut), #selector(browserZoomReset): return focusedBrowser != nil
         case #selector(newBrowser), #selector(focusBrowserAddress): return focusedPane != nil
-        case #selector(nextTab), #selector(previousTab): return (focusedPane?.surfaces.count ?? 0) > 1
+        case #selector(nextTab), #selector(previousTab), #selector(lastTab): return (focusedPane?.surfaces.count ?? 0) > 1
+        case #selector(nextWorkspace), #selector(previousWorkspace), #selector(lastWorkspace): return (snapshot?.model.workspaces.count ?? 0) > 1
+        case #selector(nextPane), #selector(previousPane), #selector(lastPane), #selector(focusPaneLeft), #selector(focusPaneRight), #selector(focusPaneUp), #selector(focusPaneDown): return (snapshot?.workspace?.root.panes.count ?? 0) > 1
+        case #selector(focusBack), #selector(focusForward): return snapshot?.model.focusedWorkspace != nil
         default: return true
         }
     }
 
-    @objc func splitRight() { split("horizontal") }
-    @objc func splitDown() { split("vertical") }
+    @objc func splitRight() { split("right") }
+    @objc func splitDown() { split("down") }
+    @objc func splitLeft() { split("left") }
+    @objc func splitUp() { split("up") }
 
-    private func split(_ axis: String) {
+    private func split(_ direction: String) {
         if let pane = snapshot?.workspace?.focusedPane {
-            enqueue(.action("split_pane", pane, axis, nil, nil))
+            enqueue(.navigation("split_pane_directional", direction, pane, nil, nil, true))
         }
     }
 
@@ -762,8 +826,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     func selectWorkspace(_ id: UInt64) {
-        if let workspace = snapshot?.model.workspaces.first(where: { $0.id == id }) {
-            enqueue(.action("focus_pane", workspace.focusedPane, nil, nil, nil))
+        if snapshot?.model.workspaces.contains(where: { $0.id == id }) == true {
+            enqueue(.action("select_workspace", nil, nil, nil, id))
         }
     }
 
@@ -954,6 +1018,19 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard snapshot?.workspace?.root.panes.count == 1, snapshot?.frames.first?.processId != originalPID else {
             throw BridgeFailure(message: "New terminal shortcut did not create an independent tab")
         }
+        guard let secondTab = focusedPane?.selectedSurface else { throw BridgeFailure(message: "Missing navigation tab") }
+        try performShortcut("[", modifiers: [.command, .shift])
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface }
+        try performShortcut("]", modifiers: [.command, .shift])
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == secondTab }
+        lastTab()
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface }
+        try performShortcut("[", modifiers: [.command])
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == secondTab }
+        try performShortcut("]", modifiers: [.command])
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface }
+        nextTab()
+        try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == secondTab }
         try performShortcut("w", modifiers: [.command])
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
         try performShortcut("t", modifiers: [.command, .shift])
@@ -991,6 +1068,44 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         setSidebarDocument(workspaceList)
         splitRight()
         try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
+        guard let rightPane = focusedPane else { throw BridgeFailure(message: "No right pane for navigation") }
+        try performShortcut(String(UnicodeScalar(NSLeftArrowFunctionKey)!), modifiers: [.command, .option])
+        try await waitUntil { $0.workspace?.focusedPane == originalPane.id }
+        guard window.firstResponder === focusedTerminal else { throw BridgeFailure(message: "Directional focus did not reach the native terminal") }
+        try performShortcut(String(UnicodeScalar(NSRightArrowFunctionKey)!), modifiers: [.command, .option])
+        try await waitUntil { $0.workspace?.focusedPane == rightPane.id }
+        splitUp()
+        try await waitUntil { $0.workspace?.root.panes.count == 3 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
+        guard let upperPane = focusedPane, let upperSession = upperPane.sessionId,
+              let rightSession = rightPane.sessionId,
+              let rightPID = snapshot?.frames.first(where: { $0.sessionId == rightSession })?.processId,
+              let splitWorkspaceCount = snapshot?.model.workspaces.count else { throw BridgeFailure(message: "No upward split or surviving process") }
+        try performShortcut(String(UnicodeScalar(NSDownArrowFunctionKey)!), modifiers: [.command, .option])
+        try await waitUntil { $0.workspace?.focusedPane == rightPane.id }
+        try performShortcut(String(UnicodeScalar(NSUpArrowFunctionKey)!), modifiers: [.command, .option])
+        try await waitUntil { $0.workspace?.focusedPane == upperPane.id }
+        closePane()
+        try await waitUntil { $0.workspace?.root.panes.count == 2 }
+        try performShortcut("t", modifiers: [.command, .shift])
+        try await waitUntil {
+            $0.workspace?.root.panes.count == 3 && $0.model.closedItems.last?.restoring != true
+                && $0.frames.count == 3 && $0.frames.allSatisfy { $0.snapshot?.state == "running" }
+        }
+        guard let restoredWorkspace = snapshot?.workspace,
+              restoredWorkspace.id == first.id, snapshot?.model.workspaces.count == splitWorkspaceCount,
+              case .split(let outerAxis, .leaf(let left), .split(let innerAxis, .leaf(let restoredUpper), .leaf(let lower))) = restoredWorkspace.root,
+              outerAxis == "horizontal", innerAxis == "vertical",
+              left.id == originalPane.id, lower.id == rightPane.id,
+              restoredUpper.id != upperPane.id, let restoredSession = restoredUpper.sessionId,
+              restoredSession != upperSession, restoredWorkspace.focusedPane == restoredUpper.id,
+              snapshot?.frames.first(where: { $0.sessionId == originalSession })?.processId == originalPID,
+              snapshot?.frames.first(where: { $0.sessionId == rightSession })?.processId == rightPID else {
+            throw BridgeFailure(message: "Reopening a pane lost its original split placement or replaced a surviving process")
+        }
+        closePane()
+        try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 }
+        focusPaneRight()
+        try await waitUntil { $0.workspace?.focusedPane == rightPane.id }
         window.setContentSize(NSSize(width: 1250, height: 820))
         window.contentView?.layoutSubtreeIfNeeded()
         try await waitUntil { [weak self] snapshot in
@@ -1010,7 +1125,16 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         newWorkspace()
         try await waitUntil { $0.model.workspaces.count == 2 && $0.frames.count == 1 && $0.frames.first?.snapshot?.state == "running" }
-        selectWorkspace(first.id)
+        guard let secondWorkspace = snapshot?.workspace?.id else { throw BridgeFailure(message: "Missing second workspace") }
+        try performShortcut("[", modifiers: [.command, .control])
+        try await waitUntil { $0.model.focusedWorkspace == first.id && $0.frames.count == 2 }
+        try performShortcut("]", modifiers: [.command, .control])
+        try await waitUntil { $0.model.focusedWorkspace == secondWorkspace }
+        lastWorkspace()
+        try await waitUntil { $0.model.focusedWorkspace == first.id }
+        try performShortcut("[", modifiers: [.command])
+        try await waitUntil { $0.model.focusedWorkspace == secondWorkspace }
+        try performShortcut("]", modifiers: [.command])
         try await waitUntil { $0.model.focusedWorkspace == first.id && $0.frames.count == 2 }
         closePane()
         try await waitUntil { $0.workspace?.root.panes.count == 1 && $0.frames.count == 1 }
@@ -1042,6 +1166,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               browser.bounds.width <= canvas.bounds.width * 0.7 else {
             throw BridgeFailure(message: "Browser split is cramped: \(browser.bounds.width) of \(canvas.bounds.width)")
         }
+        try performShortcut(String(UnicodeScalar(NSLeftArrowFunctionKey)!), modifiers: [.command, .option])
+        try await waitUntil { $0.workspace?.focusedPane != browserPane.id }
+        guard window.firstResponder === focusedTerminal else { throw BridgeFailure(message: "Browser-to-terminal navigation retained browser input ownership") }
+        try performShortcut(String(UnicodeScalar(NSRightArrowFunctionKey)!), modifiers: [.command, .option])
+        try await waitUntil { $0.workspace?.focusedPane == browserPane.id }
+        guard window.firstResponder === browser.webView else { throw BridgeFailure(message: "Terminal-to-browser navigation did not focus WebKit") }
         let pagePNG: Data = try await withCheckedThrowingContinuation { continuation in
             browser.webView.takeSnapshot(with: nil) { image, error in
                 if let error { continuation.resume(throwing: error); return }
@@ -1079,6 +1209,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             capture.waitUntilExit()
             return capture.terminationStatus
         }.value
+        try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
         let evidence: [String: Any] = [
             "success": true,
             "native_input": true,
@@ -1091,6 +1222,13 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "close_tab_shortcut": true,
             "reopen_tab_shortcut": true,
             "sibling_process_preserved": true,
+            "tab_navigation_shared_actions": true,
+            "workspace_navigation_shortcuts": true,
+            "directional_pane_focus_shortcuts": true,
+            "browser_directional_focus": true,
+            "directional_split_up": true,
+            "pane_reopen_original_split_anchor": true,
+            "global_focus_history_shortcuts": true,
             "sidebar_toggle": true,
             "terminal_wheel_scrollback": true,
             "terminal_keyboard_scrollback": true,
@@ -1107,6 +1245,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "clipboard_image_preparation": true,
             "clipboard_image_pasteboard": true,
             "clipboard_image_local_paste": true,
+            "clipboard_image_remote_transfer": true,
+            "clipboard_image_remote_shell_path": true,
+            "clipboard_image_remote_source_lifetime": true,
+            "clipboard_image_remote_source_cleanup": true,
+            "clipboard_image_remote_managed_connection": true,
+            "clipboard_image_remote_focus_retained": true,
             "native_cloud_callback": true,
             "bundled_cli_control": true,
             "accessible_icon_controls": true,
@@ -1176,8 +1320,15 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private func performShortcut(_ key: String, modifiers: NSEvent.ModifierFlags) throws {
         // AppKit removes command/option/control from charactersIgnoringModifiers, but
         // retains Shift. Supplying lowercase here would synthesize an unshifted shortcut.
-        let characters = modifiers.contains(.shift) ? key.uppercased() : key
-        let keyCode: UInt16 = ["t": 17, "w": 13, "b": 11][key] ?? 0
+        let characters = modifiers.contains(.shift) ? (["[": "{", "]": "}"][key] ?? key.uppercased()) : key
+        let keyCodes: [String: UInt16] = [
+            "t": 17, "w": 13, "b": 11, "[": 33, "]": 30,
+            String(UnicodeScalar(NSLeftArrowFunctionKey)!): 123,
+            String(UnicodeScalar(NSRightArrowFunctionKey)!): 124,
+            String(UnicodeScalar(NSDownArrowFunctionKey)!): 125,
+            String(UnicodeScalar(NSUpArrowFunctionKey)!): 126
+        ]
+        let keyCode = keyCodes[key] ?? 0
         // A synthetic menu invocation does not run AppKit's normal event-dispatch menu
         // update. Refresh dynamic availability, including newly added close history.
         NSApp.mainMenu?.items.forEach { $0.submenu?.update() }

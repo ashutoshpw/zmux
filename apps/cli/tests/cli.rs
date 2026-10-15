@@ -181,6 +181,16 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
             .output()
             .unwrap()
     };
+    let split_help = offline(&["help", "new-split"]);
+    assert!(split_help.status.success());
+    let split_help = String::from_utf8(split_help.stdout).unwrap();
+    assert!(split_help.contains("--focus true|false|--no-focus"));
+    assert!(split_help.contains("created_panes"));
+    let history_help = offline(&["focus-history", "--help"]);
+    assert!(history_help.status.success());
+    let history_help = String::from_utf8(history_help.stdout).unwrap();
+    assert!(history_help.contains("<back|forward>"));
+    assert!(!history_help.contains("--workspace"));
     let topic = offline(&["help", "navigate"]);
     assert!(topic.status.success());
     let topic = String::from_utf8(topic.stdout).unwrap();
@@ -857,5 +867,367 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
     assert!(String::from_utf8_lossy(&stale_uuid.stderr).contains("target_not_found"));
     replacement_server.shutdown(Duration::from_secs(2)).unwrap();
     replacement.shutdown(Duration::from_secs(5)).unwrap();
+    fs::remove_dir(socket.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn navigation_parser_preserves_direction_focus_scope_and_global_history_on_the_wire() {
+    // This boundary protects CLI grammar and protocol mapping; geometry/history behavior
+    // is covered by workspace-core's own navigation tests.
+    let cases = [
+        (
+            vec![
+                "new-split",
+                "left",
+                "--workspace",
+                "workspace:1",
+                "--surface",
+                "tab:2",
+            ],
+            serde_json::json!({"action":"split_pane_directional","direction":"left","focus":false}),
+        ),
+        (
+            vec!["new-split", "--pane", "pane:3", "right", "--focus", "true"],
+            serde_json::json!({"action":"split_pane_directional","direction":"right","focus":true}),
+        ),
+        (
+            vec!["new-split", "up", "--no-focus"],
+            serde_json::json!({"action":"split_pane_directional","direction":"up","focus":false}),
+        ),
+        (
+            vec!["new-split", "--focus", "false", "down"],
+            serde_json::json!({"action":"split_pane_directional","direction":"down","focus":false}),
+        ),
+        (
+            vec!["select-workspace", "workspace:4"],
+            serde_json::json!({"action":"select_workspace"}),
+        ),
+        (
+            vec!["next-window", "--workspace", "workspace:4"],
+            serde_json::json!({"action":"navigate_workspace","direction":"next"}),
+        ),
+        (
+            vec!["previous-window"],
+            serde_json::json!({"action":"navigate_workspace","direction":"previous"}),
+        ),
+        (
+            vec!["last-window"],
+            serde_json::json!({"action":"navigate_workspace","direction":"last"}),
+        ),
+        (
+            vec!["next-tab", "--tab", "tab:2"],
+            serde_json::json!({"action":"navigate_surface","direction":"next"}),
+        ),
+        (
+            vec!["previous-tab"],
+            serde_json::json!({"action":"navigate_surface","direction":"previous"}),
+        ),
+        (
+            vec!["last-tab"],
+            serde_json::json!({"action":"navigate_surface","direction":"last"}),
+        ),
+        (
+            vec!["next-pane"],
+            serde_json::json!({"action":"navigate_pane","direction":"next"}),
+        ),
+        (
+            vec!["previous-pane"],
+            serde_json::json!({"action":"navigate_pane","direction":"previous"}),
+        ),
+        (
+            vec!["last-pane", "--workspace", "workspace:4"],
+            serde_json::json!({"action":"navigate_pane","direction":"last"}),
+        ),
+        (
+            vec!["focus-direction", "left", "--pane", "pane:3"],
+            serde_json::json!({"action":"focus_pane_direction","direction":"left"}),
+        ),
+        (
+            vec!["tab-action", "--tab", "tab:2", "rename", "build", "logs"],
+            serde_json::json!({"action":"rename_surface","name":"build logs"}),
+        ),
+        (
+            vec![
+                "tab-action",
+                "--action",
+                "rename",
+                "--title",
+                "--literal-title",
+            ],
+            serde_json::json!({"action":"rename_surface","name":"--literal-title"}),
+        ),
+        (
+            vec!["tab-action", "--action", "close_others"],
+            serde_json::json!({"action":"close_other_surfaces"}),
+        ),
+        (
+            vec!["focus-history", "back"],
+            serde_json::json!({"action":"navigate_focus","direction":"back"}),
+        ),
+        (
+            vec!["focus-history", "forward"],
+            serde_json::json!({"action":"navigate_focus","direction":"forward"}),
+        ),
+    ];
+    for (arguments, expected) in cases {
+        let socket = socket_path();
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let capture = capture_request(listener, 2);
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .arg("--socket")
+            .arg(&socket)
+            .args(&arguments)
+            .env("ZMUX_WORKSPACE_ID", "workspace:99")
+            .env("ZMUX_SURFACE_ID", "surface:98")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let command = capture.join().unwrap()["command"].clone();
+        if arguments[0] == "focus-history" {
+            assert_eq!(
+                command,
+                serde_json::json!({"method":"action", "action":expected})
+            );
+        } else {
+            let request = &command["request"];
+            assert_eq!(request["operation"]["action"], expected, "{arguments:?}");
+            let explicitly_scoped = arguments
+                .iter()
+                .any(|arg| ["--workspace", "--pane", "--surface", "--tab"].contains(arg))
+                || arguments[0] == "select-workspace";
+            assert_eq!(
+                request["caller"]["workspace"].is_null(),
+                explicitly_scoped,
+                "{arguments:?}"
+            );
+            if arguments[0] == "select-workspace" || arguments.contains(&"--workspace") {
+                let expected_workspace = if arguments[0] == "new-split" {
+                    "workspace:1"
+                } else {
+                    "workspace:4"
+                };
+                assert_eq!(
+                    request["scope"]["workspace"], expected_workspace,
+                    "{arguments:?}"
+                );
+            }
+            if arguments.contains(&"--tab") || arguments.contains(&"--surface") {
+                assert_eq!(request["scope"]["surface"], "tab:2", "{arguments:?}");
+            }
+            if arguments.contains(&"--pane") {
+                assert_eq!(request["scope"]["pane"], "pane:3", "{arguments:?}");
+            }
+        }
+        fs::remove_file(&socket).unwrap();
+        fs::remove_dir(socket.parent().unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn navigation_rejects_unsupported_or_ambiguous_options_before_connecting() {
+    for (arguments, expected) in [
+        (vec!["new-split", "diagonal"], "direction must be"),
+        (vec!["new-split", "left", "right"], "expected one direction"),
+        (
+            vec!["new-split", "right", "--focus", "yes"],
+            "--focus requires true or false",
+        ),
+        (
+            vec!["new-split", "right", "--focus", "true", "--no-focus"],
+            "conflicting focus",
+        ),
+        (vec!["new-split", "right", "--focus"], "requires a value"),
+        (
+            vec!["new-split", "right", "--command", "pwd"],
+            "unknown new-split option",
+        ),
+        (
+            vec!["new-split", "right", "--surface", "tab:2", "--tab", "tab:3"],
+            "repeated --tab selector",
+        ),
+        (
+            vec![
+                "select-workspace",
+                "--workspace",
+                "workspace:1",
+                "workspace:2",
+            ],
+            "do not repeat",
+        ),
+        (
+            vec!["next-workspace", "--window", "window:1"],
+            "unknown next-workspace option",
+        ),
+        (
+            vec!["next-tab", "--focus", "true"],
+            "unknown next-tab option",
+        ),
+        (vec!["last-pane", "extra"], "accepts target options only"),
+        (vec!["tab-action", "pin"], "unsupported tab-action pin"),
+        (
+            vec!["tab-action", "rename"],
+            "requires --title or trailing title",
+        ),
+        (
+            vec!["tab-action", "rename", "title", "--title", "other"],
+            "not both",
+        ),
+        (
+            vec!["tab-action", "close-others", "--force"],
+            "unknown tab-action option",
+        ),
+        (
+            vec!["tab-action", "close-others", "--title", "unexpected"],
+            "accepts no title",
+        ),
+        (
+            vec!["focus-history", "back", "--workspace", "workspace:1"],
+            "expects 1 argument",
+        ),
+    ] {
+        let output = invoke(&[&["--socket", "relative-must-not-be-used"][..], &arguments].concat());
+        assert!(
+            !output.status.success(),
+            "{arguments:?} unexpectedly succeeded"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn navigation_cli_routes_live_workspace_pane_and_tab_selection_without_stealing_focus() {
+    let socket = socket_path();
+    let desktop = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/sh".into(),
+            args: vec!["-i".into()],
+            cwd: None,
+        })
+        .unwrap(),
+    );
+    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+    let a = invoke_app(&socket, &["new-workspace", "Navigation A"]);
+    let b = invoke_app(&socket, &["new-workspace", "Navigation B"]);
+    let a_id = a["focused_workspace_uuid"].as_str().unwrap();
+    let b_id = b["focused_workspace_uuid"].as_str().unwrap();
+    let b_pane = id(&b, "focused_pane");
+    invoke_app(&socket, &["select-workspace", "--workspace", a_id]);
+    let split = invoke_app(&socket, &["new-split", "left", "--workspace", b_id]);
+    assert_eq!(split["focused_workspace"], a["focused_workspace"]);
+    assert_eq!(split["focused_pane"], a["focused_pane"]);
+    let panes = invoke_app(&socket, &["list-panes", "--workspace", b_id]);
+    let panes = panes["panes"].as_array().unwrap();
+    assert_eq!(
+        panes.len(),
+        2,
+        "explicit workspace split must not affect the focused workspace"
+    );
+    let new_pane = panes
+        .iter()
+        .find(|pane| id(pane, "pane_id") != b_pane)
+        .unwrap();
+    let new_pane = id(new_pane, "pane_id");
+    assert_eq!(split["created_panes"].as_array().unwrap().len(), 1);
+    assert_eq!(split["created_surfaces"].as_array().unwrap().len(), 1);
+    let receipt = &split["created_panes"][0];
+    assert_eq!(receipt["workspace_uuid"], b_id);
+    assert_eq!(receipt["pane_id"].as_u64().unwrap().to_string(), new_pane);
+    assert_ne!(receipt["surface_id"], split["focused_surface"]);
+    assert_eq!(split["created_surfaces"][0], *receipt);
+    let created_tabs = invoke_app(&socket, &["list-pane-surfaces", &new_pane]);
+    assert_eq!(
+        receipt["surface_uuid"],
+        created_tabs["surfaces"][0]["surface_uuid"]
+    );
+    let focused = invoke_app(
+        &socket,
+        &["new-split", "down", "--pane", &new_pane, "--focus", "true"],
+    );
+    assert_eq!(focused["focused_workspace"], b["focused_workspace"]);
+    assert_ne!(focused["focused_pane"], new_pane.parse::<u64>().unwrap());
+    let last = invoke_app(&socket, &["last-pane", "--workspace", b_id]);
+    assert_eq!(last["focused_pane"], b["focused_pane"]);
+
+    let tab = invoke_app(&socket, &["new-surface", "--pane", &b_pane]);
+    let tab_id = tab["focused_surface_uuid"].as_str().unwrap();
+    let previous = invoke_app(&socket, &["previous-tab", "--tab", tab_id]);
+    assert_eq!(previous["focused_surface"], b["focused_surface"]);
+    let next = invoke_app(&socket, &["next-tab", "--pane", &b_pane]);
+    assert_eq!(next["focused_surface"], tab["focused_surface"]);
+    let last = invoke_app(&socket, &["last-tab", "--pane", &b_pane]);
+    assert_eq!(last["focused_surface"], b["focused_surface"]);
+    invoke_app(
+        &socket,
+        &[
+            "tab-action",
+            "rename",
+            "--tab",
+            tab_id,
+            "--title",
+            "Build logs",
+        ],
+    );
+    let tabs = invoke_app(&socket, &["list-pane-surfaces", &b_pane]);
+    assert!(
+        tabs["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|surface| surface["surface_uuid"] == tab_id && surface["title"] == "Build logs")
+    );
+    invoke_app(
+        &socket,
+        &["tab-action", "--action", "close-others", "--tab", tab_id],
+    );
+    let tabs = invoke_app(&socket, &["list-pane-surfaces", &b_pane]);
+    assert_eq!(tabs["surfaces"].as_array().unwrap().len(), 1);
+    assert_eq!(tabs["surfaces"][0]["surface_uuid"], tab_id);
+
+    assert_eq!(
+        invoke_app(&socket, &["previous-workspace", "--workspace", b_id])["focused_workspace"],
+        a["focused_workspace"]
+    );
+    assert_eq!(
+        invoke_app(&socket, &["next-window", "--workspace", a_id])["focused_workspace"],
+        b["focused_workspace"]
+    );
+    assert_eq!(
+        invoke_app(&socket, &["last-window"])["focused_workspace"],
+        a["focused_workspace"]
+    );
+    let rejected = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args([
+            "new-split",
+            "right",
+            "--workspace",
+            a_id,
+            "--surface",
+            tab_id,
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("target_scope_mismatch"));
+    let rejected = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args(["next-tab", "--tab", tab_id, "--expect-revision", "0"])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("stale_revision"));
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
     fs::remove_dir(socket.parent().unwrap()).unwrap();
 }

@@ -111,7 +111,7 @@
     {
       "id": "T02",
       "title": "Tabs, panes, focus and reversible close",
-      "status": "planned",
+      "status": "implementing",
       "owner": "workspace-core, native-bridge, WorkspaceViews",
       "depends_on": [
         "F02"
@@ -120,7 +120,22 @@
         "Finish surface placement/reorder/split/focus actions and preserve live ownership across all entrypoints",
         "Complete grouped close/reopen descriptors, original pane anchors, failure rollback and focus history"
       ],
-      "exit_gate": "Cmd-T/W/Shift-Cmd-T, menu/context/CLI agree; no sibling restart or replayed input; close/reopen preserves supported layout and failures remain retryable."
+      "exit_gate": "Cmd-T/W/Shift-Cmd-T, menu/context/CLI agree; no sibling restart or replayed input; close/reopen preserves supported layout and failures remain retryable.",
+      "implemented_slices": [
+        "Working T02a directional split/navigation and bounded focus history; original split close/reopen placement with rollback"
+      ],
+      "verification_receipts": [
+        "t02-navigation.md",
+        "p1-terminal-tabs.md"
+      ],
+      "remaining_gates": [
+        "Fresh review and hosted native acceptance of working changes",
+        "Native divider ratio geometry",
+        "Remaining surface actions and grouped-close contracts",
+        "Persistence and multiwindow integration",
+        "Physical keyboard/accessibility/resource evidence",
+        "V01 full parity signoff"
+      ]
     },
     {
       "id": "T03",

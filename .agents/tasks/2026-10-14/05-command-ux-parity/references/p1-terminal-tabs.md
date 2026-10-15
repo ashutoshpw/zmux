@@ -13,6 +13,13 @@
 - History is consumed after real launch success. Failure rolls back the entire provisional
   group and retains history for retry; double restore and mutation of restoring tabs reject.
   Related histories share remapped recovered containers; unrelated live objects are untouched.
+- Original split placement now survives individual pane closure and last-tab pane removal.
+  Bounded private descriptors retain ancestor axes/order and sibling IDs, with no topology or
+  terminal-output snapshots. Restore wraps the nearest surviving original/remapped sibling
+  subtree; missing anchors fall back safely within the recovered workspace, or create a new
+  workspace when the owner disappeared. Surviving IDs/sessions and subtree layout are retained.
+  Split depth/pane capacity rejection is atomic; grouped launch failure removes provisional
+  surfaces and leaves history retryable, including chained remaps after failed launches.
 - Resource admission retains the eight-terminal limit, counting hidden, pending and retiring
   workers. Metadata copies do not clone inactive terminal output. Blocking launch stays off UI
   and coordinator threads. Late aborted-group completion is retired.
@@ -35,10 +42,21 @@
   Hosted universal compilation and packaged smoke passed; see [native receipt](native-delivery.md).
   Interactive drag/IME/accessibility evidence remains open.
 
+## Current split-anchor verification (2026-10-15 working tree)
+
+- `cargo test -p zmux-workspace-core --test restore_anchors`: initial four behavioral
+  regressions failed before the repair and passed afterward. Seven final cases cover original
+  axis/order and surviving subtree identity, selected grouped tabs, last-tab pane removal,
+  ancestor/missing-anchor fallback, recovered containers, launch rollback/retry, chained remap
+  retry and atomic split-depth rejection with retry after freeing capacity.
+- The chained remap retry case independently failed on the first implementation, then passed
+  after alias repair. `cargo test -p zmux-workspace-core` passes 33 tests; scoped Clippy passes.
+- Existing runtime launch ownership is unchanged; these are core owner checks. Native macOS
+  reopen interaction and the full product parity gates still require separate evidence.
+
 ## Remaining P1 and P0 gates
 
-Removed individual panes currently restore grouped tabs into a new workspace; original split
-anchors, richer focus history, workspace groups, no-focus policies, UUID/typed-ref targeting,
+Richer focus history, workspace groups, no-focus policies, UUID/typed-ref targeting,
 multiple windows and window recovery remain open. History age/byte budgets and persistence
 remain follow-ups. Browser descriptors join this model in P3. No browser, attention inbox or
 sidebar collapse is claimed by this slice. Exhaustive P0 contract audit and measured Mac resource

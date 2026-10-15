@@ -5,6 +5,11 @@ import json
 import platform
 import plistlib
 import subprocess
+from importlib.util import module_from_spec, spec_from_file_location
+
+fixture_spec = spec_from_file_location("native_ssh_fixture", Path(__file__).with_name("native-ssh-fixture.py"))
+fixture_module = module_from_spec(fixture_spec)
+fixture_spec.loader.exec_module(fixture_module)
 
 root = Path(__file__).resolve().parent.parent
 if platform.system() != "Darwin":
@@ -42,21 +47,22 @@ def diagnose_startup():
                 target = dist / ("native-crash-" + path.name + ".log")
                 target.write_text(path.read_text(errors="replace"))
                 print(target.read_text()[:24_000])
-try:
-    subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=100)
-except Exception:
-    for path in [stdout,stderr]:
-        if path.exists(): print(path.read_text())
-    diagnose_startup()
-    raise
-if not report.exists():
-    for path in [stdout,stderr]:
-        if path.exists(): print(path.read_text())
-    diagnose_startup()
-    raise SystemExit("The packaged app did not produce native smoke evidence")
+with fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
+    try:
+        subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=150)
+    except Exception:
+        for path in [stdout,stderr]:
+            if path.exists(): print(path.read_text())
+        diagnose_startup()
+        raise
+    if not report.exists():
+        for path in [stdout,stderr]:
+            if path.exists(): print(path.read_text())
+        diagnose_startup()
+        raise SystemExit("The packaged app did not produce native smoke evidence")
 evidence = json.loads(report.read_text())
 metadata = json.loads((dist / "build-info.json").read_text())
 if evidence.get("source_sha") != metadata["source_sha"]: raise SystemExit("Smoke evidence does not match packaged source SHA")
-for key in ["success","native_input","ansi_color","split_panes","kernel_resize","workspace_switch","pane_close","active_terminal_title","native_cloud_callback","clipboard_image_preparation","clipboard_image_pasteboard","clipboard_image_local_paste","bundled_cli_control","accessible_icon_controls","terminal_tab_shortcut","close_tab_shortcut","reopen_tab_shortcut","sibling_process_preserved","sidebar_toggle","notification_inbox","notification_target_routing","embedded_webkit","browser_hidden_state","balanced_browser_split","split_ratio_retained"]:
+for key in ["success","native_input","ansi_color","split_panes","kernel_resize","workspace_switch","pane_close","active_terminal_title","native_cloud_callback","clipboard_image_preparation","clipboard_image_pasteboard","clipboard_image_local_paste","clipboard_image_remote_transfer","clipboard_image_remote_shell_path","clipboard_image_remote_source_lifetime","clipboard_image_remote_source_cleanup","clipboard_image_remote_managed_connection","clipboard_image_remote_focus_retained","bundled_cli_control","accessible_icon_controls","terminal_tab_shortcut","close_tab_shortcut","reopen_tab_shortcut","sibling_process_preserved","sidebar_toggle","notification_inbox","notification_target_routing","embedded_webkit","browser_hidden_state","balanced_browser_split","split_ratio_retained","tab_navigation_shared_actions","workspace_navigation_shortcuts","directional_pane_focus_shortcuts","directional_split_up","pane_reopen_original_split_anchor","global_focus_history_shortcuts","browser_directional_focus"]:
     if evidence.get(key) is not True: raise SystemExit(f"Native check failed: {key}")
 print(json.dumps(evidence,indent=2))

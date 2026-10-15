@@ -175,6 +175,8 @@ pub(crate) struct Execution {
     pub result: Result<(), DesktopError>,
     pub snapshot: Arc<Snapshot>,
     pub created_workspaces: Vec<zmux_workspace_core::WorkspaceId>,
+    pub created_panes: Vec<zmux_workspace_core::PaneId>,
+    pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
 }
 
@@ -606,15 +608,14 @@ impl Worker {
         let request = envelope.request;
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
-        let previous_workspaces = if matches!(&request.payload, Command::Action { .. }) {
-            Some(
-                self.model
-                    .snapshot()
-                    .workspaces
-                    .iter()
-                    .map(|w| w.id)
-                    .collect::<Vec<_>>(),
-            )
+        // Capture creation receipts on the same executor as the mutation. Selection is
+        // independent: a no-focus split must still identify its new objects precisely.
+        let previous_model = if envelope.acknowledgement.is_some()
+            && matches!(
+                &request.payload,
+                Command::Action { .. } | Command::Targeted { .. }
+            ) {
+            Some(self.model.snapshot())
         } else {
             None
         };
@@ -629,15 +630,48 @@ impl Worker {
         };
         self.last_error = result.as_ref().err().map(ToString::to_string);
         let snapshot = self.publish(false);
-        let created_workspaces = previous_workspaces
-            .map(|ids| {
-                snapshot
+        let (created_workspaces, created_panes, created_surfaces) = previous_model
+            .map(|previous| {
+                let previous_workspaces: std::collections::HashSet<_> =
+                    previous.workspaces.iter().map(|w| w.id).collect();
+                let previous_panes: std::collections::HashSet<_> = previous
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .map(|p| p.id)
+                    .collect();
+                let previous_surfaces: std::collections::HashSet<_> = previous
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .map(|s| s.id)
+                    .collect();
+                let workspaces = snapshot
                     .model
                     .workspaces
                     .iter()
-                    .filter(|w| !ids.contains(&w.id))
+                    .filter(|w| !previous_workspaces.contains(&w.id))
                     .map(|w| w.id)
-                    .collect()
+                    .collect();
+                let panes = snapshot
+                    .model
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .filter(|p| !previous_panes.contains(&p.id))
+                    .map(|p| p.id)
+                    .collect();
+                let surfaces = snapshot
+                    .model
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .filter(|s| !previous_surfaces.contains(&s.id))
+                    .map(|s| s.id)
+                    .collect();
+                (workspaces, panes, surfaces)
             })
             .unwrap_or_default();
         if let Some(sender) = envelope.acknowledgement {
@@ -651,6 +685,8 @@ impl Worker {
                     .collect(),
                 snapshot,
                 created_workspaces,
+                created_panes,
+                created_surfaces,
             });
         }
     }

@@ -76,3 +76,43 @@ Fresh substantial and compiler-repair reviews both returned `ship`.
 
 This is not direct remote image-coordinator/physical drag/two-host/resource evidence.
 R01 and V01 remain incomplete, and no new user-facing build download was shared.
+
+## Combined packaged remote-image acceptance (authored, macOS execution pending)
+
+The packaged smoke entrypoint now creates a private, loopback-only sshd fixture with
+generated keys and explicit server/client configuration. It does not change the user's
+SSH daemon, SSH files, clipboard or preferences. A uniquely named AppKit pasteboard
+feeds the real managed remote terminal view and its production image-paste coordinator.
+After the terminal authenticates, the fixture revokes its key and verifies that a fresh
+login fails; the image upload must reuse the existing authenticated connection.
+
+The acceptance holds back the SSH acknowledgement after remote bytes are written.
+It independently observes the prepared PNG source and remote bytes, requires the source
+to remain present while the actual worker is live, then releases the acknowledgement
+and requires the source file and its private entry directory to disappear after worker
+completion. It changes workspace focus immediately after native paste and checks that
+completion preserves local focus without inserting into the local terminal. A final
+explicit Return submits the quoted remote path to a remote read loop; an independent
+file receipt must preserve its spaces, apostrophe and UTF-8. No production flags or
+receipt-supplying mocks were introduced. The original smoke helper supplies its known
+image fixture; all new implementation is independently authored MIT code.
+
+Portable validation: Python compilation and whitespace checks pass. A live Linux
+fixture check passed generated-key authentication, rejected fresh authentication after
+revocation, reuse of the authenticated master, exact binary transfer, held/released
+acknowledgement and cleanup of its temporary daemon/files. This verifies the SSH
+fixture, not AppKit or the combined native journey. The existing hosted macOS workflow
+builds every Swift source for arm64/x86_64 in Swift 6 with warnings as errors and now
+requires six remote-image evidence flags from the packaged Launch Services run.
+There is no fresh hosted result for this uncommitted slice yet.
+
+Native cancellation/close during image preparation or an in-flight upload, physical
+clipboard/drag, a second remote machine and cache/resource stress remain separate gates.
+
+Fresh remote-image review found two harness defects: shell-result existence raced its
+contents, and listener-only sshd cleanup left authenticated children alive. The result is
+now atomically published with rename; cleanup freezes the fixture process tree one
+generation at a time, then kills descendants before ancestors. Parent reproduced and
+verified real authenticated client teardown plus fixture removal. Full scripts/check
+passes (98 Rust tests plus C ABI); a fresh repair reviewer returned ship. Native execution
+is still pending and full parity remains open.

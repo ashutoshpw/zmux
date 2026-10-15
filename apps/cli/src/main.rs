@@ -17,7 +17,7 @@ use zmux_desktop_runtime::control::{
 };
 use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
-use zmux_workspace_core::{Action, Axis};
+use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod registry;
 mod ssh;
 mod targets;
@@ -189,6 +189,21 @@ fn parse(
         Some("capabilities") => app_no_args("capabilities", tail, ControlCommand::Capabilities)?,
         Some("doctor") => help_or_no_args("doctor", tail, Offline::Doctor)?,
         Some("ssh") => ssh::parse(tail)?,
+        Some("focus-history") => help_or_exact("focus-history", tail, 1, |values| {
+            let direction = match values[0].as_str() {
+                "back" => FocusHistoryDirection::Back,
+                "forward" => FocusHistoryDirection::Forward,
+                _ => {
+                    return Err(CliError(
+                        "focus-history requires back or forward and accepts no target options"
+                            .into(),
+                    ));
+                }
+            };
+            Ok(ControlCommand::Action {
+                action: Action::NavigateFocus { direction },
+            })
+        })?,
         Some("list-uploads") => app_no_args("list-uploads", tail, ControlCommand::ListUploads)?,
         Some("cancel-upload") => {
             let args = utf8_args(tail)?;

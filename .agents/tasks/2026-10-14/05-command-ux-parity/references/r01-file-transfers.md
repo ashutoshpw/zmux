@@ -13,7 +13,7 @@ These Actions receipts are diagnostic; V01 remains false and no build link is sh
 - Auxiliary operations use that socket, ignore configuration and disable local commands,
   fresh authentication and network fallback. Terminal route/config/identity selects the
   authenticated channel; auxiliary operations cannot choose a different route.
-- A worker opens bounded regular sources without following symlinks, streams through SSH
+- The original R01c worker opened bounded regular sources without following symlinks and streamed through SSH
   with nonblocking input/output, polls cancellation/deadline and captures bounded errors.
   The remote script creates private storage, validates exact file length and cleans an
   incomplete current file. Acknowledged completed files remain reported after later failure;
@@ -92,3 +92,20 @@ real two-host transfer/disconnect/performance and all broader parity remain open
 Regular-file filesystem calls can stall inside the kernel despite O_NONBLOCK; cancellation
 is checked between calls, work stays off UI/core, and shutdown reports a missed deadline. R01
 and V01 stay incomplete. No artifact is accepted for user delivery from this slice.
+
+## R01e source-baseline link contract (working change)
+
+The frozen cmux upload owners invoke SCP without recursive mode. Directories and
+links to directories fail there; recursive directory transfer is not required by this
+baseline. A selected symlink to an ordinary file transfers the target bytes under the
+selected link name. zmux now follows that contract: the worker opens the selected path
+nonblocking, validates the opened descriptor as an ordinary file, and applies the
+existing file/total limits. Descriptor ownership prevents later path replacement from
+substituting the source. This does not make kernel filesystem calls interruptible.
+
+The real SSH journey verifies alias name/exact bytes, directory/directory-link/dangling
+link/FIFO refusal and oversized linked target refusal. Each invalid input follows a
+valid input in the selection and must fail before any remote operation. The symlink
+assertion was observed failing with ELOOP before the fix and passing afterward.
+Parent full verification passes (98 Rust tests plus C ABI) and fresh review found no
+transfer-policy defect. Native Actions verification remains pending; this is not R01/V01 closure.

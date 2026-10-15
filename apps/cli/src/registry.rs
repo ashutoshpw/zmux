@@ -44,7 +44,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         true,
         "paste-files [--workspace TARGET] [--pane TARGET] [--surface TARGET] -- PATH ...",
-        "Insert quoted local paths, or upload regular files through the target SSH terminal's authenticated connection and insert remote paths. Never submits a command. Up to 16 files, 64 MiB each and 256 MiB total. Directories and raw clipboard images remain unavailable."
+        "Insert quoted local paths, or upload regular files through the target SSH terminal's authenticated connection and insert remote paths. Never submits a command. Up to 16 files, 64 MiB each and 256 MiB total. CLI input is file paths. The native app also prepares clipboard images for paste/drop. Directories remain unavailable."
     ),
     command!(
         "list-uploads",
@@ -68,7 +68,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         false,
         true,
         "ssh DESTINATION [--name NAME] [--port PORT] [--identity PATH] [--ssh-config PATH] [-A|-a] [--jump HOST] [--ssh-option KEY=VALUE] [--command TEXT] [--focus true|false|--no-focus] [-- REMOTE_ARG ...]",
-        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. Regular file/image uploads reuse this terminal's private authenticated connection. Raw clipboard images, cross-tab connection sharing and reconnect remain unavailable. Extra SSH options use a bounded allowlist; mosh is unavailable."
+        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. Regular file/image uploads reuse this terminal's private authenticated connection. The native app supports clipboard image paste/drop; this CLI accepts image file paths through paste-files. Cross-tab connection sharing and reconnect remain unavailable. Extra SSH options use a bounded allowlist; mosh is unavailable."
     ),
     command!(
         "new-workspace",
@@ -101,6 +101,121 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         "recently-closed",
         "List bounded in-process close history and restoration state."
+    ),
+    command!(
+        "select-workspace",
+        "navigate",
+        true,
+        true,
+        "select-workspace [WORKSPACE]",
+        "Select a workspace and retain its selected pane and tab."
+    ),
+    command!(
+        "new-split",
+        "navigate",
+        true,
+        true,
+        "new-split <left|right|up|down> [--workspace TARGET] [--pane TARGET] [--surface TARGET] [--focus true|false|--no-focus]",
+        "Create a terminal pane beside the target. Focus stays unchanged by default; --focus true selects the new pane. Use created_panes and created_surfaces in the result to identify new objects; focused_* describes selection. Options may precede or follow the direction."
+    ),
+    CommandSpec {
+        name: "next-workspace",
+        aliases: &["next-window"],
+        group: "navigate",
+        targeted: true,
+        socket: true,
+        usage: "next-workspace [--workspace TARGET]",
+        description: "Select the next workspace in model order, wrapping at the end. next-window is an alias for workspace navigation; --window is unavailable.",
+    },
+    CommandSpec {
+        name: "previous-workspace",
+        aliases: &["previous-window"],
+        group: "navigate",
+        targeted: true,
+        socket: true,
+        usage: "previous-workspace [--workspace TARGET]",
+        description: "Select the previous workspace in model order, wrapping at the beginning. previous-window is an alias for workspace navigation; --window is unavailable.",
+    },
+    CommandSpec {
+        name: "last-workspace",
+        aliases: &["last-window"],
+        group: "navigate",
+        targeted: true,
+        socket: true,
+        usage: "last-workspace [--workspace TARGET]",
+        description: "Select the most recently focused other workspace. Fails when no live history remains. last-window is an alias for workspace navigation; --window is unavailable.",
+    },
+    command!(
+        "next-tab",
+        "navigate",
+        true,
+        true,
+        "next-tab [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Select the next tab in the target pane, wrapping at the end."
+    ),
+    command!(
+        "previous-tab",
+        "navigate",
+        true,
+        true,
+        "previous-tab [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Select the previous tab in the target pane, wrapping at the beginning."
+    ),
+    command!(
+        "last-tab",
+        "navigate",
+        true,
+        true,
+        "last-tab [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Select the most recently focused other tab in the target pane."
+    ),
+    command!(
+        "next-pane",
+        "navigate",
+        true,
+        true,
+        "next-pane [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Focus the next pane in split-tree order, wrapping at the end."
+    ),
+    command!(
+        "previous-pane",
+        "navigate",
+        true,
+        true,
+        "previous-pane [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Focus the previous pane in split-tree order, wrapping at the beginning."
+    ),
+    command!(
+        "last-pane",
+        "navigate",
+        true,
+        true,
+        "last-pane [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Focus the most recently focused other pane within the target workspace."
+    ),
+    command!(
+        "focus-direction",
+        "navigate",
+        true,
+        true,
+        "focus-direction <left|right|up|down> [--workspace TARGET] [--pane TARGET] [--surface TARGET]",
+        "Focus an adjacent pane using equal-share split topology. Fails when no adjacent pane exists; native divider ratios do not affect this selection."
+    ),
+    command!(
+        "tab-action",
+        "navigate",
+        true,
+        true,
+        "tab-action <rename|close-others> [--tab TARGET] [--workspace TARGET] [--pane TARGET] [--title TITLE]",
+        "Apply a supported tab action. --action may supply the action instead of a positional verb. Rename accepts --title or trailing title words; close-others closes sibling tabs as one recoverable group. Other actions and flags are rejected."
+    ),
+    command!(
+        "focus-history",
+        "navigate",
+        false,
+        true,
+        "focus-history <back|forward>",
+        "Navigate global live focus history across workspaces. Accepts no target selectors or inherited caller scope."
     ),
     command!(
         "rename-workspace",
@@ -356,7 +471,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
 ];
 
 const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client deadline (50–30000 milliseconds)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
-const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Leading --workspace/--pane/--surface options constrain ownership.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  Explicit selectors override inherited caller defaults. Without them,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Surface caller identity follows tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
+const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --workspace only.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  Explicit selectors override inherited caller defaults. Without them,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Surface caller identity follows tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
 pub(super) fn find(name: &str) -> Option<&'static CommandSpec> {
     COMMANDS
         .iter()
@@ -432,7 +547,7 @@ pub(super) fn catalog() -> Value {
 }
 pub(super) fn guide() -> String {
     format!(
-        "# zmux automation guide\n\nUse `zmux commands` to discover this build's executable commands.\nRead `zmux help <command>` or `zmux help <topic>` before constructing requests.\n\nInspect with list-workspaces, list-panes and list-pane-surfaces. Preserve returned\nUUIDs when later requests must address the same object. Use leading selectors for\nexplicit scope; inherited terminal context applies when selectors are omitted.\nUse --expect-revision for operations that depend on a previously observed index.\n\nSend exact text with send-text; include carriage return only when submission is intended.\nUse --stdin for multiline text. Never retry a timeout whose outcome is unknown.\nObserve readiness after new-workspace, new-surface or reopen-closed: launch is asynchronous.\nReopening starts fresh shells at saved working directories and does not replay jobs.\n\n{}\n{}",
+        "# zmux automation guide\n\nUse `zmux commands` to discover this build's executable commands.\nRead `zmux help <command>` or `zmux help <topic>` before constructing requests.\n\nInspect with list-workspaces, list-panes and list-pane-surfaces. Preserve returned\nUUIDs when later requests must address the same object. Use leading selectors for\nexplicit scope; inherited terminal context applies when selectors are omitted.\nUse --expect-revision for operations that depend on a previously observed index.\n\nSend exact text with send-text; include carriage return only when submission is intended.\nUse --stdin for multiline text. Never retry a timeout whose outcome is unknown.\nObserve readiness after new-workspace, new-surface, new-split or reopen-closed: launch is asynchronous.\nReopening starts fresh shells at saved working directories and does not replay jobs.\n\n{}\n{}",
         GLOBAL, TARGETS
     )
 }

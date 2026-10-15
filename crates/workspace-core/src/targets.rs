@@ -1,5 +1,5 @@
 //! Stable object addressing and ownership checks. Resolution uses one immutable model revision.
-use crate::{Action, Axis, PaneId, Snapshot, SurfaceId, WorkspaceId};
+use crate::{Action, Axis, Direction, Navigation, PaneId, Snapshot, SurfaceId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use thiserror::Error;
@@ -330,6 +330,24 @@ pub enum TargetAction {
         name: String,
     },
     CloseWorkspace,
+    SelectWorkspace,
+    NavigateWorkspace {
+        direction: Navigation,
+    },
+    NavigateSurface {
+        direction: Navigation,
+    },
+    NavigatePane {
+        direction: Navigation,
+    },
+    FocusPaneDirection {
+        direction: Direction,
+    },
+    SplitPaneDirectional {
+        direction: Direction,
+        #[serde(default)]
+        focus: bool,
+    },
     FocusPane,
     SplitPane {
         axis: Axis,
@@ -371,6 +389,30 @@ impl TargetAction {
             },
             Self::CloseWorkspace => Action::CloseWorkspace {
                 workspace_id: target.workspace,
+            },
+            Self::SelectWorkspace => Action::SelectWorkspace {
+                workspace_id: target.workspace,
+            },
+            Self::NavigateWorkspace { direction } => Action::NavigateWorkspace {
+                workspace_id: target.workspace,
+                direction,
+            },
+            Self::NavigateSurface { direction } => Action::NavigateSurface {
+                surface_id: target.surface,
+                direction,
+            },
+            Self::NavigatePane { direction } => Action::NavigatePane {
+                pane_id: target.pane,
+                direction,
+            },
+            Self::FocusPaneDirection { direction } => Action::FocusPaneDirection {
+                pane_id: target.pane,
+                direction,
+            },
+            Self::SplitPaneDirectional { direction, focus } => Action::SplitPaneDirectional {
+                pane_id: target.pane,
+                direction,
+                focus,
             },
             Self::FocusPane => Action::FocusPane {
                 pane_id: target.pane,
