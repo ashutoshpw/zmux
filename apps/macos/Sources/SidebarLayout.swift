@@ -37,22 +37,16 @@ final class SidebarLayout {
 /// the divider remains available to keyboard traversal and explicit AX focus.
 @MainActor
 final class SidebarFocusWindow: NSWindow {
-    private var pointerDivider: SidebarDividerView?
-
     override func sendEvent(_ event: NSEvent) {
-        let previous = pointerDivider
-        pointerDivider = nil
+        var divider: SidebarDividerView?
         if event.type == .leftMouseDown, let content = contentView {
             let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
-            pointerDivider = content.hitTest(point) as? SidebarDividerView
+            divider = content.hitTest(point) as? SidebarDividerView
         }
-        defer { pointerDivider = previous }
+        let previous = divider?.preservesContentResponder ?? false
+        divider?.preservesContentResponder = true
+        defer { divider?.preservesContentResponder = previous }
         super.sendEvent(event)
-    }
-
-    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
-        if let pointerDivider, responder === pointerDivider { return false }
-        return super.makeFirstResponder(responder)
     }
 }
 
@@ -61,6 +55,7 @@ final class SidebarFocusWindow: NSWindow {
 @MainActor
 final class SidebarDividerView: NSView {
     var onResize: (@MainActor (CGFloat) -> Void)?
+    fileprivate var preservesContentResponder = false
     private var width: CGFloat = 224
     private var dragStart: (x: CGFloat, width: CGFloat)?
 
@@ -72,7 +67,7 @@ final class SidebarDividerView: NSView {
         setAccessibilityHelp("Drag to resize. Use Left and Right Arrow to adjust the sidebar width.")
     }
     required init?(coder: NSCoder) { nil }
-    override var acceptsFirstResponder: Bool { true }
+    override var acceptsFirstResponder: Bool { !preservesContentResponder }
     override var canBecomeKeyView: Bool { window != nil && !isHiddenOrHasHiddenAncestor }
 
     func update(width: CGFloat) {
