@@ -50,7 +50,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     })
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
+    private let sidebarLayout = SidebarLayout()
+    private let sidebarDivider = SidebarDividerView()
     private var sidebarWidth: NSLayoutConstraint?
+    private var sidebarPanelWidth: NSLayoutConstraint?
     private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     private var sidebarScroll: NSScrollView?
     private var sidebarDocumentConstraints: [NSLayoutConstraint] = []
@@ -269,7 +272,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             mainHeader.actions.addArrangedSubview(button)
         }
 
-        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, modes, sidebarActions, scroll, cloudFooter, mainHeader, canvas] {
+        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, modes, sidebarActions, scroll, cloudFooter, mainHeader, canvas, sidebarDivider] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
         content.addSubview(sidebarContainer)
@@ -288,6 +291,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         cancelUploadButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
         content.addSubview(mainHeader)
         content.addSubview(canvas)
+        content.addSubview(sidebarDivider)
+        sidebarDivider.onResize = { [weak self] width in
+            guard let self, !self.sidebarCollapsed else { return }
+            self.sidebarLayout.resize(to: width, availableWidth: self.window.contentView?.bounds.width ?? 0)
+            self.applySidebarLayout()
+        }
 
         for button in actionButtons + [notificationButton, jumpToUnreadButton, clearNotificationsButton] {
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -304,7 +313,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             sidebarPanel.leadingAnchor.constraint(equalTo: sidebarContainer.leadingAnchor),
             sidebarPanel.topAnchor.constraint(equalTo: sidebarContainer.topAnchor),
             sidebarPanel.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
-            sidebarPanel.widthAnchor.constraint(equalToConstant: 224),
+            sidebarDivider.centerXAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
+            sidebarDivider.topAnchor.constraint(equalTo: sidebarChrome.topAnchor),
+            sidebarDivider.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            sidebarDivider.widthAnchor.constraint(equalToConstant: 8),
 
             sidebarChrome.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             sidebarChrome.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
@@ -345,21 +357,44 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             canvas.topAnchor.constraint(equalTo: mainHeader.bottomAnchor),
             canvas.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
-        sidebarWidth = sidebarContainer.widthAnchor.constraint(equalToConstant: sidebarCollapsed ? 0 : 224)
+        sidebarPanelWidth = sidebarPanel.widthAnchor.constraint(equalToConstant: 224)
+        sidebarPanelWidth?.isActive = true
+        sidebarWidth = sidebarContainer.widthAnchor.constraint(equalToConstant: 0)
         sidebarWidth?.isActive = true
-        sidebarPanel.isHidden = sidebarCollapsed
+        applySidebarLayout()
         setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
+        window.autorecalculatesKeyViewLoop = true
     }
 
     @objc func toggleSidebar() {
         sidebarCollapsed.toggle()
         UserDefaults.standard.set(sidebarCollapsed, forKey: "sidebarCollapsed")
-        sidebarWidth?.constant = sidebarCollapsed ? 0 : 224
-        sidebarPanel.isHidden = sidebarCollapsed
-        window.contentView?.layoutSubtreeIfNeeded()
-        if let terminal = focusedTerminal { window.makeFirstResponder(terminal) }
+        if sidebarCollapsed, let responder = window.firstResponder as? NSView,
+           responder === sidebarDivider || responder.isDescendant(of: sidebarPanel) {
+            // A hidden sidebar cannot keep keyboard focus. Preserve content
+            // responders otherwise, including a browser address field/editor.
+            if let terminal = focusedTerminal { window.makeFirstResponder(terminal) }
+            else if let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
+                window.makeFirstResponder(browser.webView)
+            }
+            else { window.makeFirstResponder(nil) }
+        }
+        applySidebarLayout()
     }
+
+    private func applySidebarLayout() {
+        guard let content = window.contentView else { return }
+        let width = sidebarLayout.visibleWidth(availableWidth: content.bounds.width)
+        sidebarPanelWidth?.constant = width
+        sidebarWidth?.constant = sidebarCollapsed ? 0 : width
+        sidebarPanel.isHidden = sidebarCollapsed
+        sidebarDivider.isHidden = sidebarCollapsed
+        sidebarDivider.update(width: width)
+        content.layoutSubtreeIfNeeded()
+    }
+
+    func windowDidResize(_ notification: Notification) { applySidebarLayout() }
 
     func appActive(_ active: Bool) {
         enqueue(.attention("app_active", nil, nil, active && window.isKeyWindow))
@@ -1167,12 +1202,86 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard snapshot?.workspace?.focusedPane == originalPane.id else { throw BridgeFailure(message: "Reopen did not restore tab placement") }
         try performShortcut("w", modifiers: [.command])
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
-        let wasCollapsed = sidebarCollapsed
-        let priorWidth = canvas.bounds.width
-        try performShortcut("b", modifiers: [.command])
-        guard sidebarCollapsed != wasCollapsed, canvas.bounds.width != priorWidth else { throw BridgeFailure(message: "Sidebar toggle did not resize terminal space") }
-        try performShortcut("b", modifiers: [.command])
-        guard sidebarCollapsed == wasCollapsed else { throw BridgeFailure(message: "Sidebar visibility did not restore") }
+        do {
+            let wasCollapsed = sidebarCollapsed
+            let savedSidebarWidth = sidebarLayout.preferredWidth
+            let savedWidthPreference = UserDefaults.standard.object(forKey: "sidebarWidth")
+            let savedVisibilityPreference = UserDefaults.standard.object(forKey: "sidebarCollapsed")
+            let savedWindowFrame = window.frame
+            let savedResponder = window.firstResponder
+            let savedWorkspace = snapshot?.model.focusedWorkspace
+            let savedPane = snapshot?.workspace?.focusedPane
+            let savedTabs = snapshot?.workspace?.root.panes.map { $0.selectedSurface }
+            defer {
+                window.setFrame(savedWindowFrame, display: true)
+                sidebarLayout.resize(to: savedSidebarWidth, availableWidth: .greatestFiniteMagnitude)
+                sidebarCollapsed = wasCollapsed
+                if let savedWidthPreference { UserDefaults.standard.set(savedWidthPreference, forKey: "sidebarWidth") }
+                else { UserDefaults.standard.removeObject(forKey: "sidebarWidth") }
+                if let savedVisibilityPreference { UserDefaults.standard.set(savedVisibilityPreference, forKey: "sidebarCollapsed") }
+                else { UserDefaults.standard.removeObject(forKey: "sidebarCollapsed") }
+                applySidebarLayout()
+                window.makeFirstResponder(savedResponder)
+            }
+            if sidebarCollapsed { toggleSidebar() }
+            for _ in 0..<32 { _ = sidebarDivider.accessibilityPerformDecrement() }
+            guard abs(sidebarContainer.bounds.width - 200) < 1 else {
+                throw BridgeFailure(message: "Sidebar accessibility resize did not reach its minimum width")
+            }
+            let point = sidebarDivider.convert(NSPoint(x: sidebarDivider.bounds.midX, y: sidebarDivider.bounds.midY), to: nil)
+            guard let down = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1),
+                  let drag = NSEvent.mouseEvent(with: .leftMouseDragged, location: NSPoint(x: point.x + 64, y: point.y), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1),
+                  let up = NSEvent.mouseEvent(with: .leftMouseUp, location: NSPoint(x: point.x + 64, y: point.y), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0) else {
+                throw BridgeFailure(message: "Unable to create native sidebar drag events")
+            }
+            window.sendEvent(down)
+            window.sendEvent(drag)
+            window.sendEvent(up)
+            guard abs(sidebarContainer.bounds.width - 264) < 1, window.firstResponder === savedResponder else {
+                throw BridgeFailure(message: "Sidebar dragging did not resize while retaining input focus")
+            }
+            window.recalculateKeyViewLoop()
+            for _ in 0..<256 {
+                if window.firstResponder === sidebarDivider { break }
+                window.selectNextKeyView(nil)
+            }
+            guard window.firstResponder === sidebarDivider,
+                  let left = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!), charactersIgnoringModifiers: String(UnicodeScalar(NSLeftArrowFunctionKey)!), isARepeat: false, keyCode: 123) else {
+                throw BridgeFailure(message: "Sidebar divider could not receive keyboard focus")
+            }
+            window.sendEvent(left)
+            guard abs(sidebarContainer.bounds.width - 248) < 1, window.firstResponder === sidebarDivider,
+                  sidebarDivider.accessibilityPerformIncrement(), abs(sidebarContainer.bounds.width - 264) < 1,
+                  SidebarLayout().preferredWidth == 264 else {
+                throw BridgeFailure(message: "Sidebar keyboard/accessibility resize or persisted width failed")
+            }
+            let priorCanvasWidth = canvas.bounds.width
+            try performShortcut("b", modifiers: [.command])
+            guard sidebarCollapsed, sidebarContainer.bounds.width == 0, canvas.bounds.width > priorCanvasWidth,
+                  window.firstResponder === savedResponder else {
+                throw BridgeFailure(message: "Sidebar collapse did not return its space and keyboard focus to the selected terminal")
+            }
+            try performShortcut("b", modifiers: [.command])
+            guard !sidebarCollapsed, abs(sidebarContainer.bounds.width - 264) < 1, window.firstResponder === savedResponder else {
+                throw BridgeFailure(message: "Sidebar expansion forgot the resized width or changed content focus")
+            }
+            for _ in 0..<32 { _ = sidebarDivider.accessibilityPerformIncrement() }
+            guard abs(sidebarContainer.bounds.width - 480) < 1 else {
+                throw BridgeFailure(message: "Sidebar accessibility resize did not respect its maximum width")
+            }
+            window.setContentSize(NSSize(width: 680, height: window.contentView?.bounds.height ?? 720))
+            guard sidebarContainer.bounds.width < 480, canvas.bounds.width >= 400,
+                  SidebarLayout().preferredWidth == 480 else {
+                throw BridgeFailure(message: "A narrow window overwrote the sidebar preference or squeezed terminal content")
+            }
+            window.setFrame(savedWindowFrame, display: true)
+            guard abs(sidebarContainer.bounds.width - 480) < 1, window.firstResponder === savedResponder,
+                  snapshot?.model.focusedWorkspace == savedWorkspace,
+                  snapshot?.workspace?.focusedPane == savedPane,
+                  snapshot?.workspace?.root.panes.map({ $0.selectedSurface }) == savedTabs else {
+                throw BridgeFailure(message: "Sidebar resizing lost its width, input focus, or workspace target")
+            }
+        }
         newTerminal()
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.frames.first?.snapshot?.state == "running" }
         guard let attentionTab = snapshot?.workspace?.root.panes.first?.selectedSurface else { throw BridgeFailure(message: "No attention test tab") }
@@ -1383,6 +1492,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "pane_reopen_original_split_anchor": true,
             "global_focus_history_shortcuts": true,
             "sidebar_toggle": true,
+            "sidebar_resize": true,
             "terminal_wheel_scrollback": true,
             "terminal_keyboard_scrollback": true,
             "terminal_input_returns_live": true,
