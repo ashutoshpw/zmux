@@ -24,21 +24,24 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private(set) var snapshot: DesktopSnapshot?
 
     private let bridge = NativeBridge()
-    private lazy var notificationDelivery = NotificationDelivery(
-        sendEvent: { [weak self] event in
-            guard let self else { throw BridgeFailure(message: "Desktop is closed") }
-            try await self.bridge.notificationEvent(event)
-        },
-        performAction: { [weak self] action in
-            guard let self else { throw BridgeFailure(message: "Desktop is closed") }
-            return try await self.bridge.notificationAction(action)
-        },
-        activate: { [weak self] in
-            self?.window.makeKeyAndOrderFront(nil)
-            NSApp.activate()
-        },
-        reportError: { [weak self] message in self?.showError(message) }
-    )
+    private lazy var notificationDelivery = makeNotificationDelivery()
+    private func makeNotificationDelivery() -> NotificationDelivery {
+        NotificationDelivery(
+            sendEvent: { [weak self] event in
+                guard let self else { throw BridgeFailure(message: "Desktop is closed") }
+                try await self.bridge.notificationEvent(event)
+            },
+            performAction: { [weak self] action in
+                guard let self else { throw BridgeFailure(message: "Desktop is closed") }
+                return try await self.bridge.notificationAction(action)
+            },
+            activate: { [weak self] in
+                self?.window.makeKeyAndOrderFront(nil)
+                NSApp.activate()
+            },
+            reportError: { [weak self] message in self?.showError(message) }
+        )
+    }
     private lazy var imagePastes = ClipboardImagePastes(bridge: bridge, reportError: { [weak self] message in
         self?.showError(message)
     }, statusChanged: { [weak self] in
