@@ -264,10 +264,11 @@ def credential_fixture(api, root, environment, observations, output):
         for role in ("owned", "unrelated"):
             began = time.time()
             error_path = output / (role + "-peer.log")
-            with error_path.open("wb") as error_log:
+            result_path = output / (role + "-peer-result.json")
+            with error_path.open("wb") as error_log, result_path.open("wb") as result_log:
                 child = subprocess.Popen([interpreter, "-B", str(HERE / "run.py"),
                                           "--peer-child", str(path), role], env=environment,
-                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stdin=subprocess.DEVNULL, stdout=result_log,
                                          stderr=error_log, start_new_session=True)
             children.append(child)
             connection, _ = listener.accept()
@@ -292,7 +293,9 @@ def credential_fixture(api, root, environment, observations, output):
                 if accepted:
                     require(connection.recv(64) == b"GENUINE_CHILD", "Real child payload changed")
                     connection.sendall(b"ACK")
-                observations.append({"role": role, "actual": peer, "expected_pid": expected, "accepted": accepted})
+                observations.append({"role": role, "actual": peer, "expected_pid": expected, "accepted": accepted,
+                                     "peer_identity_verified": True,
+                                     "rejection_reason": None if accepted else "peer_pid_not_owned"})
             wait_until(lambda: child_exited(child), "peer child exit", 5)
             status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
             observations[-1]["exit_observation"] = repr(status)
@@ -300,6 +303,26 @@ def credential_fixture(api, root, environment, observations, output):
                 diagnostic = error_log.read(4096).decode(errors="replace")
             require(status is not None and status.si_code == os.CLD_EXITED and status.si_status == 0,
                     "Peer child observed incorrect authorization (" + role + "): " + repr(status) + "; " + diagnostic)
+            with result_path.open("rb") as result_log:
+                result_bytes = result_log.read(4097)
+            require(len(result_bytes) <= 4096, "Peer child outcome exceeded its bound")
+            result = json.loads(result_bytes)
+            require(isinstance(result, dict) and result.get("role") == role, "Peer child outcome role changed")
+            observations[-1]["child_outcome"] = result
+            if role == "owned":
+                require(accepted and result.get("send_error") is None and result.get("response") == "ack",
+                        "Owned peer did not independently receive its acknowledgement")
+            else:
+                # A child-side close alone is insufficient. This exact child was
+                # independently authenticated above, then rejected before close.
+                rejection = observations[-1]
+                require(rejection["peer_identity_verified"] and not rejection["accepted"]
+                        and rejection["rejection_reason"] == "peer_pid_not_owned"
+                        and rejection["actual"]["pid"] == child.pid != expected
+                        and rejection["actual"]["uid"] == os.geteuid()
+                        and result.get("send_error") in (None, "EPIPE", "ECONNRESET")
+                        and result.get("response") == "eof",
+                        "Closed peer lacks the matching independent authorization rejection")
         require(observations[0]["accepted"] and not observations[1]["accepted"], "Unrelated peer was not rejected")
         for child in children:
             child.wait(timeout=1)
@@ -329,6 +352,7 @@ class Broker:
         self.input_rejections = []
         self.shutdown_confirmed = False
         self.terminal_phase, self.confirmed_terminal_phase = None, None
+        self.child_exit_observation = None
         self.record_lock = threading.Lock()
         self.peak_connections = 0
         try:
@@ -412,8 +436,11 @@ class Broker:
     def require_clean_owned_child(self):
         require(self.owned_child.returncode is None, "Terminal child was reaped before confirmation")
         status = os.waitid(os.P_PID, self.owned_child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        self.child_exit_observation = ({"pid": status.si_pid, "code": status.si_code,
+                                        "status": status.si_status, "phase": self.terminal_phase,
+                                        "owned_child_unreaped": True} if status is not None else None)
         require(status is not None and status.si_code == os.CLD_EXITED and status.si_status == 0,
-                "Terminal child did not independently exit successfully")
+                "Terminal child did not independently exit successfully: " + repr(status))
 
     def confirm_owner_shutdown(self):
         require(self.terminal_phase == "owner_shutdown", "Owner shutdown was not requested")
@@ -576,6 +603,8 @@ class TerminalClient:
         self.broker = broker
         self.master, self.process = None, None
         self.output = bytearray()
+        self.output_bytes_seen = 0
+        self.lifecycle = {"requested_signals": []}
         self.closed = False
         try:
             self.master, slave = os.openpty()
@@ -595,7 +624,7 @@ class TerminalClient:
                 raise ExceptionGroup("Terminal construction and cleanup failed", [error, cleanup]) from error
             raise
 
-    def pump(self):
+    def pump(self, *, answer_queries=True):
         if select.select([self.master], [], [], 0.03)[0]:
             try:
                 data = os.read(self.master, 16384)
@@ -604,8 +633,9 @@ class TerminalClient:
                     return
                 raise
             self.output.extend(data[:max(0, LIMIT - len(self.output))])
+            self.output_bytes_seen += len(data)
             for query, answer in ((b"\x1b[c", b"\x1b[?1;2c"), (b"\x1b[6n", b"\x1b[1;1R")):
-                if query in data:
+                if answer_queries and query in data and not child_exited(self.process):
                     os.write(self.master, answer)
 
     def until(self, predicate, label):
@@ -616,6 +646,14 @@ class TerminalClient:
             return predicate()
         return wait_until(check, label, 15)
 
+    def wait_for_exit(self, label, timeout):
+        def exited():
+            # A terminating client can still be blocked writing final terminal
+            # output. Drain it while retaining the same bounded exit deadline.
+            self.pump(answer_queries=False)
+            return child_exited(self.process)
+        return wait_until(exited, label, timeout)
+
     def close(self, preserve_owner=None):
         if self.closed:
             return
@@ -624,13 +662,21 @@ class TerminalClient:
             if preserve_owner is not None:
                 require(self.process is not None and not child_exited(self.process), "Detach client exited before cancellation")
                 self.broker.request_attachment_cancel()
+            self.lifecycle["requested_phase"] = self.broker.terminal_phase
             if self.process is not None and not child_exited(self.process):
+                self.lifecycle["requested_signals"].append("SIGTERM")
                 os.kill(self.process.pid, signal.SIGTERM)
                 try:
-                    wait_until(lambda: child_exited(self.process), "terminal TERM", 3)
-                except RuntimeError:
+                    self.wait_for_exit("terminal TERM", 3)
+                except RuntimeError as error:
+                    self.lifecycle["term_wait_failure"] = repr(error)
+                    self.lifecycle["requested_signals"].append("SIGKILL")
                     os.kill(self.process.pid, signal.SIGKILL)
-                    wait_until(lambda: child_exited(self.process), "terminal KILL", 3)
+                    self.wait_for_exit("terminal KILL", 3)
+            if self.process is not None and self.process.returncode is None:
+                status = os.waitid(os.P_PID, self.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                self.lifecycle["unreaped_exit_observation"] = ({"pid": status.si_pid, "code": status.si_code,
+                                                                "status": status.si_status} if status is not None else None)
             if preserve_owner is not None:
                 self.broker.confirm_attachment_cancel(preserve_owner)
         finally:
@@ -641,11 +687,119 @@ class TerminalClient:
             finally:
                 try:
                     if self.process is not None:
-                        self.process.wait(timeout=3)
+                        self.lifecycle["reaped_exit_code"] = self.process.wait(timeout=3)
                 finally:
                     if self.master is not None:
                         os.close(self.master)
                         self.master = None
+
+
+def pty_exit_drain_fixture(api, wrapper, root, environment, compiler, output, observations):
+    """An actual PTY child must finish bounded TERM output without owner-induced KILL."""
+    source, executable = root / "term-output.c", root / "term-output"
+    source.write_text(r'''#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <string.h>
+#include <termios.h>
+#include <unistd.h>
+static char block[4096];
+static void finish(int number) {
+    (void)number;
+    for (int count = 0; count < 64; ++count) {
+        size_t offset = 0;
+        while (offset < sizeof(block)) {
+            ssize_t size = write(STDOUT_FILENO, block + offset, sizeof(block) - offset);
+            if (size < 0 && errno == EINTR) continue;
+            if (size <= 0) _exit(2);
+            offset += (size_t)size;
+        }
+    }
+    int flags = fcntl(STDIN_FILENO, F_GETFL);
+    if (flags < 0 || fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK) < 0) _exit(2);
+    for (int count = 0; count < 128; ++count) {
+        struct pollfd input = {STDIN_FILENO, POLLIN, 0};
+        int ready = poll(&input, 1, 500);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready < 0) _exit(2);
+        if (ready == 0) _exit(0);
+        char received[4096];
+        ssize_t size = read(STDIN_FILENO, received, sizeof(received));
+        if (size < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        if (size <= 0) _exit(2);
+        /* Seeded input contains only q. An ESC is an actual query response. */
+        for (ssize_t index = 0; index < size; ++index)
+            if (received[index] == '\033') _exit(3);
+    }
+    _exit(2);
+}
+int main(void) {
+    struct termios settings;
+    if (tcgetattr(STDIN_FILENO, &settings) != 0) return 2;
+    settings.c_lflag &= (tcflag_t)~(ICANON | ECHO);
+    settings.c_iflag &= (tcflag_t)~(IXON | IXOFF | ICRNL | INLCR | IGNCR);
+    settings.c_oflag &= (tcflag_t)~OPOST;
+    settings.c_cc[VMIN] = 1;
+    settings.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &settings) != 0) return 2;
+    memset(block, 'x', sizeof(block));
+    memcpy(block, "\033[6n", 4);
+    if (signal(SIGTERM, finish) == SIG_ERR) return 2;
+    alarm(8);
+    const char ready[] = "TERM_OUTPUT_READY\n";
+    if (write(STDOUT_FILENO, ready, sizeof(ready) - 1) != (ssize_t)(sizeof(ready) - 1)) return 2;
+    for (;;) pause();
+}
+''')
+    command([*compiler, source, "-o", executable], environment, 30)
+    proxy = Path(tempfile.mkdtemp(prefix="zjterm-", dir="/tmp")).resolve()
+    broker = Broker(api, proxy, root / "unused-pty-backend", api.process(os.getpid()), environment)
+    client = None
+    queued_input, backpressured = 0, False
+    close_started = None
+    try:
+        # This child tests PTY lifecycle only. It implements no zellij protocol.
+        client = TerminalClient(wrapper, executable, root / "config/config.kdl", "pty-only", broker)
+        client.until(lambda: b"TERM_OUTPUT_READY" in client.output, "real PTY TERM-output readiness")
+        # The child defers input reads until TERM output finishes. Queue input,
+        # then restore blocking mode; responses must still be disabled on exit.
+        os.set_blocking(client.master, False)
+        try:
+            fill_deadline = time.monotonic() + 1
+            while queued_input < 4 * LIMIT:
+                try:
+                    written = os.write(client.master, b"q" * 4096)
+                except BlockingIOError:
+                    backpressured = True
+                    break
+                require(written > 0, "PTY input queue accepted zero bytes")
+                queued_input += written
+                require(time.monotonic() < fill_deadline, "PTY input fill exceeded its deadline")
+        finally:
+            os.set_blocking(client.master, True)
+        require(backpressured, "PTY input queue did not reach bounded backpressure")
+        close_started = time.monotonic()
+        client.close()
+        status = client.lifecycle.get("unreaped_exit_observation")
+        require(status is not None and status["code"] == os.CLD_EXITED and status["status"] == 0
+                and client.process.returncode == 0, "PTY exit output caused an unclean child termination")
+        require(client.output_bytes_seen > LIMIT and len(client.output) == LIMIT,
+                "PTY exit output was not drained beyond the bounded retained log")
+        require(not broker.records, "PTY-only helper unexpectedly opened a backend")
+    finally:
+        try:
+            if client is not None:
+                client.close()
+        finally:
+            broker.close()
+            if client is not None:
+                (output / "pty-exit-drain.log").write_bytes(client.output)
+                observations.update(lifecycle=client.lifecycle, output_bytes_seen=client.output_bytes_seen,
+                                    retained_output_bytes=len(client.output),
+                                    queued_master_input_bytes=queued_input, master_input_backpressure_confirmed=backpressured,
+                                    close_elapsed_seconds=time.monotonic() - close_started if close_started is not None else None,
+                                    workers_joined=not broker.acceptor.is_alive() and not any(w.is_alive() for w in broker.workers))
 
 
 def relay_half_close_fixture(api, root, environment, observations, *, backend_rejects_input=False,
@@ -750,6 +904,7 @@ def relay_half_close_fixture(api, root, environment, observations, *, backend_re
                                     records=broker.records if broker is not None else [],
                                     normal_closes=broker.closes if broker is not None else [],
                                     input_rejections=broker.input_rejections if broker is not None else [],
+                                    child_exit_observation=broker.child_exit_observation if broker is not None else None,
                                     errors=broker.errors if broker is not None else [])
     if backend_rejects_input:
         require(close_failure is not None and confirmation_denied is not None
@@ -936,11 +1091,23 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
         return observations
     finally:
         errors = []
-        for client in clients:
+        observations["client_cleanup"] = []
+        for index, client in enumerate(clients):
             try:
                 client.close()
             except Exception as error:
                 errors.append("client cleanup: " + repr(error))
+            finally:
+                (output / ("pty-" + str(index) + ".log")).write_bytes(client.output)
+                observations["client_cleanup"].append({"client_pid": client.process.pid,
+                                                        "lifecycle": client.lifecycle,
+                                                        "output_bytes_seen": client.output_bytes_seen,
+                                                        "retained_output_bytes": len(client.output),
+                                                        "child_exit_observation": client.broker.child_exit_observation,
+                                                        "records": client.broker.records,
+                                                        "input_rejections": client.broker.input_rejections,
+                                                        "errors": client.broker.errors,
+                                                        "normal_closes": client.broker.closes})
         for broker in brokers:
             try:
                 broker.close()
@@ -980,7 +1147,7 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
                 require(os.write(helper.master, b"\x11") == 1, "Quit input was not accepted by the PTY")
                 observations["close_control"]["quit_input_written"] = True
                 def close_completed():
-                    helper.pump()
+                    helper.pump(answer_queries=False)
                     return original_gone()
                 wait_until(close_completed, "original daemon exit through authenticated Quit", 12)
                 wait_until(lambda: all(identity is not None and original_process_gone(api, identity)
@@ -1018,6 +1185,8 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
                 "records": closer.records if closer is not None else [],
                 "input_rejections": closer.input_rejections if closer is not None else [],
                 "shutdown_confirmed": closer.shutdown_confirmed if closer is not None else False,
+                "lifecycle": helper.lifecycle if helper is not None else None,
+                "child_exit_observation": closer.child_exit_observation if closer is not None else None,
                 "rejected": closer.rejected if closer is not None else [],
                 "errors": closer.errors if closer is not None else [],
                 "normal_closes": closer.closes if closer is not None else []}
@@ -1059,15 +1228,24 @@ def zellij_fixture(api, binary, pty_wrapper, root, environment, output, observat
 
 
 def peer_child(path, role):
+    require(role in ("owned", "unrelated"), "Unknown peer fixture role")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(5)
         connection.connect(path)
-        connection.sendall(b"GENUINE_CHILD" if role == "owned" else b"UNRELATED_CHILD")
+        send_error = None
+        try:
+            connection.sendall(b"GENUINE_CHILD" if role == "owned" else b"UNRELATED_CHILD")
+        except OSError as error:
+            if role != "unrelated" or error.errno not in (errno.EPIPE, errno.ECONNRESET):
+                raise
+            send_error = errno.errorcode[error.errno]
         try:
             data = connection.recv(64)
         except ConnectionResetError:
             data = b""
         require(data == (b"ACK" if role == "owned" else b""), "Child observed wrong authorization outcome")
+        print(json.dumps({"role": role, "send_error": send_error,
+                          "response": "ack" if data == b"ACK" else "eof"}))
 
 
 def main():
@@ -1118,6 +1296,8 @@ def main():
         receipt["relay_unconfirmed_cancel_rejection"] = {}
         relay_half_close_fixture(api, scratch, environment, receipt["relay_unconfirmed_cancel_rejection"],
                                 backend_rejects_input=True, requested_terminal_phase="attachment_cancel")
+        receipt["pty_exit_drain"] = {}
+        pty_exit_drain_fixture(api, wrapper, scratch, environment, [*compiler, *common], output, receipt["pty_exit_drain"])
         binary, receipt["download"] = download_binary(pins["assets"][key], scratch)
         receipt["version"] = command([binary, "--version"], environment)["output"].strip()
         require(receipt["version"] == "zellij " + pins["version"], "Pinned version mismatch")
