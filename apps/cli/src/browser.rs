@@ -110,6 +110,9 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 | "reload"
                 | "zoom"
                 | "fill"
+                | "type"
+                | "select"
+                | "scroll"
                 | "click"
         )
     {
@@ -166,6 +169,9 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     let mut selector = None;
     let mut script = None;
     let mut fill_text = None;
+    let mut selected_value = None;
+    let mut dx = None;
+    let mut dy = None;
     let mut attribute = None;
     let mut property = None;
     let mut max_depth = None;
@@ -219,17 +225,44 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 if interaction.is_some()
                     || matches!(
                         verb,
-                        "get" | "is" | "snapshot" | "find" | "wait" | "fill" | "click"
+                        "get"
+                            | "is"
+                            | "snapshot"
+                            | "find"
+                            | "wait"
+                            | "fill"
+                            | "type"
+                            | "select"
+                            | "scroll"
+                            | "click"
                     ) =>
             {
                 set(&mut selector, value(&args, index, flag)?, flag)?;
                 index += 2;
             }
-            "--text" if verb == "fill" => {
+            "--text" if matches!(verb, "fill" | "type") => {
                 let text = args.get(index + 1).ok_or_else(|| {
                     CliError("--text requires a value (which may be empty)".into())
                 })?;
                 set(&mut fill_text, text, flag)?;
+                index += 2;
+            }
+            "--value" if verb == "select" => {
+                let text = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError("--value requires a value".into()))?;
+                set(&mut selected_value, text, flag)?;
+                index += 2;
+            }
+            "--dx" | "--dy" if verb == "scroll" => {
+                let slot = if flag == "--dx" { &mut dx } else { &mut dy };
+                if slot.is_some() {
+                    return Err(CliError(format!("repeated {flag}")));
+                }
+                *slot =
+                    Some(value(&args, index, flag)?.parse::<i64>().map_err(|_| {
+                        CliError(format!("{flag} requires an integer pixel delta"))
+                    })?);
                 index += 2;
             }
             "--name" if verb == "find" => {
@@ -316,12 +349,25 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             }
             "--snapshot-after"
                 if interaction.is_some()
-                    || matches!(verb, "back" | "forward" | "reload" | "fill" | "click") =>
+                    || matches!(
+                        verb,
+                        "back"
+                            | "forward"
+                            | "reload"
+                            | "fill"
+                            | "type"
+                            | "select"
+                            | "scroll"
+                            | "click"
+                    ) =>
             {
                 flag_once(&mut snapshot_after, flag)?;
                 index += 1;
             }
-            other if verb == "zoom" && other.parse::<f64>().is_ok() => {
+            other
+                if (verb == "zoom" && other.parse::<f64>().is_ok())
+                    || (verb == "scroll" && other.parse::<i64>().is_ok()) =>
+            {
                 values.push(args[index].clone());
                 index += 1;
             }
@@ -361,14 +407,64 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 }
             }
         }
-        "fill" => {
+        "fill" | "type" => {
             if selector.is_none() && !values.is_empty() {
                 selector = Some(values.remove(0));
             }
-            BrowserAction::Fill {
-                selector: selector
-                    .ok_or_else(|| CliError("browser fill requires a selector".into()))?,
-                text: fill_text.unwrap_or_else(|| values.join(" ")),
+            let selector =
+                selector.ok_or_else(|| CliError(format!("browser {verb} requires a selector")))?;
+            let text = fill_text.unwrap_or_else(|| values.join(" "));
+            if verb == "type" {
+                BrowserAction::Type {
+                    selector,
+                    text,
+                    snapshot_after,
+                }
+            } else {
+                BrowserAction::Fill {
+                    selector,
+                    text,
+                    snapshot_after,
+                }
+            }
+        }
+        "select" => {
+            if selector.is_none() && !values.is_empty() {
+                selector = Some(values.remove(0));
+            }
+            let selector =
+                selector.ok_or_else(|| CliError("browser select requires a selector".into()))?;
+            let value = match selected_value {
+                Some(value) => value,
+                None if !values.is_empty() => values.remove(0),
+                None => return Err(CliError("browser select requires a value".into())),
+            };
+            if !values.is_empty() {
+                return Err(CliError(
+                    "browser select accepts exactly one selector and value".into(),
+                ));
+            }
+            BrowserAction::Select {
+                selector,
+                value,
+                snapshot_after,
+            }
+        }
+        "scroll" => {
+            if values.len() > 1 || (dy.is_some() && !values.is_empty()) {
+                return Err(CliError(
+                    "browser scroll accepts one positional delta or --dy".into(),
+                ));
+            }
+            if let Some(value) = values.pop() {
+                dy = Some(value.parse::<i64>().map_err(|_| {
+                    CliError("browser scroll requires an integer pixel delta".into())
+                })?);
+            }
+            BrowserAction::Scroll {
+                selector,
+                dx: dx.unwrap_or(0),
+                dy: dy.unwrap_or(0),
                 snapshot_after,
             }
         }

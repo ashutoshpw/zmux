@@ -1570,6 +1570,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "browser_fill": true,
             "browser_click": true,
             "browser_interactions": true,
+            "browser_edit_scroll": true,
             "browser_downloads_native": true,
             "local_tmux_cli_native_reopen": true,
             "browser_never_selected_viewport": true,
@@ -2133,6 +2134,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await BrowserFillSmoke.validate(cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         try await BrowserClickSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
         try await BrowserInteractionSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
+        try await BrowserEditScrollSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
         try await WorkspaceNumberSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         try await WorkspaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, rows: { self.workspaceList.arrangedSubviews.compactMap { $0 as? WorkspaceRowView } }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         @MainActor func nativeTabs(_ view: NSView) -> [TerminalTabControl] {

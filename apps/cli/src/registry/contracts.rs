@@ -620,6 +620,83 @@ fn definitions() -> Vec<Contract> {
         c.limitations = semantics;
         result.push(c);
     }
+    for (name, action, field, semantics) in [
+        (
+            "browser type",
+            "type",
+            "text",
+            "Append one admitted trimmed nonblank chunk to the entire current value/textContent, ignoring caret selection. Ordinary DOM focus may scroll. Cancelable beforeinput insertText precedes inherited native setter and input/change for value fields; other elements receive input only. No disabled/readonly guard and no keyboard or trusted input claim. Explicit text overrides positional words. Read-only sockets deny; uncertain outcomes never replay.",
+        ),
+        (
+            "browser select",
+            "select",
+            "value",
+            "Trimmed nonblank value is assigned through the inherited native setter to any value-bearing element, then input/change always fire, even unchanged. No focus, disabled guard, beforeinput or final option-match validation; an absent option may leave an empty value. Read-only sockets deny; uncertain outcomes never replay.",
+        ),
+    ] {
+        let flag = if field == "text" { "--text" } else { "--value" };
+        let mut c = contract(
+            name,
+            &["--surface", "1", "--selector", "#example", flag, "example"],
+            target_arguments(),
+            "browser",
+        );
+        c.route = "browser";
+        c.requirements = &["running_app", "native_webkit_host"];
+        c.expected.push(("/request/action/action", action));
+        c.arguments.extend([
+            option("selector", &["--selector"], ValueKind::Text),
+            positional("selector_operand", ValueKind::Text, false),
+            option(
+                field,
+                if field == "text" {
+                    &["--text"]
+                } else {
+                    &["--value"]
+                },
+                ValueKind::Text,
+            ),
+            positional("text_or_value_operand", ValueKind::Text, false),
+            option("snapshot_after", &["--snapshot-after"], ValueKind::Flag),
+        ]);
+        c.argument_rules.extend([
+            json!({"exactly_one":["selector","selector_operand"]}),
+            json!({"required_nonblank":field,"trim_at_admission":true,"max_utf8_bytes":browser::MAX_INPUT_TEXT_BYTES}),
+        ]);
+        c.default_pointers.extend([
+            ("snapshot_after", "/request/action/snapshot_after"),
+            ("operation_timeout_ms", "/request/timeout_ms"),
+        ]);
+        c.limitations = semantics;
+        result.push(c);
+    }
+    let mut scroll = contract(
+        "browser scroll",
+        &["--surface", "1", "--dx", "12", "--dy", "24"],
+        target_arguments(),
+        "browser",
+    );
+    scroll.route = "browser";
+    scroll.requirements = &["running_app", "native_webkit_host"];
+    scroll.expected.push(("/request/action/action", "scroll"));
+    scroll.arguments.extend([
+        option("selector", &["--selector"], ValueKind::Text),
+        option("dx", &["--dx"], ValueKind::SignedInteger),
+        option("dy", &["--dy"], ValueKind::SignedInteger),
+        positional("dy_operand", ValueKind::SignedInteger, false),
+        option("snapshot_after", &["--snapshot-after"], ValueKind::Flag),
+    ]);
+    scroll.argument_rules.extend([
+        json!({"at_most_one":["dy","dy_operand"]}),
+        json!({"exact_signed_pixel_limit":browser::MAX_SCROLL_DELTA}),
+    ]);
+    scroll.default_pointers.extend([
+        ("snapshot_after", "/request/action/snapshot_after"),
+        ("operation_timeout_ms", "/request/timeout_ms"),
+    ]);
+    scroll.defaults = json!({"dx":0,"dy":0,"selector":null});
+    scroll.limitations = "Instant signed pixel scroll; omitted selector targets window, explicit CSS first match/exact ref targets element.scrollBy or native scrollLeft/Top fallback. Deltas default0 and must be exact integers within 9007199254740991; geometry may clamp. Does not focus or synthesize wheel events. Optional snapshot observes the same mutation. Read-only sockets deny and uncertain outcomes never replay.";
+    result.push(scroll);
     let mut fill = contract(
         "browser fill",
         &["--surface", "1", "--selector", "#example"],

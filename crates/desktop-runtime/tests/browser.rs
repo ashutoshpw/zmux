@@ -569,6 +569,22 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
             selector: "#send".into(),
             snapshot_after: false,
         },
+        BrowserAction::Type {
+            selector: "#entry".into(),
+            text: "chunk".into(),
+            snapshot_after: true,
+        },
+        BrowserAction::Select {
+            selector: "#choice".into(),
+            value: "a".into(),
+            snapshot_after: true,
+        },
+        BrowserAction::Scroll {
+            selector: None,
+            dx: 1,
+            dy: 2,
+            snapshot_after: true,
+        },
     ]
     .into_iter()
     .chain(
@@ -1265,7 +1281,7 @@ fn admitted_wait_expires_or_cancels_on_navigation_without_uncertain_mutation() {
 }
 
 #[test]
-fn dom_interaction_navigation_fails_original_owner_without_promoting_or_replaying_it() {
+fn dom_mutation_navigation_fails_original_owner_without_promoting_or_replaying_it() {
     let (model, surface) = fixture();
     let now = Instant::now();
     let before = model.snapshot();
@@ -1276,12 +1292,20 @@ fn dom_interaction_navigation_fails_original_owner_without_promoting_or_replayin
         "check",
         "uncheck",
         "scroll_into_view",
-    ] {
+    ]
+    .map(|operation| {
+        json!({"action":"interact", "operation":operation,
+        "selector":"#navigation-handler", "snapshot_after":true})
+    })
+    .into_iter()
+    .chain([
+        json!({"action":"type","selector":"#entry","text":"chunk"}),
+        json!({"action":"select","selector":"#choice","value":"a"}),
+        json!({"action":"scroll","dx":1,"dy":2}),
+    ]) {
         let mut runtime = BrowserRuntime::default();
         let owner = attach(&mut runtime, &model, surface, now);
-        let action = serde_json::from_value(json!({"action":"interact", "operation":operation,
-            "selector":"#navigation-handler", "snapshot_after":true}))
-        .unwrap();
+        let action = serde_json::from_value(operation).unwrap();
         let id = runtime
             .admit(&before, request(&model, surface, action), now)
             .unwrap();
@@ -1328,4 +1352,82 @@ fn dom_interaction_navigation_fails_original_owner_without_promoting_or_replayin
         )
         .is_err()
     );
+}
+
+#[test]
+fn edit_normalization_and_scroll_bounds_are_owned_before_native_dispatch() {
+    let (model, surface) = fixture();
+    let before = model.snapshot();
+    let now = Instant::now();
+    let mut runtime = BrowserRuntime::default();
+    let owner = attach(&mut runtime, &model, surface, now);
+    let make = |value| serde_json::from_value::<BrowserAction>(value).unwrap();
+    for action in [
+        make(json!({"action":"type","selector":"#entry","text":"  "})),
+        make(json!({"action":"select","selector":"#choice","value":""})),
+        make(
+            json!({"action":"type","selector":"#entry","text":"x".repeat(MAX_INPUT_TEXT_BYTES+1)}),
+        ),
+        make(
+            json!({"action":"select","selector":"#choice","value":"x".repeat(MAX_INPUT_TEXT_BYTES+1)}),
+        ),
+        make(json!({"action":"scroll","dx":MAX_SCROLL_DELTA+1})),
+        make(json!({"action":"scroll","dy":i64::MIN})),
+        make(json!({"action":"scroll","selector":" "})),
+        make(
+            json!({"action":"type","selector":"#entry","text":format!("bad{}text",char::from(0))}),
+        ),
+        make(
+            json!({"action":"select","selector":"#choice","value":format!("bad{}value",char::from(0))}),
+        ),
+    ] {
+        assert!(matches!(
+            runtime.admit(&before, request(&model, surface, action), now),
+            Err(BrowserError::Invalid(_))
+        ));
+    }
+    for action in [
+        json!({"action":"scroll","dx":1.5}),
+        json!({"action":"scroll","dy":"Infinity"}),
+    ] {
+        assert!(serde_json::from_value::<BrowserAction>(action).is_err());
+    }
+    assert!(runtime.drain_requests(&before, now).requests.is_empty());
+    for (raw, expected) in [
+        (
+            json!({"action":"type","selector":"#entry","text":"  雪  ","snapshot_after":true}),
+            json!({"action":"type","selector":"#entry","text":"雪","snapshot_after":true}),
+        ),
+        (
+            json!({"action":"select","selector":"#choice","value":"  value  "}),
+            json!({"action":"select","selector":"#choice","value":"value","snapshot_after":false}),
+        ),
+        (
+            json!({"action":"scroll","dx":MAX_SCROLL_DELTA,"dy":-MAX_SCROLL_DELTA}),
+            json!({"action":"scroll","selector":null,"dx":MAX_SCROLL_DELTA,"dy":-MAX_SCROLL_DELTA,"snapshot_after":false}),
+        ),
+    ] {
+        let id = runtime
+            .admit(&before, request(&model, surface, make(raw)), now)
+            .unwrap();
+        let batch = runtime.drain_requests(&before, now);
+        assert_eq!(batch.requests.len(), 1);
+        assert_eq!(
+            serde_json::to_value(&batch.requests[0].action).unwrap(),
+            expected
+        );
+        assert!(runtime.drain_requests(&before, now).requests.is_empty());
+        runtime
+            .host_event(
+                &before,
+                BrowserHostEvent::Complete {
+                    operation_id: id,
+                    owner: owner.clone(),
+                    result: json!({"value":{"dispatched":true}}),
+                },
+                now,
+            )
+            .unwrap();
+    }
+    assert_eq!(model.snapshot(), before);
 }

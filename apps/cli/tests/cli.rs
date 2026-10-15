@@ -273,6 +273,10 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
         ("CMD-248", "browser check"),
         ("CMD-249", "browser uncheck"),
         ("CMD-250", "browser scroll-into-view"),
+        ("CMD-251", "browser type"),
+        ("CMD-252", "browser fill"),
+        ("CMD-256", "browser select"),
+        ("CMD-257", "browser scroll"),
     ] {
         let row = entries
             .iter()
