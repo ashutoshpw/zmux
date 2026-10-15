@@ -1,5 +1,10 @@
 //! Headless parser feasibility adapter, not a production renderer or full terminal engine.
 
+mod engine;
+pub use engine::{Engine, EngineBatch, EngineError, EngineKind};
+#[cfg(feature = "ghostty")]
+pub use zmux_ghostty_vt::Limits as GhosttyLimits;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

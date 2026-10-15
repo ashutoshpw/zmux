@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "scope": "Exact retained libraries accepted for opt-in production linkage; input/native/performance acceptance remains separate. No download or rebuild.",
+  "darwin": {
+    "producer_sha256": "a40d6c048636432a4be4b1ffd2db39e611ecf955d1ab495ec029f1dc77a89891",
+    "independent_review_sha256": "82db21047e67fdbc370354db48343afe73b6b66b71145fa82b75a4adb1662b21",
+    "source_sha": "41f1645372daca1282d0387aeb338315e2acab60",
+    "libraries": {
+      "aarch64-apple-darwin": "df2aa776d0637f13e6641ac443695c9ea4cd592416b9b1a35bf2e73be9c7e658",
+      "x86_64-apple-darwin": "3933947add88a2bbb4bc3ccec7ead6615127396536385d99069fbf46c789f941"
+    },
+    "supplement": {
+      ".github/workflows/terminal-engine-artifacts.yml": "6fab06dc9e9709c7be6b36f78b7776c88eb3fa4e745394fe6a5ca8186eb264b7"
+    },
+    "independent_review_path": "evidence/darwin-retained-independent-review.json",
+    "download": {
+      "repository": "ashutoshpw/zmux",
+      "run": 38799601657,
+      "artifact": 12004400055,
+      "name": "terminal-engine-darwin-thin-41f1645372daca1282d0387aeb338315e2acab60",
+      "archive_sha256": "4412eae9e095726b7a0fad080f87358c8b633f45c481376aba2f4fd73eecd600",
+      "archive_bytes": 9225410
+    }
+  },
+  "shim_inputs_sha256": {
+    "tools/terminal-feasibility/collector.c": "0cedd95c24bf2ec731ec69118040db84a81f424fd2afbd19b74de293296d20f9",
+    "tools/terminal-feasibility/collector.h": "8ffcd98be2080e5bc761972f533b86312f59587ef64ea9113e3bc135dcdba842",
+    "tools/terminal-feasibility/effects.c": "184e801e93da2beae5fd8c3fac05949de80338fa8b6ce149c856168e993d027a",
+    "tools/terminal-feasibility/effects.h": "15d879c3291aab2f21b5a2039c58a7da837af0db6e29cf78eae9c6b7d40a4ebf",
+    "tools/terminal-feasibility/frame.h": "8231f0f4f66a8c9f9b937b13aa8a93cfbc16b10448cb706c8ae4e85b05cfa6f7",
+    "tools/terminal-feasibility/integrated.c": "1a5885cb31b59e9248d8be138c8b0a7856aeda169fb264bbf2d0a4e55d38d411",
+    "tools/terminal-feasibility/integrated.h": "c7feb9d0e8f96259ebbfcc1f3955b3a50acaafe4f3746f6b2e368de4aaaaf3f1",
+    "tools/terminal-feasibility/metadata.c": "2aecb5464b8dd3c818051459b99cd650e0d9129aeda73021da71e81a88fd747e",
+    "tools/terminal-feasibility/metadata.h": "cc9d2b5fe115b8c2912d675ebea17b11d3ba89fa517b300aa5febc71dec31ce9",
+    "tools/terminal-feasibility/probe.c": "11c6d127d264d8cfbd326fa3c630d08dcf10589808ab3a6b4bf99925c0c4eaac",
+    "tools/terminal-feasibility/resource-internal.h": "fdd872054abe433dc4bb2932241e60cec5f059516c4d18d1b6b71c8d6a8b0e54",
+    "tools/terminal-feasibility/resource.c": "1acb646ac30a77f792218bb0ae5aeaa02607008aafd6600e4a8f21b1ec7397ff",
+    "tools/terminal-feasibility/resource.h": "ff3cdb28662bc65669a51a79b027728d4cb86bd2bc669cc9792e38a13dac72ca"
+  }
+}
