@@ -175,7 +175,7 @@ they are not independently exercised by the current resource fixtures.
 The reviewed local Linux resource run is
 `/tmp/zmux-f04-resource-repro-final-reviewed-20261015/receipt.json` (SHA-256
 `4c88318afa08e9afaf59e3363be3c20457897584f75672d7400ad4188a526b46`).
-All 14 current input hashes match; every normal phase passes and the two original
+All 14 input hashes matched that historical reviewed snapshot; every normal phase passed and the two original
 constructor controls fail their intended assertions. It uses an explicitly labeled
 existing dependency cache, a private Cargo target, and fresh verified upstream/tool
 archives. Patch SHA-256:
@@ -240,9 +240,66 @@ allocation denial with this publication owner is still an independent gate.
 The reviewed local combined run is
 `/tmp/zmux-f04-effects-repro-reviewed-20261015/receipt.json` (SHA-256
 `5f9f75280eeed19843798535b8f0dade799cf802fabbcfe906b07bb59a2cac1e`).
-All 17 current harness hashes match. Every ordinary phase passes, including exact
+All 17 harness hashes matched that historical reviewed snapshot. Every ordinary phase passed, including exact
 4,096-byte reply success; four explicitly labeled controls intentionally exit 101
 (two resource and two effects). The effects fixture passes in 0.332 seconds and
 records 24,632 fixed C host bytes on Linux, separately from Rust frame/batch storage.
 It uses the labeled explicit dependency cache and does not establish fresh dependency
 availability, Mac effects execution, production integration or a performance budget.
+
+## Integrated resource/callback/publication owner
+
+```sh
+python3 tools/terminal-feasibility/run.py --resource-experiment \
+  --integrated-experiment --output /tmp/zmux-terminal-integrated-results
+```
+
+This adds a separate real single-terminal fixture. The existing resource and effects
+fixtures remain available; `--effects-experiment` can also run in the same command.
+Integrated mode requires the resource patch, whose source and contract are unchanged.
+`collector.c`/`collector.h` now share the original fixed callback implementation;
+the standalone effects owner continues using its default constructor. The integrated
+owner constructs one Resource terminal with the bounded constructor, its general/page
+allocators and the same render helpers, and binds that collector before first input.
+No opaque engine layout is cast and no second terminal/parser is created in this owner.
+
+Successful calls stage an operation even with no callbacks. Export checks render
+results and allocation counters again, then seals all further engine/config access
+until exact-ID commit. Commit retires the batch without allocation. Rust validates
+candidate UTF-8/event ranges before commit and swaps two preallocated slots to publish;
+failed allocation, callback overflow or export retains the previous good slot and
+refuses subsequent input. Scalar quota tightening is permitted before successful
+export, with validation before assignment; history reads require idle. A valid export
+blocks subsequent export/quota/history/engine calls until commit. Diagnostic stats,
+explicit abort and teardown remain available.
+
+The fixed C owner/collector/Resource/Probe allowance is subtracted from the requested
+C managed budget before constructing the engine. The fixture reports fixed bytes,
+reserved engine mappings and their current/peak sum. Rust separately reserves two
+bounded publication slots before engine construction; no per-operation buffer growth
+or Published/String clone is needed. On this Linux host the allowance is 155,952 C
+bytes, 1,081,344 Rust backing capacity bytes and 800 inline Rust owner bytes. Heap/kernel
+overhead, stacks, libraries and caller-made snapshot copies are separate; none of
+these sums is total app RSS or physical footprint. Host budget/allocation and nullable
+C constructor errors are returned before a usable owner is published.
+
+The fixture composes exact 1/1,000-row history, callbacks and reflow in this same owner;
+checks callback-before-quota-denial batches, every observed constructor allocation
+position, quota/overflow/snapshot failure cleanup, sealed and stale commits, and 128
+lifecycles. It forces an actual general allocation denial during render export after
+a healthy mutation, rather than assuming resize allocates. A temporary original-shim
+control omits that render result/quota fence and must fail the named last-good
+publication assertion. Earlier separate negative controls also remain required.
+Title/cwd/OSC notification provenance, optional compression/features, real PTY delivery,
+AppKit fidelity and named-Mac workload budgets remain independent acceptance gates.
+
+Read the [integrated owner design](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/f04-integrated-owner.md)
+for ownership, accounting and review boundaries. New integrated execution is host-only;
+Mac universal compilation still names the original raw fixture/library only.
+
+Final local integrated receipt:
+`/tmp/zmux-f04-integrated-repro-final-20261015/receipt.json`, SHA-256
+`0c0bd1483598c8ebc812ecaa68b8a027311076b1679a2798e15e1693ba219a30`.
+All 23 frozen input hashes match. Every ordinary stage passes and five labeled
+controls intentionally exit 101. The integrated fixture completes in 1.078 seconds
+on Linux; independent rerun and hosted integrated execution remain separate gates.

@@ -39,3 +39,9 @@ does not complete linked-component distribution notice review.
 `effects.c`, `effects.h` and `effects.rs` are original MIT public-C-API fixtures.
 They introduce no additional upstream patch, dependency or distributed engine
 artifact. Negative controls modify only temporary copies of the original shim.
+
+`collector.c`/`collector.h` extract the original fixed callback collector without
+changing upstream code. `resource-internal.h` and `integrated.c`/`integrated.h`/
+`integrated.rs` are original MIT owner/publication integration code. They reuse the
+same pinned resource patch and public C handles, add no dependency and distribute
+no compiled engine. Temporary negative controls modify original shim copies only.

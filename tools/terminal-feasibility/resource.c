@@ -7,7 +7,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include "resource.h"
+#include "resource-internal.h"
 
 typedef struct Probe Probe;
 extern Probe *probe_wrap_terminal(GhosttyTerminal, const GhosttyAllocator *);
@@ -21,7 +21,6 @@ extern GhosttyResult zmux_ghostty_terminal_new_bounded(const GhosttyAllocator *,
 extern GhosttyResult zmux_ghostty_terminal_clone_storage(GhosttyTerminal, size_t *);
 
 enum { MAX_MAPPINGS = 4096 };
-typedef struct Resource Resource;
 typedef struct { Resource *owner; uint8_t kind; } Context;
 typedef struct {
   void *pointer;
@@ -36,6 +35,7 @@ struct Resource {
   Mapping mappings[MAX_MAPPINGS];
   ZmuxResourceStats stats;
   size_t total_limit, general_limit, page_limit, page_size, deny_at;
+  bool used, callbacks_bound, binding_failed;
 };
 
 static Mapping *find(Resource *r, const void *pointer) {
@@ -140,7 +140,7 @@ Resource *resource_new(uint16_t cols, uint16_t rows, size_t history,
   }
   return r; // Caller can inspect denied partial construction and zero live mappings.
 }
-int resource_ready(Resource *r) { return r && r->probe && !r->stats.denials && !r->stats.invalid; }
+int resource_ready(Resource *r) { return r && r->probe && !r->stats.denials && !r->stats.invalid && !r->binding_failed; }
 int resource_stats(Resource *r, ZmuxResourceStats *out, size_t size) {
   if (!r || !out || size != sizeof(*out)) return -1;
   *out = r->stats; return 0;
@@ -163,16 +163,19 @@ int resource_limits(Resource *r, size_t total, size_t general, size_t pages) {
 }
 int resource_feed(Resource *r, const uint8_t *bytes, size_t count) {
   if (!resource_ready(r) || count > 4096) return -1;
+  r->used = true;
   int result = probe_feed(r->probe, bytes, count);
   return resource_ready(r) ? result : -1;
 }
 int resource_resize(Resource *r, uint16_t cols, uint16_t rows) {
   if (!resource_ready(r)) return -1;
+  r->used = true;
   int result = probe_resize(r->probe, cols, rows);
   return resource_ready(r) ? result : -1;
 }
 int resource_clone(Resource *r, size_t *history) {
   if (!resource_ready(r)) return -1;
+  r->used = true;
   GhosttyResult result = zmux_ghostty_terminal_clone_storage(r->terminal, history);
   return resource_ready(r) && result == GHOSTTY_SUCCESS ? 0 : -1;
 }
@@ -182,13 +185,25 @@ int resource_history(Resource *r, size_t *history) {
 }
 int resource_scroll(Resource *r, int32_t lines) {
   if (!resource_ready(r)) return -1;
+  r->used = true;
   int result = probe_scroll(r->probe, lines);
   return resource_ready(r) ? result : -1;
 }
 int resource_copy(Resource *r, uint8_t *out, size_t cap, size_t *length) {
   if (!resource_ready(r)) return -1;
   uint16_t x, y;
-  int result = probe_copy(r->probe, out, cap, length, &x, &y);
+  return resource_snapshot(r, out, cap, length, &x, &y);
+}
+int resource_snapshot(Resource *r, uint8_t *out, size_t cap, size_t *length, uint16_t *x, uint16_t *y) {
+  if (!resource_ready(r)) return -1;
+  r->used = true;
+  int result = probe_copy(r->probe, out, cap, length, x, y);
   return resource_ready(r) ? result : -1;
+}
+int resource_bind_callbacks(Resource *r, ResourceBindFn bind, void *context) {
+  if (!resource_ready(r) || r->used || r->callbacks_bound || !bind || !context) return -1;
+  r->callbacks_bound = true;
+  if (bind(r->terminal, context) != GHOSTTY_SUCCESS) { r->binding_failed = true; return -1; }
+  return 0;
 }
 size_t resource_host_storage_bytes(void) { return sizeof(Resource) + 8192; }
