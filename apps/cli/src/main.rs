@@ -19,6 +19,7 @@ use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis};
 mod registry;
+mod ssh;
 mod targets;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -187,6 +188,7 @@ fn parse(
         Some("version") => help_or_no_args("version", tail, Offline::Version)?,
         Some("capabilities") => app_no_args("capabilities", tail, ControlCommand::Capabilities)?,
         Some("doctor") => help_or_no_args("doctor", tail, Offline::Doctor)?,
+        Some("ssh") => ssh::parse(tail)?,
         Some("status") => app_no_args("status", tail, ControlCommand::Status)?,
         Some("list-workspaces") => {
             app_no_args("list-workspaces", tail, ControlCommand::ListWorkspaces)?

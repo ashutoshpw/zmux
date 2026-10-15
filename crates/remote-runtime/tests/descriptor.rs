@@ -46,6 +46,7 @@ fn malformed_or_option_shaped_destinations_fail_before_process_creation() {
 fn terminal_process_and_future_operations_share_one_endpoint_route() {
     let descriptor = SshDescriptor::builder("deploy@prod-alias")
         .unwrap()
+        .config_file("/tmp/fixture ssh/config")
         .port(2222)
         .identity("/Users/me/.ssh/team key")
         .jump_host(JumpHost::parse("bastion", Some(2200)).unwrap())
@@ -73,6 +74,8 @@ fn terminal_process_and_future_operations_share_one_endpoint_route() {
     assert_eq!(
         transport,
         [
+            "-F",
+            "/tmp/fixture ssh/config",
             "-p",
             "2222",
             "-i",
@@ -182,6 +185,13 @@ fn builder_rejects_invalid_ports_duplicate_fields_and_command_controls() {
         SshDescriptor::builder("host").unwrap().port(0).build(),
         Err(DescriptorError::InvalidPort)
     );
+    assert!(matches!(
+        SshDescriptor::builder("host")
+            .unwrap()
+            .config_file("config\n-oProxyCommand=evil")
+            .build(),
+        Err(DescriptorError::InvalidConfig(_))
+    ));
     assert!(matches!(
         SshDescriptor::builder("host")
             .unwrap()
@@ -313,5 +323,12 @@ fn descriptor_collections_and_arguments_have_hard_bounds() {
             .identity("x".repeat(MAX_ARGUMENT_BYTES + 1))
             .build(),
         Err(DescriptorError::InvalidIdentity("path is too long"))
+    ));
+    assert!(matches!(
+        SshDescriptor::builder("host")
+            .unwrap()
+            .config_file("x".repeat(MAX_ARGUMENT_BYTES + 1))
+            .build(),
+        Err(DescriptorError::InvalidConfig("path is too long"))
     ));
 }

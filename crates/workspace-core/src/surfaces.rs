@@ -17,6 +17,7 @@ pub struct Surface {
     pub navigation: u64,
     pub title: String,
     pub cwd: Option<String>,
+    pub remote: Option<zmux_remote_runtime::SshConnectionConfig>,
 }
 impl Surface {
     pub(crate) fn terminal(id: SurfaceId, session_id: SessionId) -> Self {
@@ -28,6 +29,7 @@ impl Surface {
             navigation: 0,
             title: "Terminal".into(),
             cwd: None,
+            remote: None,
         }
     }
 }
@@ -126,6 +128,7 @@ impl WorkspaceStore {
                     navigation: 0,
                     title: "Browser".into(),
                     cwd: None,
+                    remote: None,
                 };
                 let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
                 pane.selected_surface = id;
@@ -146,10 +149,20 @@ impl WorkspaceStore {
                 let wi = self.workspace_index(pane_id)?;
                 let pane = self.pane(pane_id)?;
                 Self::check_tab_capacity(pane.surfaces.len() + 1)?;
-                let cwd = pane.selected().cwd.clone();
+                let cwd = pane
+                    .selected()
+                    .cwd
+                    .clone()
+                    .filter(|_| pane.selected().remote.is_none());
+                let remote = pane
+                    .selected()
+                    .remote
+                    .as_ref()
+                    .map(|remote| remote.for_restore());
                 let ids = self.reserve(2)?;
                 let mut surface = Surface::terminal(SurfaceId(ids), SessionId(ids + 1));
                 surface.cwd = cwd;
+                surface.remote = remote;
                 Self::start(pane_id, &surface, effects);
                 let pane = self.state.workspaces[wi]
                     .root
@@ -356,6 +369,7 @@ impl WorkspaceStore {
                 pane_id,
                 session_id,
                 cwd: surface.cwd.clone(),
+                remote: surface.remote.clone(),
             });
         }
     }
@@ -480,7 +494,8 @@ impl WorkspaceStore {
             url: old.url.clone(),
             navigation: 0,
             title: old.title.clone(),
-            cwd: old.cwd.clone(),
+            cwd: old.cwd.clone().filter(|_| old.remote.is_none()),
+            remote: old.remote.as_ref().map(|remote| remote.for_restore()),
         };
         Self::start(pane_id, &surface, effects);
         Ok(surface)

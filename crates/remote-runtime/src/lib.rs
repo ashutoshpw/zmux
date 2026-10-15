@@ -12,6 +12,10 @@
 //! known-hosts files are rejected. A destination name may be either a DNS name
 //! or an `ssh_config` alias; resolving configuration is left to OpenSSH.
 
+mod config;
+
+pub use config::{JumpConfig, SshConnectionConfig};
+
 use std::{fmt, net::IpAddr};
 use thiserror::Error;
 
@@ -37,6 +41,8 @@ pub enum DescriptorError {
     InvalidPort,
     #[error("SSH identity path is invalid: {0}")]
     InvalidIdentity(&'static str),
+    #[error("SSH config path is invalid: {0}")]
+    InvalidConfig(&'static str),
     #[error("SSH option must use Key=Value syntax")]
     MalformedOption,
     #[error("unsupported SSH option {0:?}")]
@@ -448,6 +454,7 @@ impl Forwarding {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SshEndpoint {
     destination: SshDestination,
+    config_file: Option<String>,
     port: Option<u16>,
     identity: Option<String>,
     jump_hosts: Vec<JumpHost>,
@@ -458,6 +465,10 @@ pub struct SshEndpoint {
 impl SshEndpoint {
     pub fn destination(&self) -> &SshDestination {
         &self.destination
+    }
+
+    pub fn config_file(&self) -> Option<&str> {
+        self.config_file.as_deref()
     }
 
     pub fn port(&self) -> Option<u16> {
@@ -485,6 +496,9 @@ impl SshEndpoint {
     /// those clients require an adapter rather than this argv verbatim.
     pub fn transport_args(&self) -> Vec<String> {
         let mut args = Vec::new();
+        if let Some(config_file) = &self.config_file {
+            args.extend(["-F".into(), config_file.clone()]);
+        }
         if let Some(port) = self.port {
             args.extend(["-p".into(), port.to_string()]);
         }
@@ -538,6 +552,7 @@ impl SshDescriptor {
     pub fn builder(destination: &str) -> Result<SshDescriptorBuilder, DescriptorError> {
         Ok(SshDescriptorBuilder {
             destination: SshDestination::parse(destination)?,
+            config_file: None,
             port: None,
             identity: None,
             jump_hosts: Vec::new(),
@@ -589,6 +604,7 @@ impl SshDescriptor {
 #[derive(Clone, Debug)]
 pub struct SshDescriptorBuilder {
     destination: SshDestination,
+    config_file: Option<String>,
     port: Option<u16>,
     identity: Option<String>,
     jump_hosts: Vec<JumpHost>,
@@ -599,6 +615,11 @@ pub struct SshDescriptorBuilder {
 }
 
 impl SshDescriptorBuilder {
+    pub fn config_file(mut self, config_file: impl Into<String>) -> Self {
+        self.config_file = Some(config_file.into());
+        self
+    }
+
     pub fn port(mut self, port: u16) -> Self {
         self.port = Some(port);
         self
@@ -658,18 +679,11 @@ impl SshDescriptorBuilder {
                 limit: MAX_FORWARDINGS,
             });
         }
+        if let Some(config_file) = &self.config_file {
+            validate_path(config_file).map_err(DescriptorError::InvalidConfig)?;
+        }
         if let Some(identity) = &self.identity {
-            if identity.is_empty() {
-                return Err(DescriptorError::InvalidIdentity("path is empty"));
-            }
-            if identity.len() > MAX_ARGUMENT_BYTES {
-                return Err(DescriptorError::InvalidIdentity("path is too long"));
-            }
-            if identity.chars().any(char::is_control) {
-                return Err(DescriptorError::InvalidIdentity(
-                    "path contains a NUL, newline, or other control character",
-                ));
-            }
+            validate_path(identity).map_err(DescriptorError::InvalidIdentity)?;
         }
         for (index, option) in self.options.iter().enumerate() {
             if self.options[..index]
@@ -692,6 +706,7 @@ impl SshDescriptorBuilder {
         Ok(SshDescriptor {
             endpoint: SshEndpoint {
                 destination: self.destination,
+                config_file: self.config_file,
                 port: self.port,
                 identity: self.identity,
                 jump_hosts: self.jump_hosts,
@@ -714,6 +729,19 @@ fn validate_port(port: u16) -> Result<(), DescriptorError> {
 
 fn validate_optional_port(port: Option<u16>) -> Result<(), DescriptorError> {
     port.map(validate_port).transpose().map(|_| ())
+}
+
+fn validate_path(path: &str) -> Result<(), &'static str> {
+    if path.is_empty() {
+        return Err("path is empty");
+    }
+    if path.len() > MAX_ARGUMENT_BYTES {
+        return Err("path is too long");
+    }
+    if path.chars().any(char::is_control) {
+        return Err("path contains a NUL, newline, or other control character");
+    }
+    Ok(())
 }
 
 fn has_forbidden_text(value: &str) -> bool {

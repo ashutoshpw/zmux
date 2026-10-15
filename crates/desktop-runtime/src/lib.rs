@@ -166,6 +166,7 @@ struct Envelope {
 pub(crate) struct Execution {
     pub result: Result<(), DesktopError>,
     pub snapshot: Arc<Snapshot>,
+    pub created_workspaces: Vec<zmux_workspace_core::WorkspaceId>,
 }
 
 impl Desktop {
@@ -498,6 +499,18 @@ impl Worker {
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
         self.last_request_id = request.request_id;
+        let previous_workspaces = if matches!(&request.payload, Command::Action { .. }) {
+            Some(
+                self.model
+                    .snapshot()
+                    .workspaces
+                    .iter()
+                    .map(|w| w.id)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
         let authorization = envelope.authorization;
         let guard = authorization
             .as_ref()
@@ -509,8 +522,23 @@ impl Worker {
         };
         self.last_error = result.as_ref().err().map(ToString::to_string);
         let snapshot = self.publish(false);
+        let created_workspaces = previous_workspaces
+            .map(|ids| {
+                snapshot
+                    .model
+                    .workspaces
+                    .iter()
+                    .filter(|w| !ids.contains(&w.id))
+                    .map(|w| w.id)
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Some(sender) = envelope.acknowledgement {
-            let _ = sender.try_send(Execution { result, snapshot });
+            let _ = sender.try_send(Execution {
+                result,
+                snapshot,
+                created_workspaces,
+            });
         }
     }
     fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
@@ -748,7 +776,10 @@ impl Worker {
                     }
                 }
                 Effect::StartSession {
-                    session_id, cwd, ..
+                    session_id,
+                    cwd,
+                    remote,
+                    ..
                 } => {
                     // A preceding launch-worker failure can abort the whole restore group.
                     if !self
@@ -775,10 +806,10 @@ impl Worker {
                     );
                     let sender = self.completion_tx.clone();
                     let mut shell = self.shell.clone();
-                    if let Some(cwd) = cwd {
+                    if let Some(cwd) = cwd.filter(|_| remote.is_none()) {
                         shell.cwd = Some(PathBuf::from(cwd));
                     }
-                    if let Some(cwd) = &shell.cwd {
+                    if let Some(cwd) = shell.cwd.as_ref().filter(|_| remote.is_none()) {
                         self.model
                             .set_session_cwd(session_id, cwd.to_string_lossy().into_owned());
                     }
@@ -796,15 +827,32 @@ impl Worker {
                     let result = thread::Builder::new()
                         .name(format!("zmux-launch-{}", session_id.0))
                         .spawn(move || {
-                            let result = Session::spawn_with_environment(
-                                Launch {
-                                    program: shell.program,
-                                    args: shell.args,
-                                    cwd: shell.cwd,
-                                    size: zmux_session_runtime::default_size(),
-                                },
-                                &context,
-                            );
+                            let result = (|| {
+                                if let Some(remote) = remote {
+                                    let process = remote
+                                        .validate()
+                                        .map_err(|e| {
+                                            SessionError::Failure(format!(
+                                                "invalid SSH connection: {e}"
+                                            ))
+                                        })?
+                                        .process_spec();
+                                    shell.program = "/usr/bin/ssh".into();
+                                    shell.args = process.args;
+                                    // Every managed terminal needs a remote PTY, including a
+                                    // requested command; endpoint-only file operations do not.
+                                    shell.args.insert(0, "-tt".into());
+                                }
+                                Session::spawn_with_environment(
+                                    Launch {
+                                        program: shell.program,
+                                        args: shell.args,
+                                        cwd: shell.cwd,
+                                        size: zmux_session_runtime::default_size(),
+                                    },
+                                    &context,
+                                )
+                            })();
                             // A dropped coordinator rejects the result; dropping Session cancels its worker.
                             if let Err(error) = sender.send(Completion {
                                 id: session_id,

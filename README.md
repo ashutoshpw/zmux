@@ -21,6 +21,10 @@ Install Rust 1.95.0 with Cargo, rustfmt and Clippy, then run:
 scripts/check
 ```
 
+The checks include a private loopback OpenSSH fixture. Linux development machines need
+`openssh-server` and `ssh-keygen`; CI installs the server dependency on its disposable runner.
+The fixture generates temporary keys/configuration and removes them after the test.
+
 The Rust foundation can be checked on Linux. Native work initially targets macOS 14+ and
 requires a macOS development machine; portable checks do not establish native UI behavior.
 
@@ -37,6 +41,7 @@ See [prototype limits](docs/terminal-prototype.md).
 
 Grouped offline help, an automation guide, command discovery and socket password/access
 modes are described in [local control](docs/local-control.md).
+The current managed SSH subset and remaining transfer work are described in [SSH workspaces](docs/ssh.md).
 
 ## Terminal history and attention
 
