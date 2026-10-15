@@ -77,3 +77,12 @@ This accepts adapter linkage, not Session/native-app/default/typed-input/perform
 behavior. The optional Session extension is recorded in the linked worker slice.
 
 The next production worker slice is tracked in [F04 Session engine integration](f04-session-engine.md).
+
+The optional Session extension subsequently passed run `38814746696` at
+`c9ec29b27f7c4702ad2a4f46dfb2c2a53ac862de`: both shim/adapter/Session target
+linkages were inspected, and ARM executed all four adapter plus four public Session
+cases. Independent ZIP/source/raw Mach-O review is recorded in the linked Session
+slice, including the 1,022-byte blocked input prefix and exact 4,096-byte user prefix
+before its causal reply. Intel remains compile/link/inspection only. This adds
+optional Session evidence without changing defaults or original engine pins;
+native app, typed input and performance acceptance remain separate.

@@ -50,7 +50,7 @@ Raw input remains exact. Explicit history-wheel navigation is supported for the
 candidate. Application wheel encoding is refused before queue admission until its
 authoritative engine encoder is integrated; it is never silently downgraded to
 history. Typed keys/paste/native modes, richer styles, selection/IME, actual Zellij
-launch wiring, Darwin Session execution, named workloads and default policy remain
+launch wiring, named workloads and default policy remain
 gates. The existing real Zellij fixture's DA/DSR responder is not copied into the
 product: the selected engine owns production protocol replies.
 
@@ -213,3 +213,40 @@ policies and repeated calls. Red evidence is retained under
 The focused regression and full linked Session23 cases pass locally, including
 strict all-targets Clippy. Actual Darwin reap and optional Session acceptance
 remain pending the repaired lane.
+
+## Accepted optional Darwin Session execution
+
+Run [38814746696](https://github.com/ashutoshpw/zmux/actions/runs/38814746696)
+at `c9ec29b27f7c4702ad2a4f46dfb2c2a53ac862de` completed on the isolated
+`ci/session-cleanup-diagnostics` branch. Artifact `12010556195` is 14,857,622 bytes;
+its ZIP SHA256 is
+`4e52a7c3bb2a830ac87c3607386cc2ef6e26e5e8f69c43612f4fb712ec803a3a`.
+Producer receipt SHA256 is
+`be01262440071b77bfa822d6c916c399d638c09dd06d2c3eaa158a625379525c`.
+
+Independent review verified all 343 uploaded files against that ZIP, all 193 source
+entries (192 distinct normalized paths) against the exact Git commit, and the raw
+shim objects plus adapter and Session executables for both architectures. Each
+consumer remains generic arm64/x86_64 with minOS 14 and SDK 15.5. Both adapter
+executables load only libSystem; both Session executables load libSystem plus the
+justified system libiconv.2. Each Session uses the same shim hash as its adapter.
+Original engine libraries, producer receipt, independent review and required source
+supplement remain hash-identical; no engine rebuild occurred.
+
+All four adapter and four public Session cases actually passed on ARM. Deadline
+and cancellation cases each confirmed a 1,022-byte accepted user prefix, with the
+first incomplete receipt Partial and the remaining queued receipts NotWritten.
+The release case independently observed exactly 4,096 user bytes before the
+literal reply. Cleanup errors remained fatal to the fixture. Intel compilation,
+linkage and inspection passed; Intel execution did not occur.
+
+The independent review is retained beside the extracted artifact at
+`target/terminal-engine-artifacts/darwin-session-38814746696/independent-review.json`
+and `/tmp/zmux-darwin-session-independent-review-38814746696.json`, SHA256
+`188926354e509f51412fd436e83bd64ee6cf14c4f151e6074a016ea5b97e7f45`.
+The successful log contains no rare EPERM/ESRCH actual-reap fallback event: its
+execution is not established by this run. The sticky cleanup-error contract has
+real-kernel local red/green evidence above. This accepts the optional four-case
+Session lane and its observed cleanup outcomes; it does not establish all-group
+extinction, native-app/default/typed-input acceptance, minimum-OS execution or
+performance budgets.

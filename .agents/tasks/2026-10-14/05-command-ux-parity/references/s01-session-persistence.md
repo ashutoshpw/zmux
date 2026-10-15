@@ -109,7 +109,7 @@ silently select it. Its Foundation control must reproduce
 the old existing-path ENOTDIR. It runs before Rust compilation so path regressions
 fail early. Shell syntax, workflow YAML/order and whitespace checks pass on Linux;
 no local Swift compiler or Darwin SDK is available. Focused native execution and a
-green packaged reopen remain hosted gates, including split ratio and fresh input.
+green packaged reopen were the remaining gates at that source-review checkpoint.
 
 The first repaired run `38811810709` passed strict Swift typechecking on both
 Apple targets, then passed the focused main path/alias and invalid/file/loop
@@ -122,5 +122,32 @@ is inferred. That one case now records only this specific refusal as its platfor
 outcome. Other creation errors still fail. If a filesystem permits the raw name,
 the original production-owner invalid-UTF8 refusal assertion still runs, including
 the usable replacement-character directory. All main path assertions and the
-production lossless decoding guard are unchanged. Native focused and packaged
-reopen acceptance remain pending after this fixture-only correction.
+production lossless decoding guard are unchanged. This fixture-only correction
+then awaited native focused and packaged reopen evidence.
+
+## Scoped native acceptance
+
+Run `38813108591` at `f62a10cff9c2d613b9ba0b3047036c4fa35010dd`
+passes both strict Swift target typechecks, the focused storage-path executable,
+Rust/core/ABI verification and the universal build. The raw-name probe again records
+`mkdir=-1`, errno92/EILSEQ; all mandatory main path/alias/refusal assertions pass.
+The packaged close/save/reopen journey then completes successfully. Its externally
+validated final save retains the exact namespace, window, workspace and surface;
+the fresh process accepts native input and restores the split ratio. Both close and
+reopen logs finish with every pending physical count zero, native cleanup false,
+control zero and `shutdown after all physical owners joined`.
+
+Diagnostic artifact `12009264859` contains16 files in a16111-byte ZIP, independently
+verified against SHA256
+`fc9a888c78e04fc7fb65718dca04d1e0c0afa4808e3c60a86ec0f5887016e62e`.
+Its `native-windows.json` source SHA and restored identities match both phases;
+saved version4 documents and physical-shutdown logs were independently checked.
+The acceptance receipt is
+`/tmp/zmux-native-storage-lifecycle-independent-acceptance-20261015.json`, SHA256
+`4e1c91b06b0a7e5bdb8941d47818f1ddfd81af4922004a0008a6f80c5ce97415`.
+
+This accepts the scoped native window persistence journey on the hosted ARM Mac.
+The overall run fails afterward while compiling the separate save-panel driver,
+before broad smoke and browser keyboard execution. It does not establish active
+SSH/transfer/download shutdown scenarios, Intel execution, the macOS14 runtime
+floor, broader S01 parity or the full V01 artifact gate.

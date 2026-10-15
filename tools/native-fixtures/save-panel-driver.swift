@@ -45,6 +45,8 @@ enum SavePanelDriver {
             throw Failure(description: "Accessibility application identity differs from the target PID")
         }
         let deadline = ContinuousClock.now + .seconds(10)
+        // The public AX attribute has no kAXSheetsAttribute export in this SDK.
+        let sheetsAttribute = "AXSheets"
         func checkDeadline() throws {
             guard ContinuousClock.now < deadline else { throw Failure(description: "Accessibility UI input exceeded its deadline") }
         }
@@ -77,7 +79,7 @@ enum SavePanelDriver {
                 guard result.count < 256 else { throw Failure(description: "Save-panel Accessibility tree exceeded its bound") }
                 result.append(element)
                 queue.append(contentsOf: try children(element))
-                queue.append(contentsOf: try children(element, kAXSheetsAttribute))
+                queue.append(contentsOf: try children(element, sheetsAttribute))
                 guard queue.count <= 512 else { throw Failure(description: "Save-panel Accessibility traversal exceeded its queue bound") }
             }
             return result
@@ -100,7 +102,7 @@ enum SavePanelDriver {
             guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == pid else {
                 throw Failure(description: "Accessibility window does not belong to the exact target app")
             }
-            let sheets = try children(window, kAXSheetsAttribute)
+            let sheets = try children(window, sheetsAttribute)
             for sheet in sheets {
                 guard try text(sheet, kAXRoleAttribute) == kAXSheetRole else { continue }
                 let controls = try descendants(sheet)
@@ -128,7 +130,7 @@ enum SavePanelDriver {
             try wait("exact target save filename focus") {
                 guard let focused = try attribute(app, kAXFocusedUIElementAttribute),
                       CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
-                return CFEqual(unsafeBitCast(focused, to: AXUIElement.self), target.name)
+                return CFEqual(unsafeDowncast(focused, to: AXUIElement.self), target.name)
             }
             func key(_ code: CGKeyCode, flags: CGEventFlags = []) throws {
                 for down in [true, false] {
@@ -146,7 +148,7 @@ enum SavePanelDriver {
             try wait("target save sheet Go to Folder input") {
                 guard let value = try attribute(app, kAXFocusedUIElementAttribute),
                       CFGetTypeID(value) == AXUIElementGetTypeID() else { return false }
-                let element = unsafeBitCast(value, to: AXUIElement.self)
+                let element = unsafeDowncast(value, to: AXUIElement.self)
                 let role = try text(element, kAXRoleAttribute)
                 guard !CFEqual(element, target.name), role == kAXTextFieldRole || role == kAXComboBoxRole else { return false }
                 // The focused entry must be reachable from this exact sheet,
@@ -164,7 +166,7 @@ enum SavePanelDriver {
             try wait("Go to Folder completion") {
                 guard let value = try attribute(app, kAXFocusedUIElementAttribute),
                       CFGetTypeID(value) == AXUIElementGetTypeID() else { return false }
-                return !CFEqual(unsafeBitCast(value, to: AXUIElement.self), pathField)
+                return !CFEqual(unsafeDowncast(value, to: AXUIElement.self), pathField)
             }
             guard try text(target.name, kAXValueAttribute) == arguments[6] else {
                 throw Failure(description: "Save panel did not retain the requested fixture filename")

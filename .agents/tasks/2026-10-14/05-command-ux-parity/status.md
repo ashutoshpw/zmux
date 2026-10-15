@@ -5,11 +5,15 @@
 
 ## Active implementation
 
-- Native38812458734 measured raw invalid-name mkdir errno92/EILSEQ. The focused
-  fixture records only that filesystem capability refusal; all main physical-path,
-  existing/missing/alias and invalid-parent checks remain mandatory. Production
-  validatingCString and strict Rust path policies are unchanged. Root source review
-  passes; next native run must establish focused acceptance and actual reopen.
+- Native38813108591 at `f62a10c` passes the focused physical-storage regression,
+  both strict Swift target checks, Rust/core/ABI and universal build. Its packaged
+  close/save/reopen journey passes: exact identities, fresh process/native input,
+  restored split ratio and all physical owners joined in both phases. Artifact
+  `12009264859` and its ZIP hash were independently verified; see [S01](references/s01-session-persistence.md).
+  The overall run fails later while compiling the separate save-panel fixture;
+  broad smoke, browser keyboard, active remote/download cleanup and full V01 remain
+  unaccepted. Native38812458734's exact raw-name EILSEQ refusal remains explicitly
+  recorded; production lossless decoding and strict Rust path policies are unchanged.
 - Patched Zellij38811822523 Darwin producer and all27 actual owner checks pass with
   independently verified source/workflow/log receipts. GUI integration, distributable
   dependency packaging and acquisition pins remain separate gates.
@@ -23,8 +27,9 @@
   unchanged and close owners joined. Foundation can strip `/private` from an existing
   path. NativeBridge now passes a POSIX realpath physical spelling; source review passed.
   Native38811810709 passed both Swift typechecks and the focused main filesystem cases,
-  then failed to create an invalid-UTF8 fixture directory. Exact errno diagnostic is
-  running in38812458734; packaged reopen and browser keyboard remain unverified.
+  then failed to create an invalid-UTF8 fixture directory. Native38812458734 captured
+  errno92/EILSEQ; the corrected focused fixture and packaged reopen now pass in38813108591.
+  Browser keyboard remains unverified because its later smoke stage was not reached.
 - Optional Session38811818507 proved Darwin accepts1022bytes of the first4096byte
   input chunk before EAGAIN. The old fixture incorrectly required one complete chunk.
   Repaired fixture retains exact child byte ordering and positive partial-write proof;

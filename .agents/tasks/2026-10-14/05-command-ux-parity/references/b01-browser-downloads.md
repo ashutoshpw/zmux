@@ -278,3 +278,17 @@ UI automation authorization fails with an explicit native-acceptance gate; no
 download success or full-parity claim follows. Exact-source native compilation,
 permission evidence and real save acceptance remain required. Production
 `BrowserDownloads` and filesystem guards are unchanged.
+
+Run `38813108591` at `f62a10cff9c2d613b9ba0b3047036c4fa35010dd`
+passed the packaged close/save/reopen journey, including restored split ratio.
+The next Save panel driver compilation failed before the broad app smoke: this
+SDK exports no `kAXSheetsAttribute`, and strict warnings reject three
+`unsafeBitCast` calls where `unsafeDowncast` is appropriate. No Save panel UI
+interaction or browser keyboard fixture ran in that attempt.
+
+The driver now names the same `AXSheets` attribute directly and uses the suggested
+downcasts after the existing AX type-ID checks. Its PID/permission checks, tree
+bounds, UI actions, deadlines and assertions are unchanged. The early native
+source gate also type-checks this driver for both Apple architectures before Rust
+compilation. Python syntax and whitespace checks pass locally; strict Darwin
+compilation and actual permission-checked Save panel acceptance remain pending.

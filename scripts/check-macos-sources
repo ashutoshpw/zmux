@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Type-check both native app slices before spending time building Rust libraries."""
+"""Type-check native app slices and the external Save panel driver before Rust builds."""
 from pathlib import Path
 import platform
 import subprocess
@@ -26,4 +26,11 @@ for architecture in architectures:
         "-import-objc-header", str(root / "crates/native-bridge/include/zmux.h"),
         *map(str, sources),
     ], check=True)
-print("Both native Swift slices type-check; linking and runtime checks remain required.")
+    subprocess.run([
+        "xcrun", "swiftc", "-typecheck", "-parse-as-library", "-swift-version", "6",
+        "-strict-concurrency=complete", "-warnings-as-errors", "-O",
+        "-target", f"{architecture}-apple-macosx14.0", "-sdk", sdk,
+        str(root / "tools/native-fixtures/save-panel-driver.swift"),
+        "-framework", "AppKit", "-framework", "ApplicationServices",
+    ], check=True)
+print("Both native Swift slices and the Save panel driver type-check; linking and runtime checks remain required.")
