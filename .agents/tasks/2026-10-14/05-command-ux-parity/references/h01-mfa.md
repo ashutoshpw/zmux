@@ -1,5 +1,23 @@
 # H01 authenticator and recovery flow
 
+## HTTPS development tunnel cookie repair (2026-10-15)
+
+The real authentication handler issued a session cookie without `Secure` when the
+configured origin was HTTPS and `production` was false. A new table case in the
+existing PostgreSQL integration suite failed on that exact response attribute
+(expected true, received false), before the owner was changed. Existing tests
+used HTTP loopback and could not detect the tunnel case; no production test seam
+or replacement auth implementation was added.
+
+Cookie policy now uses the validated public origin as well as production mode.
+The same test passes HTTPS development, HTTPS production, and HTTP loopback,
+checking the session cookie's Secure attribute/prefix, HttpOnly and SameSite.
+`scripts/check-cloud` passes all 18 real PostgreSQL tests, TypeScript and the
+production Docker image build. Evidence is retained in
+`target/agent-validation/cloud-cookie-check-20261015.log`. The test database is a
+separate disposable container; the serving database was not touched. Public
+Cloudflare/browser acceptance and local service promotion remain separate gates.
+
 Implement TOTP enrollment, confirmation, challenge and recovery using the pinned
 Better Auth owner, including the web UI. Native authorization must remain denied
 for a password-only challenge until a valid second factor creates a session.
