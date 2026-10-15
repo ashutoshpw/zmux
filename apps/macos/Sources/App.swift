@@ -1335,10 +1335,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 throw BridgeFailure(message: "Sidebar divider could not receive keyboard focus")
             }
             window.sendEvent(left)
-            guard abs(sidebarContainer.bounds.width - 248) < 1, window.firstResponder === sidebarDivider,
-                  sidebarDivider.accessibilityPerformIncrement(), abs(sidebarContainer.bounds.width - 264) < 1,
-                  SidebarLayout().preferredWidth == 264 else {
-                throw BridgeFailure(message: "Sidebar keyboard/accessibility resize or persisted width failed")
+            guard abs(sidebarContainer.bounds.width - 248) < 1, window.firstResponder === sidebarDivider else {
+                throw BridgeFailure(message: "Sidebar keyboard resize failed: width=\(sidebarContainer.bounds.width), expected=248; responder=\(responderDescription(window.firstResponder))")
+            }
+            guard sidebarDivider.accessibilityPerformIncrement(), abs(sidebarContainer.bounds.width - 264) < 1 else {
+                throw BridgeFailure(message: "Sidebar accessibility increment failed: width=\(sidebarContainer.bounds.width), expected=264")
+            }
+            let reloadedSidebarWidth = SidebarLayout(key: sidebarWidthKey, inheritLegacy: false).preferredWidth
+            guard reloadedSidebarWidth == 264 else {
+                throw BridgeFailure(message: "Sidebar persisted width failed: width=\(reloadedSidebarWidth), expected=264")
             }
             let priorCanvasWidth = canvas.bounds.width
             try performShortcut("b", modifiers: [.command])
@@ -1356,7 +1361,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             }
             window.setContentSize(NSSize(width: 680, height: window.contentView?.bounds.height ?? 720))
             guard sidebarContainer.bounds.width < 480, canvas.bounds.width >= 400,
-                  SidebarLayout().preferredWidth == 480 else {
+                  SidebarLayout(key: sidebarWidthKey, inheritLegacy: false).preferredWidth == 480 else {
                 throw BridgeFailure(message: "A narrow window overwrote the sidebar preference or squeezed terminal content")
             }
             window.setFrame(savedWindowFrame, display: true)

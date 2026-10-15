@@ -2,7 +2,9 @@
 
 Original AppKit implementation; no cmux implementation or assets imported.
 
-`SidebarLayout` remembers an expanded width in UserDefaults (`sidebarWidth`),
+`SidebarLayout` remembers an expanded width in each bound window's UserDefaults
+key (`window.<identity namespace>.<window UUID>.sidebarWidth`), with optional
+legacy `sidebarWidth` inheritance for the initial window,
 defaulting to 224 points and bounded to 200–480 points. The displayed sidebar leaves
 at least 400 points for main content when the window permits it. Window resizing
 only clamps presentation; growing the window restores the remembered width.
@@ -58,3 +60,15 @@ compilation and packaged execution. The executed smoke receipt reports
 the strict native event, key-view, AX-action, preference, collapse and window-size
 checks described above. Physical pointer/keyboard and VoiceOver acceptance remain
 separate; the hosted smoke does not claim those manual OS interactions.
+
+macOS 38818219763 at 74a228780 reached the packaged sidebar keyboard/AX/persistence
+guard after passing pointer resizing. That guard still reloaded the legacy global
+`sidebarWidth`, although the bound window now writes its scoped preference. The
+repair reloads the current window's exact key with legacy inheritance disabled,
+both after keyboard/AX resizing and after narrowing the window. It retains all
+existing width/focus/selection assertions and separates keyboard, AX and persisted
+width failures for diagnosis. The artifact's separate direct diagnostic launch
+failed earlier at pointer resizing with `key=false`; it is not evidence for the
+original Launch Services failure. Browser keyboard smoke was not reached.
+Native compilation and the same packaged journey must rerun on this repair;
+Linux diff/source inspection does not establish native acceptance.
