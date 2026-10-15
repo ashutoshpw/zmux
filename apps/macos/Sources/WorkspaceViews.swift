@@ -209,7 +209,7 @@ final class WorkspaceRowView: NSControl {
         updateMetadata(metadata)
         metadataButton.setAccessibilityLabel("Show workspace activity for \(title)")
         let activity = self.metadata.map { value in
-            "\(value.statuses.count) statuses, \(value.logs.count) log entries" + (value.progress.map { ", \(Int($0.value * 100)) percent" } ?? "")
+            "\(value.statuses.count) statuses, \(value.logs.count) log entries" + (value.progress.map { ", \(Int($0.value * 100)) percent" } ?? "") + (value.pullRequest.map { ", PR #\($0.number)" } ?? "")
         } ?? ""
         setAccessibilityLabel("\(title), \(subtitle)" + (activity.isEmpty ? "" : ", " + activity))
         setAccessibilityValue(self.metadata == nil ? "" : metadataLabel.stringValue + ", " + progressLabel.stringValue)
@@ -226,15 +226,15 @@ final class WorkspaceRowView: NSControl {
         for view in [metadataIcon, metadataLabel, progressLabel, metadataButton] { view.isHidden = value == nil }
         guard let value else { progress.isHidden = true; return }
         let first = value.statuses.first
-        let symbol = first?.icon ?? (value.progress == nil ? "text.bubble" : "circle.dotted")
+        let symbol = first?.icon ?? (value.pullRequest == nil ? (value.progress == nil ? "text.bubble" : "circle.dotted") : "arrow.triangle.pull")
         metadataIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
         let color = first?.color.flatMap { hexColor($0) } ?? NSColor.secondaryLabelColor
         metadataIcon.contentTintColor = color
         metadataLabel.textColor = color
-        metadataLabel.stringValue = first.map { "\($0.key): \($0.value)" } ?? (value.progress == nil ? "Workspace log" : "Task progress")
+        metadataLabel.stringValue = first.map { "\($0.key): \($0.value)" } ?? (value.pullRequest.map { "PR #\($0.number)" } ?? (value.progress == nil ? "Workspace log" : "Task progress"))
         metadataLabel.toolTip = metadataLabel.stringValue
-        metadataButton.toolTip = "Show all \(value.statuses.count) statuses and \(value.logs.count) log entries"
+        metadataButton.toolTip = "Show all workspace activity" + (value.pullRequest.map { " · " + $0.url } ?? "")
         progress.isHidden = value.progress == nil
         progressWidth?.constant = value.progress == nil ? 0 : 44
         progressSpacing?.constant = value.progress == nil ? 0 : 6
@@ -244,7 +244,10 @@ final class WorkspaceRowView: NSControl {
             progressLabel.stringValue = "\(percent)%" + (task.label.map { " · " + $0 } ?? "")
             progress.setAccessibilityLabel(task.label ?? "Workspace progress")
         } else { progressLabel.stringValue = "\(value.logs.count) log entries" + (value.logsDropped > 0 ? " · \(value.logsDropped) older omitted" : "") }
-        progressLabel.toolTip = progressLabel.stringValue
+        if let pullRequest = value.pullRequest {
+            if first != nil || value.progress != nil { progressLabel.stringValue += " · PR #\(pullRequest.number)" }
+            progressLabel.toolTip = pullRequest.url
+        } else { progressLabel.toolTip = progressLabel.stringValue }
     }
     private func hexColor(_ text: String) -> NSColor? {
         guard text.count == 7, text.first == "#", let value = UInt32(text.dropFirst(), radix: 16) else { return nil }
@@ -346,7 +349,10 @@ final class WorkspaceMetadataViewController: NSViewController {
         text.setAccessibilityLabel("Workspace activity details for \(name)")
         guard displayed != metadata else { return }
         displayed = metadata
-        var lines = ["STATUSES · \(metadata.statuses.count)"]
+        var lines = ["PULL REQUEST"]
+        if let pullRequest = metadata.pullRequest { lines += ["PR #\(pullRequest.number)", pullRequest.url] }
+        else { lines.append("No manual pull request") }
+        lines += ["", "STATUSES · \(metadata.statuses.count)"]
         if metadata.statuses.isEmpty { lines.append("No statuses") }
         for status in metadata.statuses {
             lines += ["\(status.key) · priority \(status.priority)", status.value]
@@ -365,10 +371,22 @@ final class WorkspaceMetadataViewController: NSViewController {
         }
         let selection = text.selectedRange()
         let origin = scroll.contentView.bounds.origin
-        text.string = lines.joined(separator: "\n")
-        let length = (text.string as NSString).length
-        let location = min(selection.location, length)
-        text.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+        let replacement = lines.joined(separator: "\n")
+        let previous = Array(text.string.utf16)
+        let next = Array(replacement.utf16)
+        var prefix = 0
+        while prefix < min(previous.count, next.count), previous[prefix] == next[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(previous.count, next.count) - prefix,
+              previous[previous.count - suffix - 1] == next[next.count - suffix - 1] { suffix += 1 }
+        let oldLocation = min(selection.location, previous.count)
+        let oldLength = min(selection.length, previous.count - oldLocation)
+        let location: Int
+        if oldLocation + oldLength <= prefix { location = oldLocation }
+        else if oldLocation >= previous.count - suffix { location = oldLocation + next.count - previous.count }
+        else { location = min(oldLocation, next.count) }
+        text.string = replacement
+        text.setSelectedRange(NSRange(location: location, length: min(oldLength, next.count - location)))
         scroll.contentView.scroll(to: origin)
         scroll.reflectScrolledClipView(scroll.contentView)
     }

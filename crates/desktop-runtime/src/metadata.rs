@@ -18,6 +18,10 @@ pub const MAX_RETAINED_BYTES: usize = 512 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MetadataAction {
+    SetPullRequest {
+        pull_request: PullRequest,
+    },
+    ClearPullRequest {},
     SetStatus {
         key: String,
         value: String,
@@ -74,6 +78,80 @@ pub struct Progress {
     pub value: f64,
     pub label: Option<String>,
 }
+/// A manual link, not automatically fetched PR state. No network or process work
+/// runs on this metadata owner. The CLI verifies repository provenance first.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PullRequest {
+    pub number: u64,
+    pub url: String,
+}
+impl PullRequest {
+    pub fn parse(url: &str) -> Result<Self, MetadataError> {
+        let invalid = || {
+            MetadataError::Invalid(
+                "PR must use https://github.com/OWNER/REPO/pull/NUMBER with a canonical positive number",
+            )
+        };
+        if url.len() > 256 {
+            return Err(invalid());
+        }
+        let path = url
+            .strip_prefix("https://github.com/")
+            .ok_or_else(invalid)?;
+        let parts: Vec<_> = path.split('/').collect();
+        if parts.len() != 4
+            || parts[2] != "pull"
+            || !valid_repository(&format!("{}/{}", parts[0], parts[1]))
+        {
+            return Err(invalid());
+        }
+        let number = positive_pr_number(parts[3]).ok_or_else(invalid)?;
+        Ok(Self {
+            number,
+            url: url.into(),
+        })
+    }
+    pub fn repository(&self) -> &str {
+        // Only validated records are retained; parsing never normalizes paths.
+        self.url
+            .strip_prefix("https://github.com/")
+            .and_then(|path| path.rsplit_once("/pull/").map(|(repository, _)| repository))
+            .unwrap_or("")
+    }
+    fn validate(&self) -> Result<(), MetadataError> {
+        if Self::parse(&self.url)?.number != self.number {
+            return Err(MetadataError::Invalid(
+                "PR number does not match its canonical URL",
+            ));
+        }
+        Ok(())
+    }
+}
+pub fn positive_pr_number(value: &str) -> Option<u64> {
+    if value.is_empty() || value.starts_with('0') || !value.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
+}
+pub fn valid_repository(value: &str) -> bool {
+    let Some((owner, repo)) = value.split_once('/') else {
+        return false;
+    };
+    !owner.is_empty()
+        && owner.len() <= 39
+        && owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && owner.as_bytes()[0].is_ascii_alphanumeric()
+        && owner.as_bytes()[owner.len() - 1].is_ascii_alphanumeric()
+        && !repo.is_empty()
+        && repo.len() <= 100
+        && !matches!(repo, "." | "..")
+        && repo
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
     pub sequence: u64,
@@ -84,6 +162,8 @@ pub struct LogEntry {
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkspaceMetadata {
     pub workspace_id: WorkspaceId,
+    pub workspace_uuid: Uuid,
+    pub pull_request: Option<PullRequest>,
     pub statuses: Vec<StatusEntry>,
     pub progress: Option<Progress>,
     /// Oldest to newest. A list limit retains the newest N in this same order.
@@ -94,17 +174,21 @@ impl WorkspaceMetadata {
     // All admitted text requires at most two JSON bytes per UTF-8 byte. The
     // fixed framing allowances include IDs, counters, enum strings and numbers.
     fn encoded_bound(&self) -> usize {
-        128 + self
-            .statuses
-            .iter()
-            .map(|s| {
-                128 + 2
-                    * (s.key.len()
-                        + s.value.len()
-                        + s.icon.as_ref().map_or(0, String::len)
-                        + s.color.as_ref().map_or(0, String::len))
-            })
-            .sum::<usize>()
+        192 + self
+            .pull_request
+            .as_ref()
+            .map_or(0, |pr| 128 + 2 * pr.url.len())
+            + self
+                .statuses
+                .iter()
+                .map(|s| {
+                    128 + 2
+                        * (s.key.len()
+                            + s.value.len()
+                            + s.icon.as_ref().map_or(0, String::len)
+                            + s.color.as_ref().map_or(0, String::len))
+                })
+                .sum::<usize>()
             + self
                 .progress
                 .as_ref()
@@ -116,11 +200,16 @@ impl WorkspaceMetadata {
                 .sum::<usize>()
     }
     fn is_empty(&self) -> bool {
-        self.statuses.is_empty() && self.progress.is_none() && self.logs.is_empty()
+        self.pull_request.is_none()
+            && self.statuses.is_empty()
+            && self.progress.is_none()
+            && self.logs.is_empty()
     }
-    fn empty(workspace_id: WorkspaceId) -> Self {
+    fn empty(workspace_id: WorkspaceId, workspace_uuid: Uuid) -> Self {
         Self {
             workspace_id,
+            workspace_uuid,
+            pull_request: None,
             statuses: Vec::new(),
             progress: None,
             logs: Vec::new(),
@@ -149,6 +238,7 @@ impl MetadataAction {
     /// The owner validates wire requests too; CLI validation is only early feedback.
     pub fn validate(&self) -> Result<(), MetadataError> {
         match self {
+            Self::SetPullRequest { pull_request } => pull_request.validate()?,
             Self::SetStatus {
                 key,
                 value,
@@ -253,6 +343,7 @@ impl MetadataStore {
     pub fn apply(
         &mut self,
         workspace: WorkspaceId,
+        workspace_uuid: Uuid,
         action: MetadataAction,
     ) -> Result<WorkspaceMetadata, MetadataError> {
         action.validate()?;
@@ -269,9 +360,13 @@ impl MetadataStore {
             .workspaces
             .get(&workspace.0)
             .cloned()
-            .unwrap_or_else(|| WorkspaceMetadata::empty(workspace));
+            .unwrap_or_else(|| WorkspaceMetadata::empty(workspace, workspace_uuid));
         let mut sequence = self.sequence;
         match action {
+            MetadataAction::SetPullRequest { pull_request } => {
+                state.pull_request = Some(pull_request)
+            }
+            MetadataAction::ClearPullRequest {} => state.pull_request = None,
             MetadataAction::SetStatus {
                 key,
                 value,

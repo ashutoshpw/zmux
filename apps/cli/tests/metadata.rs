@@ -23,6 +23,9 @@ struct App {
 }
 impl App {
     fn new() -> Self {
+        Self::with_cwd(None)
+    }
+    fn with_cwd(cwd: Option<PathBuf>) -> Self {
         // Parallel macOS tests can observe the same wall-clock tick.
         let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let socket = std::env::temp_dir()
@@ -39,7 +42,7 @@ impl App {
             Desktop::new(Shell {
                 program: "/bin/sh".into(),
                 args: vec!["-i".into()],
-                cwd: None,
+                cwd,
             })
             .unwrap(),
         );
@@ -61,6 +64,9 @@ impl App {
         app
     }
     fn output(&self, args: &[&str], caller: Option<(&str, &str)>) -> Output {
+        self.command(args, caller).output().unwrap()
+    }
+    fn command(&self, args: &[&str], caller: Option<(&str, &str)>) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_zmux"));
         c.arg("--socket")
             .arg(&self.socket)
@@ -73,7 +79,7 @@ impl App {
         if let Some((w, s)) = caller {
             c.env("ZMUX_WORKSPACE_ID", w).env("ZMUX_SURFACE_ID", s);
         }
-        c.output().unwrap()
+        c
     }
     fn call(&self, args: &[&str], caller: Option<(&str, &str)>) -> Value {
         let o = self.output(args, caller);
@@ -97,6 +103,405 @@ impl Drop for App {
 }
 fn id(v: &Value, key: &str) -> String {
     v[key].as_u64().unwrap().to_string()
+}
+
+struct GitFixture {
+    root: PathBuf,
+    repository: PathBuf,
+    bin: PathBuf,
+}
+impl GitFixture {
+    fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("zmux-pr-{}", uuid::Uuid::new_v4()));
+        let repository = root.join("repo");
+        let bin = root.join("bin");
+        fs::create_dir_all(&repository).unwrap();
+        fs::create_dir(&bin).unwrap();
+        for arguments in [
+            vec!["init", "-q"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(arguments)
+                    .current_dir(&repository)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let fixture = Self {
+            root,
+            repository,
+            bin,
+        };
+        fixture.gh("case \"$1 $2\" in\n'repo view') printf '%s\\n' '{\"nameWithOwner\":\"acme/widget\",\"parent\":null}' ;;\n'pr view') printf '%s\\n' '{\"number\":17,\"url\":\"https://github.com/acme/widget/pull/17\"}' ;;\n*) exit 9 ;;\nesac\n");
+        fs::set_permissions(fixture.bin.join("gh"), fs::Permissions::from_mode(0o700)).unwrap();
+        fixture
+    }
+    fn gh(&self, body: &str) {
+        fs::write(self.bin.join("gh"), format!("#!/bin/sh\n{body}")).unwrap();
+    }
+    fn command(&self, app: &App, args: &[&str], caller: Option<(&str, &str)>) -> Command {
+        let mut command = app.command(args, caller);
+        command.current_dir(&self.repository).env(
+            "PATH",
+            format!("{}:{}", self.bin.display(), std::env::var("PATH").unwrap()),
+        );
+        command
+    }
+    fn run(&self, app: &App, args: &[&str], caller: Option<(&str, &str)>) -> Value {
+        let output = self.command(app, args, caller).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+}
+impl Drop for GitFixture {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.root).unwrap();
+    }
+}
+
+#[test]
+fn pull_request_handoff_checks_repository_and_caller_without_changing_focus_or_other_metadata() {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
+    let git = GitFixture::new();
+    let app = App::with_cwd(Some(git.repository.clone()));
+    let first = app.run(&["new-workspace", "PR owner"]);
+    let workspace = id(&first, "focused_workspace");
+    let surface = id(&first, "focused_surface");
+    app.run(&[
+        "set-status",
+        "build",
+        "preserved",
+        "--workspace",
+        &workspace,
+    ]);
+    let foreground = app.run(&["new-workspace", "foreground"]);
+    let attached = git.run(
+        &app,
+        &[
+            "pr",
+            "https://github.com/acme/widget/pull/17",
+            "--workspace",
+            &workspace,
+        ],
+        None,
+    );
+    assert_eq!(attached["pull_request"]["number"], 17);
+    assert_eq!(
+        attached["pull_request"]["url"],
+        "https://github.com/acme/widget/pull/17"
+    );
+    assert_eq!(attached["statuses"][0]["value"], "preserved");
+    let numbered = git.run(&app, &["pr", "17"], Some((&workspace, &surface)));
+    assert_eq!(numbered["pull_request"], attached["pull_request"]);
+    let mut isolated = git.command(&app, &["pr", "17", "--workspace", &workspace], None);
+    isolated
+        .env("GIT_DIR", "/not-the-workspace")
+        .env("GIT_WORK_TREE", "/not-the-workspace")
+        .env("GH_REPO", "foreign/repo")
+        .env("GH_HOST", "github.evil.test");
+    let output = isolated.output().unwrap();
+    assert!(
+        output.status.success(),
+        "ambient tool override escaped isolation: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for input in [
+        "0",
+        "17junk",
+        "017",
+        "18",
+        "https://github.com/acme/widget/pull/18446744073709551616",
+        "https://github.com/acme/widget/pull/17?x=y",
+        "https://github.com/acme/widget/pull/17/",
+        "https://github.com.evil.test/acme/widget/pull/17",
+        "https://github.com/acme/other/pull/17",
+    ] {
+        assert!(
+            !git.command(&app, &["pr", input, "--workspace", &workspace], None)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "{input}"
+        );
+    }
+    assert!(
+        !git.command(&app, &["pr", "17"], None)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(
+        app.run(&["list-status", "--workspace", &workspace])["pull_request"],
+        attached["pull_request"]
+    );
+    assert_eq!(
+        app.run(&["list-workspaces"])["focused_workspace"],
+        foreground["focused_workspace"]
+    );
+    let foreign = GitFixture::new();
+    assert!(
+        !foreign
+            .command(&app, &["pr", "17", "--workspace", &workspace], None)
+            .output()
+            .unwrap()
+            .status
+            .success(),
+        "foreign checkout was accepted for the workspace"
+    );
+    assert!(
+        Command::new("git")
+            .args([
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/acme/pull.git"
+            ])
+            .current_dir(&git.repository)
+            .status()
+            .unwrap()
+            .success()
+    );
+    git.gh("case \"$1 $2\" in\n'repo view') printf '%s\\n' '{\"nameWithOwner\":\"acme/pull\",\"parent\":{\"name\":\"upstream\",\"owner\":{\"login\":\"acme\"}}}' ;;\n'pr view') printf '%s\\n' '{\"number\":17,\"url\":\"https://github.com/acme/pull/pull/17\"}' ;;\nesac\n");
+    let named_pull = git.run(
+        &app,
+        &[
+            "pr",
+            "https://github.com/acme/pull/pull/17",
+            "--workspace",
+            &workspace,
+        ],
+        None,
+    );
+    assert_eq!(
+        named_pull["pull_request"]["url"],
+        "https://github.com/acme/pull/pull/17"
+    );
+    git.gh("case \"$1 $2\" in\n'repo view') printf '%s\\n' '{\"nameWithOwner\":\"acme/pull\",\"parent\":{\"name\":\"upstream\",\"owner\":{\"login\":\"acme\"}}}' ;;\n'pr view') printf '%s\\n' '{\"number\":17,\"url\":\"https://github.com/acme/upstream/pull/17\"}' ;;\nesac\n");
+    let parent = git.run(&app, &["pr", "17", "--workspace", &workspace], None);
+    assert_eq!(
+        parent["pull_request"]["url"],
+        "https://github.com/acme/upstream/pull/17"
+    );
+    app.server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let denied = git
+        .command(&app, &["pr", "clear", "--workspace", &workspace], None)
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    app.server
+        .set_policy(ControlPolicy::same_user(ControlAccess::Full))
+        .unwrap();
+    let cleared = git.run(&app, &["pr", "--workspace", &workspace, "clear"], None);
+    assert!(cleared["pull_request"].is_null());
+    assert_eq!(cleared["statuses"][0]["value"], "preserved");
+}
+
+#[test]
+fn pull_request_lookup_deadlines_and_failure_keep_metadata_and_stop_pipe_holding_descendants() {
+    let git = GitFixture::new();
+    let app = App::with_cwd(Some(git.repository.clone()));
+    let first = app.run(&["new-workspace", "PR lookup owner"]);
+    let workspace = id(&first, "focused_workspace");
+    let attached = git.run(&app, &["pr", "17", "--workspace", &workspace], None);
+    let child = git.root.join("descendant");
+    for body in [
+        format!(
+            "sleep 60 &\nprintf '%s' \"$!\" > '{}'\nexit 0\n",
+            child.display()
+        ),
+        format!(
+            "exec 1>&- 2>&-\nsleep 60 &\nprintf '%s' \"$!\" > '{}'\nwait\n",
+            child.display()
+        ),
+    ] {
+        git.gh(&body);
+        let before = Instant::now();
+        let output = git
+            .command(
+                &app,
+                &["--timeout", "250", "pr", "17", "--workspace", &workspace],
+                None,
+            )
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(before.elapsed() < Duration::from_secs(3));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("deadline"));
+        let pid: u32 = fs::read_to_string(&child).unwrap().parse().unwrap();
+        let state = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+            .unwrap();
+        let state = String::from_utf8(state.stdout).unwrap();
+        assert!(
+            state.trim().is_empty() || state.trim().starts_with('Z'),
+            "owned descendant still executes: {pid} {state}"
+        );
+        assert_eq!(
+            app.run(&["list-status", "--workspace", &workspace])["pull_request"],
+            attached["pull_request"]
+        );
+    }
+    git.gh(&format!("case \"$1 $2\" in\n'repo view') sleep 60 </dev/null >/dev/null 2>&1 & printf '%s' \"$!\" > '{}'; printf '%s\\n' '{{\"nameWithOwner\":\"acme/widget\",\"parent\":null}}' ;;\n'pr view') printf '%s\\n' '{{\"number\":17,\"url\":\"https://github.com/acme/widget/pull/17\"}}' ;;\nesac\n", child.display()));
+    git.run(&app, &["pr", "17", "--workspace", &workspace], None);
+    let pid = fs::read_to_string(&child).unwrap();
+    let state = Command::new("ps")
+        .args(["-p", &pid, "-o", "stat="])
+        .output()
+        .unwrap();
+    let state = String::from_utf8(state.stdout).unwrap();
+    assert!(
+        state.trim().is_empty() || state.trim().starts_with('Z'),
+        "closed-stdio descendant survived successful lookup"
+    );
+    for body in [
+        "printf 'PRIVATE_AUTH_FIXTURE' >&2; exit 7\n",
+        "head -c 70000 /dev/zero\n",
+    ] {
+        git.gh(body);
+        let output = git
+            .command(&app, &["pr", "17", "--workspace", &workspace], None)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("PRIVATE_AUTH_FIXTURE"));
+        assert_eq!(
+            app.run(&["list-status", "--workspace", &workspace])["pull_request"],
+            attached["pull_request"]
+        );
+    }
+    let ready = git.root.join("cancel-ready");
+    git.gh(&format!(
+        "sleep 60 &\nprintf '%s' \"$!\" > '{}'\ntouch '{}'\nwait\n",
+        child.display(),
+        ready.display()
+    ));
+    let mut cli = git
+        .command(&app, &["pr", "17", "--workspace", &workspace], None)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(cli.id() as i32),
+        nix::sys::signal::Signal::SIGTERM,
+    )
+    .unwrap();
+    while cli.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    let output = cli.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cancelled"));
+    let pid = fs::read_to_string(&child).unwrap();
+    let state = Command::new("ps")
+        .args(["-p", &pid, "-o", "stat="])
+        .output()
+        .unwrap();
+    let state = String::from_utf8(state.stdout).unwrap();
+    assert!(state.trim().is_empty() || state.trim().starts_with('Z'));
+    assert_eq!(
+        app.run(&["list-status", "--workspace", &workspace])["pull_request"],
+        attached["pull_request"]
+    );
+    // Only the second Git query probes the optional target directory. A
+    // nonrepository may be skipped, but permission/stream/encoding failures
+    // must not disappear behind a misleading worktree-mismatch error.
+    use std::os::unix::fs::PermissionsExt;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let counter = git.root.join("git-counter");
+    for (failure, expected) in [
+        (
+            "printf 'fatal: permission failure' >&2; exit 128",
+            "Git/GitHub lookup failed",
+        ),
+        (
+            "head -c 70000 /dev/zero; exit 0",
+            "lookup stream exceeded64KiB",
+        ),
+        ("printf '\\377'; exit 0", "lookup returned invalid UTF-8"),
+    ] {
+        fs::write(&counter, "0").unwrap();
+        fs::write(git.bin.join("git"), format!("#!/bin/sh\nn=$(cat '{}'); n=$((n+1)); printf '%s' \"$n\" > '{}'\nif [ \"$n\" = 2 ]; then {failure}; fi\nexec '{}' \"$@\"\n", counter.display(), counter.display(), real_git.display())).unwrap();
+        fs::set_permissions(git.bin.join("git"), fs::Permissions::from_mode(0o700)).unwrap();
+        let output = git
+            .command(&app, &["pr", "17", "--workspace", &workspace], None)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            app.run(&["list-status", "--workspace", &workspace])["pull_request"],
+            attached["pull_request"]
+        );
+    }
+}
+
+#[test]
+fn slow_pull_request_lookup_pins_the_original_workspace_instead_of_reusing_its_index() {
+    let git = GitFixture::new();
+    let app = App::with_cwd(Some(git.repository.clone()));
+    let initial = app.run(&["list-workspaces"]);
+    let workspace = id(&initial, "focused_workspace");
+    let ready = git.root.join("ready");
+    let release = git.root.join("release");
+    git.gh(&format!("case \"$1 $2\" in\n'repo view') touch '{}'; while [ ! -f '{}' ]; do sleep .01; done; printf '%s\\n' '{{\"nameWithOwner\":\"acme/widget\",\"parent\":null}}' ;;\n'pr view') printf '%s\\n' '{{\"number\":17,\"url\":\"https://github.com/acme/widget/pull/17\"}}' ;;\nesac\n", ready.display(), release.display()));
+    let mut child = git
+        .command(&app, &["pr", "17", "--workspace", "index:1"], None)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline, "gh lookup never started");
+        thread::sleep(Duration::from_millis(5));
+    }
+    app.run(&["close-workspace", "--workspace", &workspace]);
+    let replacement = app.run(&["new-workspace", "replacement"]);
+    fs::write(&release, "release").unwrap();
+    while child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "slow lookup did not finish");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let state = app.run(&["list-status"]);
+    assert!(state["pull_request"].is_null());
+    assert_eq!(state["workspace_id"], replacement["focused_workspace"]);
 }
 #[test]
 fn current_inspects_hidden_tabs_with_exact_owners_without_inventing_active_work() {

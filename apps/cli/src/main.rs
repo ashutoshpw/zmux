@@ -20,11 +20,13 @@ use zmux_desktop_runtime::control::{
 use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
+mod bounded_command;
 mod browser;
 mod browser_download;
 mod inspection;
 mod local_multiplexer;
 mod local_zellij;
+mod pull_request;
 mod registry;
 mod session;
 mod ssh;
@@ -63,6 +65,7 @@ struct ClientOptions {
 }
 
 enum Parsed {
+    PullRequest(pull_request::Invocation),
     Offline(Offline),
     LocalMultiplexer(local_multiplexer::Invocation),
     LocalZellij(local_zellij::Invocation),
@@ -99,6 +102,14 @@ fn main() -> ExitCode {
 fn run() -> Result<u8, Box<dyn Error>> {
     let (parsed, socket_override, timeout, password) = parse(env::args_os().skip(1).collect())?;
     match parsed {
+        Parsed::PullRequest(invocation) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&pull_request::run(&options, invocation)?)?
+            );
+            Ok(0)
+        }
         Parsed::Offline(Offline::Help(command)) => {
             print_help(command.as_deref())?;
             Ok(0)
@@ -315,6 +326,9 @@ fn parse(
             timeout = *wait;
         }
         return Ok((parsed, socket, timeout, password));
+    }
+    if command == Some("pr") {
+        return Ok((pull_request::parse(tail)?, socket, timeout, password));
     }
     if let Some(command) = command
         && registry::find(command).is_some_and(|spec| spec.targeted)

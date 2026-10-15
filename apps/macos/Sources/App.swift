@@ -1577,6 +1577,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "notification_jump_to_unread": true,
             "notification_reply_pty": true,
             "workspace_metadata": true,
+            "workspace_pull_request_metadata": true,
             "remote_file_url_symlink": true,
             "remote_file_url_directory_refusal": true,
             "browser_cli_automation": true,
@@ -1768,6 +1769,24 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
               details.string.contains("WARNING · native-smoke"), details.string.contains("<script>literal log</script>"),
               details.string.contains("0 older entries omitted"), !details.isEditable, !details.isRichText,
               scroll.hasVerticalScroller else { throw BridgeFailure(message: "Workspace activity details lost status/log fields or treated metadata as rich text") }
+        let metadataResponder = window.firstResponder
+        let ownerData = try await nativeCLI(["list-status"] + target, externalCaller: true)
+        guard let owner = try JSONSerialization.jsonObject(with: ownerData) as? [String: Any],
+              let rawUUID = owner["workspace_uuid"] as? String, let ownerUUID = UUID(uuidString: rawUUID) else {
+            throw BridgeFailure(message: "Native PR fixture did not resolve the exact shared workspace UUID")
+        }
+        let prNumber = UInt64.max
+        let prURL = "https://github.com/acme/pull/pull/\(prNumber)"
+        try await WorkspacePullRequestSmoke.set(workspace: ownerUUID, number: prNumber, url: prURL)
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.pullRequest?.number == prNumber }
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard row.subviews.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "42% · Indexing source · PR #\(prNumber)" && !$0.isHidden }),
+              details.string.contains("PR #\(prNumber)"), details.string.contains(prURL),
+              details.string.contains(literal), details.string.contains("<script>literal log</script>"),
+              row.bounds.height <= 86.5, window.firstResponder === metadataResponder,
+              snapshot?.model.focusedWorkspace == foregroundWorkspace else {
+            throw BridgeFailure(message: "Shared PR metadata did not reach the row/inspector intact or changed focus/status/log state")
+        }
         let selection = (details.string as NSString).range(of: literal)
         details.setSelectedRange(selection)
         if let layout = details.layoutManager, let container = details.textContainer { layout.ensureLayout(for: container) }
@@ -1779,6 +1798,21 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard details.string.contains("Build complete"), details.selectedRange() == selection,
               abs(scroll.contentView.bounds.origin.y - origin.y) < 1 else {
             throw BridgeFailure(message: "Live workspace log refresh lost the reader's selection or scroll position")
+        }
+        _ = try await nativeCLI(["pr", "clear", "--workspace", ownerUUID.uuidString], externalCaller: true)
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.pullRequest == nil }
+        let clearSelection = details.selectedRange()
+        let clearDocument = details.string as NSString
+        guard let retainedMetadata = snapshot?.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID }),
+              retainedMetadata.statuses.count == 2, retainedMetadata.logs.count == 2,
+              retainedMetadata.progress?.value == 0.42,
+              row.subviews.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "42% · Indexing source" && !$0.isHidden }),
+              details.string.contains("No manual pull request"), !details.string.contains(prURL),
+              clearSelection.location <= clearDocument.length,
+              clearSelection.length <= clearDocument.length - clearSelection.location,
+              clearDocument.substring(with: clearSelection) == literal,
+              window.firstResponder === metadataResponder else {
+            throw BridgeFailure(message: "PR clear changed other metadata/selected text or left stale native projection")
         }
         _ = try await nativeCLI(["clear-status", "build"] + target, externalCaller: true)
         _ = try await nativeCLI(["clear-status", "notes"] + target, externalCaller: true)

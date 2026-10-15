@@ -1534,7 +1534,14 @@ impl Worker {
                 let workspace =
                     targets::metadata_workspace(&model, &request.scope, &request.caller)?;
                 self.metadata.reconcile(&model);
-                self.metadata_result = Some(self.metadata.apply(workspace, action)?);
+                self.metadata_result = Some(self.metadata.apply(
+                    workspace,
+                    model.object_uuid(
+                        zmux_workspace_core::targets::TargetKind::Workspace,
+                        workspace.0,
+                    ),
+                    action,
+                )?);
                 Ok(())
             }
             TargetOperation::Notifications { action } => {

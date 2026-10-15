@@ -1400,15 +1400,15 @@
       "inventory_id": "CMD-199",
       "reference_command": "pr",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "pr"
     },
     {
       "inventory_id": "CMD-200",
       "reference_command": "pr clear",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "pr clear"
     },
     {
       "inventory_id": "CMD-201",

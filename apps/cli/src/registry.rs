@@ -136,6 +136,14 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "Attach-only compatibility spelling of local-tmux attach. Default attachment uses the authenticated app socket; --headless requires terminal stdin/stdout. Other lifecycle verbs use local-tmux."
     ),
     command!(
+        "pr",
+        "automation",
+        true,
+        true,
+        "pr <https://github.com/OWNER/REPO/pull/NUMBER | NUMBER | clear> [--workspace TARGET] [--window TARGET]",
+        "Attach a repository-verified manual PR link, or clear only that link. Requires an explicit workspace or live caller; never targets foreground focus. Set runs bounded git/gh from the CLI's local worktree, which must match a local terminal in the target workspace. Origin must be GitHub; gh authentication is required. URL must be canonical and match origin or its verified fork parent; a bare positive number uses the parent when present. No query, fragment, trailing slash, leading zero or alternate host. Workspace/window UUIDs are pinned before lookup; replacement or cross-window moves fail. --timeout covers lookup and socket requests; each child has at most2s additional physical cleanup reserve, never renewed. Lookup output is bounded at64KiB per stream. Clear needs no Git/gh. Results use JSON, including pull_request and stable workspace_uuid. Manual metadata is transient; automatic status refresh, TTY and unique-worktree target inference are unavailable."
+    ),
+    command!(
         "set-status",
         "automation",
         true,
@@ -666,10 +674,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
 const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client response deadline (50–30000 ms; checked after decoding; output rendering may finish later)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
 const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, window:N/workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --window and --workspace.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  --window constrains an object's actual owner, including an inherited caller;\n  it never silently retargets an object to another window's selection. Explicit\n  workspace/pane/surface selectors override inherited object defaults.\n  ZMUX_WINDOW_ID is a hint only; malformed/stale hints are ignored. Workspace metadata\n  uses ZMUX_WORKSPACE_ID with caller surface ownership checked, and allows\n  options after values; consult its command help. For other target commands,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Those surface callers follow tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
 const METADATA_TARGETS: &str = "Workspace metadata targets:\n  --window is a hard ownership constraint for the resolved workspace.\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Explicit --workspace overrides inherited caller defaults. Otherwise,\n  ZMUX_WORKSPACE_ID selects the workspace, and any ZMUX_SURFACE_ID\n  (or ZMUX_TAB_ID) must belong to it. A moved or mismatched caller fails.\n  Without a caller workspace, the caller surface or current focus applies.\n  Closed/stale targets fail. Pane/surface selector flags are unavailable.\n  Options may appear before or after values; -- preserves literal text.\n";
+const PR_TARGETS: &str = "PR targets:\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  Otherwise a live ZMUX_WORKSPACE_ID and/or ZMUX_SURFACE_ID (ZMUX_TAB_ID)\n  or managed tmux caller must prove the owner. No foreground-focus fallback.\n  --window constrains ownership; --expect-revision checks the observed model.\n  Options may precede or follow the single value. Resolved workspace/window\n  UUIDs remain pinned through lookup; failures preserve the previous link.\n";
 fn metadata_command(name: &str) -> bool {
     matches!(
         name,
-        "set-status"
+        "pr" | "set-status"
             | "clear-status"
             | "list-status"
             | "set-progress"
@@ -720,7 +729,9 @@ pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
         }
         if spec.targeted {
             out.push('\n');
-            out.push_str(if metadata_command(spec.name) {
+            out.push_str(if spec.name == "pr" {
+                PR_TARGETS
+            } else if metadata_command(spec.name) {
                 METADATA_TARGETS
             } else {
                 TARGETS

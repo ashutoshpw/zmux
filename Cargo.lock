@@ -743,6 +743,7 @@ dependencies = [
  "nix",
  "portable-pty",
  "serde_json",
+ "signal-hook",
  "socket2",
  "uuid",
  "zmux-desktop-runtime",

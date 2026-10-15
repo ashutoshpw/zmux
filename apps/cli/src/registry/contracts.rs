@@ -133,6 +133,28 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    for (name, input) in [("pr", Some("17")), ("pr clear", None)] {
+        let mut operands = vec![];
+        if let Some(input) = input {
+            operands.push(input);
+        }
+        operands.extend(["--workspace", "1"]);
+        let mut arguments = target_arguments();
+        arguments.retain(|a| !matches!(a.name, "pane" | "surface"));
+        if input.is_some() {
+            arguments.insert(0, positional("url_or_number", ValueKind::Text, true));
+        }
+        let mut c = contract(name, &operands, arguments, "pull_request");
+        c.route = "pull_request";
+        c.requirements = if input.is_some() {
+            &["running_app", "local_git_worktree", "gh_authentication"]
+        } else {
+            &["running_app"]
+        };
+        c.defaults = json!({"implicit_focus_target":false,"lookup_stream_bytes":65536,"state":"transient_manual_link"});
+        c.limitations = "Explicit workspace or proven caller required; pin workspace/window UUIDs across lookup. Set verifies canonical GitHub PR against local Git origin or its gh-verified fork parent and a local terminal worktree. Bare numbers use the parent for forks. Clear only removes the manual link, without Git/gh. Parser probe describes preflight, not tool execution. TTY/unique-worktree target inference, auto-refresh and full historical compatibility remain unresolved.";
+        result.push(c);
+    }
     let mut current = contract(
         "current",
         &[],
@@ -910,12 +932,14 @@ fn failure(message: impl Into<String>) -> CliError {
 fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
     let (parsed, _, timeout, _) = crate::parse(c.probe.iter().map(OsString::from).collect())
         .map_err(|error| failure(format!("{}: {}", c.name, error)))?;
-    let (route, command) = match parsed {
-        Parsed::App(command) => ("app", command),
-        Parsed::WorkspaceMove(command) => ("workspace_move", command),
-        Parsed::SurfaceOrder(command) => ("surface_order", command),
-        Parsed::Browser(command, _) => ("browser", command),
-        Parsed::BrowserDownload(command, _) => ("browser_download", command),
+    let value = |command| serde_json::to_value(command).map_err(|e| failure(e.to_string()));
+    let (route, request) = match parsed {
+        Parsed::PullRequest(invocation) => ("pull_request", invocation.discovery()),
+        Parsed::App(command) => ("app", value(command)?),
+        Parsed::WorkspaceMove(command) => ("workspace_move", value(command)?),
+        Parsed::SurfaceOrder(command) => ("surface_order", value(command)?),
+        Parsed::Browser(command, _) => ("browser", value(command)?),
+        Parsed::BrowserDownload(command, _) => ("browser_download", value(command)?),
         _ => {
             return Err(failure(format!(
                 "{} no longer parses to its app request",
@@ -926,7 +950,6 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
     if route != c.route {
         return Err(failure(format!("{} changed its execution route", c.name)));
     }
-    let request = serde_json::to_value(command).map_err(|e| failure(e.to_string()))?;
     for (path, expected) in &c.expected {
         if request.pointer(path).and_then(Value::as_str) != Some(expected) {
             return Err(failure(format!("{} expected {path}={expected}", c.name)));

@@ -87,6 +87,73 @@ fn status(key: String, value: &str, priority: i32) -> MetadataAction {
     }
 }
 #[test]
+fn pull_request_wire_owner_rejects_noncanonical_records_without_poisoning_snapshot() {
+    use zmux_desktop_runtime::metadata::PullRequest;
+    let mut app = App::new();
+    let initial = desktop_snapshot::read(&app.desktop);
+    let workspace = initial.model.workspaces[0].id;
+    let url = format!("https://github.com/acme/pull/pull/{}", u64::MAX);
+    let record = PullRequest::parse(&url).unwrap();
+    let accepted = app.metadata(
+        workspace,
+        MetadataAction::SetPullRequest {
+            pull_request: record,
+        },
+    );
+    assert!(accepted.last_error.is_none());
+    let before = serde_json::to_value(&accepted.workspace_metadata).unwrap();
+    assert_eq!(before[0]["pull_request"]["number"], u64::MAX);
+    assert_eq!(before[0]["pull_request"]["url"], url);
+    assert_eq!(
+        before[0]["workspace_uuid"],
+        initial
+            .model
+            .object_uuid(
+                zmux_workspace_core::targets::TargetKind::Workspace,
+                workspace.0
+            )
+            .to_string()
+    );
+    for (number, url) in [
+        (17, "https://github.com/acme/widget/pull/18".to_owned()),
+        (
+            17,
+            "https://github.com/acme/widget/pull/17#fragment".to_owned(),
+        ),
+        (
+            17,
+            "https://github.com/acme/widget/pull/17/../18".to_owned(),
+        ),
+        (17, "https://github.com/acme/%2fescape/pull/17".to_owned()),
+        (
+            17,
+            "https://github.com/user:secret@github.com/acme/widget/pull/17".to_owned(),
+        ),
+        (0, "https://github.com/acme/widget/pull/0".to_owned()),
+    ] {
+        let result = app.metadata(
+            workspace,
+            MetadataAction::SetPullRequest {
+                pull_request: PullRequest { number, url },
+            },
+        );
+        assert!(result.last_error.is_some());
+        assert_eq!(
+            serde_json::to_value(&result.workspace_metadata).unwrap(),
+            before
+        );
+    }
+    assert!(
+        serde_json::from_value::<MetadataAction>(
+            serde_json::json!({"action":"clear_pull_request","extra":true})
+        )
+        .is_err()
+    );
+    let cleared = app.metadata(workspace, MetadataAction::ClearPullRequest {});
+    assert!(cleared.last_error.is_none());
+    assert!(cleared.workspace_metadata.is_empty());
+}
+#[test]
 fn owner_bounds_status_and_log_records_without_losing_existing_keys_or_newest_messages() {
     let mut a = App::new();
     let w = desktop_snapshot::read(&a.desktop).model.workspaces[0].id;
