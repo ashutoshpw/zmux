@@ -5,6 +5,16 @@
 
 ## Active implementation
 
+- Checkpoint `16cf61a` pushed: native lifecycle startup routing, process-group
+  ownership cleanup, isolated kernel PTY acceptance and authenticated Zellij
+  rejection fixture. Native `38784161310`, Foundation `38784161346`, and PTY
+  `38784165438` are running. Zellij `38784160950` passed the repaired negative
+  fixture but failed real attachment cancellation: terminal child did not exit
+  successfully. Diagnosis continues; its Darwin gate remains open.
+- Independent final Linux PTY acceptance passes frozen8/lock31, construction
+  exhaustion cleanup and named negative controls. This is an isolated experiment,
+  not a production terminal-engine switch. Workspace moves remain in progress.
+
 - T03 two-window creation/focus/close, per-window rendering/attention and last-close
   save/reopen slice passes independent full portable checks and native source review.
   Packaged macOS execution remains required; moves/groups/canvas and full parity

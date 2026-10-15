@@ -1,0 +1,4344 @@
+{
+  "baseline_cmux_sha": "3ba653b9e5afb11d0bc578031142950d6136697e",
+  "baseline_zmux_sha": "5642b48",
+  "scope": "User-supplied help plus source-observed session save/open and vm restart. Functional identifiers only; no implementation or help prose copied. Wildcard command families require recursive expansion in P0. cloud aliases all vm leaves. Optional default verbs are tested alongside explicit spellings.",
+  "commands": [
+    {
+      "id": "CMD-001",
+      "group": "start",
+      "command": "restore",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-002",
+      "group": "start",
+      "command": "fork",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-003",
+      "group": "start",
+      "command": "restore-session",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-004",
+      "group": "start",
+      "command": "session restore",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-005",
+      "group": "start",
+      "command": "sessions list",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-006",
+      "group": "start",
+      "command": "open",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-007",
+      "group": "start",
+      "command": "new-workspace",
+      "phase": "P4",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-008",
+      "group": "start",
+      "command": "local-tmux start",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-009",
+      "group": "start",
+      "command": "local-tmux attach",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-010",
+      "group": "start",
+      "command": "local-tmux list",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-011",
+      "group": "start",
+      "command": "local-tmux status",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-012",
+      "group": "start",
+      "command": "local-tmux detach",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-013",
+      "group": "start",
+      "command": "local-tmux close",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-014",
+      "group": "start",
+      "command": "local-tmux cleanup",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-015",
+      "group": "start",
+      "command": "tmux attach",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-016",
+      "group": "start",
+      "command": "local-zellij start",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-017",
+      "group": "start",
+      "command": "local-zellij attach",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-018",
+      "group": "start",
+      "command": "local-zellij list",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-019",
+      "group": "start",
+      "command": "local-zellij status",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-020",
+      "group": "start",
+      "command": "local-zellij close",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-021",
+      "group": "start",
+      "command": "surface resume set",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-022",
+      "group": "start",
+      "command": "surface resume show",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-023",
+      "group": "start",
+      "command": "surface resume get",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-024",
+      "group": "start",
+      "command": "surface resume clear",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-025",
+      "group": "agents",
+      "command": "agent message",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-026",
+      "group": "agents",
+      "command": "agent inbox",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-027",
+      "group": "agents",
+      "command": "agent messages on",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-028",
+      "group": "agents",
+      "command": "agent messages off",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-029",
+      "group": "agents",
+      "command": "agent messages status",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-030",
+      "group": "agents",
+      "command": "agent-hibernation on",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-031",
+      "group": "agents",
+      "command": "agent-hibernation off",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-032",
+      "group": "agents",
+      "command": "agent-hibernation hibernate",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-033",
+      "group": "agents",
+      "command": "agent-hibernation wake",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-034",
+      "group": "agents",
+      "command": "claude-teams",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-035",
+      "group": "agents",
+      "command": "codex-teams",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-036",
+      "group": "agents",
+      "command": "omo",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-037",
+      "group": "agents",
+      "command": "omx",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-038",
+      "group": "agents",
+      "command": "omc",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-039",
+      "group": "agents",
+      "command": "hooks setup",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-040",
+      "group": "agents",
+      "command": "hooks uninstall",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-041",
+      "group": "agents",
+      "command": "hooks <agent> install",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-042",
+      "group": "agents",
+      "command": "hooks <agent> uninstall",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-043",
+      "group": "agents",
+      "command": "hooks <agent> event",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-044",
+      "group": "agents",
+      "command": "hooks feed",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-045",
+      "group": "agents",
+      "command": "coderouter",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-046",
+      "group": "agents",
+      "command": "cr",
+      "phase": "P6",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-047",
+      "group": "agents",
+      "command": "coderouter status",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-048",
+      "group": "agents",
+      "command": "coderouter machines",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-049",
+      "group": "agents",
+      "command": "coderouter claude",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-050",
+      "group": "agents",
+      "command": "ai-accounts list",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-051",
+      "group": "agents",
+      "command": "ai-accounts upload",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-052",
+      "group": "agents",
+      "command": "ai-accounts remove",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-053",
+      "group": "navigate",
+      "command": "new-window",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-054",
+      "group": "navigate",
+      "command": "focus-window",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-055",
+      "group": "navigate",
+      "command": "close-window",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-056",
+      "group": "navigate",
+      "command": "resize-window",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-057",
+      "group": "navigate",
+      "command": "move-workspace-to-window",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-058",
+      "group": "navigate",
+      "command": "reorder-workspace",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-059",
+      "group": "navigate",
+      "command": "reorder-workspaces",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-060",
+      "group": "navigate",
+      "command": "workspace-action",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-061",
+      "group": "navigate",
+      "command": "workspace status",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-062",
+      "group": "navigate",
+      "command": "workspace status set",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-063",
+      "group": "navigate",
+      "command": "move-tab-to-new-workspace",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-064",
+      "group": "navigate",
+      "command": "new-split",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-065",
+      "group": "navigate",
+      "command": "focus-pane",
+      "phase": "P1",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-066",
+      "group": "navigate",
+      "command": "new-pane",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-067",
+      "group": "navigate",
+      "command": "new-surface",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-068",
+      "group": "navigate",
+      "command": "close-surface",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-069",
+      "group": "navigate",
+      "command": "move-surface",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-070",
+      "group": "navigate",
+      "command": "split-off",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-071",
+      "group": "navigate",
+      "command": "reorder-surface",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-072",
+      "group": "navigate",
+      "command": "tab-action",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-073",
+      "group": "navigate",
+      "command": "rename-tab",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-074",
+      "group": "navigate",
+      "command": "drag-surface-to-split",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-075",
+      "group": "navigate",
+      "command": "refresh-surfaces",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-076",
+      "group": "navigate",
+      "command": "list-panels",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-077",
+      "group": "navigate",
+      "command": "focus-panel",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-078",
+      "group": "navigate",
+      "command": "close-workspace",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-079",
+      "group": "navigate",
+      "command": "select-workspace",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-080",
+      "group": "navigate",
+      "command": "rename-workspace",
+      "phase": "P1",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-081",
+      "group": "navigate",
+      "command": "rename-window",
+      "phase": "P1",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-082",
+      "group": "inspect",
+      "command": "diff",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-083",
+      "group": "inspect",
+      "command": "identify",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-084",
+      "group": "inspect",
+      "command": "list-windows",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-085",
+      "group": "inspect",
+      "command": "current-window",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-086",
+      "group": "inspect",
+      "command": "comments list",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-087",
+      "group": "inspect",
+      "command": "review list",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-088",
+      "group": "inspect",
+      "command": "review show",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-089",
+      "group": "inspect",
+      "command": "review findings",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-090",
+      "group": "inspect",
+      "command": "vault sessions",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-091",
+      "group": "inspect",
+      "command": "vault search",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-092",
+      "group": "inspect",
+      "command": "vault checkpoints",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-093",
+      "group": "inspect",
+      "command": "vault checkpoint",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-094",
+      "group": "inspect",
+      "command": "vault fork",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-095",
+      "group": "inspect",
+      "command": "recover",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-096",
+      "group": "inspect",
+      "command": "list-workspaces",
+      "phase": "P5",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-097",
+      "group": "inspect",
+      "command": "list-panes",
+      "phase": "P5",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-098",
+      "group": "inspect",
+      "command": "list-pane-surfaces",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-099",
+      "group": "inspect",
+      "command": "current",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-100",
+      "group": "inspect",
+      "command": "tree",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-101",
+      "group": "inspect",
+      "command": "top",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-102",
+      "group": "inspect",
+      "command": "memory",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-103",
+      "group": "inspect",
+      "command": "surface-health",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-104",
+      "group": "inspect",
+      "command": "current-workspace",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-105",
+      "group": "inspect",
+      "command": "read-selection",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-106",
+      "group": "inspect",
+      "command": "read-screen",
+      "phase": "P5",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-107",
+      "group": "inspect",
+      "command": "record start",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-108",
+      "group": "inspect",
+      "command": "record stop",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-109",
+      "group": "inspect",
+      "command": "record status",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-110",
+      "group": "inspect",
+      "command": "record note",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-111",
+      "group": "inspect",
+      "command": "record list",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-112",
+      "group": "inspect",
+      "command": "shot",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-113",
+      "group": "inspect",
+      "command": "sidebar-state",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-114",
+      "group": "inspect",
+      "command": "markdown open",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-115",
+      "group": "customize",
+      "command": "guide",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-116",
+      "group": "customize",
+      "command": "--skill",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-117",
+      "group": "customize",
+      "command": "welcome",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-118",
+      "group": "customize",
+      "command": "docs settings",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-119",
+      "group": "customize",
+      "command": "docs shortcuts",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-120",
+      "group": "customize",
+      "command": "docs api",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-121",
+      "group": "customize",
+      "command": "docs browser",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-122",
+      "group": "customize",
+      "command": "docs capture",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-123",
+      "group": "customize",
+      "command": "docs agents",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-124",
+      "group": "customize",
+      "command": "docs dock",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-125",
+      "group": "customize",
+      "command": "docs sidebars",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-126",
+      "group": "customize",
+      "command": "settings open",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-127",
+      "group": "customize",
+      "command": "settings path",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-128",
+      "group": "customize",
+      "command": "settings docs",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-129",
+      "group": "customize",
+      "command": "settings <target>",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-130",
+      "group": "customize",
+      "command": "config doctor",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-131",
+      "group": "customize",
+      "command": "config check",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-132",
+      "group": "customize",
+      "command": "config validate",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-133",
+      "group": "customize",
+      "command": "config path",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-134",
+      "group": "customize",
+      "command": "config paths",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-135",
+      "group": "customize",
+      "command": "config docs",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-136",
+      "group": "customize",
+      "command": "config documentation",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-137",
+      "group": "customize",
+      "command": "config reload",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-138",
+      "group": "customize",
+      "command": "shortcuts",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-139",
+      "group": "customize",
+      "command": "feedback",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-140",
+      "group": "customize",
+      "command": "feed tui",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-141",
+      "group": "customize",
+      "command": "feed clear",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-142",
+      "group": "customize",
+      "command": "themes list",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-143",
+      "group": "customize",
+      "command": "themes set",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-144",
+      "group": "customize",
+      "command": "themes clear",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-145",
+      "group": "customize",
+      "command": "import",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-146",
+      "group": "customize",
+      "command": "reload-config",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-147",
+      "group": "customize",
+      "command": "right-sidebar toggle",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-148",
+      "group": "customize",
+      "command": "right-sidebar show",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-149",
+      "group": "customize",
+      "command": "right-sidebar hide",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-150",
+      "group": "customize",
+      "command": "right-sidebar focus",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-151",
+      "group": "customize",
+      "command": "right-sidebar set",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-152",
+      "group": "customize",
+      "command": "right-sidebar mode",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-153",
+      "group": "customize",
+      "command": "right-sidebar files",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-154",
+      "group": "customize",
+      "command": "right-sidebar find",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-155",
+      "group": "customize",
+      "command": "right-sidebar vault",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-156",
+      "group": "customize",
+      "command": "right-sidebar sessions",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-157",
+      "group": "customize",
+      "command": "right-sidebar feed",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-158",
+      "group": "customize",
+      "command": "right-sidebar dock",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-159",
+      "group": "customize",
+      "command": "right-sidebar cloud",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-160",
+      "group": "customize",
+      "command": "right-sidebar devices",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-161",
+      "group": "customize",
+      "command": "sidebar templates",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-162",
+      "group": "customize",
+      "command": "sidebar try",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-163",
+      "group": "customize",
+      "command": "sidebar new",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-164",
+      "group": "customize",
+      "command": "sidebar validate",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-165",
+      "group": "customize",
+      "command": "sidebar reload",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-166",
+      "group": "customize",
+      "command": "sidebar select",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-167",
+      "group": "customize",
+      "command": "sidebar open",
+      "phase": "P4",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-168",
+      "group": "customize",
+      "command": "help",
+      "phase": "P4",
+      "baseline": "partial",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-169",
+      "group": "automation",
+      "command": "events",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-170",
+      "group": "automation",
+      "command": "automation list",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-171",
+      "group": "automation",
+      "command": "automation show",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-172",
+      "group": "automation",
+      "command": "automation test",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-173",
+      "group": "automation",
+      "command": "automation enable",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-174",
+      "group": "automation",
+      "command": "automation disable",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-175",
+      "group": "automation",
+      "command": "automation logs",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-176",
+      "group": "automation",
+      "command": "automation reload",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-177",
+      "group": "automation",
+      "command": "glaeda request",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-178",
+      "group": "automation",
+      "command": "glaeda observe",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-179",
+      "group": "automation",
+      "command": "todo add",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-180",
+      "group": "automation",
+      "command": "todo list",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-181",
+      "group": "automation",
+      "command": "todo check",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-182",
+      "group": "automation",
+      "command": "todo uncheck",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-183",
+      "group": "automation",
+      "command": "todo start",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-184",
+      "group": "automation",
+      "command": "todo rm",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-185",
+      "group": "automation",
+      "command": "todo clear",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-186",
+      "group": "automation",
+      "command": "send",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-187",
+      "group": "automation",
+      "command": "send-key",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-188",
+      "group": "automation",
+      "command": "paste",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-189",
+      "group": "automation",
+      "command": "send-panel",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-190",
+      "group": "automation",
+      "command": "send-key-panel",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-191",
+      "group": "automation",
+      "command": "notify",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-192",
+      "group": "automation",
+      "command": "list-notifications",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-193",
+      "group": "automation",
+      "command": "dismiss-notification",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-194",
+      "group": "automation",
+      "command": "mark-notification-read",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-195",
+      "group": "automation",
+      "command": "open-notification",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-196",
+      "group": "automation",
+      "command": "jump-to-unread",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-197",
+      "group": "automation",
+      "command": "jump-to-last-prompt",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-198",
+      "group": "automation",
+      "command": "clear-notifications",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p1-terminal-tabs.md",
+        "p2-attention-sidebar.md"
+      ]
+    },
+    {
+      "id": "CMD-199",
+      "group": "automation",
+      "command": "pr",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-200",
+      "group": "automation",
+      "command": "pr clear",
+      "phase": "P5",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-201",
+      "group": "automation",
+      "command": "set-status",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-202",
+      "group": "automation",
+      "command": "clear-status",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-203",
+      "group": "automation",
+      "command": "list-status",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-204",
+      "group": "automation",
+      "command": "set-progress",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-205",
+      "group": "automation",
+      "command": "clear-progress",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-206",
+      "group": "automation",
+      "command": "log",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-207",
+      "group": "automation",
+      "command": "clear-log",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-208",
+      "group": "automation",
+      "command": "list-log",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-209",
+      "group": "browser",
+      "command": "disable-browser",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-210",
+      "group": "browser",
+      "command": "enable-browser",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-211",
+      "group": "browser",
+      "command": "browser-status",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-212",
+      "group": "browser",
+      "command": "browser disable",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-213",
+      "group": "browser",
+      "command": "browser enable",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-214",
+      "group": "browser",
+      "command": "browser status",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-215",
+      "group": "browser",
+      "command": "browser open",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p3-embedded-browser.md",
+        "native-delivery.md"
+      ]
+    },
+    {
+      "id": "CMD-216",
+      "group": "browser",
+      "command": "browser open-split",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-217",
+      "group": "browser",
+      "command": "browser goto",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p3-embedded-browser.md",
+        "native-delivery.md"
+      ]
+    },
+    {
+      "id": "CMD-218",
+      "group": "browser",
+      "command": "browser navigate",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "partial-contract",
+      "evidence": [
+        "p3-embedded-browser.md",
+        "native-delivery.md"
+      ]
+    },
+    {
+      "id": "CMD-219",
+      "group": "browser",
+      "command": "browser back",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-220",
+      "group": "browser",
+      "command": "browser forward",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-221",
+      "group": "browser",
+      "command": "browser reload",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-222",
+      "group": "browser",
+      "command": "browser react-grab toggle",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-223",
+      "group": "browser",
+      "command": "browser devtools toggle",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-224",
+      "group": "browser",
+      "command": "browser devtools console",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-225",
+      "group": "browser",
+      "command": "browser focus-mode enter",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-226",
+      "group": "browser",
+      "command": "browser focus-mode exit",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-227",
+      "group": "browser",
+      "command": "browser focus-mode toggle",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-228",
+      "group": "browser",
+      "command": "browser design-mode enable",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-229",
+      "group": "browser",
+      "command": "browser design-mode disable",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-230",
+      "group": "browser",
+      "command": "browser design-mode toggle",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-231",
+      "group": "browser",
+      "command": "browser design-mode status",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-232",
+      "group": "browser",
+      "command": "browser zoom in",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-233",
+      "group": "browser",
+      "command": "browser zoom out",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-234",
+      "group": "browser",
+      "command": "browser zoom reset",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-235",
+      "group": "browser",
+      "command": "browser zoom <factor>",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-236",
+      "group": "browser",
+      "command": "browser history clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-237",
+      "group": "browser",
+      "command": "browser url",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-238",
+      "group": "browser",
+      "command": "browser get-url",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-239",
+      "group": "browser",
+      "command": "browser snapshot",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-240",
+      "group": "browser",
+      "command": "browser eval",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-241",
+      "group": "browser",
+      "command": "browser repl",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-242",
+      "group": "browser",
+      "command": "browser repl guide",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-243",
+      "group": "browser",
+      "command": "browser wait",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-244",
+      "group": "browser",
+      "command": "browser click",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-245",
+      "group": "browser",
+      "command": "browser dblclick",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-246",
+      "group": "browser",
+      "command": "browser hover",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-247",
+      "group": "browser",
+      "command": "browser focus",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-248",
+      "group": "browser",
+      "command": "browser check",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-249",
+      "group": "browser",
+      "command": "browser uncheck",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-250",
+      "group": "browser",
+      "command": "browser scroll-into-view",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-251",
+      "group": "browser",
+      "command": "browser type",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-252",
+      "group": "browser",
+      "command": "browser fill",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-253",
+      "group": "browser",
+      "command": "browser press",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-254",
+      "group": "browser",
+      "command": "browser keydown",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-255",
+      "group": "browser",
+      "command": "browser keyup",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-256",
+      "group": "browser",
+      "command": "browser select",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-257",
+      "group": "browser",
+      "command": "browser scroll",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-258",
+      "group": "browser",
+      "command": "browser screenshot",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-259",
+      "group": "browser",
+      "command": "browser get url",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-260",
+      "group": "browser",
+      "command": "browser get title",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-261",
+      "group": "browser",
+      "command": "browser get text",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-262",
+      "group": "browser",
+      "command": "browser get html",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-263",
+      "group": "browser",
+      "command": "browser get value",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-264",
+      "group": "browser",
+      "command": "browser get attr",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-265",
+      "group": "browser",
+      "command": "browser get count",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-266",
+      "group": "browser",
+      "command": "browser get box",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-267",
+      "group": "browser",
+      "command": "browser get styles",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-268",
+      "group": "browser",
+      "command": "browser is visible",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-269",
+      "group": "browser",
+      "command": "browser is enabled",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-270",
+      "group": "browser",
+      "command": "browser is checked",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-271",
+      "group": "browser",
+      "command": "browser find role",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-272",
+      "group": "browser",
+      "command": "browser find text",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-273",
+      "group": "browser",
+      "command": "browser find label",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-274",
+      "group": "browser",
+      "command": "browser find placeholder",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-275",
+      "group": "browser",
+      "command": "browser find alt",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-276",
+      "group": "browser",
+      "command": "browser find title",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-277",
+      "group": "browser",
+      "command": "browser find testid",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-278",
+      "group": "browser",
+      "command": "browser find first",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-279",
+      "group": "browser",
+      "command": "browser find last",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-280",
+      "group": "browser",
+      "command": "browser find nth",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-281",
+      "group": "browser",
+      "command": "browser frame",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-282",
+      "group": "browser",
+      "command": "browser dialog accept",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-283",
+      "group": "browser",
+      "command": "browser dialog dismiss",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-284",
+      "group": "browser",
+      "command": "browser download",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-285",
+      "group": "browser",
+      "command": "browser download list",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-286",
+      "group": "browser",
+      "command": "browser download wait",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-287",
+      "group": "browser",
+      "command": "browser profiles list",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-288",
+      "group": "browser",
+      "command": "browser profiles add",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-289",
+      "group": "browser",
+      "command": "browser profiles rename",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-290",
+      "group": "browser",
+      "command": "browser profiles clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-291",
+      "group": "browser",
+      "command": "browser profiles delete",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-292",
+      "group": "browser",
+      "command": "browser import",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-293",
+      "group": "browser",
+      "command": "browser cookies get",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-294",
+      "group": "browser",
+      "command": "browser cookies set",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-295",
+      "group": "browser",
+      "command": "browser cookies clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-296",
+      "group": "browser",
+      "command": "browser storage local get",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-297",
+      "group": "browser",
+      "command": "browser storage local set",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-298",
+      "group": "browser",
+      "command": "browser storage local clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-299",
+      "group": "browser",
+      "command": "browser storage session get",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-300",
+      "group": "browser",
+      "command": "browser storage session set",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-301",
+      "group": "browser",
+      "command": "browser storage session clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-302",
+      "group": "browser",
+      "command": "browser tab new",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-303",
+      "group": "browser",
+      "command": "browser tab list",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-304",
+      "group": "browser",
+      "command": "browser tab switch",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-305",
+      "group": "browser",
+      "command": "browser tab close",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-306",
+      "group": "browser",
+      "command": "browser tab <index>",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-307",
+      "group": "browser",
+      "command": "browser console list",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-308",
+      "group": "browser",
+      "command": "browser console clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-309",
+      "group": "browser",
+      "command": "browser errors list",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-310",
+      "group": "browser",
+      "command": "browser errors clear",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-311",
+      "group": "browser",
+      "command": "browser highlight",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-312",
+      "group": "browser",
+      "command": "browser state save",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-313",
+      "group": "browser",
+      "command": "browser state load",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-314",
+      "group": "browser",
+      "command": "browser addinitscript",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-315",
+      "group": "browser",
+      "command": "browser addscript",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-316",
+      "group": "browser",
+      "command": "browser addstyle",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-317",
+      "group": "browser",
+      "command": "browser identify",
+      "phase": "P3",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-318",
+      "group": "remote",
+      "command": "auth status",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-319",
+      "group": "remote",
+      "command": "auth login",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-320",
+      "group": "remote",
+      "command": "auth logout",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-321",
+      "group": "remote",
+      "command": "auth team",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-322",
+      "group": "remote",
+      "command": "login",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-323",
+      "group": "remote",
+      "command": "logout",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-324",
+      "group": "remote",
+      "command": "vm base",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-325",
+      "group": "remote",
+      "command": "vm new",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-326",
+      "group": "remote",
+      "command": "vm ls",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-327",
+      "group": "remote",
+      "command": "vm domains",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-328",
+      "group": "remote",
+      "command": "vm tree",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-329",
+      "group": "remote",
+      "command": "vm self",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-330",
+      "group": "remote",
+      "command": "vm status",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-331",
+      "group": "remote",
+      "command": "vm stats",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-332",
+      "group": "remote",
+      "command": "vm resize",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-333",
+      "group": "remote",
+      "command": "vm network",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-334",
+      "group": "remote",
+      "command": "vm agent-updates",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-335",
+      "group": "remote",
+      "command": "vm rename",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-336",
+      "group": "remote",
+      "command": "vm pause",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-337",
+      "group": "remote",
+      "command": "vm resume",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-338",
+      "group": "remote",
+      "command": "vm restart",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-339",
+      "group": "remote",
+      "command": "vm snapshot",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-340",
+      "group": "remote",
+      "command": "vm fork",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-341",
+      "group": "remote",
+      "command": "vm restore",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-342",
+      "group": "remote",
+      "command": "vm rm",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-343",
+      "group": "remote",
+      "command": "vm run",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-344",
+      "group": "remote",
+      "command": "vm route",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-345",
+      "group": "remote",
+      "command": "vm agent",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-346",
+      "group": "remote",
+      "command": "vm dev",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-347",
+      "group": "remote",
+      "command": "vm prompt",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-348",
+      "group": "remote",
+      "command": "vm exec",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-349",
+      "group": "remote",
+      "command": "vm push",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-350",
+      "group": "remote",
+      "command": "vm pull",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-351",
+      "group": "remote",
+      "command": "vm wait",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-352",
+      "group": "remote",
+      "command": "vm shell",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-353",
+      "group": "remote",
+      "command": "vm tui",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-354",
+      "group": "remote",
+      "command": "vm desktop",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-355",
+      "group": "remote",
+      "command": "vm open",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-356",
+      "group": "remote",
+      "command": "vm workspace",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-357",
+      "group": "remote",
+      "command": "vm terminal",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-358",
+      "group": "remote",
+      "command": "vm tab",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-359",
+      "group": "remote",
+      "command": "vm layout",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-360",
+      "group": "remote",
+      "command": "vm env",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-361",
+      "group": "remote",
+      "command": "vm ports",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-362",
+      "group": "remote",
+      "command": "vm tools",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-363",
+      "group": "remote",
+      "command": "vm handoff",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-364",
+      "group": "remote",
+      "command": "vm promote-template",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-365",
+      "group": "remote",
+      "command": "vm attach",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-366",
+      "group": "remote",
+      "command": "vm ssh",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-367",
+      "group": "remote",
+      "command": "vm ssh-info",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-368",
+      "group": "remote",
+      "command": "cloud",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-369",
+      "group": "remote",
+      "command": "cloud guide",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-370",
+      "group": "remote",
+      "command": "cloud --skill",
+      "phase": "P7-cloud",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-371",
+      "group": "remote",
+      "command": "remotes list",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-372",
+      "group": "remote",
+      "command": "remotes add",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-373",
+      "group": "remote",
+      "command": "remotes remove",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-374",
+      "group": "remote",
+      "command": "remote list",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-375",
+      "group": "remote",
+      "command": "remote add",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-376",
+      "group": "remote",
+      "command": "remote remove",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-377",
+      "group": "remote",
+      "command": "simulator <subcommand>",
+      "phase": "P8-platform",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-378",
+      "group": "remote",
+      "command": "ios <subcommand>",
+      "phase": "P8-platform",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-379",
+      "group": "remote",
+      "command": "ssh",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "source-traced-core-journey-options-and-variants-still-open",
+      "implementation_status": "missing",
+      "evidence": [
+        "cmux CLI/cmux.swift:13634 runSSH",
+        "cmux CLI/cmux.swift:14444 parseSSHCommandOptions",
+        "cmux CLI/CMUXCLI+SSHTui.swift:9 runSSHTui",
+        "zmux apps/cli/src/main.rs:176 has no SSH dispatch",
+        "references/ssh-transfer-contract.md"
+      ]
+    },
+    {
+      "id": "CMD-380",
+      "group": "remote",
+      "command": "mosh",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-381",
+      "group": "remote",
+      "command": "mosh-tmux",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-382",
+      "group": "remote",
+      "command": "session save",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-383",
+      "group": "remote",
+      "command": "session open",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-384",
+      "group": "remote",
+      "command": "session move",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-385",
+      "group": "remote",
+      "command": "ssh-tmux list",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-386",
+      "group": "remote",
+      "command": "ssh-tmux ls",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-387",
+      "group": "remote",
+      "command": "ssh-tmux attach",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-388",
+      "group": "remote",
+      "command": "ssh-session-list",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-389",
+      "group": "remote",
+      "command": "ssh-session-attach",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-390",
+      "group": "remote",
+      "command": "ssh-session-cleanup",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-391",
+      "group": "remote",
+      "command": "remote-daemon-status",
+      "phase": "P7",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-392",
+      "group": "diagnostics",
+      "command": "ping",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-393",
+      "group": "diagnostics",
+      "command": "iroh-diag",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-394",
+      "group": "diagnostics",
+      "command": "version",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-395",
+      "group": "diagnostics",
+      "command": "sudo run",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-396",
+      "group": "diagnostics",
+      "command": "sudo pending",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-397",
+      "group": "diagnostics",
+      "command": "sudo setup-touch-id",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-398",
+      "group": "diagnostics",
+      "command": "socket-status",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-399",
+      "group": "diagnostics",
+      "command": "capabilities",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-400",
+      "group": "diagnostics",
+      "command": "rpc",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-401",
+      "group": "diagnostics",
+      "command": "debug-terminals",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-402",
+      "group": "diagnostics",
+      "command": "trigger-flash",
+      "phase": "P2",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-403",
+      "group": "diagnostics",
+      "command": "set-app-focus",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-404",
+      "group": "diagnostics",
+      "command": "simulate-app-active",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-405",
+      "group": "diagnostics",
+      "command": "simulate-sidebar-drag",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-406",
+      "group": "diagnostics",
+      "command": "capture-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-407",
+      "group": "diagnostics",
+      "command": "resize-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-408",
+      "group": "diagnostics",
+      "command": "pipe-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-409",
+      "group": "diagnostics",
+      "command": "wait-for",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-410",
+      "group": "diagnostics",
+      "command": "swap-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-411",
+      "group": "diagnostics",
+      "command": "break-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-412",
+      "group": "diagnostics",
+      "command": "join-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-413",
+      "group": "diagnostics",
+      "command": "next-window",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-414",
+      "group": "diagnostics",
+      "command": "previous-window",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-415",
+      "group": "diagnostics",
+      "command": "last-window",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-416",
+      "group": "diagnostics",
+      "command": "last-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-417",
+      "group": "diagnostics",
+      "command": "find-window",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-418",
+      "group": "diagnostics",
+      "command": "clear-history",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-419",
+      "group": "diagnostics",
+      "command": "set-hook",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-420",
+      "group": "diagnostics",
+      "command": "popup",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-421",
+      "group": "diagnostics",
+      "command": "bind-key",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-422",
+      "group": "diagnostics",
+      "command": "unbind-key",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-423",
+      "group": "diagnostics",
+      "command": "copy-mode",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-424",
+      "group": "diagnostics",
+      "command": "set-buffer",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-425",
+      "group": "diagnostics",
+      "command": "list-buffers",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-426",
+      "group": "diagnostics",
+      "command": "paste-buffer",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-427",
+      "group": "diagnostics",
+      "command": "respawn-pane",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    },
+    {
+      "id": "CMD-428",
+      "group": "diagnostics",
+      "command": "display-message",
+      "phase": "P8",
+      "baseline": "missing",
+      "contract_status": "needs-option-and-dispatch-audit",
+      "implementation_status": "not-verified",
+      "evidence": []
+    }
+  ],
+  "current_source_audit": "full-parity-audit.md",
+  "current_inventory_reconciliation": "audit-reconciliation.json",
+  "historical_fields_note": "Original baseline statuses are preserved as history. Consult the current source audit for the 2026-10-15 comparison; review routing is not runtime parity."
+}

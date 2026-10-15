@@ -132,3 +132,17 @@ No command execution/socket occurs in safe parser probes. Remaining ownership wo
 move compiled immutable baselines out of completed-task cleanup lifecycle and
 ensure CI checks baseline-only changes. All48 contracts remain partial;37 local
 counterparts remain unverified and391 inventory rows unresolved.
+
+### Durable baseline ownership
+
+The CLI now embeds `apps/cli/contracts/baseline/command-inventory.json` and
+`audit-reconciliation.json`. Both were migrated byte-for-byte; their initial
+SHA-256 values and archival relationship are recorded in the baseline README.
+Historical task copies remain evidence, not build inputs. Existing Foundation
+`apps/cli/**` filters cover baseline-only changes for push and pull requests.
+
+Fresh isolated `scripts/check` passed at `/tmp/zmux-baseline-check-nqja9g_7`
+(log `/tmp/zmux-baseline-check.log`). Removing both historical task copies from
+that isolated checkout still allowed `cargo run -p zmux -- commands --check`
+to pass: 48 partial contracts, 428 inventory entries, parity explicitly incomplete.
+No new counterpart or compatibility claim is introduced by this ownership repair.
