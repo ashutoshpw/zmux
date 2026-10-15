@@ -42,6 +42,11 @@ the lock.
   requiring prompt failure and closure of every owned descriptor before return.
   Cleanup syscall/wait errors are surfaced; successful reaping is checked in the
   exercised paths, not guaranteed under every possible operating-system error.
+  Cleanup first reaps an already-exited direct child before signalling. A wait
+  error grants no signalling authority; EPERM/ESRCH is benign only after that
+  exact direct child is actually reaped. Failures retain the first cleanup
+  operation and errno. Kernel-boundary cases cover an exited unreaped child and
+  a real ECHILD after external reaping; neither authorizes a stale-PID signal.
 - The original child has fixed modes and finite transcripts. Its stdout is actual
   terminal bytes; report/control pipes contain only bounded protocol bytes, not
   VT data. No shell or arbitrary code is injected into a terminal.
