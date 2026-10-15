@@ -1,0 +1,60 @@
+name: Patched zellij production owner
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-zellij-patched-owner-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patched-production-owner:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Build pinned source and prove real stdin interruption repair
+        run: python3 -B tools/local-zellij-feasibility/produce-patched.py --output "$RUNNER_TEMP/patched-zellij" --jobs 2
+      - name: Exercise unchanged actual production owners
+        run: python3 -B tools/local-zellij-feasibility/run-patched-owner.py --producer-receipt "$RUNNER_TEMP/patched-zellij/receipt.json" --output "$RUNNER_TEMP/patched-zellij-owner"
+      - name: Upload immutable source inputs and host evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: patched-zellij-owner-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/patched-zellij/receipt.json
+            ${{ runner.temp }}/patched-zellij/*.log
+            ${{ runner.temp }}/patched-zellij/source.tar.gz
+            ${{ runner.temp }}/patched-zellij/dependency-metadata.json
+            ${{ runner.temp }}/patched-zellij/prebuilt-assets-manifest.json
+            ${{ runner.temp }}/patched-zellij/Zellij-LICENSE.md
+            ${{ runner.temp }}/patched-zellij-owner/receipt.json
+            ${{ runner.temp }}/patched-zellij-owner/*.log
+            .github/workflows/local-zellij-patched-owner.yml
+            tools/local-zellij-feasibility/produce-patched.py
+            tools/local-zellij-feasibility/run-patched-owner.py
+            tools/local-zellij-feasibility/patched-producer-lock.json
+            tools/local-zellij-feasibility/stdin-eintr.rs
+            tools/local-zellij-feasibility/patches/0001-retry-interrupted-stdin.patch
+            tools/local-zellij-feasibility/NOTICE.md
+            tools/local-zellij-feasibility/licenses/Zellij-LICENSE
+            tools/terminal-feasibility/run.py
+            scripts/process_group.py
+            vendor/darwin-libproc/UPSTREAM.md
+            vendor/darwin-libproc/LICENSE*
+            THIRD_PARTY_NOTICES.md
+          if-no-files-found: error
+          retention-days: 7

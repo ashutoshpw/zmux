@@ -20,3 +20,16 @@ executable, compiled fixture library or other upstream assets.
 Darwin SDK headers/system libraries are provided by the host's Xcode installation.
 The fixture calls public declarations and defines no private kernel structure or
 copied Darwin implementation. No package/system install or HOME change is performed.
+
+The separate experimental `produce-patched.py` verifies that same source commit
+from the archive hash in `patched-producer-lock.json` and applies the original
+Zmux stdin-interruption patch in `patches/`. Its public-client regression example
+is original MIT fixture code. The producer retains the upstream MIT license and
+records source, lock, patch, fixture, toolchain, flags and executable hashes.
+It inventories upstream prebuilt WASM assets by hash; those assets are retained
+from the verified archive and are not rebuilt by this producer. Build processes
+use an environment allowlist excluding inherited compiler/linker/Rust/Cargo
+overrides, and effective Cargo configuration files are recorded by hash.
+It does not replace the official-binary runner or product acquisition pins and
+is not an app redistribution pipeline; full linked-component distribution
+notices and actual Linux/Darwin owner acceptance remain separate gates.

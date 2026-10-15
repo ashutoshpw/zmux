@@ -1,0 +1,17 @@
+{
+  "version": "0.43.0",
+  "source_commit": "23bb542548d517f7f20a7fdd14a943f1a610df37",
+  "source_url": "https://codeload.github.com/zellij-org/zellij/tar.gz/23bb542548d517f7f20a7fdd14a943f1a610df37",
+  "source_archive_sha256": "d8738326a7b3f7b9eec6b9ae94c01acfb1b87f54598e1ef88adee9e94811d4f8",
+  "rust_toolchain": "1.95.0",
+  "features": [
+    "vendored_curl"
+  ],
+  "default_features": false,
+  "release_overrides": {
+    "lto": false,
+    "opt_level": 1,
+    "codegen_units": 16
+  },
+  "scope": "experimental patched producer only; does not replace official binary acquisition or product support pins"
+}

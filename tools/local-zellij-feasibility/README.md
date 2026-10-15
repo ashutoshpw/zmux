@@ -145,3 +145,32 @@ The PTY wrapper reserves distinct exit statuses for arguments (64), terminal
 acquisition (71), exec ENOENT (127) and other exec failure (126); the missing-exec
 case verifies unreaped and reaped status rather than requiring transient PTY stderr
 to survive a child exit on every host.
+
+## Experimental stdin interruption repair
+
+The separate manual `Patched zellij production owner` workflow builds pinned MIT
+Zellij 0.43.0 source with the original `Interrupted`-only stdin patch, then runs
+the unchanged production owner checks on Linux and macos-15. It has its own
+concurrency group and does not alter the official download pins or native workflow.
+See the [failure and evidence](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/r03-zellij-eintr.md).
+
+```sh
+python3 -B tools/local-zellij-feasibility/produce-patched.py --output /absolute/fresh/producer
+python3 -B tools/local-zellij-feasibility/run-patched-owner.py --producer-receipt /absolute/fresh/producer/receipt.json --output /absolute/fresh/owner
+```
+
+The producer requires Rust 1.95.0 and retains its executable at `artifacts/zellij`.
+Real pipe/SIGUSR1 tests require the original client to fail at EINTR, the patched
+client to read subsequent bytes once, and other read errors to remain fatal.
+Build phases use retained process groups, bounded logs and deadlines; a preexisting
+archive must also satisfy the byte/hash limits. Registry dependency caches may be
+reused with explicit `--cargo-target` paths, but client/root source products are
+cleaned before the baseline to prevent stale patched artifacts from passing as red.
+The owner helper otherwise selects its own private Cargo target directory.
+
+Receipts bind source, patch, toolchain, input hashes, configuration hashes, binary,
+actual owner results and upstream prebuilt WASM inventory. Those WASM files are not
+rebuilt. The workflow uploads immutable source inputs, logs, receipts and notices;
+it excludes the compiled executable. Full binary distribution notices, verified
+Darwin acceptance, native integration and a product acquisition decision remain
+separate gates.
