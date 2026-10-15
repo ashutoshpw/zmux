@@ -57,3 +57,19 @@ This is hosted test evidence, not migration or maintenance of the running local 
 A public `/health` probe on2026-10-15 failed DNS resolution for `zmux.w3dev.app`
 from this environment; no public service response or sign-in was observed. The local
 loopback service still answers health/readiness and `bunx path-to-port` returns3530.
+
+## Persistent local service refresh — 2026-10-15 17:49 UTC
+
+At committed `58a882b`, `scripts/local-cloud start` rebuilt the unchanged committed
+control-plane source, completed its private pre-migration PostgreSQL backup, applied
+migrations and recreated the app. Both `/health` and database-backed `/ready` return
+HTTP200. A direct schema query confirms `001_native_identity.sql`,
+`002_native_token_expiry.sql` and `native_access_token_expiry_idx` in the persistent DB.
+An operator-invoked bounded cleanup completed with `codes:0,tokens:0`. No periodic
+schedule was installed. After readiness, `bunx path-to-port` in the service directory
+again returned3530. Tunnel target remains `http://127.0.0.1:3530`. Public tunnel and
+auth callbacks remain unverified; VM, relay and email remain unavailable.
+
+This receipt supersedes the earlier statements that migration002 and cleanup had
+not been run against the persistent local service. Private credentials, backups and
+operation logs remain outside Git under the existing local state directory.

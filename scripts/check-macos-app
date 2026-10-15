@@ -29,6 +29,14 @@ dist = root / "dist"
 bundle = dist / "zmux.app/Contents"
 info = plistlib.loads((bundle / "Info.plist").read_bytes())
 assert info["CFBundleName"] == "zmux"
+# This external fixture uses only public Accessibility input. It checks its own
+# authorization without prompting or changing TCC; missing trust fails the native
+# download acceptance gate rather than substituting a destination callback.
+subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
+                "-strict-concurrency=complete", "-warnings-as-errors", "-O",
+                str(root / "tools/native-fixtures/save-panel-driver.swift"),
+                "-framework", "AppKit", "-framework", "ApplicationServices",
+                "-o", str(dist / "native-save-panel-driver")], check=True, timeout=60)
 assert (bundle / "Resources/AppIcon.icns").stat().st_size > 1024
 for executable in [bundle / "Resources/bin/zmux", bundle / "MacOS/zmux-app"]:
     help_text = subprocess.run([str(executable), "--help"], check=True, capture_output=True, text=True, timeout=15).stdout

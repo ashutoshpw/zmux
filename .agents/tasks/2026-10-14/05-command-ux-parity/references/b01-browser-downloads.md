@@ -247,3 +247,34 @@ helper now waits for the actual panel URL to match before OK, retaining exact-by
 and CLI-history assertions. Timeout diagnostics skip a second app launch because
 the original Launch Services app may remain alive. Independent source review,
 Python syntax and scoped diff checks pass; AppKit execution remains pending.
+
+Run `38778435343` at `c33ec40` also compiled, but the real save panel remained at
+`/Users/runner/Documents/fixture.bin` after the bounded destination wait. It did
+not establish native save acceptance. Its second diagnostic app also failed a
+sidebar check without key focus; that is not the original download failure.
+
+Apple's public [`NSSavePanel.ok(_:)` documentation](https://developer.apple.com/documentation/appkit/nssavepanel/ok(_:))
+explicitly states: "In macOS 10.15 and later, you cannot call this method
+programmatically to trigger the OK action." The fixture's direct `panel.ok(nil)`
+was therefore not a supported acceptance driver; another property-delay retry
+cannot establish that path. No download-owner defect was demonstrated.
+
+The replacement candidate uses a separate compiled Accessibility driver against
+the exact packaged application PID and executable. It requires existing
+`AXIsProcessTrusted()` and `CGPreflightPostEventAccess()` authorization, without
+prompting, modifying TCC, or posting global/frontmost-app keystrokes. It identifies
+one real save sheet by its filename and Save control, sets its actual filename,
+uses the standard Go to Folder shortcut targeted to the app PID, and enters the
+fixture directory through the actual UI. The app independently requires the real
+panel URL to match before a second driver phase performs the Save button's public
+`AXPress` action. Saved-record cleanup, exact file bytes, CLI history and event
+assertions remain unchanged. The app waits for its helper outside MainActor, with
+explicit deadlines and owned-process cleanup. Driver UI waits block only the
+separate helper process; its termination/reaping ultimately depends on the OS and
+the outer hosted fixture deadline.
+
+This candidate has not yet compiled or executed on macOS. A host without existing
+UI automation authorization fails with an explicit native-acceptance gate; no
+download success or full-parity claim follows. Exact-source native compilation,
+permission evidence and real save acceptance remain required. Production
+`BrowserDownloads` and filesystem guards are unchanged.

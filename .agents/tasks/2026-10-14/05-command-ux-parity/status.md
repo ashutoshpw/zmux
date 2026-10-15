@@ -5,6 +5,27 @@
 
 ## Active implementation
 
+- Local Docker service refreshed at `58a882b`: private backup, persistent migration002
+  and expiry index verified, bounded cleanup codes0/tokens0, health/readiness200.
+  Post-health `bunx path-to-port` confirms3530; tunnel/public auth and VM/relay/email
+  remain open. See [local cloud](references/local-cloud.md).
+
+- Latest checkpoint: Foundation `38778435301` passes at `c33ec40`; macOS
+  `38778435343` passed universal compilation but failed save-panel destination
+  selection in packaged smoke; fixture investigation continues.
+  Full parity remains incomplete; no final parity artifact exists.
+- F04 metadata hosted `38777353391` passes Linux/macOS; all29 inputs verified
+  against `b86a700`, receipts recorded in `90f05e3`. Production engine unchanged.
+- Zellij retained authenticated Quit passes independent real Linux rerun
+  `/tmp/zmux-zellij-retained-parent-20261015/receipt.json`. Darwin short-lived
+  kill-session credentials remain unsupported; repair committed/pushed `58a882b`,
+  hosted `38779766351` confirms daemon exit and client exit0 but fails on59
+  undeliverable opaque bytes during shutdown. Typed terminal-outcome handling is
+  being implemented; no lossless shutdown claim.
+- T03 two-window core/runtime/native and CLI are under validation, including
+  close-before-open acknowledgement, physical capacity retention and key-window attention.
+  Isolated real-PTY replies experiment continues separately.
+
 - F04 isolated metadata owner committed/pushed `b86a700`; independent full39+7
   and final focused normal/source/arena controls pass, all29 final hashes checked.
   Hosted Linux/macOS `38777353391` running; no production engine switch.
