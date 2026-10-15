@@ -80,7 +80,17 @@ struct AttentionNotification: Decodable, Sendable {
     let id: UInt64; let surfaceId: UInt64; let title: String; let body: String; let source: String
     let timestampMs: UInt64; let read: Bool
 }
+struct SessionPersistence: Decodable, Sendable {
+    let enabled: Bool
+    let startupPending: Bool
+    let restoring: Bool
+    let autosaveEnabled: Bool
+    let lastSavedRevision: UInt64?
+    let error: String?
+}
 struct DesktopSnapshot: Decodable, Sendable {
+    let persistence: SessionPersistence?
+    let cleanupError: String?
     let uploads: [UploadProgress]
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
     let revision: UInt64; let model: Model; let frames: [Frame]

@@ -86,8 +86,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         buildMenus()
     }
 
-    func start() async throws {
-        try await bridge.start()
+    func start(persistent: Bool = true) async throws {
+        try await bridge.start(persistent: persistent)
         commandTask = Task { [weak self, stream] in
             for await command in stream {
                 guard let self, !Task.isCancelled else { break }
@@ -507,9 +507,13 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let uploadFailure = latestUpload.flatMap { $0.delivery == "failed" ? $0 : nil }
         cancelUploadButton.isHidden = activeUpload == nil
         if let activeUpload { cancelUploadButton.toolTip = "Cancel upload \(activeUpload.id)" }
-        let isError = presentationError != nil || snapshot.lastError != nil || uploadFailure != nil
+        let isError = presentationError != nil || snapshot.lastError != nil || uploadFailure != nil || snapshot.persistence?.error != nil
         if let error = presentationError {
             detail = error
+        } else if let error = snapshot.persistence?.error {
+            detail = "Session recovery: \(error)"
+        } else if snapshot.persistence?.startupPending == true || snapshot.persistence?.restoring == true {
+            detail = "Restoring session…"
         } else if let activeUpload {
             detail = "Uploading \(ByteCountFormatter.string(fromByteCount: Int64(activeUpload.bytesSent), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(activeUpload.totalBytes), countStyle: .file))"
         } else if imagePastes.preparingCount > 0 {
@@ -1369,7 +1373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
         Task {
             do {
-                try await controller.start()
+                try await controller.start(persistent: !CommandLine.arguments.contains("--smoke-test"))
                 if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
@@ -1408,6 +1412,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             do { try await controller.shutdown() } catch {
                 FileHandle.standardError.write(Data("zmux shutdown: \(error)\n".utf8))
+                // Teardown has already stopped sessions. Do not offer a misleading
+                // Cancel/Retry that would return the user to a dead desktop.
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = "zmux could not confirm a clean shutdown"
+                alert.informativeText = "The latest session layout may not have been saved. Terminal shutdown has already started.\n\n" + error.localizedDescription
+                alert.addButton(withTitle: "Quit")
+                alert.runModal()
             }
             sender.reply(toApplicationShouldTerminate: true)
         }

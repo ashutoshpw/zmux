@@ -220,7 +220,8 @@
     {
       "id": "S01",
       "title": "Session persistence, launch and quit recovery",
-      "status": "planned",
+      "status": "in_progress",
+      "evidence": ["s01-session-persistence.md"],
       "owner": "new Rust persistence owner, native startup/termination",
       "depends_on": [
         "F02",

@@ -39,6 +39,30 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "restore-session",
+        "start",
+        false,
+        true,
+        "restore-session [--from PATH | --export PATH [--force]]",
+        "Restore the default saved session or a private session file into an empty desktop. A populated desktop refuses restore; additive windows are unavailable. --export writes the current restorable layout to PATH without replacing an existing file unless --force is set. Relative paths resolve from the CLI's working directory. Operations return a pending operation_id; inspect session-status --id ID for completion or an error. Fresh shells start without replaying commands or recovering running jobs. Caller target variables do not select a session."
+    ),
+    command!(
+        "save-session",
+        "start",
+        false,
+        true,
+        "save-session",
+        "Save the current restorable layout to the app's default private session file. The response admits asynchronous work; inspect session-status --id ID to confirm completion or an error."
+    ),
+    command!(
+        "session-status",
+        "start",
+        false,
+        true,
+        "session-status [--id ID]",
+        "Show persistence state or the bounded receipt for an admitted operation. A pending receipt does not establish that a file was saved or a restore completed. Unknown or expired operation IDs fail."
+    ),
+    command!(
         "paste-files",
         "automation",
         true,
@@ -547,7 +571,7 @@ pub(super) fn catalog() -> Value {
 }
 pub(super) fn guide() -> String {
     format!(
-        "# zmux automation guide\n\nUse `zmux commands` to discover this build's executable commands.\nRead `zmux help <command>` or `zmux help <topic>` before constructing requests.\n\nInspect with list-workspaces, list-panes and list-pane-surfaces. Preserve returned\nUUIDs when later requests must address the same object. Use leading selectors for\nexplicit scope; inherited terminal context applies when selectors are omitted.\nUse --expect-revision for operations that depend on a previously observed index.\n\nSend exact text with send-text; include carriage return only when submission is intended.\nUse --stdin for multiline text. Never retry a timeout whose outcome is unknown.\nObserve readiness after new-workspace, new-surface, new-split or reopen-closed: launch is asynchronous.\nReopening starts fresh shells at saved working directories and does not replay jobs.\n\n{}\n{}",
+        "# zmux automation guide\n\nUse `zmux commands` to discover this build's executable commands.\nRead `zmux help <command>` or `zmux help <topic>` before constructing requests.\n\nInspect with list-workspaces, list-panes and list-pane-surfaces. Preserve returned\nUUIDs when later requests must address the same object. Use leading selectors for\nexplicit scope; inherited terminal context applies when selectors are omitted.\nUse --expect-revision for operations that depend on a previously observed index.\n\nSend exact text with send-text; include carriage return only when submission is intended.\nUse --stdin for multiline text. Never retry a timeout whose outcome is unknown.\nObserve readiness after new-workspace, new-surface, new-split or reopen-closed: launch is asynchronous.\nReopening starts fresh shells at saved working directories and does not replay jobs.\n\nSession save, restore and export return an operation_id for asynchronous work.\nPoll session-status --id ID until its receipt completes or fails before using a saved file.\nRestore requires an empty desktop and starts fresh shells without replaying commands.\n\n{}\n{}",
         GLOBAL, TARGETS
     )
 }

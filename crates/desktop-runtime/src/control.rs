@@ -49,6 +49,13 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    Session {
+        action: crate::sessions::SessionCommand,
+    },
+    SessionStatus {
+        #[serde(default)]
+        operation_id: Option<u64>,
+    },
     Targeted {
         request: TargetRequest,
     },
@@ -526,6 +533,31 @@ fn dispatch(
     admission: &ControlAdmission,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::Session { action } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Session { action },
+        ),
+        ControlCommand::SessionStatus { operation_id } => {
+            let snapshot = current_snapshot(desktop)?;
+            if let Some(id) = operation_id {
+                let operation = snapshot
+                    .persistence
+                    .operations
+                    .iter()
+                    .find(|op| op.operation_id == id)
+                    .ok_or_else(|| {
+                        (
+                            "operation_not_found",
+                            "session operation receipt expired or does not exist".into(),
+                        )
+                    })?;
+                Ok(json!(operation))
+            } else {
+                Ok(json!(snapshot.persistence))
+            }
+        }
         ControlCommand::Targeted {
             request: target_request,
         } => match target_request.operation {
@@ -759,6 +791,11 @@ fn mutate(
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(operation_id) = execution.session_operation_id {
+        return Ok(
+            json!({"operation_id": operation_id, "state": "pending", "revision": execution.snapshot.revision}),
+        );
+    }
     let workspace = execution.snapshot.model.focused_workspace.and_then(|id| {
         execution
             .snapshot

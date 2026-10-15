@@ -3,6 +3,8 @@ pub mod attention;
 pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
+pub mod persistence;
+pub mod sessions;
 pub mod targets;
 pub mod transfers;
 use attention::{Attention, AttentionCommand, Notification};
@@ -71,6 +73,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Session {
+        action: sessions::SessionCommand,
+    },
     Transfer {
         action: TransferCommand,
     },
@@ -146,6 +151,7 @@ pub struct Snapshot {
     pub notifications: Vec<Notification>,
     pub notifications_dropped: u64,
     pub uploads: Vec<TransferSnapshot>,
+    pub persistence: sessions::PersistenceSnapshot,
     pub last_request_id: u64,
     pub last_error: Option<String>,
     pub closed: bool,
@@ -178,6 +184,7 @@ pub(crate) struct Execution {
     pub created_panes: Vec<zmux_workspace_core::PaneId>,
     pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
+    pub session_operation_id: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -195,7 +202,23 @@ pub struct TransferExecutionError {
 
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
+        Self::start(shell, None)
+    }
+
+    pub fn with_persistence(shell: Shell, state_directory: PathBuf) -> Result<Self, DesktopError> {
+        let persistence = sessions::SessionPersistence::start(state_directory)?;
+        Self::start(shell, Some(persistence))
+    }
+
+    fn start(
+        shell: Shell,
+        persistence: Option<sessions::SessionPersistence>,
+    ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+        let persistence_snapshot = persistence
+            .as_ref()
+            .map(|p| p.snapshot.clone())
+            .unwrap_or_default();
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             snapshot: Mutex::new(Arc::new(Snapshot {
@@ -205,6 +228,7 @@ impl Desktop {
                 notifications: Vec::new(),
                 notifications_dropped: 0,
                 uploads: Vec::new(),
+                persistence: persistence_snapshot,
                 last_request_id: 0,
                 last_error: None,
                 closed: false,
@@ -221,6 +245,9 @@ impl Desktop {
             .spawn(move || {
                 let mut worker = Worker {
                     model,
+                    persistence,
+                    restoring: None,
+                    session_operation_id: None,
                     attention: Attention::default(),
                     transfers: Vec::new(),
                     next_transfer_id: 1,
@@ -232,15 +259,14 @@ impl Desktop {
                     completion_tx,
                     completion_rx,
                     pending_launches: 0,
+                    next_launch_id: 1,
                     last_request_id: 0,
                     last_error: None,
                     cleanup_error: None,
                     revision: 0,
                 };
-                if let Err(error) = worker.action(Action::CreateWorkspace {
-                    name: "Terminal".into(),
-                }) {
-                    worker.last_error = Some(error.to_string());
+                if worker.persistence.is_none() {
+                    worker.starter_workspace();
                 }
                 worker.publish(false);
                 worker.run(receiver);
@@ -420,6 +446,7 @@ impl Drop for Desktop {
     }
 }
 struct Slot {
+    launch_id: u64,
     session: Option<Session>,
     connection: Option<Arc<ManagedConnection>>,
     cached: Option<Arc<TerminalSnapshot>>,
@@ -429,12 +456,16 @@ struct Slot {
     last_notice: u64,
 }
 struct Completion {
+    launch_id: u64,
     id: SessionId,
     result: Result<Session, SessionError>,
     connection: Option<Arc<ManagedConnection>>,
 }
 struct Worker {
     model: WorkspaceStore,
+    persistence: Option<sessions::SessionPersistence>,
+    restoring: Option<sessions::PendingRestore>,
+    session_operation_id: Option<u64>,
     attention: Attention,
     transfers: Vec<TransferSlot>,
     next_transfer_id: u64,
@@ -446,6 +477,7 @@ struct Worker {
     completion_tx: SyncSender<Completion>,
     completion_rx: Receiver<Completion>,
     pending_launches: usize,
+    next_launch_id: u64,
     last_request_id: u64,
     last_error: Option<String>,
     cleanup_error: Option<String>,
@@ -538,6 +570,7 @@ impl Worker {
                     dirty = true;
                 }
             }
+            dirty |= self.poll_sessions();
             dirty |= self.poll_transfers();
             self.retired.retain_mut(|session| {
                 if !session.is_finished() {
@@ -553,6 +586,7 @@ impl Worker {
             }
         }
         let deadline = Instant::now() + Duration::from_secs(3);
+        self.shutdown_persistence(deadline);
         self.cancel_transfers();
         let sessions: Vec<_> = self
             .slots
@@ -608,6 +642,7 @@ impl Worker {
         let request = envelope.request;
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
+        self.session_operation_id = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if envelope.acknowledgement.is_some()
@@ -677,6 +712,7 @@ impl Worker {
         if let Some(sender) = envelope.acknowledgement {
             let _ = sender.try_send(Execution {
                 result,
+                session_operation_id: self.session_operation_id,
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -691,7 +727,18 @@ impl Worker {
         }
     }
     fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
+        if self.session_transition_pending()
+            && !matches!(
+                &command,
+                Command::Session { .. } | Command::Attention { .. }
+            )
+        {
+            return Err(DesktopError::Failure(
+                "session restore is pending; retry after its receipt completes".into(),
+            ));
+        }
         match command {
+            Command::Session { action } => self.session_command(action),
             Command::Transfer { action } => self.transfer(action),
             Command::Targeted { request } => self.targeted(request),
             Command::Attention { action } => self.attention_action(action),
@@ -875,10 +922,8 @@ impl Worker {
         })();
         result.map_err(DesktopError::Failure)
     }
-    fn action(&mut self, action: Action) -> Result<(), DesktopError> {
+    pub(crate) fn model_with_session_metadata(&self) -> WorkspaceStore {
         let mut candidate = self.model.clone();
-        // Capture metadata from the owning session before close/create. A rejected action
-        // must leave even descriptor state unchanged.
         for (id, slot) in &self.slots {
             if let Some(cwd) = slot
                 .cached
@@ -888,6 +933,12 @@ impl Worker {
                 candidate.set_session_cwd(*id, cwd);
             }
         }
+        candidate
+    }
+    fn action(&mut self, action: Action) -> Result<(), DesktopError> {
+        // Capture observed metadata on a candidate so rejected actions leave the
+        // authoritative topology and descriptor state unchanged.
+        let mut candidate = self.model_with_session_metadata();
         let transition = candidate
             .apply(action)
             .map_err(|e| DesktopError::Failure(e.to_string()))?;
@@ -919,6 +970,7 @@ impl Worker {
                 "development build supports at most {MAX_BROWSERS} browser tabs"
             )));
         }
+        self.ensure_reserved(&candidate)?;
         self.model = candidate;
         self.effects(transition.effects);
         Ok(())
@@ -941,7 +993,7 @@ impl Worker {
                 } => {
                     // A preceding launch-worker failure can abort the whole restore group.
                     if !self
-                        .model
+                        .launch_model()
                         .snapshot()
                         .workspaces
                         .iter()
@@ -951,9 +1003,15 @@ impl Worker {
                     {
                         continue;
                     }
+                    let launch_id = self.next_launch_id;
+                    self.next_launch_id = self
+                        .next_launch_id
+                        .checked_add(1)
+                        .expect("launch generation exhausted");
                     self.slots.insert(
                         session_id,
                         Slot {
+                            launch_id,
                             session: None,
                             connection: None,
                             cached: None,
@@ -969,10 +1027,10 @@ impl Worker {
                         shell.cwd = Some(PathBuf::from(cwd));
                     }
                     if let Some(cwd) = shell.cwd.as_ref().filter(|_| remote.is_none()) {
-                        self.model
+                        self.launch_model_mut()
                             .set_session_cwd(session_id, cwd.to_string_lossy().into_owned());
                     }
-                    let model = self.model.snapshot();
+                    let model = self.launch_model().snapshot();
                     let context = model.workspaces.iter().find_map(|w| {
                         w.root.panes().into_iter().find_map(|p| {
                             p.surfaces.iter().find(|s| s.session_id == Some(session_id)).map(|s| vec![
@@ -1022,6 +1080,7 @@ impl Worker {
                             };
                             // A dropped coordinator rejects the result; dropping Session cancels its worker.
                             if let Err(error) = sender.send(Completion {
+                                launch_id,
                                 id: session_id,
                                 result,
                                 connection,
@@ -1035,8 +1094,12 @@ impl Worker {
                         slot.starting = false;
                         slot.failure = Some(format!("launch worker failed: {error}"));
                         self.last_error = slot.failure.clone();
-                        let cleanup = self.model.finish_restore(session_id, false);
-                        self.effects(cleanup);
+                        if self.restoring.is_some() {
+                            self.fail_session_restore("launch worker failed".into());
+                        } else {
+                            let cleanup = self.model.finish_restore(session_id, false);
+                            self.effects(cleanup);
+                        }
                     }
                 }
             }
@@ -1044,6 +1107,29 @@ impl Worker {
     }
     fn complete(&mut self, completion: Completion) {
         self.pending_launches -= 1;
+        if self
+            .slots
+            .get(&completion.id)
+            .is_none_or(|slot| slot.launch_id != completion.launch_id)
+        {
+            if let Ok(session) = completion.result {
+                self.retire(session);
+            }
+            return;
+        }
+        if self.complete_session_restore(completion.id, &completion.result) {
+            if let Some(slot) = self.slots.get_mut(&completion.id) {
+                slot.starting = false;
+                if let Ok(session) = completion.result {
+                    slot.session = Some(session);
+                    slot.connection = completion.connection;
+                }
+            } else if let Ok(session) = completion.result {
+                self.retire(session);
+            }
+            self.commit_session_restore();
+            return;
+        }
         let success = completion.result.is_ok();
         if let Some(slot) = self.slots.get_mut(&completion.id) {
             slot.starting = false;
@@ -1111,6 +1197,11 @@ impl Worker {
             notifications: self.attention.items.clone(),
             notifications_dropped: self.attention.dropped,
             uploads: self.transfer_snapshots(),
+            persistence: self
+                .persistence
+                .as_ref()
+                .map(|p| p.snapshot.clone())
+                .unwrap_or_default(),
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),
             closed,

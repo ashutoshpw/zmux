@@ -35,6 +35,10 @@ int32_t zmux_buffer_release(uint64_t buffer);
    Snapshot OK/value=0 means unchanged; nonzero value is an owned buffer token.
    Destroy waits for cleanup and MUST run off the native UI thread. */
 ZmuxResult zmux_desktop_create(void);
+/* Opt-in durable state. path is an absolute UTF-8 directory (1..4096 bytes, no NUL).
+   The directory is created/validated by the persistence worker; startup snapshots expose
+   loading and recovery errors. Existing create() remains nonpersistent and isolated. */
+ZmuxResult zmux_desktop_create_persistent(const uint8_t *path, size_t length);
 ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_t length);
 /* Executes only ABI-v1 transfer/paste_files requests with expected_session_id. The call
    waits at most two seconds for that envelope's worker acknowledgement and MUST run off

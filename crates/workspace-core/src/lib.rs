@@ -3,7 +3,13 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 mod navigation;
+mod restore;
 mod surfaces;
+pub use restore::{
+    PreparedSessionRestore, RestoreError, RestoreLimits, SESSION_DOCUMENT_VERSION, SavedContent,
+    SavedPane, SavedSshConnection, SavedSurface, SavedTree, SavedWorkspace, SessionDocument,
+    ValidatedSessionDocument,
+};
 pub mod targets;
 pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Navigation};
 use surfaces::PendingRestore;

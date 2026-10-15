@@ -1017,7 +1017,7 @@ impl WorkspaceStore {
 }
 
 /// Browser content cannot select local files, scripts or privileged URL handlers.
-fn validate_browser_url(url: &str) -> Result<(), ActionError> {
+pub(crate) fn validate_browser_url(url: &str) -> Result<(), ActionError> {
     if url == "about:blank" {
         return Ok(());
     }

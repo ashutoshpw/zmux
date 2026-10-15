@@ -159,3 +159,12 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
 - macOS Actions run 38725306919 at 85e6e9f passed universal build and packaged native
   smoke after shifted-bracket shortcut correction. No full-parity artifact handed off.
 - Session persistence integration and crash-safe allocator work remain in progress.
+
+## S01 foundation accepted locally
+
+- Versioned private topology persistence, transactional empty-desktop restore, CLI receipts
+  and native startup integration implemented. Durable allocator blocks prevent crash reuse.
+- Review repaired stale OSC7 cwd persistence and silent final-save failure; independent
+  runtime reproductions pass. Parent scripts/check: 123 tests plus Clippy/notices/C ABI.
+- Native hosted checks pending; S01 additive/multiwindow/full-browser and safe cancel gates
+  remain open. Next implementation begins B02a browser automation bridge.

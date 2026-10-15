@@ -1,5 +1,6 @@
 /* Independent C caller: exercises the actual shared-library boundary and owned buffers. */
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #include "zmux.h"
 #include <assert.h>
 #include <stdio.h>
@@ -8,6 +9,8 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 /* Foreign hosts do not inherit Rust main's ignored SIGPIPE disposition. Closing an
  * already-exited terminal must survive that default and leave the host alive. */
@@ -165,7 +168,60 @@ static void native_transfer_receipts_are_session_bound(void) {
     assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
 }
 
+/* Exercise the persistent constructor through foreign ABI, not just Rust owners. */
+static void persistent_desktop_uses_requested_directory(void) {
+    char temporary[] = "/tmp/zmux-abi-state-XXXXXX";
+    assert(mkdtemp(temporary) != NULL);
+    char *directory = realpath(temporary, NULL);
+    assert(directory != NULL);
+    ZmuxResult desktop = zmux_desktop_create_persistent((const uint8_t *)directory, strlen(directory));
+    assert(desktop.status == ZMUX_OK);
+    int ready = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        ready = strstr(text, "\"enabled\":true") != NULL &&
+                strstr(text, "\"startup_pending\":false") != NULL &&
+                strstr(text, "\"state\":\"running\"") != NULL;
+        free(text);
+        if (ready) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(ready);
+    assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
+    char path[4096];
+    snprintf(path, sizeof path, "%s/session.json", directory);
+    struct stat saved;
+    assert(stat(path, &saved) == 0 && S_ISREG(saved.st_mode));
+    assert((saved.st_mode & 0777) == 0600 && saved.st_size > 0);
+    DIR *entries = opendir(directory);
+    assert(entries != NULL);
+    struct dirent *entry;
+    while ((entry = readdir(entries)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) { continue; }
+        snprintf(path, sizeof path, "%s/%s", directory, entry->d_name);
+        assert(unlink(path) == 0);
+    }
+    assert(closedir(entries) == 0);
+    assert(rmdir(directory) == 0);
+    free(directory);
+}
+
+/* Foreign pointers/byte strings must be rejected before starting a runtime. */
+static void persistent_path_contract(void) {
+    assert(zmux_desktop_create_persistent(NULL, 1).status == ZMUX_INVALID_ARGUMENT);
+    const uint8_t relative[] = "relative/state";
+    assert(zmux_desktop_create_persistent(relative, sizeof relative - 1).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_create_persistent(relative, 0).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_create_persistent(relative, 4097).status == ZMUX_INVALID_ARGUMENT);
+    const uint8_t invalid[] = {'/', 0xff};
+    assert(zmux_desktop_create_persistent(invalid, sizeof invalid).status == ZMUX_INVALID_ARGUMENT);
+    const uint8_t embedded_nul[] = {'/', 'a', 0, 'b'};
+    assert(zmux_desktop_create_persistent(embedded_nul, sizeof embedded_nul).status == ZMUX_INVALID_ARGUMENT);
+}
+
 int main(void) {
+    persistent_path_contract();
+    persistent_desktop_uses_requested_directory();
     assert(zmux_abi_version() == 1);
     ZmuxResult core = zmux_core_create();
     assert(core.status == ZMUX_OK && core.value != 0);
