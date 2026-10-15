@@ -1,3 +1,6 @@
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
+use zmux_desktop_runtime as desktop_runtime;
 #[path = "support/window_host.rs"]
 mod window_host;
 use std::{
@@ -42,11 +45,14 @@ fn wait(desktop: &Desktop, predicate: impl Fn(&Snapshot) -> bool) -> std::sync::
             "desktop did not reach expected state: {}",
             format_args!(
                 "revision={}, last_request={}, error={:?}, pending={}, workspaces={}",
-                desktop.snapshot().unwrap().revision,
-                desktop.snapshot().unwrap().last_request_id,
-                desktop.snapshot().unwrap().last_error,
-                desktop.snapshot().unwrap().pending_launches,
-                desktop.snapshot().unwrap().model.workspaces.len()
+                desktop_snapshot::read_until(desktop, deadline).revision,
+                desktop_snapshot::read_until(desktop, deadline).last_request_id,
+                desktop_snapshot::read_until(desktop, deadline).last_error,
+                desktop_snapshot::read_until(desktop, deadline).pending_launches,
+                desktop_snapshot::read_until(desktop, deadline)
+                    .model
+                    .workspaces
+                    .len()
             )
         );
         thread::sleep(Duration::from_millis(5));
@@ -101,7 +107,7 @@ fn native_commands_route_input_and_resize_to_a_live_shell() {
     assert_eq!(observed.last_request_id, 2);
     assert!(observed.last_error.is_none());
     desktop.shutdown(Duration::from_secs(5)).unwrap();
-    assert!(desktop.snapshot().unwrap().closed);
+    assert!(desktop_snapshot::read(&desktop).closed);
 }
 
 #[test]
@@ -257,7 +263,7 @@ fn split_creates_a_real_independent_session_and_limits_reject_before_mutation() 
     let desktop = desktop();
     wait(&desktop, ready);
     for request in 1..MAX_TERMINALS {
-        let before = desktop.snapshot().unwrap();
+        let before = desktop_snapshot::read(&desktop);
         let pane = before.model.workspaces[0].focused_pane;
         send(
             &desktop,
@@ -271,7 +277,7 @@ fn split_creates_a_real_independent_session_and_limits_reject_before_mutation() 
         );
         wait(&desktop, |s| s.frames.len() == request + 1 && ready(s));
     }
-    let before = desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&desktop);
     let pids: std::collections::HashSet<_> = before
         .frames
         .iter()
@@ -316,7 +322,7 @@ fn close_during_startup_never_reattaches_a_closed_pane() {
         s.model.workspaces.is_empty() && s.frames.is_empty() && s.pending_launches == 0
     });
     desktop.shutdown(Duration::from_secs(5)).unwrap();
-    let final_state = desktop.snapshot().unwrap();
+    let final_state = desktop_snapshot::read(&desktop);
     assert!(final_state.closed);
     assert!(final_state.frames.is_empty());
     assert_eq!(final_state.pending_launches, 0);
@@ -610,7 +616,7 @@ fn restore_uses_saved_cwd_and_missing_directory_retains_retryable_history() {
     });
     assert_ne!(
         pane,
-        desktop.snapshot().unwrap().model.workspaces[0].focused_pane
+        desktop_snapshot::read(&desktop).model.workspaces[0].focused_pane
     );
     desktop.shutdown(Duration::from_secs(5)).unwrap();
     std::fs::remove_dir(directory).unwrap();
@@ -660,7 +666,7 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
                 })
         })
     });
-    assert!(desktop.snapshot().unwrap().notifications.is_empty());
+    assert!(desktop_snapshot::read(&desktop).notifications.is_empty());
     send(
         &desktop,
         4,
@@ -797,7 +803,7 @@ fn browser_metadata_never_allocates_a_terminal_and_has_independent_capacity() {
         assert_eq!(state.control_frames[0].process_id, first_pid);
         assert_eq!(state.pending_launches, 0);
     }
-    let before = desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&desktop);
     send(
         &desktop,
         99,

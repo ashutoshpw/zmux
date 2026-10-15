@@ -1,4 +1,6 @@
 //! Real loopback OpenSSH journey; requires sshd and ssh-keygen, never an external host.
+#[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use serde_json::Value;
 use std::{
     fs,
@@ -11,6 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Command as DesktopCommand, Desktop, Request as DesktopRequest, Shell, control::ControlServer,
     transfers::TransferCommand,
@@ -387,7 +390,7 @@ fn ssh_cli_opens_an_actual_remote_session_and_reopen_never_replays_its_command()
         &["send-text", "--surface", restored_surface, "\u{15}"],
     );
     let restored_surface_id = SurfaceId(restored["focused_surface"].as_u64().unwrap());
-    let before = desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&desktop);
     let restored_session_id = before
         .model
         .workspaces
@@ -423,7 +426,7 @@ fn ssh_cli_opens_an_actual_remote_session_and_reopen_never_replays_its_command()
     );
     assert!(stale.upload_id.is_none());
     assert_eq!(
-        desktop.snapshot().unwrap().uploads.len(),
+        desktop_snapshot::read(&desktop).uploads.len(),
         before.uploads.len()
     );
     assert_eq!(

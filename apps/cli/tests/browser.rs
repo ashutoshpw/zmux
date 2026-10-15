@@ -1,4 +1,6 @@
 //! Grammar and transport contracts; successful DOM execution belongs to native WebKit tests.
+#[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -16,6 +18,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
 use zmux_desktop_runtime::{Desktop, Shell, control::ControlServer};
 
@@ -49,7 +52,7 @@ impl Fixture {
         let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let snapshot = desktop.snapshot().unwrap();
+            let snapshot = desktop_snapshot::read_until(&desktop, deadline);
             if !snapshot.model.workspaces.is_empty() && snapshot.pending_launches == 0 {
                 break;
             }
@@ -809,7 +812,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
     server
         .set_policy(ControlPolicy::same_user(ControlAccess::Full))
         .unwrap();
-    let snapshot = desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(&desktop);
     let surface_id = browser["focused_surface"].as_u64().unwrap();
     let model_surface = snapshot
         .model
@@ -844,7 +847,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
             Duration::from_millis(300),
             stall_status,
         );
-        let count = desktop.snapshot().unwrap().browser_operations.len();
+        let count = desktop_snapshot::read(&desktop).browser_operations.len();
         let cli_socket = proxy.path.clone();
         let cli_root = fixture.0.clone();
         let cli_surface = surface.to_owned();
@@ -866,7 +869,11 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         });
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if desktop.snapshot().unwrap().browser_operations.len() > count {
+            if desktop_snapshot::read_until(&desktop, deadline)
+                .browser_operations
+                .len()
+                > count
+            {
                 break;
             }
             assert!(
@@ -896,7 +903,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
                 started.elapsed()
             );
         }
-        let after = desktop.snapshot().unwrap();
+        let after = desktop_snapshot::read(&desktop);
         assert_eq!(
             after.browser_operations.len(),
             count + 1,
@@ -1083,24 +1090,7 @@ fn leading_browser_targets_preserve_legacy_url_operands() {
     }
 }
 
-/// Desktop snapshots are nonblocking. Retry only publication contention under
-/// the caller's original deadline; lifecycle failures remain test failures.
-#[track_caller]
-fn profile_snapshot(desktop: &Desktop, deadline: Instant) -> Arc<zmux_desktop_runtime::Snapshot> {
-    loop {
-        match desktop.snapshot() {
-            Ok(snapshot) => return snapshot,
-            Err(zmux_desktop_runtime::DesktopError::Busy) => {
-                assert!(Instant::now() < deadline, "profile snapshot remained busy");
-                thread::sleep(
-                    Duration::from_millis(2)
-                        .min(deadline.saturating_duration_since(Instant::now())),
-                );
-            }
-            Err(error) => panic!("profile snapshot failed: {error}"),
-        }
-    }
-}
+use desktop_snapshot::read_until as profile_snapshot;
 
 struct ProfileApp {
     desktop: Arc<Desktop>,
@@ -1358,7 +1348,7 @@ fn download_cli_observes_real_paths_uses_native_events_and_shares_read_policy() 
     let (socket, desktop, server) = fixture.desktop();
     let browser = value(&socket, &fixture.0, &["browser", "open", "about:blank"]);
     let surface = browser["focused_surface_uuid"].as_str().unwrap();
-    let snap = desktop.snapshot().unwrap();
+    let snap = desktop_snapshot::read(&desktop);
     let selected = snap.model.workspaces[0].root.panes()[0].selected();
     let owner = BrowserOwner {
         epoch: snap.browser_epoch,

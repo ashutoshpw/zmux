@@ -1,4 +1,6 @@
 //! Public headless lifecycle and real PTY attach; never touches the default tmux server.
+#[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use serde_json::Value;
 use std::{
     fs,
@@ -8,6 +10,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_session_runtime::{Launch, Session, State};
 struct Fixture {
     root: PathBuf,
@@ -402,12 +405,7 @@ impl Gui {
         serde_json::from_slice(&out.stdout).unwrap()
     }
     fn snapshot(&self) -> std::sync::Arc<zmux_desktop_runtime::Snapshot> {
-        let mut result = None;
-        wait(|| {
-            result = self.desktop.snapshot().ok();
-            result.is_some()
-        });
-        result.unwrap()
+        desktop_snapshot::read(&self.desktop)
     }
     fn surface(&self, id: &str) -> u64 {
         self.snapshot()

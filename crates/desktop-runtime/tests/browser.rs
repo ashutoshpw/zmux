@@ -1,7 +1,10 @@
 //! Rust/native protocol ownership tests. These do not execute or claim WebKit behavior.
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use serde_json::json;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::browser::*;
 use zmux_workspace_core::{
     Action, SurfaceId, WorkspaceStore,
@@ -96,9 +99,8 @@ fn wait_desktop(
 ) -> std::sync::Arc<zmux_desktop_runtime::Snapshot> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(snapshot) = desktop.snapshot()
-            && predicate(&snapshot)
-        {
+        let snapshot = desktop_snapshot::read_until(desktop, deadline);
+        if predicate(&snapshot) {
             return snapshot;
         }
         assert!(
@@ -222,7 +224,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
             ))
             .is_err()
     );
-    assert_eq!(desktop.snapshot().unwrap().model, navigated.model);
+    assert_eq!(desktop_snapshot::read(&desktop).model, navigated.model);
     let mut current = original.clone();
     current.document_generation += 1;
     current.model_navigation += 1;
@@ -239,7 +241,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
     desktop
         .browser_host_event(observed(&current, &valid_url, &title))
         .unwrap();
-    let accepted = desktop.snapshot().unwrap();
+    let accepted = desktop_snapshot::read(&desktop);
     let actual = accepted.model.workspaces[0].root.panes()[0]
         .surfaces
         .iter()
@@ -291,7 +293,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
             ))
             .is_err()
     );
-    assert_eq!(desktop.snapshot().unwrap().model, accepted.model);
+    assert_eq!(desktop_snapshot::read(&desktop).model, accepted.model);
     let closed = send(
         5,
         Command::Action {
@@ -305,7 +307,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
             .browser_host_event(observed(&current, "https://example.org/closed", "Closed"))
             .is_err()
     );
-    assert_eq!(desktop.snapshot().unwrap().model, closed.model);
+    assert_eq!(desktop_snapshot::read(&desktop).model, closed.model);
     desktop.shutdown(Duration::from_secs(5)).unwrap();
 }
 
@@ -982,9 +984,8 @@ fn desktop_shutdown_fails_queued_reads_and_marks_dispatched_evaluation_uncertain
     let wait = |predicate: &dyn Fn(&Snapshot) -> bool| -> Arc<Snapshot> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(snapshot) = desktop.snapshot()
-                && predicate(&snapshot)
-            {
+            let snapshot = desktop_snapshot::read_until(&desktop, deadline);
+            if predicate(&snapshot) {
                 break snapshot;
             }
             assert!(Instant::now() < deadline, "desktop state did not settle");
@@ -1067,7 +1068,7 @@ fn desktop_shutdown_fails_queued_reads_and_marks_dispatched_evaluation_uncertain
             .all(|receipt| receipt.state == BrowserOperationState::Pending)
     );
     desktop.shutdown(Duration::from_secs(5)).unwrap();
-    let closed = desktop.snapshot().unwrap();
+    let closed = desktop_snapshot::read(&desktop);
     assert!(closed.closed);
     assert_eq!(closed.browser_pending_requests, 0);
     assert_eq!(closed.browser_operations.len(), 2);

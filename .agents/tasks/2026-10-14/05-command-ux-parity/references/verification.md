@@ -115,3 +115,34 @@ current comparison; original discovery ledger status fields are retained as hist
   plan links resolve. Later integration/signing/deployed gates remain explicit in package exits.
 - `scripts/check` passed: 45 Rust tests, fmt, clippy, dependency notice inventory and C ABI
   checks. No runtime changes or new native artifact were produced by this planning update.
+
+## Nonblocking Desktop snapshot fixture audit — 2026-10-15
+
+Native run38801260556 failed at CLI browser readiness because it unwrapped a
+legitimate `DesktopError::Busy`. This is the third independent fixture family
+exposing the same incorrect assumption; foundation Linux/macOS at that head passed.
+`Desktop::snapshot` deliberately uses `try_lock` and does not promise every read
+will succeed immediately. Production locking and command execution are unchanged.
+
+The read-only inventory found80 direct typed Desktop snapshot unwraps:43 in CLI
+integration tests,35 in runtime integration/support tests and2 in inline control
+tests. None were found in native-bridge tests. WorkspaceStore and Session snapshot
+calls were excluded. The complete original call/line inventory is retained at
+`/tmp/zmux-desktop-snapshot-inventory.json`.
+
+One test-only `tests/support/desktop_snapshot.rs` owner now supplies `read` and
+`read_until`. It returns the next available snapshot, retries only Busy, fails other
+errors immediately, and never waits for a model predicate or submits/replays actions.
+Point reads have a bounded5-second acquisition; existing readiness/profile callers
+retain their original deadlines and predicates through `read_until`. The80 direct
+reads, five readiness sites previously suppressing arbitrary errors, and the local
+tmux `.ok()` helper now follow this contract. Browser profiles reuse that owner
+instead of duplicating it. Existing correct Busy-specific wait loops are preserved.
+The shared native-window test host borrows the same helper; inline control tests use
+a test-only crate alias/include, with no production export or dependency added.
+
+All action assertions remain. The original failing browser test passes. An isolated
+full `scripts/check` against8dad4f0 plus this fixture batch and the author's real
+broker SHUT_WR rejection fixture passed282 Rust tests, formatting, strict Clippy,
+license inventory and C ABI. Logs are `/tmp/zmux-desktop-snapshot-{browser,check}.log`.
+This establishes portable fixture correctness, not a fresh native build/reopen pass.
