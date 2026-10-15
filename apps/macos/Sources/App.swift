@@ -2073,11 +2073,56 @@ emit("done")
 """#
         terminal.insertText("python3 -c '" + program.replacingOccurrences(of: "'", with: "'\\''") + "'\r", replacementRange: NSRange(location: NSNotFound, length: 0))
         for (mode, keys) in [normal, application].enumerated() {
-            try await waitUntil { value in
-                value.frames.contains { frame in
-                    frame.sessionId == session && frame.snapshot?.viewport.applicationCursor == (mode == 1)
-                        && frame.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_ready\(mode)") == true
+            do {
+                try await waitUntil { value in
+                    value.frames.contains { frame in
+                        frame.sessionId == session && frame.snapshot?.viewport.applicationCursor == (mode == 1)
+                            && frame.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_ready\(mode)") == true
+                    }
                 }
+            } catch {
+                let readinessFailure = error.localizedDescription
+                // Only this newly created fixture terminal is inspected. Escape
+                // controls/non-ASCII and cap retained ASCII diagnostic bytes.
+                func diagnosticText(_ text: String, limit: Int) -> String {
+                    let escaped = text.unicodeScalars.suffix(limit).map { scalar -> String in
+                        switch scalar.value {
+                        case 0x20...0x7e: return String(scalar)
+                        case 0x0a: return "\\n"
+                        case 0x0d: return "\\r"
+                        case 0x09: return "\\t"
+                        default: return "\\u{" + String(scalar.value, radix: 16) + "}"
+                        }
+                    }.joined()
+                    return String(escaped.suffix(limit))
+                }
+                let responder = window.firstResponder.map { "\(String(reflecting: type(of: $0)))@\(ObjectIdentifier($0))" } ?? "nil"
+                var details = ["mode=\(mode)", "session=\(session)", "surface=\(surface)",
+                               "expectedReady=KEY_\(token)_ready\(mode)", "windowKey=\(window.isKeyWindow)",
+                               "firstResponder=\(responder)", "terminalMounted=\(terminal.window === window)"]
+                if let frame = snapshot?.frames.first(where: { $0.sessionId == session }) {
+                    details.append("frameStarting=\(frame.starting),pid=\(frame.processId.map { String($0) } ?? "nil"),failure=\(diagnosticText(frame.failure ?? "nil", limit: 512))")
+                    if let value = frame.snapshot {
+                        let viewport = value.viewport
+                        details.append("frameState=\(value.state),bytesRead=\(value.bytesRead),exitCode=\(value.exitCode.map { String($0) } ?? "nil"),failure=\(diagnosticText(value.failure ?? "nil", limit: 512))")
+                        details.append("applicationCursor=\(viewport.applicationCursor),scrollbackOffset=\(viewport.scrollbackOffset),scrollbackLines=\(viewport.scrollbackLines),alternateScreen=\(viewport.alternateScreen),rows=\(viewport.size.rows),cols=\(viewport.size.cols)")
+                    } else { details.append("frameSnapshot=unavailable") }
+                } else { details.append("frame=not-visible") }
+                let ownsTarget = snapshot?.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
+                    .contains { $0.id == surface && $0.kind == "terminal" && $0.sessionId == session } == true
+                if ownsTarget {
+                    do {
+                        let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000, externalCaller: true)
+                        guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              (screen["surface_id"] as? NSNumber)?.uint64Value == surface,
+                              (screen["session_id"] as? NSNumber)?.uint64Value == session,
+                              let contents = screen["contents"] as? String else {
+                            throw BridgeFailure(message: "Diagnostic screen did not identify the fixture surface/session")
+                        }
+                        details.append("readScreenFixtureTail=\(diagnosticText(contents, limit: 4096))")
+                    } catch { details.append("readScreenError=\(diagnosticText(error.localizedDescription, limit: 512))") }
+                } else { details.append("readScreen=skipped-fixture-target-no-longer-owned") }
+                throw BridgeFailure(message: readinessFailure + "; special-key readiness: " + details.joined(separator: "; "))
             }
             for key in keys {
                 let characters = String(UnicodeScalar(key.symbol)!)
