@@ -4,13 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include "frame.h"
-typedef struct {
+typedef struct Probe {
  GhosttyTerminal terminal;
  GhosttyRenderState render;
  GhosttyRenderStateRowIterator rows;
  GhosttyRenderStateRowCells cells;
  unsigned char replies[4096]; size_t reply_len; int failed;
 } Probe;
+_Static_assert(sizeof(Probe) <= 8192, "resource fixture host owner bound");
 static void reply(GhosttyTerminal t, void *user, const uint8_t *data, size_t n) {
  (void)t; Probe *p=user;
  if(n>sizeof(p->replies)-p->reply_len){p->failed=1;return;}
@@ -24,20 +25,28 @@ void probe_free(Probe *p) {
  if(p->terminal)ghostty_terminal_free(p->terminal);
  free(p);
 }
-Probe *probe_new(uint16_t cols,uint16_t rows) {
- if(!cols||!rows||cols>240||rows>120)return NULL;
- Probe *p=calloc(1,sizeof(*p));if(!p)return NULL;
+// Take ownership of an existing terminal; allocator contexts outlive all handles.
+Probe *probe_wrap_terminal(GhosttyTerminal terminal,const GhosttyAllocator *allocator) {
+ if(!terminal)return NULL;
+ Probe *p=calloc(1,sizeof(*p));if(!p){ghostty_terminal_free(terminal);return NULL;}
+ p->terminal=terminal;
  #define CHECK(call) if((call)!=GHOSTTY_SUCCESS){probe_free(p);return NULL;}
- CHECK(ghostty_terminal_new(NULL,&p->terminal,cols,rows));
- CHECK(ghostty_render_state_new(NULL,&p->render));
- CHECK(ghostty_render_state_row_iterator_new(NULL,&p->rows));
- CHECK(ghostty_render_state_row_cells_new(NULL,&p->cells));
- size_t history_bytes=4*1024*1024,history_lines=1000;
- CHECK(ghostty_terminal_set(p->terminal,GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,&history_bytes));
- CHECK(ghostty_terminal_set(p->terminal,GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,&history_lines));
+ CHECK(ghostty_render_state_new(allocator,&p->render));
+ CHECK(ghostty_render_state_row_iterator_new(allocator,&p->rows));
+ CHECK(ghostty_render_state_row_cells_new(allocator,&p->cells));
  CHECK(ghostty_terminal_set(p->terminal,GHOSTTY_TERMINAL_OPT_USERDATA,p));
  CHECK(ghostty_terminal_set(p->terminal,GHOSTTY_TERMINAL_OPT_WRITE_PTY,reply));
  #undef CHECK
+ return p;
+}
+Probe *probe_new(uint16_t cols,uint16_t rows) {
+ if(!cols||!rows||cols>240||rows>120)return NULL;
+ GhosttyTerminal terminal=NULL;
+ if(ghostty_terminal_new(NULL,&terminal,cols,rows)!=GHOSTTY_SUCCESS)return NULL;
+ Probe *p=probe_wrap_terminal(terminal,NULL);if(!p)return NULL;
+ size_t history_bytes=4*1024*1024,history_lines=1000;
+ if(ghostty_terminal_set(terminal,GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,&history_bytes)!=GHOSTTY_SUCCESS
+  ||ghostty_terminal_set(terminal,GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,&history_lines)!=GHOSTTY_SUCCESS){probe_free(p);return NULL;}
  return p;
 }
 int probe_feed(Probe *p,const uint8_t *bytes,size_t n) {

@@ -121,3 +121,66 @@ fixtures and baseline observations pass. The first Mac run exposed a `lipo`
 argument-order bug, repaired before this rerun. Mac address-space containment was
 unavailable. See the F04 evaluation for exact receipts, red/green logs and remaining
 production/native/performance gates.
+
+Hosted exporter workflow [38761104404](https://github.com/ashutoshpw/zmux/actions/runs/38761104404)
+completed at `3ac6fa410b693c1978dd61d9649295b6bc93326f` with fresh dependency
+caches. The compatibility exporter executes successfully on Linux x86_64 and
+macOS 15.7.9 arm64. Mac x86_64 remains compilation-only; universal verification
+covers the original raw fixture/library. Mac `RLIMIT_AS` is unavailable. This is
+**pre-resource-patch** evidence and does not validate the allocator extension.
+
+## Opt-in allocation and exact-history experiment
+
+```sh
+python3 tools/terminal-feasibility/run.py --resource-experiment \
+  --output /tmp/zmux-terminal-resource-results
+```
+
+Read the frozen [resource contract](RESOURCE_CONTRACT.md) before interpreting this
+mode. The runner applies `resource.patch` only to its fresh, checksum-verified
+upstream extraction, after `git apply --check` and equality-checking the retained
+upstream MIT license. The exact upstream pin, application engine/dependencies and
+production limits remain unchanged. Default runs do not apply the patch.
+
+The original MIT patch supplies general and dedicated page allocators before
+construction, preserves page ownership through clone/reflow/alternate replacement,
+and prunes exact oldest history prefixes at Screen growth/resize completion. The
+fixed-ledger shim charges page-rounded **reserved mappings**, including preheated,
+free-pool and old/new transient allocations. Its 16-MiB fixture quota is an experiment
+setting. It is not total app/helper RSS, a production budget or evidence of measured
+Mac memory/latency. Fixed host owner/ledger storage, 512-KiB copied frames and other
+exclusions are recorded separately in the contract.
+
+The host-only resource fixture checks exact zero/one/1,000-row limits and oldest-row
+removal at the next two rows, byte-fragmented feed, clone, resize/reflow, alternate
+creation/resizing/reset, constructor failure positions, aggregate/general/page
+quota denial, sticky refusal and zero live mappings on cleanup. The two unchanged
+original-constructor controls must fail the intended assertions (exit 101); their
+phase records say `expected_failure: true`. A complete resource receipt therefore
+includes those two intentional red phases, while the repaired resource fixture and
+all original raw/exporter fixtures must pass. Resource fixture/header/shim/patch,
+contract and retained-license hashes are included in `harness_sha256`; patch base
+and hash also have a separate `upstream_patch` entry.
+
+Compression is not called, snapshot import is unsupported, and optional
+formatter/search/selection APIs and effects need separate acceptance. No total
+app memory bound, full allocation closure for every upstream export, physical
+footprint, Mac resource execution or production migration is claimed by this mode.
+
+Alternate replacement after a failed in-place resize and the partial top-region
+scroll rotation branch have allocator/pruning propagation reviewed in source;
+they are not independently exercised by the current resource fixtures.
+
+
+The reviewed local Linux resource run is
+`/tmp/zmux-f04-resource-repro-final-reviewed-20261015/receipt.json` (SHA-256
+`4c88318afa08e9afaf59e3363be3c20457897584f75672d7400ad4188a526b46`).
+All 14 current input hashes match; every normal phase passes and the two original
+constructor controls fail their intended assertions. It uses an explicitly labeled
+existing dependency cache, a private Cargo target, and fresh verified upstream/tool
+archives. Patch SHA-256:
+`0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02`.
+The six operation-denial paths include ordinary history page growth separately from
+lazy alternate initialization. Sticky denial takes effect for subsequent calls
+after the current at-most-4,096-byte feed returns; there is no consumed-byte or
+last-good-generation receipt. Hosted/Mac resource execution remains a separate gate.

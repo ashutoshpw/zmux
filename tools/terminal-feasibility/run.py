@@ -23,7 +23,7 @@ MAX_LOG_BYTES = 1024 * 1024
 MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
 
 
-def execute_fixture(binary):
+def execute_fixture(binary, arguments=()):
     """Report requested OS containment separately from the fixture result."""
     import resource
     limits = {}
@@ -35,7 +35,7 @@ def execute_fixture(binary):
         except (AttributeError, OSError, ValueError) as error:
             limits[name] = {"state": "unavailable", "reason": type(error).__name__}
     print("FIXTURE_LIMITS=" + json.dumps(limits, sort_keys=True), flush=True)
-    os.execv(binary, [binary])
+    os.execv(binary, [binary, *arguments])
 
 
 def run(command, label, output, phases, timeout=60, cwd=None, env=None):
@@ -139,6 +139,8 @@ def main():
     parser.add_argument("--macos-universal", action="store_true")
     parser.add_argument("--dependency-cache", type=Path,
                         help="Explicit Zig content-addressed cache; default is a fresh temporary cache")
+    parser.add_argument("--resource-experiment", action="store_true",
+                        help="Apply the original hashed allocator/exact-history patch; experiment only")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -148,18 +150,28 @@ def main():
     if machine == "aarch64" and system == "Darwin":
         machine = "arm64"
     host = f"{system}-{machine}"
+    inputs = ["run.py", "pins.json", "probe.c", "probe.rs", "owner.rs", "frame.h",
+              "compatibility.rs", "current-adapter.rs"]
+    if args.resource_experiment:
+        inputs += ["resource.patch", "resource.c", "resource.h", "resource.rs",
+                   "RESOURCE_CONTRACT.md", "licenses/Ghostty-LICENSE"]
     document = {"schema_version": 1, "state": "starting", "pins": pins,
                 "host": {"system": system, "architecture": machine,
                          "os_release": platform.release(), "macos": platform.mac_ver()[0]},
                 "downloads": [], "phases": [], "targets": [],
                 "dependency_cache": "explicit_existing_cache" if args.dependency_cache else "fresh_temporary_cache",
                 "harness_sha256": {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
-                                   for name in ["run.py", "pins.json", "probe.c", "probe.rs", "owner.rs",
-                                                "frame.h", "compatibility.rs", "current-adapter.rs"]},
+                                   for name in inputs},
                 "limits": {"build_deadline_seconds": BUILD_TIMEOUT,
                            "build_jobs": 2, "retained_log_bytes_per_phase": MAX_LOG_BYTES,
                            "fixture_wall_seconds": 10, "snapshot_bytes": 512 * 1024,
                            "reply_bytes": 4096, "cell_utf8_bytes": 256},
+                "upstream_patch": {"applied": False,
+                    "base_commit": pins["ghostty"]["commit"],
+                    "sha256": hashlib.sha256((HERE / "resource.patch").read_bytes()).hexdigest()
+                              if args.resource_experiment else None},
+                "resource_experiment": {"requested": args.resource_experiment,
+                    "total_app_memory_bound": False, "scope": "host_architecture_only"},
                 "claims": {"production_engine_changed": False, "native_app_launched": False,
                            "performance_measured": False, "graphics_tested": False,
                            "cross_architecture_execution": False,
@@ -185,6 +197,14 @@ def main():
                 if "MIT License" not in license_text.splitlines()[0]:
                     raise RuntimeError(f"unexpected {label} root license")
             document["root_licenses_verified"] = ["ghostty:MIT", "zig:MIT"]
+            if args.resource_experiment:
+                if (source / "LICENSE").read_bytes() != (HERE / "licenses/Ghostty-LICENSE").read_bytes():
+                    raise RuntimeError("retained Ghostty license differs from verified source")
+                patch = str(HERE / "resource.patch")
+                run(["git", "apply", "--check", patch], "resource-patch-check", output,
+                    phases, cwd=source)
+                run(["git", "apply", patch], "resource-patch-apply", output, phases, cwd=source)
+                document["upstream_patch"]["applied"] = True
             zig = zig_root / "zig"
             version = run([str(zig), "version"], "zig-version", output, phases).strip()
             if version != pins["zig"]["version"]:
@@ -287,6 +307,48 @@ def main():
             document["compatibility_exporter"] = {"architecture": machine,
                 "scope": "host_architecture_only", "compile": "passed", "execution": "passed",
                 "observation_stdout": stdout[:16384]}
+            if args.resource_experiment:
+                resource_obj = work / "resource.o"
+                command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-DGHOSTTY_STATIC",
+                           "-I", str(source / "include"), "-c", str(HERE / "resource.c"),
+                           "-o", str(resource_obj)]
+                if sdk:
+                    command += ["-arch", machine, "-isysroot", sdk]
+                run(command, "resource-c-shim", output, phases, env=environment)
+                resource_binary = work / "resource-probe"
+                command = ["rustc", "--edition=2024", str(HERE / "resource.rs"),
+                           "-C", "link-arg=" + str(obj), "-C", "link-arg=" + str(resource_obj),
+                           "-C", "link-arg=" + str(library), "-o", str(resource_binary)]
+                if sdk:
+                    command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + sdk]
+                run(command, "resource-rust-owner", output, phases, env=environment)
+                controls = []
+                for name, message in [
+                    ("pages", "zero page quota must reject construction before mapping preheat"),
+                    ("history", "retained 2 rows with limit1"),
+                ]:
+                    label = "resource-original-constructor-" + name
+                    try:
+                        run([sys.executable, str(HERE / "run.py"), "--execute-fixture",
+                             str(resource_binary), "--original-constructor-" + name],
+                            label, output, phases, timeout=10)
+                    except RuntimeError:
+                        record = phases[-1]
+                        log = (output / record["log"]).read_text(errors="replace")
+                        if record["timed_out"] or record["exit_code"] != 101 or message not in log:
+                            raise RuntimeError(label + " did not fail for the intended assertion")
+                        record["expected_failure"] = True
+                        controls.append({"name": name, "execution": "expected_assertion_failure",
+                                         "log": record["log"]})
+                    else:
+                        raise RuntimeError(label + " unexpectedly passed")
+                stdout = run([sys.executable, str(HERE / "run.py"), "--execute-fixture",
+                              str(resource_binary)], "resource-fixture", output, phases, timeout=10)
+                if "resource_success=true" not in stdout:
+                    raise RuntimeError("resource fixture returned no completed assertion receipt")
+                document["resource_experiment"].update(
+                    execution="passed", architecture=machine, negative_controls=controls,
+                    observation_stdout=stdout[:16384])
             document["state"] = "complete"
     except Exception as error:
         document.update(state="failed", error=f"{type(error).__name__}: {error}")
@@ -297,6 +359,6 @@ def main():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--execute-fixture":
-        execute_fixture(sys.argv[2])
+    if len(sys.argv) >= 3 and sys.argv[1] == "--execute-fixture":
+        execute_fixture(sys.argv[2], sys.argv[3:])
     raise SystemExit(main())

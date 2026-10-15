@@ -1,8 +1,8 @@
 # Terminal feasibility provenance
 
 The local drivers and runner are original Zmux code under the repository's MIT
-license. They use public upstream C APIs and independently specified protocol
-bytes. No cmux GPL/BUSL implementation, test, asset or binary is used.
+license. The default fixtures use public upstream C APIs and independently specified protocol
+bytes. The opt-in resource experiment also calls two original pinned extension APIs. No cmux GPL/BUSL implementation, test, asset or binary is used.
 
 `pins.json` identifies every directly downloaded source/toolchain archive and its
 SHA-256. Downloads stay in a temporary directory and are removed after the run.
@@ -25,3 +25,12 @@ downloaded source, Zig toolchain, compiled upstream libraries or executables.
 Before shipping a library in Zmux, audit the actual linked dependency, Unicode,
 compiler-runtime and platform notices and preserve their licenses. The root MIT
 license does not relicense every bundled component.
+
+`resource.patch` is an original MIT modification against the unchanged Ghostty
+commit above. It adds creation-time allocator propagation and exact-prefix retention;
+`resource.c`, `resource.h` and `resource.rs` are original MIT integration fixtures.
+The patch preserves upstream source notices. A verbatim copy of the pinned upstream
+root license is retained in [licenses/Ghostty-LICENSE](licenses/Ghostty-LICENSE), and
+the runner checks it against the verified archive before applying the patch. Patch
+and fixture SHA-256 hashes are recorded in each opt-in receipt. This license copy
+does not complete linked-component distribution notice review.
