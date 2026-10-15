@@ -168,9 +168,14 @@ are coalesced and actual provider fixtures validate each supported integration.
 
 ## P7 — Remote terminal and cloud command parity
 
-Owner: remote runtime and independent control plane. Depends on P0/P1/P5; cloud host decision.
+Owner: remote runtime and independent control plane. SSH depends on shared identity/actions,
+not cloud hosting. Implement managed SSH with file/image drop and paste as a priority journey;
+see [traced contract](ssh-transfer-contract.md). Only hosted VM/cloud journeys depend on the
+deferred provider/database decision.
 
-- SSH first: host-key validation, cwd/command transport, daemon negotiation, reconnect,
+- SSH first, together with remote file/image drop and clipboard upload, transfer progress,
+  cancellation, authenticated route reuse and origin-bound remote-path insertion.
+  Include host-key validation, cwd/command transport, daemon negotiation, reconnect,
   output replay, resize, detach/attach/cleanup and process ownership proven on a second host.
   Then mosh/tmux/session move and all remote discovery/status commands.
 - Complete auth/team/account commands and every vm/cloud verb (including nested verbs),

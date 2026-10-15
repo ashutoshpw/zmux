@@ -22,7 +22,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## Steps
 - [x] Review source and establish initial command/UX gap inventory.
-- [ ] P0: audit every interaction entrypoint, nested CLI contract and measured resource budget.
+- [ ] P0: trace every command/UI entrypoint through its owner, effects and failure paths; record option contracts and resource budgets.
+- [ ] Priority journey: managed SSH plus remote file/image drop and paste; independent of cloud hosting.
 - [ ] P1: topology, ⌘T tabs, ⇧⌘T/recently-closed recovery, focus history and navigation.
 - [ ] P2: collapsible sidebar, attention inbox/badges and notification automation.
 - [ ] P3a: embedded browser UI; P3b: full browser automation and advanced commands.
@@ -44,6 +45,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Managed SSH and transfer comparison](references/ssh-transfer-contract.md) — traced source contracts, coupled delivery and acceptance gates.
 - [Scrolling and attention repair](references/scroll-attention-repair.md) — corrective slice and concrete CLI parity backlog.
 - [Native delivery receipt](references/native-delivery.md) — accepted artifact, checksums, screenshots and remaining gates.
 - [P3 embedded browser](references/p3-embedded-browser.md) — WebKit foundation, lifecycle and open automation/profile gates.

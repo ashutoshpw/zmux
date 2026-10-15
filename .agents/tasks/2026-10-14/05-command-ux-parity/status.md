@@ -43,6 +43,12 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 
 ## Next action
 
+User correction on 2026-10-15: incremental builds must not substitute for full source-based
+parity. Prioritize the managed SSH + remote file/image transfer journey and complete owner/
+effect/error tracing for every family. SSH is not blocked by cloud hosting. See the
+[SSH/transfer comparison](references/ssh-transfer-contract.md). No runtime SSH support
+was added in this comparison; the whole-product audit remains incomplete.
+
 Continue P0 command registry/target contracts and remaining P1 navigation/window/recovery actions;
 then close P2 attention and P3 browser gaps against the linked ledgers. Preserve native artifact
 and visual gates, and commit cohesive validated slices. Full parity is still the objective.

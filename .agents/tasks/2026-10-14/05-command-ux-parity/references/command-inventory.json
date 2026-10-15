@@ -3837,9 +3837,15 @@
       "command": "ssh",
       "phase": "P7",
       "baseline": "missing",
-      "contract_status": "needs-option-and-dispatch-audit",
-      "implementation_status": "not-verified",
-      "evidence": []
+      "contract_status": "source-traced-core-journey-options-and-variants-still-open",
+      "implementation_status": "missing",
+      "evidence": [
+        "cmux CLI/cmux.swift:13634 runSSH",
+        "cmux CLI/cmux.swift:14444 parseSSHCommandOptions",
+        "cmux CLI/CMUXCLI+SSHTui.swift:9 runSSHTui",
+        "zmux apps/cli/src/main.rs:176 has no SSH dispatch",
+        "references/ssh-transfer-contract.md"
+      ]
     },
     {
       "id": "CMD-380",
