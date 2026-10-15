@@ -56,6 +56,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var sidebarDocumentConstraints: [NSLayoutConstraint] = []
     private var sidebarModes: NSSegmentedControl?
     private lazy var clearNotificationsButton = IconButton(symbol: "trash", label: "Clear displayed notifications", target: self, action: #selector(clearNotifications))
+    private lazy var jumpToUnreadButton = IconButton(symbol: "arrow.up.forward.circle", label: "Jump to latest unread (⌘⇧U)", target: self, action: #selector(jumpToUnread))
     private var notificationList: NSStackView?
     private var notificationKey = ""
     private lazy var notificationButton = IconButton(symbol: "bell", label: "Notifications", target: self, action: #selector(showNotifications))
@@ -239,7 +240,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
 
         let newWorkspaceButton = makeIconButton(symbol: "plus", label: "New workspace", action: #selector(newWorkspace))
         let cloudButton = makeIconButton(symbol: "icloud", label: "Cloud account", action: #selector(showCloudSettings))
-        let sidebarActions = NSStackView(views: [newWorkspaceButton, clearNotificationsButton, cloudButton])
+        let sidebarActions = NSStackView(views: [newWorkspaceButton, jumpToUnreadButton, clearNotificationsButton, cloudButton])
         sidebarActions.orientation = .horizontal
         sidebarActions.spacing = 3
 
@@ -286,7 +287,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         content.addSubview(mainHeader)
         content.addSubview(canvas)
 
-        for button in actionButtons + [notificationButton, clearNotificationsButton] {
+        for button in actionButtons + [notificationButton, jumpToUnreadButton, clearNotificationsButton] {
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
                 button.widthAnchor.constraint(equalToConstant: 28),
@@ -345,7 +346,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         sidebarWidth = sidebarContainer.widthAnchor.constraint(equalToConstant: sidebarCollapsed ? 0 : 224)
         sidebarWidth?.isActive = true
         sidebarPanel.isHidden = sidebarCollapsed
-        clearNotificationsButton.isHidden = true
+        setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
     }
 
@@ -392,6 +393,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
             ("Toggle Sidebar", #selector(toggleSidebar), "b"),
             ("Notifications", #selector(showNotifications), ""),
+            ("Jump to Latest Unread", #selector(jumpToUnread), "U"),
             ("Enable Desktop Notifications…", #selector(enableDesktopNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),
             ("Split Down", #selector(splitDown), "D"),
@@ -909,6 +911,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         case #selector(nextWorkspace), #selector(previousWorkspace), #selector(lastWorkspace): return (snapshot?.model.workspaces.count ?? 0) > 1
         case #selector(nextPane), #selector(previousPane), #selector(lastPane), #selector(focusPaneLeft), #selector(focusPaneRight), #selector(focusPaneUp), #selector(focusPaneDown): return (snapshot?.workspace?.root.panes.count ?? 0) > 1
         case #selector(focusBack), #selector(focusForward): return snapshot?.model.focusedWorkspace != nil
+        case #selector(jumpToUnread): return canJumpToUnread
         default: return true
         }
     }
@@ -983,12 +986,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
     @objc private func sidebarModeChanged(_ sender: NSSegmentedControl) {
         if sender.selectedSegment == 1 { showNotifications() }
-        else { clearNotificationsButton.isHidden = true; setSidebarDocument(workspaceList) }
+        else { setNotificationActionsVisible(false); setSidebarDocument(workspaceList) }
     }
     @objc func showNotifications() {
         if sidebarCollapsed { toggleSidebar() }
         sidebarModes?.selectedSegment = 1
-        clearNotificationsButton.isHidden = false
+        setNotificationActionsVisible(true)
         if notificationList == nil {
             let list = FlippedStackView()
             list.orientation = .vertical; list.alignment = .leading; list.spacing = 6
@@ -1006,6 +1009,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
         notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
         notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
+        jumpToUnreadButton.isEnabled = canJumpToUnread
         guard let list = notificationList else { return }
         let key = snapshot.notifications.map { "\($0.id):\($0.read)" }.joined(separator: ",") + ":\(snapshot.model.revision):\(snapshot.notificationsDropped):\(snapshot.nativeNotifications.epoch)"
         guard key != notificationKey else { return }
@@ -1034,6 +1038,15 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             return
         }
         notificationDelivery.openInbox(target)
+    }
+    private var canJumpToUnread: Bool {
+        guard let snapshot else { return false }
+        return snapshot.notifications.contains { !$0.read && ($0.target?.isAvailable(in: snapshot) ?? false) }
+    }
+    @objc private func jumpToUnread() { notificationDelivery.jumpToUnread() }
+    private func setNotificationActionsVisible(_ visible: Bool) {
+        clearNotificationsButton.isHidden = !visible
+        jumpToUnreadButton.isHidden = !visible
     }
     @objc private func enableDesktopNotifications() { notificationDelivery.enable() }
     func readNotification(_ id: UInt64) { enqueue(.attention("read", id, nil, nil)) }
@@ -1190,7 +1203,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         closeTerminalTab(attentionTab)
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
         sidebarModes?.selectedSegment = 0
-        clearNotificationsButton.isHidden = true
+        setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
         splitRight()
         try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
@@ -1343,6 +1356,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "notification_permission_ordering": true,
             "notification_cli_metadata": true,
             "notification_workspace_target": true,
+            "notification_jump_to_unread": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
@@ -1464,9 +1478,33 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         selectWorkspace(foregroundWorkspace)
         try await waitUntil { $0.model.focusedWorkspace == foregroundWorkspace }
+        try await smokeUnreadNotificationJump(workspace: retained, foregroundWorkspace: foregroundWorkspace)
         sidebarModes?.selectedSegment = 0
-        clearNotificationsButton.isHidden = true
+        setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
+    }
+    private func smokeUnreadNotificationJump(workspace: Workspace, foregroundWorkspace: UInt64) async throws {
+        let selectedTabs = Dictionary(uniqueKeysWithValues: workspace.root.panes.map { ($0.id, $0.selectedSurface) })
+        for (index, shortcut) in [true, false].enumerated() {
+            let title = "CLI unread jump \(index)"
+            _ = try await nativeCLI(["notify", "--workspace", String(workspace.id), "--title", title, "--desktop", "false"], externalCaller: true)
+            try await waitUntil { $0.notifications.contains { $0.title == title && !$0.read } }
+            guard let item = snapshot?.notifications.last(where: { $0.title == title }),
+                  snapshot?.model.focusedWorkspace == foregroundWorkspace,
+                  jumpToUnreadButton.isEnabled, !jumpToUnreadButton.isHidden else {
+                throw BridgeFailure(message: "Unread notification changed focus before an explicit jump or disabled the inbox action")
+            }
+            if shortcut { try performShortcut("u", modifiers: [.command, .shift]) }
+            else { jumpToUnreadButton.performClick(nil) }
+            try await waitUntil { value in
+                guard let focused = value.workspace, focused.id == workspace.id,
+                      focused.focusedPane == workspace.focusedPane,
+                      value.notifications.first(where: { $0.id == item.id })?.read == true else { return false }
+                return Dictionary(uniqueKeysWithValues: focused.root.panes.map { ($0.id, $0.selectedSurface) }) == selectedTabs
+            }
+            selectWorkspace(foregroundWorkspace)
+            try await waitUntil { $0.model.focusedWorkspace == foregroundWorkspace }
+        }
     }
     private func smokeBrowserAutomation(report: URL, surface: UInt64, pane: Pane, terminalSession: UInt64) async throws {
         let data = try Data(contentsOf: report.deletingLastPathComponent().appendingPathComponent("native-browser-fixture.json"))
@@ -1630,7 +1668,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         // retains Shift. Supplying lowercase here would synthesize an unshifted shortcut.
         let characters = modifiers.contains(.shift) ? (["[": "{", "]": "}"][key] ?? key.uppercased()) : key
         let keyCodes: [String: UInt16] = [
-            "t": 17, "w": 13, "b": 11, "[": 33, "]": 30,
+            "t": 17, "w": 13, "b": 11, "u": 32, "[": 33, "]": 30,
             String(UnicodeScalar(NSLeftArrowFunctionKey)!): 123,
             String(UnicodeScalar(NSRightArrowFunctionKey)!): 124,
             String(UnicodeScalar(NSDownArrowFunctionKey)!): 125,

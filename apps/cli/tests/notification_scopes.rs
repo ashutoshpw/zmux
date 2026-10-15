@@ -359,8 +359,78 @@ fn caller_clear_and_observed_cutoff_preserve_unrelated_and_newer_arrivals() {
 }
 
 #[test]
+fn notification_uuid_handles_and_unread_navigation_work_through_public_cli() {
+    let app = App::new();
+    let (workspace, _, surface) = create(&app, "UUID target");
+    let (other_workspace, _, other_surface) = create(&app, "foreground");
+    let numeric = app.notify(&surface, "first handle");
+    let list = app.run(&["list-notifications"]);
+    let first = list["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == numeric)
+        .unwrap();
+    let uuid = first["uuid"]
+        .as_str()
+        .expect("admitted notification UUID")
+        .to_owned();
+    app.run(&["mark-notification-read", "--id", &uuid]);
+    assert!(
+        app.run(&["list-notifications"])["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == numeric)
+            .unwrap()["read"]
+            .as_bool()
+            .unwrap()
+    );
+    let second_id = app.notify(&surface, "second handle");
+    let list = app.run(&["list-notifications"]);
+    let reference = list["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == second_id)
+        .unwrap()["reference"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    app.run(&["open-notification", "--id", &reference]);
+    assert_eq!(
+        app.run(&["list-workspaces"])["focused_workspace"]
+            .as_u64()
+            .unwrap()
+            .to_string(),
+        workspace
+    );
+    let receipt = app.run(&["dismiss-notification", "--id", &uuid]);
+    assert_eq!(receipt["affected_uuids"], serde_json::json!([uuid]));
+    assert!(!ids(&app.run(&["list-notifications"])).contains(&numeric));
+    app.run(&["dismiss-notification", "--id", &second_id.to_string()]);
+    assert_eq!(app.run(&["jump-to-unread"])["opened"], false);
+    let unread = app.notify(&other_surface, "jump via CLI");
+    let receipt = app.run(&["jump-to-unread"]);
+    assert_eq!(receipt["opened"], true);
+    assert_eq!(receipt["notification_id"], unread);
+    assert_eq!(
+        app.run(&["list-workspaces"])["focused_workspace"]
+            .as_u64()
+            .unwrap()
+            .to_string(),
+        other_workspace
+    );
+}
+
+#[test]
 fn notification_selector_conflicts_fail_before_socket_use() {
     for args in [
+        vec!["open-notification", "--id", "notification:5"],
+        vec!["open-notification", "--id", "0"],
+        vec!["mark-notification-read", "--id", "not-a-uuid"],
+        vec!["dismiss-notification", "--id", "notification:"],
+        vec!["jump-to-unread", "--workspace", "1"],
         vec!["notify", "--desktop", "yes"],
         vec!["notify", "--title", "a", "--title", "b"],
         vec!["notify", "--clear", "--body", "conflict"],

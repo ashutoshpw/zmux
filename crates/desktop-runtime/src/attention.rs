@@ -20,6 +20,59 @@ pub fn default_notification_title() -> String {
     DEFAULT_NOTIFICATION_TITLE.into()
 }
 
+/// Notification handles resolve only against admitted attention history, never
+/// against workspace targets or the currently focused object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum NotificationSelector {
+    Id(u64),
+    Uuid(Uuid),
+}
+impl From<u64> for NotificationSelector {
+    fn from(id: u64) -> Self {
+        Self::Id(id)
+    }
+}
+impl std::fmt::Display for NotificationSelector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Id(id) => write!(formatter, "{id}"),
+            Self::Uuid(uuid) => write!(formatter, "notification:{uuid}"),
+        }
+    }
+}
+impl std::str::FromStr for NotificationSelector {
+    type Err = AttentionError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Ok(id) = value.parse::<u64>()
+            && id > 0
+        {
+            return Ok(Self::Id(id));
+        }
+        let value = value.strip_prefix("notification:").unwrap_or(value);
+        Uuid::parse_str(value).map(Self::Uuid).map_err(|_| {
+            AttentionError::InvalidSelector(
+                "notification target must be a positive ID, UUID, or notification:UUID",
+            )
+        })
+    }
+}
+impl<'de> Deserialize<'de> for NotificationSelector {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Id(u64),
+            Text(String),
+        }
+        match Input::deserialize(deserializer)? {
+            Input::Id(id) if id > 0 => Ok(Self::Id(id)),
+            Input::Text(value) => value.parse().map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom("notification ID must be positive")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationContent {
@@ -157,6 +210,8 @@ impl DesktopDelivery {
 #[derive(Clone, Debug, Serialize)]
 pub struct Notification {
     pub id: u64,
+    pub uuid: Uuid,
+    pub reference: String,
     pub surface_id: Option<SurfaceId>,
     pub identity_namespace: Uuid,
     /// Last workspace owning this exact live session; retained after close.
@@ -215,6 +270,15 @@ pub enum NativeAttentionAction {
     Open { target: NotificationTarget },
     OpenInbox { target: NotificationTarget },
     Dismiss { target: NotificationTarget },
+    JumpToUnread,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct NotificationNavigation {
+    pub opened: bool,
+    pub notification_id: Option<u64>,
+    pub notification_uuid: Option<Uuid>,
+    pub target: Option<NotificationTarget>,
 }
 #[derive(Debug, Error)]
 pub enum AttentionError {
@@ -233,7 +297,7 @@ pub enum AttentionError {
     #[error("notification cursor belongs to a previous attention epoch")]
     StaleEpoch,
     #[error("notification {0} does not exist")]
-    NotFound(u64),
+    NotFound(NotificationSelector),
     #[error("{0}")]
     InvalidSelector(&'static str),
 }
@@ -266,14 +330,15 @@ pub enum AttentionCommand {
         desktop: Option<bool>,
     },
     Read {
-        id: u64,
+        id: NotificationSelector,
     },
     Open {
-        id: u64,
+        id: NotificationSelector,
     },
     Dismiss {
-        id: u64,
+        id: NotificationSelector,
     },
+    JumpToUnread,
     /// A cursor is mandatory: a newly arrived generation must survive a stale clear.
     Clear {
         through_id: u64,
@@ -303,14 +368,14 @@ pub enum NotificationAction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "selector", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NotificationSelection {
-    Id { id: u64 },
+    Id { id: NotificationSelector },
     All,
     Workspace,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "selector", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DismissSelection {
-    Id { id: u64 },
+    Id { id: NotificationSelector },
     AllRead,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -367,6 +432,7 @@ pub struct NotificationMutation {
     pub epoch: Uuid,
     pub cursor: u64,
     pub affected_ids: Vec<u64>,
+    pub affected_uuids: Vec<Uuid>,
     pub affected_count: usize,
 }
 
@@ -404,8 +470,27 @@ impl Attention {
             epoch: self.epoch,
             cursor,
             affected_count: affected_ids.len(),
+            affected_uuids: affected_ids
+                .iter()
+                .filter_map(|id| {
+                    self.items
+                        .iter()
+                        .find(|item| item.id == *id)
+                        .map(|item| item.uuid)
+                })
+                .collect(),
             affected_ids,
         }
+    }
+    pub fn resolve(&self, selector: NotificationSelector) -> Result<u64, AttentionError> {
+        self.items
+            .iter()
+            .find(|item| match selector {
+                NotificationSelector::Id(id) => item.id == id,
+                NotificationSelector::Uuid(uuid) => item.uuid == uuid,
+            })
+            .map(|item| item.id)
+            .ok_or(AttentionError::NotFound(selector))
     }
     pub fn apply_mutation(
         &mut self,
@@ -420,7 +505,7 @@ impl Attention {
         if let NotificationFilter::Id(id) = filter
             && !self.items.iter().any(|item| item.id == *id)
         {
-            return Err(AttentionError::NotFound(*id));
+            return Err(AttentionError::NotFound((*id).into()));
         }
         let cursor = through_id.unwrap_or(self.next_id).min(self.next_id);
         let affected_ids: Vec<_> = self
@@ -434,6 +519,7 @@ impl Attention {
             })
             .map(|item| item.id)
             .collect();
+        let receipt = self.mutation_receipt(affected_ids.clone(), cursor);
         match kind {
             NotificationMutationKind::MarkRead => {
                 for item in &mut self.items {
@@ -444,7 +530,7 @@ impl Attention {
             }
             _ => self.items.retain(|item| !affected_ids.contains(&item.id)),
         }
-        Ok(self.mutation_receipt(affected_ids, cursor))
+        Ok(receipt)
     }
     pub fn notify_owned(
         &mut self,
@@ -559,8 +645,11 @@ impl Attention {
                 false,
             );
         }
+        let uuid = Uuid::new_v5(&self.epoch, format!("zmux.notification.v1:{id}").as_bytes());
         self.items.push(Notification {
             id,
+            uuid,
+            reference: format!("notification:{uuid}"),
             surface_id: target.destination.surface_id(),
             identity_namespace: target.identity_namespace,
             workspace_id,

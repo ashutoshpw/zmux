@@ -85,7 +85,7 @@ surface instead of null). The public CLI regression independently failed because
 workspace parsing discarded a hidden caller surface (returned selected9 instead of8).
 Parent full checks pass: 169 Rust tests, formatting, strict Clippy, notices and C ABI.
 Fresh production review accepted ownership, scope and activation behavior. Native smoke
-external-caller environment isolation is being repaired; hosted execution remains pending.
+external-caller environment isolation was repaired; hosted execution remains pending.
 
 ## N01d next slice: handles and unread navigation
 
@@ -108,3 +108,22 @@ Last-prompt navigation requires an agent UserPromptSubmit source, not shell prom
 keystroke recency (Sources/AppDelegate+JumpToLastPrompt.swift:5 and
 cmuxTests/JumpToLastPromptTests.swift:20). Rich manual/restored unread state and badge
 settings also remain open. No implementation for these followup items is claimed.
+
+N01d is implemented locally. The public CLI regression first failed at the missing
+admitted UUID field; the six public CLI notification tests now pass. Parent scripts/check
+passes 172 Rust tests, formatting, strict Clippy, notices and C ABI. Fresh review accepts
+UUID ownership, deletion receipts and shared navigation; native gates remain open.
+
+## Confirmed native callback crash
+
+Hosted `2dcb038` (run38736550307) compiled universally but crashed during real
+UserNotifications permission refresh. LLDB captured the UN service call-out queue
+entering `_dispatch_assert_queue_fail`, Swift executor validation, and
+`NotificationDelivery.refreshPermission`'s callback. This establishes inherited
+main-actor isolation at the Objective-C completion boundary as the crash cause.
+
+The repair makes all three framework completion blocks explicitly Sendable. Settings
+become a Sendable enum and errors become bounded strings before the main-actor hop;
+all delivery state remains actor-owned. No unsafe actor assumption or bypass is added.
+The same packaged workflow is the native regression gate; portable checks cannot
+establish the repair. Actual banners/reply behavior remain separate open gates.

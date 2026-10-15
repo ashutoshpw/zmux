@@ -12,7 +12,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use zmux_desktop_runtime::attention::AttentionCommand;
+use zmux_desktop_runtime::attention::{AttentionCommand, NotificationSelector};
 use zmux_desktop_runtime::control::{
     CONTROL_VERSION, ControlCommand, ControlRequest, ControlResponse, MAX_CONTROL_REQUEST_BYTES,
     MAX_CONTROL_RESPONSE_BYTES,
@@ -245,11 +245,18 @@ fn parse(
             tail,
             ControlCommand::ListNotifications,
         )?,
+        Some("jump-to-unread") => app_no_args(
+            "jump-to-unread",
+            tail,
+            ControlCommand::Attention {
+                action: AttentionCommand::JumpToUnread,
+            },
+        )?,
         Some("open-notification") => help_or_exact("open-notification", tail, 2, |values| {
             if values[0] != "--id" {
                 return Err(CliError("open-notification requires --id ID".into()));
             }
-            let id = parse_id(&values[1], "notification")?;
+            let id = parse_notification_selector(&values[1])?;
             Ok(ControlCommand::Attention {
                 action: AttentionCommand::Open { id },
             })
@@ -357,6 +364,10 @@ fn utf8_arg<'a>(argument: Option<&'a OsString>, label: &str) -> Result<&'a str, 
     argument
         .and_then(|value| value.to_str())
         .ok_or_else(|| CliError(format!("missing or invalid {label}")))
+}
+
+fn parse_notification_selector(value: &str) -> Result<NotificationSelector, CliError> {
+    value.parse().map_err(|error| CliError(format!("{error}")))
 }
 
 fn parse_id(value: &str, label: &str) -> Result<u64, CliError> {

@@ -828,6 +828,9 @@ fn mutate(
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(navigation) = execution.notification_navigation {
+        return Ok(json!(navigation));
+    }
     if let Some(mutation) = execution.notification_mutation {
         return Ok(json!(mutation));
     }

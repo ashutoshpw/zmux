@@ -231,3 +231,20 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   cannot satisfy the native smoke gate. Source-only actor-isolation guesses are unproven.
 - N01d UUID handles and shared newest-openable-unread navigation are designed next.
   Replies, agent last-prompt events, richer unread state and full V01 remain open.
+
+## N01d in progress
+
+- `2dcb038` commits workspace notification ownership and failure-only native debugger
+  diagnostics. Foundation38736550252 passes; macOS38736550307 is compiling.
+- UUID handles preserve numeric compatibility; shared jump-to-unread will serve CLI,
+  menu, inbox and Command-Shift-U with activation only after confirmed selection.
+  Runtime/native integration and verification are in progress.
+
+## N01d verification and confirmed native repair
+
+- N01d full local check passes 172 tests plus strict Clippy/notices/C ABI. Public CLI
+  handle/navigation cases pass; fresh production review accepted.
+- `2dcb038` universal compilation passed but packaged smoke failed. LLDB proves the
+  UN call-out queue hits a Swift main-actor assertion in refreshPermission's callback.
+  Explicit Sendable completion boundaries repair the identified cause; next hosted
+  execution must verify it. No partial artifact is shared.

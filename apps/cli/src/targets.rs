@@ -314,7 +314,9 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
                 if matches!(command, "mark-notification-read" | "dismiss-notification")
                     && id.is_none() =>
             {
-                id = Some(parse_id(option_value(args, cursor, flag)?, "notification")?);
+                id = Some(parse_notification_selector(option_value(
+                    args, cursor, flag,
+                )?)?);
                 cursor += 2;
             }
             "--through" if command == "clear-notifications" && through_id.is_none() => {
