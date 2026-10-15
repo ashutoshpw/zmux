@@ -1471,10 +1471,27 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               receipt.navigation == nil, receipt.focusedWorkspaceId == nil, receipt.focusedSurfaceId == nil else {
             throw BridgeFailure(message: "Reply did not confirm the canonical text and terminator without navigation")
         }
-        try await waitUntil { value in
-            value.notifications.first(where: { $0.id == item.id })?.read == true
-                && value.frames.contains { $0.sessionId == session && $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("ZMUX_REPLY_\(nonce)") == true }
+        // UI snapshots intentionally omit hidden frames. The public targeted read
+        // inspects the background PTY without selecting its tab or borrowing focus.
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        var observed = false
+        while clock.now < deadline {
+            let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000)
+            guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (screen["surface_id"] as? NSNumber)?.uint64Value == surface,
+                  (screen["session_id"] as? NSNumber)?.uint64Value == session,
+                  let contents = screen["contents"] as? String else {
+                throw BridgeFailure(message: "Targeted reply screen read did not identify the background terminal")
+            }
+            if contents.components(separatedBy: "\n").contains("ZMUX_REPLY_\(nonce)"),
+               snapshot?.notifications.first(where: { $0.id == item.id })?.read == true {
+                observed = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(25))
         }
+        guard observed else { throw BridgeFailure(message: "Reply text and read acknowledgement were not observed on the background terminal") }
         guard let after = snapshot, after.model.focusedWorkspace == workspace.id,
               after.workspace?.focusedPane == workspace.focusedPane,
               after.workspace?.root.panes.allSatisfy({ selected[$0.id] == $0.selectedSurface }) == true else {
