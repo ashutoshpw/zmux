@@ -89,6 +89,12 @@ pub enum BrowserAction {
         #[serde(default)]
         snapshot_after: bool,
     },
+    Interact {
+        operation: BrowserInteraction,
+        selector: String,
+        #[serde(default)]
+        snapshot_after: bool,
+    },
     Eval {
         script: String,
     },
@@ -113,6 +119,16 @@ pub enum BrowserAction {
         #[serde(default)]
         state: WaitState,
     },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserInteraction {
+    Dblclick,
+    Hover,
+    Focus,
+    Check,
+    Uncheck,
+    ScrollIntoView,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -261,6 +277,9 @@ impl BrowserAction {
     pub fn validate(&self) -> Result<(), BrowserError> {
         match self {
             Self::Click {
+                selector: value, ..
+            }
+            | Self::Interact {
                 selector: value, ..
             } => selector(Some(value))?,
             Self::Fill {

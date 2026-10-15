@@ -18,7 +18,7 @@ enum BrowserClickSmoke {
         let contentWorld: String
     }
     private struct Envelope<T: Decodable>: Decodable { let value: T }
-    private struct Observation: Decodable {
+    private struct Observation: Codable {
         let events: [String]
         let activation: [String]
         let checked: Bool
@@ -27,6 +27,13 @@ enum BrowserClickSmoke {
         let otherClicks: Int
         let clicks: Int
         let focused: String
+        let documentHasFocus: Bool
+        let readyState: String
+        let visibility: String
+    }
+    private static func diagnostic(_ observation: Observation) -> String {
+        do { return String(decoding: try JSONEncoder().encode(observation), as: UTF8.self) }
+        catch { return "Observation encoding failed: " + error.localizedDescription }
     }
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -90,7 +97,7 @@ enum BrowserClickSmoke {
                 return reply
             }
             @MainActor func observe() async throws -> Observation {
-                let script = "({events:globalThis.zmuxClickEvents,activation:globalThis.zmuxActivation,checked:document.getElementById('activate').checked,cancelled:document.getElementById('cancel').checked,cancelledEvents:globalThis.zmuxCancelled,otherClicks:globalThis.zmuxOtherClicks,clicks:globalThis.zmuxClicks,focused:document.activeElement.id})"
+                let script = "({events:globalThis.zmuxClickEvents,activation:globalThis.zmuxActivation,checked:document.getElementById('activate').checked,cancelled:document.getElementById('cancel').checked,cancelledEvents:globalThis.zmuxCancelled,otherClicks:globalThis.zmuxOtherClicks,clicks:globalThis.zmuxClicks,focused:document.activeElement.id,documentHasFocus:document.hasFocus(),readyState:document.readyState,visibility:document.visibilityState})"
                 return try decode(Envelope<Observation>.self, await cli(["browser", "eval", script] + target, false)).value
             }
             let first = try await click(".click-many", after: true)
@@ -98,7 +105,7 @@ enum BrowserClickSmoke {
             let expected = ["pointerover", "mouseover", "pointerenter", "mouseenter", "pointermove", "mousemove", "pointerdown", "mousedown", "pointerup", "mouseup", "click"]
             guard observed.events == expected, observed.clicks == 1, observed.otherClicks == 0,
                   observed.focused == "first", first.snapshot?.nodes.isEmpty == false else {
-                throw BridgeFailure(message: "Click lost first-match, event sequence, DOM focus or once-only snapshot behavior")
+                throw BridgeFailure(message: "Click lost first-match, event sequence, DOM focus or once-only snapshot behavior: " + diagnostic(observed))
             }
             _ = try await click(first.value.ref)
             _ = try await click("#activate")
@@ -106,7 +113,7 @@ enum BrowserClickSmoke {
             let activation = try await observe()
             guard activation.clicks == 2, activation.checked, activation.activation == ["click", "input", "change"],
                   !activation.cancelled, activation.cancelledEvents == ["click"] else {
-                throw BridgeFailure(message: "Click changed native default activation or cancellation semantics")
+                throw BridgeFailure(message: "Click changed native default activation or cancellation semantics: " + diagnostic(activation))
             }
             for (selector, code) in [("#disabled", "element_disabled"), ("[", "invalid_selector"), ("#missing", "element_not_found")] {
                 let failed = try await cli(["browser", "click", selector] + target, true)

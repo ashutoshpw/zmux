@@ -64,6 +64,11 @@ enum BrowserZoom: Codable, Sendable {
     }
 }
 
+enum BrowserInteraction: String, Codable, Sendable {
+    case dblclick, hover, focus, check, uncheck
+    case scrollIntoView = "scroll_into_view"
+}
+
 enum BrowserAction: Codable, Sendable {
     case back(snapshotAfter: Bool)
     case forward(snapshotAfter: Bool)
@@ -71,6 +76,7 @@ enum BrowserAction: Codable, Sendable {
     case zoom(operation: BrowserZoom)
     case fill(selector: String, text: String, snapshotAfter: Bool)
     case click(selector: String, snapshotAfter: Bool)
+    case interact(operation: BrowserInteraction, selector: String, snapshotAfter: Bool)
     case eval(script: String)
     case snapshot(options: BrowserSnapshotOptions)
     case get(kind: String, selector: String?, attribute: String?, property: String?)
@@ -87,6 +93,7 @@ enum BrowserAction: Codable, Sendable {
         case "zoom": self = .zoom(operation: try c.decode(BrowserZoom.self, forKey: .operation))
         case "fill": self = .fill(selector: try c.decode(String.self, forKey: .selector), text: try c.decode(String.self, forKey: .text), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "click": self = .click(selector: try c.decode(String.self, forKey: .selector), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
+        case "interact": self = .interact(operation: try c.decode(BrowserInteraction.self, forKey: .operation), selector: try c.decode(String.self, forKey: .selector), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "eval": self = .eval(script: try c.decode(String.self, forKey: .script))
         case "snapshot": self = .snapshot(options: try c.decodeIfPresent(BrowserSnapshotOptions.self, forKey: .options) ?? .init())
         case "find": self = .find(locator: try c.decode(BrowserLocator.self, forKey: .locator))
@@ -110,6 +117,9 @@ enum BrowserAction: Codable, Sendable {
         case .click(let selector, let after):
             try c.encode("click", forKey: .action); try c.encode(selector, forKey: .selector)
             try c.encode(after, forKey: .snapshotAfter)
+        case .interact(let operation, let selector, let after):
+            try c.encode("interact", forKey: .action); try c.encode(operation, forKey: .operation)
+            try c.encode(selector, forKey: .selector); try c.encode(after, forKey: .snapshotAfter)
         case .snapshot(let options): try c.encode("snapshot", forKey: .action); try c.encode(options, forKey: .options)
         case .find(let locator): try c.encode("find", forKey: .action); try c.encode(locator, forKey: .locator)
         case .wait(let selector, let state):
@@ -121,7 +131,7 @@ enum BrowserAction: Codable, Sendable {
     }
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
-    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .click: true; default: false } }
+    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .click, .interact: true; default: false } }
     var isWait: Bool { if case .wait = self { return true }; return false }
 }
 
@@ -366,15 +376,22 @@ enum BrowserAutomationScript {
       }
       return {matched,state:req.state,ref:matched && node ? reference(node) : null};
     };
-    const click = () => {
+    const inputTarget = () => {
       const node = resolve(req.selector);
-      if (!node) fault('element_not_found', 'Click selector did not match an element');
-      if (node.disabled) fault('element_disabled', 'Click target is disabled');
-      node.scrollIntoView({block:'nearest', inline:'nearest'});
+      if (!node) fault('element_not_found', 'Interaction selector did not match an element');
+      return node;
+    };
+    const requireEnabled = node => {
+      if (node.disabled) fault('element_disabled', 'Interaction target is disabled');
+    };
+    const nearest = node => node.scrollIntoView({block:'nearest', inline:'nearest'});
+    const eventLocation = node => {
       const box = node.getBoundingClientRect();
       const x = Math.floor(box.left + box.width / 2), y = Math.floor(box.top + box.height / 2);
-      const location = {cancelable:true, composed:true, view:window, button:0, clientX:x, clientY:y, screenX:x, screenY:y};
-      for (const phase of ['over','enter','move','down','up']) {
+      return {cancelable:true, composed:true, view:window, button:0, clientX:x, clientY:y, screenX:x, screenY:y};
+    };
+    const pointerPhases = (node, location, phases) => {
+      for (const phase of phases) {
         if (phase === 'up' && typeof node.focus === 'function') node.focus({preventScroll:true});
         const properties = {...location, bubbles:phase !== 'enter', buttons:phase === 'down' ? 1 : 0};
         if (typeof PointerEvent === 'function') {
@@ -382,11 +399,76 @@ enum BrowserAutomationScript {
         }
         node.dispatchEvent(new MouseEvent('mouse' + phase, {...properties, detail:['down','up'].includes(phase) ? 1 : 0}));
       }
-      // Let the DOM activation algorithm own defaults and click cancellation.
-      // A second manually dispatched click would toggle controls twice.
+    };
+    const activate = (node, location) => {
+      // DOM activation owns defaults and click cancellation. Down-event
+      // cancellation does not suppress this separately requested activation.
       if (typeof node.click === 'function') node.click();
       else node.dispatchEvent(new MouseEvent('click', {...location, bubbles:true, buttons:0, detail:1}));
-      return {dispatched:true, ref:reference(node)};
+    };
+    const clickAttempt = node => {
+      const location = eventLocation(node);
+      pointerPhases(node, location, ['over','enter','move','down','up']);
+      activate(node, location);
+    };
+    const setNativeProperty = (node, name, value) => {
+      // Bypass an instance-level framework tracker, then notify page observers
+      // through the operation's ordinary DOM events.
+      let prototype = Object.getPrototypeOf(node);
+      for (let depth = 0; prototype && depth < 32; depth++, prototype = Object.getPrototypeOf(prototype)) {
+        const setter = Object.getOwnPropertyDescriptor(prototype, name)?.set;
+        if (setter) { setter.call(node, value); return; }
+      }
+      node[name] = value;
+    };
+    const dispatched = node => ({dispatched:true, ref:reference(node)});
+    const click = () => {
+      const node = inputTarget();
+      requireEnabled(node);
+      nearest(node);
+      clickAttempt(node);
+      return dispatched(node);
+    };
+    const interact = () => {
+      const node = inputTarget();
+      switch (req.operation) {
+      case 'dblclick':
+        requireEnabled(node);
+        nearest(node);
+        clickAttempt(node);
+        clickAttempt(node);
+        node.dispatchEvent(new MouseEvent('dblclick', {...eventLocation(node), bubbles:true, buttons:0, detail:2}));
+        break;
+      case 'hover':
+        nearest(node);
+        pointerPhases(node, eventLocation(node), ['over','enter','move']);
+        break;
+      case 'focus':
+        if (typeof node.focus === 'function') node.focus();
+        break;
+      case 'check':
+      case 'uncheck': {
+        if (!('checked' in node)) fault('not_checkable', 'Interaction target has no checked property');
+        requireEnabled(node);
+        nearest(node);
+        if (typeof node.focus === 'function') node.focus({preventScroll:true});
+        const desired = req.operation === 'check';
+        if (node.checked !== desired) {
+          if (!desired && node.type === 'radio') {
+            setNativeProperty(node, 'checked', false);
+            node.dispatchEvent(new Event('input', {bubbles:true}));
+            node.dispatchEvent(new Event('change', {bubbles:true}));
+          } else activate(node, eventLocation(node));
+        }
+        if (node.checked !== desired) fault('not_changed', 'The page did not retain the requested checked state');
+        break;
+      }
+      case 'scroll_into_view':
+        node.scrollIntoView({block:'center', inline:'center', behavior:'instant'});
+        break;
+      default: fault('unsupported_action', 'Unsupported browser interaction');
+      }
+      return dispatched(node);
     };
     const fill = () => {
       const node = resolve(req.selector);
@@ -395,17 +477,8 @@ enum BrowserAutomationScript {
       const hasValue = 'value' in node;
       const edit = {bubbles:true, cancelable:true, inputType:'insertReplacementText', data:req.text};
       if (!node.dispatchEvent(new InputEvent('beforeinput', edit))) fault('input_rejected', 'The page rejected the replacement text');
-      if (hasValue) {
-        // Use an inherited setter so an instance-level framework tracker can
-        // observe the subsequent input event against the changed native value.
-        let prototype = Object.getPrototypeOf(node), setter;
-        for (let depth = 0; prototype && depth < 32; depth++, prototype = Object.getPrototypeOf(prototype)) {
-          const property = Object.getOwnPropertyDescriptor(prototype, 'value');
-          if (property?.set) { setter = property.set; break; }
-        }
-        if (setter) setter.call(node, req.text);
-        else node.value = req.text;
-      } else node.textContent = req.text;
+      if (hasValue) setNativeProperty(node, 'value', req.text);
+      else node.textContent = req.text;
       node.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertReplacementText', data:req.text}));
       if (hasValue) node.dispatchEvent(new Event('change', {bubbles:true}));
       return {filled:true, ref:reference(node)};
@@ -509,8 +582,9 @@ enum BrowserAutomationScript {
       else if (req.action === 'wait') value = wait();
       else if (req.action === 'fill') value = fill();
       else if (req.action === 'click') value = click();
+      else if (req.action === 'interact') value = interact();
       else fault('unsupported_action', 'Unsupported browser action');
-      const result = JSON.stringify({value, ...(['fill','click'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
+      const result = JSON.stringify({value, ...(['fill','click','interact'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
       if (new TextEncoder().encode(result).length > 58000) fault('result_too_large', 'Browser result exceeds the byte limit; narrow the selector');
       return result;
     } catch (error) {

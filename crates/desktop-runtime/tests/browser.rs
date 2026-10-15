@@ -569,7 +569,23 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
             selector: "#send".into(),
             snapshot_after: false,
         },
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        [
+            BrowserInteraction::Dblclick,
+            BrowserInteraction::Hover,
+            BrowserInteraction::Focus,
+            BrowserInteraction::Check,
+            BrowserInteraction::Uncheck,
+            BrowserInteraction::ScrollIntoView,
+        ]
+        .map(|operation| BrowserAction::Interact {
+            operation,
+            selector: "#control".into(),
+            snapshot_after: true,
+        }),
+    ) {
         let mut queued = request(&model, surface, action);
         queued.timeout_ms = 10;
         let id = runtime
@@ -663,6 +679,30 @@ fn input_selectors_and_fill_text_are_bounded_before_mutation_dispatch() {
             runtime.admit(&before, request(&model, surface, rejected), now),
             Err(BrowserError::Invalid(_))
         ));
+    }
+    for operation in [
+        BrowserInteraction::Dblclick,
+        BrowserInteraction::Hover,
+        BrowserInteraction::Focus,
+        BrowserInteraction::Check,
+        BrowserInteraction::Uncheck,
+        BrowserInteraction::ScrollIntoView,
+    ] {
+        for selector in [
+            String::new(),
+            "x".repeat(MAX_SELECTOR_BYTES + 1),
+            "bad\0selector".into(),
+        ] {
+            let action = BrowserAction::Interact {
+                operation,
+                selector,
+                snapshot_after: false,
+            };
+            assert!(matches!(
+                runtime.admit(&before, request(&model, surface, action), now),
+                Err(BrowserError::Invalid(_))
+            ));
+        }
     }
     assert!(runtime.drain_requests(&before, now).requests.is_empty());
     for text in [
@@ -1221,5 +1261,71 @@ fn admitted_wait_expires_or_cancels_on_navigation_without_uncertain_mutation() {
     assert_eq!(
         runtime.receipt(cancelled).unwrap().state,
         BrowserOperationState::Failed
+    );
+}
+
+#[test]
+fn dom_interaction_navigation_fails_original_owner_without_promoting_or_replaying_it() {
+    let (model, surface) = fixture();
+    let now = Instant::now();
+    let before = model.snapshot();
+    for operation in [
+        "dblclick",
+        "hover",
+        "focus",
+        "check",
+        "uncheck",
+        "scroll_into_view",
+    ] {
+        let mut runtime = BrowserRuntime::default();
+        let owner = attach(&mut runtime, &model, surface, now);
+        let action = serde_json::from_value(json!({"action":"interact", "operation":operation,
+            "selector":"#navigation-handler", "snapshot_after":true}))
+        .unwrap();
+        let id = runtime
+            .admit(&before, request(&model, surface, action), now)
+            .unwrap();
+        assert_eq!(runtime.drain_requests(&before, now).requests.len(), 1);
+        runtime
+            .host_event(
+                &before,
+                BrowserHostEvent::DocumentChanged {
+                    owner: owner.clone(),
+                    document_generation: owner.document_generation + 1,
+                    model_navigation: owner.model_navigation,
+                    caused_by: Some(id),
+                },
+                now,
+            )
+            .unwrap();
+        let receipt = runtime.receipt(id).unwrap();
+        assert_eq!(receipt.state, BrowserOperationState::Failed);
+        assert_eq!(
+            receipt.owner, owner,
+            "a DOM event is not an explicit navigation request"
+        );
+        let failure = receipt.error.as_ref().unwrap();
+        assert!(failure.outcome_unknown);
+        assert_eq!(failure.code, "stale_browser_owner");
+        assert!(matches!(
+            runtime.host_event(
+                &before,
+                BrowserHostEvent::Complete {
+                    operation_id: id,
+                    owner,
+                    result: json!({"value":{"dispatched":true}}),
+                },
+                now
+            ),
+            Err(BrowserError::StaleOwner)
+        ));
+        assert!(runtime.drain_requests(&before, now).requests.is_empty());
+    }
+    assert_eq!(model.snapshot(), before);
+    assert!(
+        serde_json::from_value::<BrowserAction>(
+            json!({"action":"interact", "operation":"press", "selector":"#button"})
+        )
+        .is_err()
     );
 }

@@ -522,6 +522,74 @@ fn definitions() -> Vec<Contract> {
     ]);
     click.limitations = "Synthetic DOM pointer/mouse sequence followed by one DOM click activation; not a trusted OS gesture. First CSS match or exact document ref. Native disabled property rejects before events. Scrolls nearest, focuses the DOM element without selecting its app tab; down-event cancellation does not suppress the later activation, while click cancellation controls the native default. Completion establishes dispatch only, not navigation readiness or successful default action. Unknown navigation/deadline outcomes never replay. Optional snapshot-after reads once after activation; read-only sockets deny. Full historical compatibility remains unverified.";
     result.push(click);
+    for (name, operation, semantics) in [
+        (
+            "browser dblclick",
+            "dblclick",
+            "Two complete click attempts followed by a synthetic detail-2 dblclick. Disabled targets reject; nearest scroll. Completion proves dispatch, not a default action or navigation readiness.",
+        ),
+        (
+            "browser hover",
+            "hover",
+            "Nearest scroll plus pointer/mouse over, enter and move only; no activation or DOM focus. Disabled targets are accepted. Synthetic events do not establish CSS :hover or trusted pointer input.",
+        ),
+        (
+            "browser focus",
+            "focus",
+            "Ordinary element.focus when available, including its default scrolling. No disabled guard; completion does not promise the element was focusable. This is DOM focus, distinct from native tab/webview focus.",
+        ),
+        (
+            "browser check",
+            "check",
+            "Requires a checked property and non-disabled target. Nearest scroll and DOM focus precede one DOM click activation if state differs; same state emits no activation/input/change. Native checkbox/radio defaults apply. Final state is verified; canceled activation fails not_changed without forced assignment or replay.",
+        ),
+        (
+            "browser uncheck",
+            "uncheck",
+            "Requires a checked property and non-disabled target. Nearest scroll and DOM focus precede mutation only if state differs. Checkbox uses one DOM click; radio uses the inherited native checked setter and input/change without click. Final state is verified; cancellation fails not_changed without replay.",
+        ),
+        (
+            "browser scroll-into-view",
+            "scroll_into_view",
+            "Centers both axes with instant scrollIntoView; no synthetic focus or activation. Aliases scrollintoview and scrollinto use the same operation.",
+        ),
+        (
+            "browser scrollintoview",
+            "scroll_into_view",
+            "Alias of browser scroll-into-view: center both axes with instant scrolling.",
+        ),
+        (
+            "browser scrollinto",
+            "scroll_into_view",
+            "Alias of browser scroll-into-view: center both axes with instant scrolling.",
+        ),
+    ] {
+        let mut c = contract(
+            name,
+            &["--surface", "1", "--selector", "#example"],
+            target_arguments(),
+            "browser",
+        );
+        c.route = "browser";
+        c.requirements = &["running_app", "native_webkit_host"];
+        c.expected.extend([
+            ("/request/action/action", "interact"),
+            ("/request/action/operation", operation),
+        ]);
+        c.arguments.extend([
+            option("selector", &["--selector"], ValueKind::Text),
+            positional("selector_operand", ValueKind::Text, false),
+            option("snapshot_after", &["--snapshot-after"], ValueKind::Flag),
+        ]);
+        c.argument_rules
+            .push(json!({"exactly_one": ["selector", "selector_operand"]}));
+        c.default_pointers.extend([
+            ("snapshot_after", "/request/action/snapshot_after"),
+            ("operation_timeout_ms", "/request/timeout_ms"),
+        ]);
+        c.limitations = semantics;
+        result.push(c);
+    }
     let mut fill = contract(
         "browser fill",
         &["--surface", "1", "--selector", "#example"],

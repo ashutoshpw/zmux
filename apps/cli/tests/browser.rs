@@ -178,10 +178,49 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
         vec!["browser", "zoom", "--help"],
         vec!["browser", "fill", "--help"],
         vec!["browser", "click", "--help"],
+        vec!["browser", "dblclick", "--help"],
+        vec!["browser", "hover", "--help"],
+        vec!["browser", "focus", "--help"],
+        vec!["browser", "check", "--help"],
+        vec!["browser", "uncheck", "--help"],
+        vec!["browser", "scroll-into-view", "--help"],
+        vec!["browser", "scrollintoview", "--help"],
+        vec!["browser", "scrollinto", "--help"],
     ] {
         let output = invoke(socket, &fixture.0, &args);
         assert!(output.status.success(), "offline help failed: {args:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("--snapshot-after"));
+    }
+    for verb in [
+        "dblclick",
+        "hover",
+        "focus",
+        "check",
+        "uncheck",
+        "scroll-into-view",
+        "scrollintoview",
+        "scrollinto",
+    ] {
+        for (operands, reason) in [
+            (vec![], "requires a selector"),
+            (vec!["#one", "#two"], "exactly one selector"),
+            (vec!["--selector", "#one", "#two"], "exactly one selector"),
+            (vec!["#one", "--text", "value"], "unknown browser"),
+            (vec!["--selector", ""], "requires a nonempty value"),
+        ] {
+            let mut args = vec!["browser", verb];
+            args.extend(operands);
+            let output = invoke(socket, &fixture.0, &args);
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(reason),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let long = "x".repeat(2049);
+        let output = invoke(socket, &fixture.0, &["browser", verb, &long]);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("selector"));
     }
     for (args, reason) in [
         (vec!["browser", "click"], "requires a selector"),
@@ -537,6 +576,20 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
         (vec!["fill", "#entry"], json!({"action":"fill","selector":"#entry","text":"","snapshot_after":false})),
         (vec!["fill", "#entry", "--text", ""], json!({"action":"fill","selector":"#entry","text":"","snapshot_after":false})),
         (vec!["click", "#send"], json!({"action":"click","selector":"#send","snapshot_after":false})),
+        (vec!["dblclick", "#control"], json!({"action":"interact","operation":"dblclick","selector":"#control","snapshot_after":false})),
+        (vec!["hover", "#control"], json!({"action":"interact","operation":"hover","selector":"#control","snapshot_after":false})),
+        (vec!["focus", "#control"], json!({"action":"interact","operation":"focus","selector":"#control","snapshot_after":false})),
+        (vec!["check", "#control"], json!({"action":"interact","operation":"check","selector":"#control","snapshot_after":false})),
+        (vec!["uncheck", "#control"], json!({"action":"interact","operation":"uncheck","selector":"#control","snapshot_after":false})),
+        (vec!["scroll-into-view", "#control"], json!({"action":"interact","operation":"scroll_into_view","selector":"#control","snapshot_after":false})),
+        (vec!["dblclick", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"dblclick","selector":"#control","snapshot_after":true})),
+        (vec!["hover", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"hover","selector":"#control","snapshot_after":true})),
+        (vec!["focus", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"focus","selector":"#control","snapshot_after":true})),
+        (vec!["check", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"check","selector":"#control","snapshot_after":true})),
+        (vec!["uncheck", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"uncheck","selector":"#control","snapshot_after":true})),
+        (vec!["scroll-into-view", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"scroll_into_view","selector":"#control","snapshot_after":true})),
+        (vec!["scrollintoview", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"scroll_into_view","selector":"#control","snapshot_after":true})),
+        (vec!["scrollinto", "--selector", "#control", "--snapshot-after"], json!({"action":"interact","operation":"scroll_into_view","selector":"#control","snapshot_after":true})),
         (vec!["click", "--selector", "@zmux:host:1:7", "--snapshot-after"], json!({"action":"click","selector":"@zmux:host:1:7","snapshot_after":true})),
         (vec!["find", "role", "button", "--name", "Continue", "--exact"], json!({"action":"find","locator":{"kind":"role","query":"button","name":"Continue","exact":true,"selector":null,"index":null}})),
         (vec!["find", "text", "--", "--literal"], json!({"action":"find","locator":{"kind":"text","query":"--literal","name":null,"exact":false,"selector":null,"index":null}})),
@@ -601,6 +654,18 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         vec!["browser", "snapshot", "--surface", surface],
         vec!["browser", "zoom", "1.25", "--surface", surface],
         vec!["browser", "click", "#send", "--surface", surface],
+        vec!["browser", "dblclick", "#control", "--surface", surface],
+        vec!["browser", "hover", "#control", "--surface", surface],
+        vec!["browser", "focus", "#control", "--surface", surface],
+        vec!["browser", "check", "#control", "--surface", surface],
+        vec!["browser", "uncheck", "#control", "--surface", surface],
+        vec![
+            "browser",
+            "scroll-into-view",
+            "#control",
+            "--surface",
+            surface,
+        ],
         vec![
             "browser",
             "fill",
@@ -636,6 +701,18 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         vec!["browser", "reload", "--surface", surface],
         vec!["browser", "zoom", "in", "--surface", surface],
         vec!["browser", "click", "#send", "--surface", surface],
+        vec!["browser", "dblclick", "#control", "--surface", surface],
+        vec!["browser", "hover", "#control", "--surface", surface],
+        vec!["browser", "focus", "#control", "--surface", surface],
+        vec!["browser", "check", "#control", "--surface", surface],
+        vec!["browser", "uncheck", "#control", "--surface", surface],
+        vec![
+            "browser",
+            "scroll-into-view",
+            "#control",
+            "--surface",
+            surface,
+        ],
         vec!["browser", "fill", "#entry", "--surface", surface],
     ] {
         let output = invoke(&socket, &fixture.0, &args);

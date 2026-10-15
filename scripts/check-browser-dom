@@ -39,11 +39,19 @@ suite = r'''
 const runScript = new (Object.getPrototypeOf(async function(){}).constructor)('payload', SOURCE);
 let generation = '1', passed = 0;
 const call = async action => JSON.parse(await runScript(JSON.stringify({action, host_id:'fixture', document_generation:generation})));
-const assert = (condition, label) => { if (!condition) throw new Error(label); passed++; };
+const assert = (condition, label, diagnostic) => { if (!condition) throw new Error(label + (diagnostic ? ': ' + JSON.stringify(diagnostic()) : '')); passed++; };
 const find = async locator => call({action:'find',locator});
 const wait = async (selector,state='visible') => call({action:'wait',selector,state});
 const code = (result, expected) => assert(result.error?.code === expected, `expected ${expected}: ${JSON.stringify(result)}`);
 (async () => {
+ // Native focus events require a loaded, focused browsing context. Starting
+ // during parser execution can change activeElement without emitting focus.
+ const startupDeadline = performance.now() + 2000;
+ while (document.readyState !== 'complete' || !document.hasFocus()) {
+   window.focus();
+   if (performance.now() >= startupDeadline) throw new Error('DOM fixture could not establish loaded document focus: ' + JSON.stringify({readyState:document.readyState,visibility:document.visibilityState,hasFocus:document.hasFocus()}));
+   await new Promise(resolve => setTimeout(resolve, 10));
+ }
  document.body.innerHTML = `<main>
  <label for="entry">  Account\n name </label><input id="entry" placeholder="Your account" data-testid="user-entry">
  <button id="send" aria-labelledby="send-label">Ignored text</button><span id="send-label">Send   now</span>
@@ -119,8 +127,10 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  const order = ['pointerover','mouseover','pointerenter','mouseenter','pointermove','mousemove','pointerdown','mousedown','focus','pointerup','mouseup','click'];
  for (const kind of order) clickTarget.addEventListener(kind,event=>sequence.push({kind:event.type,buttons:event.buttons,detail:event.detail,bubbles:event.bubbles,trusted:event.isTrusted}));
  clicks.querySelectorAll('.click-many')[1].addEventListener('click',()=>other.push('click'));
+ const clickContext = () => ({readyState:document.readyState,visibility:document.visibilityState,hasFocus:document.hasFocus(),activeElement:document.activeElement?.id,scroll:[scrollX,scrollY]});
+ const clickBefore = clickContext();
  const clicked = await call({action:'click',selector:'.click-many',snapshot_after:true});
- assert(clicked.value?.dispatched === true && other.length === 0 && sequence.map(event=>event.kind).join(',') === order.join(','), 'first-match click emits the observed pointer/mouse/focus sequence');
+ assert(clicked.value?.dispatched === true && other.length === 0 && sequence.map(event=>event.kind).join(',') === order.join(','), 'first-match click emits the observed pointer/mouse/focus sequence', () => ({returned:clicked,observedEvents:sequence,otherEvents:other,before:clickBefore,after:clickContext()}));
  assert(sequence.filter(event=>event.kind!=='focus').every(event=>!event.trusted), 'pointer/mouse activation is synthetic, not an OS gesture');
  assert(!sequence[2].bubbles && !sequence[3].bubbles && sequence[6].buttons === 1 && sequence[7].buttons === 1 && sequence[9].buttons === 0 && sequence[10].detail === 1, 'enter bubbling and button/detail state');
  assert(clicked.snapshot?.nodes?.length > 0 && sequence.filter(event=>event.kind==='click').length === 1 && document.activeElement === clickTarget, 'snapshot follows one activation and DOM focus');
@@ -153,6 +163,86 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  code(await call({action:'click',selector:'['}), 'invalid_selector');
  clickTarget.remove();
  code(await call({action:'click',selector:clicked.value.ref}), 'stale_reference');
+ // The interaction family observes actual event delivery and native defaults.
+ const interact = (operation,selector,after=false) => call({action:'interact',operation,selector,snapshot_after:after});
+ const controls = document.createElement('section');
+ controls.innerHTML = '<button id="double" class="double-many">Double</button><button id="double-other" class="double-many">Other</button><input id="double-box" type="checkbox"><button id="hover-disabled" disabled>Hover</button><input id="checked-one" type="checkbox" class="checked-many"><input id="checked-other" type="checkbox" class="checked-many"><input id="radio-one" type="radio" name="radios"><input id="radio-other" type="radio" name="radios" checked><input id="checked-disabled" type="checkbox" disabled><input id="checked-cancel" type="checkbox"><input id="unchecked-cancel" type="checkbox" checked><div id="no-focus">No focus</div><button id="focus-far" style="position:absolute;top:5000px">Focus</button><div id="center-scroll" style="position:absolute;left:2500px;top:7500px;width:80px;height:60px"></div><div style="position:absolute;left:5000px;top:10000px;width:1px;height:1px"></div>';
+ document.body.append(controls);
+ const double = document.getElementById('double'), doubleEvents = [];
+ for (const kind of ['pointerover','mouseover','pointerenter','mouseenter','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click','dblclick']) double.addEventListener(kind,event=>doubleEvents.push({kind:event.type,detail:event.detail,trusted:event.isTrusted}));
+ let otherDouble = 0;
+ document.getElementById('double-other').addEventListener('click',()=>otherDouble++);
+ const doubled = await interact('dblclick','.double-many',true);
+ const doubleExpected = ['pointerover','mouseover','pointerenter','mouseenter','pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click'];
+ assert(doubled.value?.dispatched && doubleEvents.map(e=>e.kind).join(',') === [...doubleExpected,...doubleExpected,'dblclick'].join(',') && otherDouble === 0, 'double click makes two complete first-match click attempts then one dblclick');
+ assert(doubleEvents.at(-1).detail === 2 && doubleEvents.every(e=>!e.trusted) && doubled.snapshot?.nodes?.length > 0, 'double click detail2 is synthetic and snapshot observes the same two activations');
+ await interact('dblclick',doubled.value.ref);
+ assert(doubleEvents.filter(e=>e.kind==='click').length === 4, 'double click reuses the exact ref without an extra activation');
+ let doubleBoxClicks = 0;
+ document.getElementById('double-box').addEventListener('click',()=>doubleBoxClicks++);
+ await interact('dblclick','#double-box');
+ assert(!document.getElementById('double-box').checked && doubleBoxClicks === 2, 'double checkbox activation toggles twice');
+ code(await interact('dblclick','#hover-disabled'), 'element_disabled');
+ const hover = document.getElementById('hover-disabled'), hovered = [];
+ for (const kind of [...doubleExpected,'focus']) hover.addEventListener(kind,event=>hovered.push({kind:event.type,bubbles:event.bubbles,buttons:event.buttons,trusted:event.isTrusted}));
+ document.getElementById('double').focus();
+ const focusBeforeHover = document.activeElement;
+ await interact('hover','#hover-disabled',true);
+ assert(hovered.map(e=>e.kind).join(',') === 'pointerover,mouseover,pointerenter,mouseenter,pointermove,mousemove' && document.activeElement === focusBeforeHover, 'hover permits disabled target without focus/down/up/activation');
+ assert(hovered.every(e=>e.buttons===0 && !e.trusted) && hovered.filter(e=>e.kind.endsWith('enter')).every(e=>!e.bubbles), 'hover keeps enter nonbubbling and unpressed synthetic pointer');
+ const farFocus = document.getElementById('focus-far');
+ let focusClicks = 0; farFocus.addEventListener('click',()=>focusClicks++);
+ await interact('focus','#focus-far');
+ assert(document.activeElement === farFocus && farFocus.getBoundingClientRect().top < innerHeight && focusClicks === 0, 'focus uses ordinary focus scrolling without activation');
+ const focusDisabled = await interact('focus','#hover-disabled');
+ assert(focusDisabled.value?.dispatched && document.activeElement === farFocus, 'disabled focus completes without promising a focusable target');
+ await interact('focus','#no-focus');
+ assert(document.activeElement === farFocus, 'nonfocusable focus completes without fabricated focus');
+ const checkedOne = document.getElementById('checked-one'), checkedEvents = [];
+ for (const kind of ['pointerdown','mousedown','focus','click','input','change']) checkedOne.addEventListener(kind,event=>checkedEvents.push(event.type));
+ const checkedResult = await interact('check','.checked-many',true);
+ assert(checkedOne.checked && !document.getElementById('checked-other').checked && checkedEvents.join(',') === 'focus,click,input,change', 'check uses one DOM activation on first CSS match with no pointer sequence');
+ assert(checkedResult.snapshot?.nodes?.length > 0 && document.activeElement === checkedOne, 'check snapshot observes actual checked state and DOM focus');
+ const beforeSame = checkedEvents.join(',');
+ await interact('check',checkedResult.value.ref);
+ assert(checkedEvents.join(',') === beforeSame && checkedOne.checked, 'already checked ref emits no activation/input/change');
+ await interact('uncheck',checkedResult.value.ref);
+ assert(!checkedOne.checked && checkedEvents.slice(-3).join(',') === 'click,input,change', 'uncheck checkbox uses one native activation');
+ const beforeUnchecked = checkedEvents.join(',');
+ await interact('uncheck','#checked-one');
+ assert(checkedEvents.join(',') === beforeUnchecked, 'already unchecked emits no activation/input/change');
+ const radio = document.getElementById('radio-one'), radioEvents = [];
+ for (const kind of ['click','input','change']) radio.addEventListener(kind,event=>radioEvents.push(event.type));
+ await interact('check','#radio-one');
+ assert(radio.checked && !document.getElementById('radio-other').checked && radioEvents.join(',') === 'click,input,change', 'radio check activates once and native group deselection applies');
+ let intercepted = 0;
+ const nativeChecked = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'checked');
+ Object.defineProperty(radio,'checked',{configurable:true,get(){return nativeChecked.get.call(this)},set(){intercepted++}});
+ await interact('uncheck','#radio-one');
+ assert(!nativeChecked.get.call(radio) && intercepted === 0 && radioEvents.join(',') === 'click,input,change,input,change', 'radio uncheck uses inherited native setter and input/change without another click');
+ const radioSame = radioEvents.join(',');
+ await interact('uncheck','#radio-one');
+ assert(radioEvents.join(',') === radioSame, 'already unchecked radio stays event-free');
+ for (const [operation,id] of [['check','checked-cancel'],['uncheck','unchecked-cancel']]) {
+   const node = document.getElementById(id), cancellation = [];
+   node.addEventListener('click',event=>{cancellation.push(event.type);event.preventDefault()});
+   for (const kind of ['input','change']) node.addEventListener(kind,event=>cancellation.push(event.type));
+   code(await interact(operation,'#'+id,true), 'not_changed');
+   assert(node.checked === (operation==='uncheck') && cancellation.join(',') === 'click', 'canceled '+operation+' fails final state validation without replay or forced state');
+ }
+ code(await interact('check','#hover-disabled'), 'not_checkable');
+ code(await interact('uncheck','#checked-disabled'), 'element_disabled');
+ const center = document.getElementById('center-scroll'), centerFocus = document.activeElement;
+ const centered = await interact('scroll_into_view','#center-scroll',true);
+ const centeredBox = center.getBoundingClientRect();
+ assert(Math.abs(centeredBox.left+centeredBox.width/2-document.documentElement.clientWidth/2) <= 1 && Math.abs(centeredBox.top+centeredBox.height/2-document.documentElement.clientHeight/2) <= 1, 'scroll into view centers both axes immediately: ' + JSON.stringify({box:centeredBox.toJSON(),viewport:[document.documentElement.clientWidth,document.documentElement.clientHeight],scroll:[scrollX,scrollY]}));
+ assert(centered.value?.dispatched && centered.snapshot?.nodes?.length > 0 && document.activeElement === centerFocus, 'scroll snapshot retains actual document focus');
+ for (const operation of ['dblclick','hover','focus','check','uncheck','scroll_into_view']) {
+   code(await interact(operation,'#absent-interaction'), 'element_not_found');
+   code(await interact(operation,'['), 'invalid_selector');
+ }
+ double.remove();
+ for (const operation of ['dblclick','hover','focus','check','uncheck','scroll_into_view']) code(await interact(operation,doubled.value.ref), 'stale_reference');
  document.querySelector('#send').remove();
  code(await wait(button.value.ref, 'detached'), 'stale_reference');
  generation = '2';
@@ -167,7 +257,7 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  for (let i=0; i<16384; i++) document.getElementById('many-nodes').append(document.createComment('bounded'));
  code(await find({kind:'first',selector:'#many-nodes'}), 'dom_scan_limit');
  document.documentElement.innerHTML = `<body><output id="result">${passed} DOM cases passed</output></body>`;
-})().catch(error => { document.documentElement.innerHTML = '<body><output id="result">FAIL: ' + String(error.stack) + '</output></body>'; });
+})().catch(error => { document.documentElement.innerHTML = '<body><output id="result"></output></body>'; document.getElementById('result').textContent = 'FAIL: ' + String(error.stack); });
 '''.replace('SOURCE', json.dumps(source), 1)
 page = ('<!doctype html><meta charset="utf-8"><body><script>' + suite.replace('</script', '<\\/script') + '</script>').encode()
 class Fixture(http.server.BaseHTTPRequestHandler):
