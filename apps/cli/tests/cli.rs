@@ -88,6 +88,7 @@ fn help_and_version_are_complete_and_offline() {
     let help = help.unwrap();
     for command in [
         "doctor",
+        "ssh",
         "status",
         "list-workspaces",
         "list-panes",
@@ -138,6 +139,12 @@ fn help_and_version_are_complete_and_offline() {
             "repeated --pane",
         ),
         (vec!["focus-pane", "--pane", "pane:0"], "positive ID"),
+        (vec!["ssh", "example", "--port", "0"], "SSH port"),
+        (vec!["ssh", "example", "-A", "-a"], "conflicting agent"),
+        (
+            vec!["ssh", "example", "--command", "uname", "--", "pwd"],
+            "conflicts",
+        ),
         (
             vec!["notify", "--title", "t", "--body", "", "--body", "again"],
             "invalid or repeated notify option",

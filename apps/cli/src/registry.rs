@@ -39,6 +39,14 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "ssh",
+        "remote",
+        false,
+        true,
+        "ssh DESTINATION [--name NAME] [--port PORT] [--identity PATH] [--ssh-config PATH] [-A|-a] [--jump HOST] [--ssh-option KEY=VALUE] [--command TEXT] [--focus true|false|--no-focus] [-- REMOTE_ARG ...]",
+        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. File/image upload, connection sharing and reconnect are not implemented yet. Extra SSH options use a bounded allowlist; mosh is unavailable."
+    ),
+    command!(
         "new-workspace",
         "start",
         false,

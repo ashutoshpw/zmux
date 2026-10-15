@@ -16,6 +16,7 @@ subtle.workspace = true
 zmux-workspace-core.workspace = true
 zmux-session-runtime.workspace = true
 zmux-terminal-adapter.workspace = true
+zmux-remote-runtime.workspace = true
 
 [lints]
 workspace = true

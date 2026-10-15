@@ -224,6 +224,12 @@ pub enum Action {
     CreateWorkspace {
         name: String,
     },
+    CreateSshWorkspace {
+        name: String,
+        connection: zmux_remote_runtime::SshConnectionConfig,
+        #[serde(default = "default_focus")]
+        focus: bool,
+    },
     RenameWorkspace {
         workspace_id: WorkspaceId,
         name: String,
@@ -248,6 +254,7 @@ pub enum Effect {
         pane_id: PaneId,
         session_id: SessionId,
         cwd: Option<String>,
+        remote: Option<zmux_remote_runtime::SshConnectionConfig>,
     },
     StopSession {
         session_id: SessionId,
@@ -336,32 +343,17 @@ impl WorkspaceStore {
         let mut effects = Vec::new();
         match action {
             Action::CreateWorkspace { name } => {
-                let name = valid_name(name)?;
-                if self.state.workspaces.len() == MAX_WORKSPACES {
-                    return Err(ActionError::Capacity {
-                        resource: "workspaces",
-                        limit: MAX_WORKSPACES,
-                    });
-                }
-                let ids = self.reserve(4)?;
-                let workspace_id = WorkspaceId(ids);
-                let pane = Pane {
-                    id: PaneId(ids + 1),
-                    selected_surface: SurfaceId(ids + 3),
-                    surfaces: vec![Surface::terminal(SurfaceId(ids + 3), SessionId(ids + 2))],
-                };
-                effects.push(Effect::StartSession {
-                    pane_id: pane.id,
-                    session_id: pane.session_id().expect("new terminal pane"),
-                    cwd: None,
-                });
-                self.state.workspaces.push(Workspace {
-                    id: workspace_id,
-                    name,
-                    focused_pane: pane.id,
-                    root: PaneTree::Leaf { pane },
-                });
-                self.state.focused_workspace = Some(workspace_id);
+                self.create_workspace(name, None, true, &mut effects)?
+            }
+            Action::CreateSshWorkspace {
+                name,
+                connection,
+                focus,
+            } => {
+                connection.validate().map_err(|e| {
+                    ActionError::InvalidOperation(format!("invalid SSH connection: {e}"))
+                })?;
+                self.create_workspace(name, Some(connection), focus, &mut effects)?;
             }
             Action::RenameWorkspace { workspace_id, name } => {
                 let name = valid_name(name)?;
@@ -393,18 +385,19 @@ impl WorkspaceStore {
                         limit: MAX_SPLIT_DEPTH,
                     });
                 }
-                let cwd = workspace
+                let selected = workspace
                     .root
                     .panes()
                     .into_iter()
                     .find(|p| p.id == pane_id)
                     .expect("validated pane")
-                    .selected()
-                    .cwd
-                    .clone();
+                    .selected();
+                let cwd = selected.cwd.clone().filter(|_| selected.remote.is_none());
+                let remote = selected.remote.as_ref().map(|remote| remote.for_restore());
                 let ids = self.reserve(3)?;
                 let mut surface = Surface::terminal(SurfaceId(ids + 2), SessionId(ids + 1));
                 surface.cwd = cwd.clone();
+                surface.remote = remote.clone();
                 let pane = Pane {
                     id: PaneId(ids),
                     selected_surface: SurfaceId(ids + 2),
@@ -414,6 +407,7 @@ impl WorkspaceStore {
                     pane_id: pane.id,
                     session_id: pane.session_id().expect("new terminal pane"),
                     cwd,
+                    remote,
                 });
                 let workspace = &mut self.state.workspaces[index];
                 workspace.focused_pane = pane.id;
@@ -425,6 +419,53 @@ impl WorkspaceStore {
         }
         self.state.revision = revision;
         Ok(Transition { revision, effects })
+    }
+
+    fn create_workspace(
+        &mut self,
+        name: String,
+        remote: Option<zmux_remote_runtime::SshConnectionConfig>,
+        focus: bool,
+        effects: &mut Vec<Effect>,
+    ) -> Result<(), ActionError> {
+        let name = valid_name(name)?;
+        if self.state.workspaces.len() == MAX_WORKSPACES {
+            return Err(ActionError::Capacity {
+                resource: "workspaces",
+                limit: MAX_WORKSPACES,
+            });
+        }
+        let ids = self.reserve(4)?;
+        let workspace_id = WorkspaceId(ids);
+        let mut surface = Surface::terminal(SurfaceId(ids + 3), SessionId(ids + 2));
+        if let Some(connection) = &remote {
+            surface.title = format!("ssh {}", connection.destination)
+                .chars()
+                .take(MAX_NAME_CHARS)
+                .collect();
+        }
+        surface.remote = remote.clone();
+        let pane = Pane {
+            id: PaneId(ids + 1),
+            selected_surface: surface.id,
+            surfaces: vec![surface],
+        };
+        effects.push(Effect::StartSession {
+            pane_id: pane.id,
+            session_id: SessionId(ids + 2),
+            cwd: None,
+            remote,
+        });
+        self.state.workspaces.push(Workspace {
+            id: workspace_id,
+            name,
+            focused_pane: pane.id,
+            root: PaneTree::Leaf { pane },
+        });
+        if focus || self.state.focused_workspace.is_none() {
+            self.state.focused_workspace = Some(workspace_id);
+        }
+        Ok(())
     }
 
     fn workspace_index(&self, pane_id: PaneId) -> Result<usize, ActionError> {
@@ -455,4 +496,8 @@ fn valid_name(name: String) -> Result<String, ActionError> {
         return Err(ActionError::InvalidName);
     }
     Ok(name.to_owned())
+}
+
+fn default_focus() -> bool {
+    true
 }

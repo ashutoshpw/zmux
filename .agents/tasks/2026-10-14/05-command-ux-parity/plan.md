@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [R01b SSH workspaces](references/r01-ssh-workspaces.md) — real OpenSSH launch, remote tab lifecycle, no-focus results and remaining upload gates.
 - [R01a SSH descriptor](references/r01-ssh-descriptor.md) — validated connection arguments, shared endpoint renderer and required managed-session/transfer integration.
 - [F03a socket authorization](references/f03-socket-authorization.md) — local credentials/access modes, executor revocation and remaining managed-policy gates.
 - [F01a command discovery](references/f01-command-registry.md) — grouped offline help, executable catalog/guide, capabilities and parser repairs.

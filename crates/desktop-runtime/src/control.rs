@@ -697,7 +697,7 @@ fn list_surfaces(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'stati
     let surfaces: Vec<_> = pane.surfaces.iter().map(|surface| {
                 let frame = surface.session_id.and_then(|id| frame_for(snapshot, id));
                 json!({"surface_id": surface.id, "surface_uuid": snapshot.model.object_uuid(TargetKind::Surface, surface.id.0), "surface_ref": format!("surface:{}", surface.id.0), "session_id": surface.session_id, "title": surface.title,
-                    "cwd": surface.cwd, "kind": surface.kind, "url": surface.url, "selected": pane.selected_surface == surface.id,
+                    "cwd": surface.cwd, "remote": surface.remote, "kind": surface.kind, "url": surface.url, "selected": pane.selected_surface == surface.id,
                     "process_id": frame.and_then(|f| f.process_id), "starting": surface.session_id.is_some() && frame.is_none_or(|f| f.starting),
                     "state": frame.and_then(|f| f.snapshot.as_ref()).map(|s| state_name(s.state)),
                     "failure": frame.and_then(|f| f.failure.clone())})
@@ -760,6 +760,12 @@ fn mutate(
         .and_then(|w| w.root.panes().into_iter().find(|p| p.id == w.focused_pane))
         .map(|p| p.selected_surface);
     Ok(json!({
+        "created_workspaces": execution.created_workspaces.iter().filter_map(|id| execution.snapshot.model.workspaces.iter().find(|w| w.id == *id)).map(|w| {
+            let pane = w.root.panes().into_iter().find(|pane| pane.id == w.focused_pane).expect("workspace focused pane exists");
+            json!({"workspace_id": w.id, "workspace_uuid": execution.snapshot.model.object_uuid(TargetKind::Workspace, w.id.0),
+                "pane_id": pane.id, "pane_uuid": execution.snapshot.model.object_uuid(TargetKind::Pane, pane.id.0),
+                "surface_id": pane.selected_surface, "surface_uuid": execution.snapshot.model.object_uuid(TargetKind::Surface, pane.selected_surface.0)})
+        }).collect::<Vec<_>>(),
         "focused_surface": selected_surface,
         "focused_surface_uuid": selected_surface.map(|id| execution.snapshot.model.object_uuid(TargetKind::Surface, id.0)),
         "focused_workspace_uuid": workspace.map(|w| execution.snapshot.model.object_uuid(TargetKind::Workspace, w.id.0)),

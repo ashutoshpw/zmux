@@ -537,6 +537,7 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "zmux-desktop-runtime",
+ "zmux-remote-runtime",
  "zmux-session-runtime",
  "zmux-workspace-core",
 ]
@@ -551,6 +552,7 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "uuid",
+ "zmux-remote-runtime",
  "zmux-session-runtime",
  "zmux-terminal-adapter",
  "zmux-workspace-core",
@@ -571,6 +573,8 @@ dependencies = [
 name = "zmux-remote-runtime"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -603,4 +607,5 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "uuid",
+ "zmux-remote-runtime",
 ]

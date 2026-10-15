@@ -11,6 +11,7 @@ description = "Original Zmux workspace actions and state invariants"
 uuid.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+zmux-remote-runtime.workspace = true
 
 [lints]
 workspace = true

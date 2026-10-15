@@ -24,6 +24,7 @@ zmux-terminal-adapter = { path = "crates/terminal-adapter" }
 zmux-session-runtime = { path = "crates/session-runtime" }
 zmux-desktop-runtime = { path = "crates/desktop-runtime" }
 zmux-workspace-core = { path = "crates/workspace-core" }
+zmux-remote-runtime = { path = "crates/remote-runtime" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

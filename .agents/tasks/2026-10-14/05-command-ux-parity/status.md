@@ -5,10 +5,15 @@
 
 ## Delivered slices
 
+- R01b implemented and fresh review passed: public `zmux ssh`, validated wire routing, real SSH PTYs,
+  no-focus creation results, endpoint-preserving tabs/splits/reopen without startup replay.
+  Full local checks pass (73 Rust tests plus C ABI), including isolated real OpenSSH.
+  Connection sharing, upload/drop/paste and full R01/V01 remain open.
+  See [receipt](references/r01-ssh-workspaces.md).
+
 - R01a descriptor foundation integrated: validated SSH endpoints/jump routes,
   host-key/config defaults, forwarding, bounded options and argv. Eight descriptor tests
-  pass; full workspace checks pass (65 Rust tests plus C ABI). Managed SSH and uploads
-  remain unimplemented. Fresh review passed. See [receipt](references/r01-ssh-descriptor.md).
+  pass; full workspace checks pass (65 Rust tests plus C ABI). This established descriptors only; the R01b entry above records subsequent launch integration. Fresh review passed. See [receipt](references/r01-ssh-descriptor.md).
 
 - F03a committed/pushed (`a1c621f`): local socket access/password modes, credential precedence
   and private-file validation, executor admission revocation and deny-by-default remote
@@ -55,8 +60,8 @@
 ## Verification and download
 
 Current foundation evidence: `c572484` (run `38706071891`) and `a1c621f`
-(run `38707343689`) passed macOS universal compile and packaged smoke. R01 descriptor
-local checks pass with 65 Rust tests; its current hosted check follows the next push.
+(run `38707343689`) passed macOS universal compile and packaged smoke. R01 descriptor `d06818a` passed Foundation checks (`38707919043`) and macOS
+compile/packaged smoke (`38707919132`). R01b currently has local checks only.
 These are diagnostic receipts; V01 remains false and no new artifact is shared.
 
 The next artifact shared with the user must pass full feature parity (V01). Existing
@@ -84,8 +89,8 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 
 ## Next action
 
-Continue R01a managed SSH workspace/authentication and R01b file/image transfer integration
-from the validated descriptor foundation. Continue remaining F02/F01/F03 contracts and the
+Review and land R01b SSH workspace integration, then implement private authenticated
+connection ownership and bounded file/image transfer with native origin-bound drop/paste. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based
