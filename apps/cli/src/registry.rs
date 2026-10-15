@@ -1,0 +1,405 @@
+//! One command catalog drives public discovery, offline help, aliases and parser routing.
+use super::CliError;
+use serde_json::{Value, json};
+use std::fmt::Write;
+
+#[derive(Clone, Copy)]
+pub(super) struct CommandSpec {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub group: &'static str,
+    pub targeted: bool,
+    pub socket: bool,
+    pub usage: &'static str,
+    pub description: &'static str,
+}
+macro_rules! command {
+    ($name:literal, $group:literal, $targeted:literal, $socket:literal, $usage:literal, $description:literal) => {
+        CommandSpec {
+            name: $name,
+            aliases: &[],
+            group: $group,
+            targeted: $targeted,
+            socket: $socket,
+            usage: $usage,
+            description: $description,
+        }
+    };
+}
+pub(super) const GROUPS: &[(&str, &str)] = &[
+    ("start", "Start and recover"),
+    ("navigate", "Navigate and arrange"),
+    ("inspect", "Inspect terminals"),
+    ("automation", "Input and attention"),
+    ("browser", "Embedded browser"),
+    ("customize", "Help and configuration"),
+    ("agents", "Agents"),
+    ("remote", "Remote sessions"),
+    ("diagnostics", "Diagnostics"),
+];
+pub(super) const COMMANDS: &[CommandSpec] = &[
+    command!(
+        "new-workspace",
+        "start",
+        false,
+        true,
+        "new-workspace NAME",
+        "Create and focus a workspace with a local terminal."
+    ),
+    command!(
+        "new-surface",
+        "start",
+        true,
+        true,
+        "new-surface [PANE]",
+        "Create an independent terminal tab in a pane."
+    ),
+    command!(
+        "reopen-closed",
+        "start",
+        false,
+        true,
+        "reopen-closed [CLOSED_ID]",
+        "Restore a closed item with fresh shells at saved working directories. Launch failures remain retryable; commands are never replayed."
+    ),
+    command!(
+        "recently-closed",
+        "start",
+        false,
+        true,
+        "recently-closed",
+        "List bounded in-process close history and restoration state."
+    ),
+    command!(
+        "rename-workspace",
+        "navigate",
+        true,
+        true,
+        "rename-workspace [WORKSPACE] NAME",
+        "Rename a workspace without changing focus. Names contain 1–128 non-control characters."
+    ),
+    command!(
+        "close-workspace",
+        "navigate",
+        true,
+        true,
+        "close-workspace [WORKSPACE]",
+        "Close all workspace tabs as one recoverable layout. This explicit CLI operation does not prompt."
+    ),
+    command!(
+        "focus-pane",
+        "navigate",
+        true,
+        true,
+        "focus-pane [PANE]",
+        "Focus a pane and its owning workspace."
+    ),
+    command!(
+        "split-pane",
+        "navigate",
+        true,
+        true,
+        "split-pane [PANE] <horizontal|vertical>",
+        "Split a pane and focus the new terminal."
+    ),
+    command!(
+        "close-pane",
+        "navigate",
+        true,
+        true,
+        "close-pane [PANE]",
+        "Close a pane and its tabs; remove the workspace when its last pane closes."
+    ),
+    command!(
+        "select-surface",
+        "navigate",
+        true,
+        true,
+        "select-surface [SURFACE]",
+        "Select a live tab and focus its pane and workspace."
+    ),
+    command!(
+        "close-surface",
+        "navigate",
+        true,
+        true,
+        "close-surface [SURFACE]",
+        "Close one tab, preserving sibling sessions and a restore descriptor."
+    ),
+    command!(
+        "close-other-tabs",
+        "navigate",
+        true,
+        true,
+        "close-other-tabs [SURFACE]",
+        "Close sibling tabs as one recoverable group. This explicit CLI operation does not prompt."
+    ),
+    command!(
+        "rename-tab",
+        "navigate",
+        true,
+        true,
+        "rename-tab [SURFACE] TITLE",
+        "Set a tab's title."
+    ),
+    command!(
+        "reorder-surface",
+        "navigate",
+        true,
+        true,
+        "reorder-surface [SURFACE] INDEX",
+        "Move a tab to a zero-based final position in its pane."
+    ),
+    command!(
+        "move-surface",
+        "navigate",
+        true,
+        true,
+        "move-surface [SURFACE] DESTINATION_PANE INDEX",
+        "Move a live tab to another pane at a zero-based position without restarting its process."
+    ),
+    command!(
+        "list-workspaces",
+        "inspect",
+        false,
+        true,
+        "list-workspaces",
+        "List workspace trees and a live UUID/ref/index target catalog."
+    ),
+    command!(
+        "list-panes",
+        "inspect",
+        true,
+        true,
+        "list-panes [--workspace TARGET]",
+        "List panes, selected sessions, process readiness and failures. Outside a caller context, an unscoped request lists every workspace."
+    ),
+    command!(
+        "list-pane-surfaces",
+        "inspect",
+        true,
+        true,
+        "list-pane-surfaces [PANE]",
+        "List every tab in a pane, including hidden tabs, UUIDs and selected state."
+    ),
+    command!(
+        "read-screen",
+        "inspect",
+        true,
+        true,
+        "read-screen [PANE]",
+        "Read visible text, cursor, geometry and exit metadata. Use --surface to read an exact hidden terminal."
+    ),
+    command!(
+        "send-text",
+        "automation",
+        true,
+        true,
+        "send-text [PANE] <TEXT|--stdin>",
+        "Send exact UTF-8 bytes; no newline is added. Input is limited to 4096 bytes. Do not retry an uncertain mutation automatically."
+    ),
+    command!(
+        "notify",
+        "automation",
+        true,
+        true,
+        "notify [--surface TARGET] --title TITLE [--body TEXT]",
+        "Add bounded in-app attention to the exact live surface."
+    ),
+    command!(
+        "list-notifications",
+        "automation",
+        false,
+        true,
+        "list-notifications",
+        "List notification IDs, targets, unread state and dropped-event count."
+    ),
+    command!(
+        "mark-notification-read",
+        "automation",
+        false,
+        true,
+        "mark-notification-read --id ID",
+        "Mark one notification generation read."
+    ),
+    command!(
+        "open-notification",
+        "automation",
+        false,
+        true,
+        "open-notification --id ID",
+        "Focus the notification's live target and acknowledge that generation."
+    ),
+    command!(
+        "dismiss-notification",
+        "automation",
+        false,
+        true,
+        "dismiss-notification --id ID",
+        "Remove one notification."
+    ),
+    command!(
+        "clear-notifications",
+        "automation",
+        false,
+        true,
+        "clear-notifications --through ID",
+        "Clear history through an observed ID, preserving newer arrivals."
+    ),
+    command!(
+        "browser",
+        "browser",
+        true,
+        true,
+        "browser open [PANE] URL\n       zmux browser navigate|goto [SURFACE] URL",
+        "Open or navigate an embedded browser tab. Allowed URLs: HTTP(S) and about:blank. Browser surfaces allocate no PTY."
+    ),
+    command!(
+        "doctor",
+        "diagnostics",
+        false,
+        true,
+        "doctor",
+        "Check the selected socket, protocol and running application."
+    ),
+    command!(
+        "status",
+        "diagnostics",
+        false,
+        true,
+        "status",
+        "Show running app, workspace, pane and process counts."
+    ),
+    command!(
+        "capabilities",
+        "diagnostics",
+        false,
+        true,
+        "capabilities",
+        "Discover the running app's actual protocol, targeting and resource limits."
+    ),
+    command!(
+        "prototype",
+        "diagnostics",
+        false,
+        false,
+        "prototype [--timeout SECONDS] -- PROGRAM [ARG ...]",
+        "Run a standalone local PTY and print its final visible screen as JSON. Does not require the app."
+    ),
+    CommandSpec {
+        name: "version",
+        aliases: &["--version", "-V"],
+        group: "diagnostics",
+        targeted: false,
+        socket: false,
+        usage: "version",
+        description: "Print the CLI version without connecting to the app.",
+    },
+    command!(
+        "commands",
+        "customize",
+        false,
+        false,
+        "commands",
+        "Print the executable command catalog as JSON without connecting to the app."
+    ),
+    CommandSpec {
+        name: "guide",
+        aliases: &["--skill"],
+        group: "customize",
+        targeted: false,
+        socket: false,
+        usage: "guide | --skill",
+        description: "Print an automation guide for this build's implemented commands.",
+    },
+    CommandSpec {
+        name: "help",
+        aliases: &["--help", "-h"],
+        group: "customize",
+        targeted: false,
+        socket: false,
+        usage: "help [COMMAND|TOPIC]",
+        description: "Read offline help for one command or a task topic.",
+    },
+];
+
+const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --timeout <MILLIS>   Client deadline (50–30000 milliseconds)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
+const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Leading --workspace/--pane/--surface options constrain ownership.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  Explicit selectors override inherited caller defaults. Without them,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Surface caller identity follows tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
+pub(super) fn find(name: &str) -> Option<&'static CommandSpec> {
+    COMMANDS
+        .iter()
+        .find(|s| s.name == name || s.aliases.contains(&name))
+}
+pub(super) fn top_help() -> String {
+    let mut out = String::from(
+        "zmux — control terminal workspaces through the local socket\n\nUsage: zmux [OPTIONS] <COMMAND> [ARGS]\n\n",
+    );
+    out.push_str(GLOBAL);
+    out.push('\n');
+    out.push_str(TARGETS);
+    out.push_str("\nCommands:\n");
+    for (group, title) in GROUPS {
+        let rows: Vec<_> = COMMANDS.iter().filter(|s| s.group == *group).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "  {title}:");
+        for spec in rows {
+            let _ = writeln!(out, "    {}", spec.usage);
+        }
+    }
+    out.push_str("\nLocal-control results use JSON. Read: zmux help <command|topic>.\nAutomation guide: zmux guide. Machine catalog: zmux commands.\n");
+    out
+}
+pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
+    let Some(name) = name else {
+        return Ok(top_help());
+    };
+    if let Some(spec) = find(name) {
+        let mut out = format!(
+            "Usage: zmux [OPTIONS] {}\n\n{}\n",
+            spec.usage, spec.description
+        );
+        if !spec.aliases.is_empty() {
+            let _ = writeln!(out, "\nAliases: {}", spec.aliases.join(", "));
+        }
+        if spec.targeted {
+            out.push('\n');
+            out.push_str(TARGETS);
+        }
+        out.push('\n');
+        out.push_str(GLOBAL);
+        return Ok(out);
+    }
+    let topic = match name {
+        "resume" => "start",
+        "arrange" => "navigate",
+        "advanced" => "diagnostics",
+        other => other,
+    };
+    let Some((_, title)) = GROUPS.iter().find(|(group, _)| *group == topic) else {
+        return Err(CliError(format!("unknown command or help topic `{name}`")));
+    };
+    let mut out = format!("zmux — {title}\n\n");
+    let mut any = false;
+    for spec in COMMANDS.iter().filter(|s| s.group == topic) {
+        any = true;
+        let _ = writeln!(out, "  zmux {}\n    {}\n", spec.usage, spec.description);
+    }
+    if !any {
+        out.push_str("No executable commands in this topic are available in this build.\n");
+    }
+    Ok(out)
+}
+pub(super) fn catalog() -> Value {
+    json!({"schema_version": 1, "parity_status": "incomplete", "version": env!("CARGO_PKG_VERSION"), "commands": COMMANDS.iter().map(|s| json!({
+        "name": s.name, "aliases": s.aliases, "group": s.group, "usage": s.usage, "description": s.description,
+        "targeted": s.targeted, "socket_required": s.socket, "availability": "implemented"
+    })).collect::<Vec<_>>()})
+}
+pub(super) fn guide() -> String {
+    format!(
+        "# zmux automation guide\n\nUse `zmux commands` to discover this build's executable commands.\nRead `zmux help <command>` or `zmux help <topic>` before constructing requests.\n\nInspect with list-workspaces, list-panes and list-pane-surfaces. Preserve returned\nUUIDs when later requests must address the same object. Use leading selectors for\nexplicit scope; inherited terminal context applies when selectors are omitted.\nUse --expect-revision for operations that depend on a previously observed index.\n\nSend exact text with send-text; include carriage return only when submission is intended.\nUse --stdin for multiline text. Never retry a timeout whose outcome is unknown.\nObserve readiness after new-workspace, new-surface or reopen-closed: launch is asynchronous.\nReopening starts fresh shells at saved working directories and does not replay jobs.\n\n{}\n{}",
+        GLOBAL, TARGETS
+    )
+}

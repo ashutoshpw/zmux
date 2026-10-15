@@ -5,6 +5,12 @@
 
 ## Delivered slices
 
+- F01a implemented locally: shared command registry, grouped/task/leaf offline help,
+  guide/skill alias, executable JSON catalog and app capabilities. Parser regressions
+  for literal stdin markers and malformed browser help repaired; full checks pass
+  (49 Rust tests plus C ABI). See [receipt](references/f01-command-registry.md).
+  F01/full parity and native gates remain open.
+
 - F02a implemented locally: live UUIDs/typed refs/indices, scoped target resolution on
   the workspace executor, caller defaults, revision guards and real shell context.
   `scripts/check` passes (47 tests plus C ABI); fresh repair review passed. Native gates remain; F02 and

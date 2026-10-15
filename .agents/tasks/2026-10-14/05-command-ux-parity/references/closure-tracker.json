@@ -7,7 +7,7 @@
     {
       "id": "F01",
       "title": "Executable compatibility contracts and command registry",
-      "status": "planned",
+      "status": "implementing",
       "owner": "CLI/control: apps/cli, desktop-runtime/control",
       "depends_on": [
         "F02"
@@ -16,7 +16,19 @@
         "Define original registry entries, argument/alias/output/error/focus schemas and availability states; migrate existing CLI without regressions",
         "Generate grouped/leaf help, guide, capabilities and docs from executable definitions; add drift validation against frozen catalogs"
       ],
-      "exit_gate": "Offline help works without app; every discovered public leaf has a contract or explicitly tracked unresolved contract; no help-only successful stubs; existing CLI retains intentional migration compatibility."
+      "exit_gate": "Offline help works without app; every discovered public leaf has a contract or explicitly tracked unresolved contract; no help-only successful stubs; existing CLI retains intentional migration compatibility.",
+      "implemented_slices": [
+        "F01a original implemented-command registry, grouped offline help, guide, catalog and capabilities"
+      ],
+      "verification_receipts": [
+        "f01-command-registry.md"
+      ],
+      "remaining_gates": [
+        "All frozen per-leaf/alias/option schemas and behavior",
+        "Drift enforcement and full CLI grammar/output/focus contracts",
+        "Native packaged CLI verification",
+        "V01 full parity signoff"
+      ]
     },
     {
       "id": "F02",

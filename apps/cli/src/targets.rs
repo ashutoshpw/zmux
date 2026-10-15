@@ -3,40 +3,23 @@ use super::*;
 use zmux_desktop_runtime::targets::{TargetOperation, TargetRequest};
 use zmux_workspace_core::targets::{CallerContext, TargetAction, TargetRef, TargetScope};
 
-pub(super) const COMMANDS: &[&str] = &[
-    "rename-workspace",
-    "focus-pane",
-    "split-pane",
-    "close-pane",
-    "browser",
-    "notify",
-    "new-surface",
-    "list-pane-surfaces",
-    "select-surface",
-    "close-surface",
-    "close-other-tabs",
-    "rename-tab",
-    "reorder-surface",
-    "move-surface",
-    "close-workspace",
-    "send-text",
-    "read-screen",
-    "list-panes",
-];
-
 pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError> {
-    if help_requested(tail)
-        || (command == "browser"
-            && (tail.first().is_some_and(|v| v == "help")
-                || (tail.len() == 2
-                    && tail[1].to_str().is_some_and(|v| v == "--help" || v == "-h"))))
-    {
+    if help_requested(tail) {
         return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
     }
     let mut args = utf8_args(tail)?;
     let browser_verb = if command == "browser" {
-        if args.is_empty() {
+        if args.as_slice() == ["help"] {
+            return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
+        }
+        if !args
+            .first()
+            .is_some_and(|value| ["open", "navigate", "goto"].contains(&value.as_str()))
+        {
             return Err(CliError("browser requires open or navigate".into()));
+        }
+        if help_requested(&tail[1..]) {
+            return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
         }
         Some(args.remove(0))
     } else {
@@ -45,10 +28,12 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     let mut scope = TargetScope::default();
     let mut expected_model_revision = None;
     let mut cursor = 0;
+    let mut literal = false;
     // Selector flags lead positional arguments. `--` preserves literal option-looking names/text.
     while cursor < args.len() {
         let flag = &args[cursor];
         if flag == "--" {
+            literal = true;
             cursor += 1;
             break;
         }
@@ -193,7 +178,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         }
         "send-text" => {
             let text = target_and_value(values, &mut scope.pane, "pane and text|--stdin")?;
-            let text = if text == "--stdin" {
+            let text = if !literal && text == "--stdin" {
                 let mut bytes = Vec::new();
                 io::stdin().take(4_097).read_to_end(&mut bytes)?;
                 if bytes.len() > 4_096 {

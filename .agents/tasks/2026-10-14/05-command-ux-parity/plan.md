@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [F01a command discovery](references/f01-command-registry.md) — grouped offline help, executable catalog/guide, capabilities and parser repairs.
 - [F02a target routing](references/f02-target-routing.md) — implementation, red/green evidence, remaining identity gates and full-parity artifact policy.
 - [Gap-closure execution plan](references/gap-closure-plan.md) — milestone order, first batch, integration, artifact gates and external dependencies.
 - [Work packages](references/closure-work-packages.md) — 26 concrete owners, dependencies, commit slices and exit gates.

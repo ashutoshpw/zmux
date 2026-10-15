@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{Read, Write},
     os::unix::fs::PermissionsExt,
-    os::unix::net::UnixStream,
+    os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::{
@@ -165,6 +165,122 @@ fn help_and_version_are_complete_and_offline() {
 }
 
 #[test]
+fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
+    let offline = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .args(["--socket", "relative-path-must-not-be-used"])
+            .args(args)
+            .env("ZMUX_SOCKET", "relative-path-must-not-be-used")
+            .output()
+            .unwrap()
+    };
+    let topic = offline(&["help", "navigate"]);
+    assert!(topic.status.success());
+    let topic = String::from_utf8(topic.stdout).unwrap();
+    assert!(topic.contains("focus-pane"));
+    assert!(topic.contains("move-surface"));
+    assert!(!topic.contains("zmux prototype"));
+
+    let guide = offline(&["guide"]);
+    let alias = offline(&["--skill"]);
+    assert!(guide.status.success());
+    assert!(alias.status.success());
+    assert_eq!(guide.stdout, alias.stdout);
+    let guide = String::from_utf8(guide.stdout).unwrap();
+    assert!(guide.contains("Never retry a timeout"));
+    assert!(guide.contains("--expect-revision"));
+
+    let catalog = offline(&["commands"]);
+    assert!(catalog.status.success());
+    let catalog: Value = serde_json::from_slice(&catalog.stdout).unwrap();
+    assert_eq!(catalog["schema_version"], 1);
+    assert_eq!(catalog["parity_status"], "incomplete");
+    let guide = catalog["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "guide")
+        .unwrap();
+    assert_eq!(guide["socket_required"], false);
+    assert_eq!(guide["aliases"], serde_json::json!(["--skill"]));
+
+    let version = offline(&["version"]);
+    assert!(version.status.success());
+    assert_eq!(version.stdout, offline(&["--version"]).stdout);
+    for args in [
+        vec!["guide", "unexpected"],
+        vec!["help", "nonexistent-topic"],
+        vec!["browser", "bogus", "--help"],
+        vec!["browser", "help", "unexpected"],
+    ] {
+        let rejected = offline(&args);
+        assert!(!rejected.status.success());
+        assert!(!String::from_utf8_lossy(&rejected.stderr).contains("cannot connect"));
+    }
+}
+
+#[test]
+fn send_text_delimiter_preserves_literal_stdin_marker_on_the_wire() {
+    use std::process::Stdio;
+    for (arguments, expected) in [
+        (vec!["send-text", "--", "--stdin"], "--stdin"),
+        (vec!["send-text", "--stdin"], "input from stdin"),
+    ] {
+        let socket = socket_path();
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let capture = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut body = vec![0; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut body).unwrap();
+            let request: Value = serde_json::from_slice(&body).unwrap();
+            let response = serde_json::to_vec(&serde_json::json!({
+                "version": 1, "request_id": request["request_id"], "ok": true, "result": {}
+            }))
+            .unwrap();
+            stream
+                .write_all(&(response.len() as u32).to_be_bytes())
+                .unwrap();
+            stream.write_all(&response).unwrap();
+            request
+        });
+        let mut child = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .arg("--socket")
+            .arg(&socket)
+            .args(arguments)
+            .env_remove("ZMUX_WORKSPACE_ID")
+            .env_remove("ZMUX_SURFACE_ID")
+            .env_remove("ZMUX_TAB_ID")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"input from stdin")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request = capture.join().unwrap();
+        fs::remove_file(&socket).unwrap();
+        fs::remove_dir(socket.parent().unwrap()).unwrap();
+        assert_eq!(request["command"]["request"]["operation"]["text"], expected);
+    }
+}
+
+#[test]
 fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
     let socket = socket_path();
     let desktop = Arc::new(
@@ -203,6 +319,12 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
     };
     assert_eq!(status["workspace_count"], 1);
     assert_eq!(status["protocol_version"], 1);
+    let capabilities = invoke_app(&socket, &["capabilities"]);
+    assert_eq!(capabilities["protocol"], "zmux-local-control");
+    assert_eq!(capabilities["version"], status["protocol_version"]);
+    assert_eq!(capabilities["model_version"], status["model_version"]);
+    assert_eq!(capabilities["authorization"], "same_uid");
+    assert_eq!(capabilities["remote_relay"], false);
     for _ in 0..20 {
         let workspaces = invoke_app(&socket, &["list-workspaces"]);
         assert_eq!(workspaces["workspaces"].as_array().unwrap().len(), 1);
