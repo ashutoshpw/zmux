@@ -1312,7 +1312,15 @@ mod tests {
         if timeout {
             assert!(matches!(result, Err(MultiplexerError::Timeout)));
         } else {
-            assert!(result.is_ok_and(|output| output.success));
+            match result {
+                Ok(output) => assert!(
+                    output.success,
+                    "completed launcher exited unsuccessfully; stdout={:?}; stderr={:?}",
+                    output.stdout.chars().take(512).collect::<String>(),
+                    output.stderr.chars().take(512).collect::<String>()
+                ),
+                Err(error) => panic!("completed launcher failed: {error}"),
+            }
         }
         assert!(started.elapsed() < Duration::from_secs(8));
         assert!(

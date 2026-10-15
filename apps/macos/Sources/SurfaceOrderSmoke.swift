@@ -13,9 +13,20 @@ enum SurfaceOrderSmoke {
     }
     private static func selection(_ value: DesktopSnapshot?) -> [UInt64] {
         guard let model = value?.model else { return [] }
-        return [model.focusedWindow ?? 0, model.focusedWorkspace ?? 0]
-            + model.windows.flatMap { [$0.id, $0.selectedWorkspace ?? 0] }
-            + model.workspaces.flatMap { [$0.id, $0.focusedPane] + $0.root.panes.flatMap { [$0.id, $0.selectedSurface] } }
+        var selected: [UInt64] = [model.focusedWindow ?? 0, model.focusedWorkspace ?? 0]
+        for window in model.windows {
+            selected.append(window.id)
+            selected.append(window.selectedWorkspace ?? 0)
+        }
+        for workspace in model.workspaces {
+            selected.append(workspace.id)
+            selected.append(workspace.focusedPane)
+            for pane in workspace.root.panes {
+                selected.append(pane.id)
+                selected.append(pane.selectedSurface)
+            }
+        }
+        return selected
     }
     static func validate(
         window: NSWindow,
