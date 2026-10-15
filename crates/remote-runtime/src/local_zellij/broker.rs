@@ -38,7 +38,7 @@ pub(super) fn peer(stream: &UnixStream) -> io::Result<ProcessIdentity> {
     #[cfg(target_os = "macos")]
     let (pid, uid) = {
         let pid = getsockopt(stream, sockopt::LocalPeerPid)?;
-        let (uid, _) = nix::sys::socket::getpeereid(stream)?;
+        let (uid, _) = nix::unistd::getpeereid(stream)?;
         (pid, uid.as_raw())
     };
     if pid <= 0 || uid != geteuid().as_raw() {
@@ -674,6 +674,9 @@ mod tests {
         for canceled in [false, true] {
             let (mut connection, mut source, target) = connection();
             source.write_all(b"abc").unwrap();
+            // Concurrent process tests can temporarily inherit this endpoint
+            // across fork. Shut down the socket itself, not only our FD ref.
+            target.shutdown(std::net::Shutdown::Both).unwrap();
             drop(target);
             let mut report = TransportReport::default();
             assert!(

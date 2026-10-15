@@ -137,6 +137,7 @@ pub enum ExitObservation {
 
 /// Caller must retain its physical child handle; this function does not reap.
 /// ECHILD is an error, never a successful exit or permission to signal a PID.
+/// With job_control=false, Some contains only Exited or Signaled.
 pub fn observe_child(pid: u32, job_control: bool) -> io::Result<Option<ExitObservation>> {
     use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
     let pid = Pid::from_raw(i32::try_from(pid).map_err(|_| invalid("invalid child PID"))?)
@@ -163,13 +164,19 @@ pub fn observe_child(pid: u32, job_control: bool) -> io::Result<Option<ExitObser
                 .ok_or_else(|| invalid("missing terminating signal"))?,
         )))
     } else if status.stopped() {
+        // Darwin can return this observation even for an EXITED-only request
+        // (hosted macOS 15 regression). Keep the exit-only API terminal-only so
+        // callers never treat suspension as exit or enter a blocking final wait.
+        if !job_control {
+            return Ok(None);
+        }
         Ok(Some(ExitObservation::Stopped(
             status
                 .stopping_signal()
                 .ok_or_else(|| invalid("missing stop signal"))?,
         )))
     } else if status.continued() {
-        Ok(Some(ExitObservation::Continued))
+        Ok(job_control.then_some(ExitObservation::Continued))
     } else {
         Err(invalid("unknown child exit observation"))
     }
