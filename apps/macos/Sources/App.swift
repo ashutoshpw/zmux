@@ -1528,6 +1528,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "notification_jump_to_unread": true,
             "notification_reply_pty": true,
             "workspace_metadata": true,
+            "remote_file_url_symlink": true,
+            "remote_file_url_directory_refusal": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,

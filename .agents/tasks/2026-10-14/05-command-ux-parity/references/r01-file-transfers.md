@@ -109,3 +109,57 @@ valid input in the selection and must fail before any remote operation. The syml
 assertion was observed failing with ELOOP before the fix and passing afterward.
 Parent full verification passes (98 Rust tests plus C ABI) and fresh review found no
 transfer-policy defect. Native Actions verification remains pending; this is not R01/V01 closure.
+
+## R01f native file-URL acceptance (authored; macOS execution pending)
+
+The existing `RemoteClipboardImageSmoke.validate` journey now continues from raw PNG
+paste into real file-URL selections on the same managed SSH terminal. It reuses the
+private loopback fixture, revoked login key and already authenticated connection;
+there is no second SSH fixture or production transfer implementation.
+
+A private named pasteboard offers a selected symlink URL plus a text representation.
+The genuine `TerminalView.paste` path must choose the URL, preserve the link's selected
+name (including space, apostrophe and UTF-8), and upload through its originating SSH
+surface/session while the app selects the original local workspace. After a successful
+receipt, an explicit Return lets the existing remote read loop independently identify
+the inserted path. The text representation must not reach the terminal, and file URLs
+must not submit the shell themselves.
+
+The same native entrypoint then selects a directory and a symlink to that directory.
+Each must produce an origin-attributed failed upload and a visible error in the real
+`MainHeaderView.detailLabel`. Remote upload storage and the previously submitted shell
+receipt must remain unchanged. An explicit Return after each refusal must submit an
+empty line, independently proving that refusal did not leave a local pathname or text
+fallback in the remote input buffer, even when viewport text wraps.
+
+Authoring gate: these checks protect native pasteboard classification, URL/name
+preservation, real dispatch/visibility and terminal input behavior. Credible failures
+include resolving a selected alias to its target name, wiring file URLs to text/local
+paste, routing completion to newly selected focus or hiding asynchronous refusal.
+The existing `apps/cli/tests/ssh.rs` remains the primary owner for all-source preflight,
+regular-file/special-file classification, transfer bytes/limits and cancellation/ACK
+edge cases. These AppKit entrypoint cases cannot be exercised by that CLI test. The
+native test adds no production seam and does not replace callbacks or supply receipts.
+
+The added fixture consists of one small ordinary source, one private directory with
+one small sentinel file, and regular-file/directory symlinks under the existing owned
+fixture root. Filesystem work and process waits stay on detached workers. It uses the
+existing 12-second subprocess/20-second observation deadlines and fixture cleanup;
+the general pasteboard, user SSH configuration and user credentials are untouched.
+
+Portable verification: `git diff --check` passes. No Swift compiler/macOS SDK is present
+on the Linux workstation, so this change has no native compilation or execution
+receipt yet. No pre-fix regression is claimed: this adds missing native acceptance for
+implemented behavior and has not exposed a reachable product defect locally. The
+parent integrates `remote_file_url_symlink` and `remote_file_url_directory_refusal`
+receipt requirements into the packaged smoke after the helper source freeze.
+
+Scope remains R01's recorded nonrecursive terminal paste behavior. Frozen public
+`vm push/upload` directory/excludes/watch contracts belong to H03; this slice neither
+adds recursive terminal upload nor establishes Cloud/VM transfer acceptance. Physical
+Finder drag/paste, external-host and resource/stress gates remain open.
+
+Fresh source review found no blocker. The file-URL upload is small and has no ACK
+hold, so it can complete before the workspace-selection CLI command: this case does
+not establish hidden-terminal completion. The separately gated image journey covers
+that shared delivery race. File-URL native execution remains pending.
