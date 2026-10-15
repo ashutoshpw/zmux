@@ -242,7 +242,9 @@ private final class ProbeRunner {
         // run the fixture or write over the original process's observations.
         configuration.arguments = []
         let processID: Int32 = try await withCheckedThrowingContinuation { continuation in
-            NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { running, error in
+            // Launch Services invokes this completion on its concurrent queue.
+            // Transfer only the PID; do not inherit the caller's MainActor.
+            NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { @Sendable running, error in
                 if let error { continuation.resume(throwing: error) }
                 else if let running { continuation.resume(returning: running.processIdentifier) }
                 else { continuation.resume(throwing: ProbeFailure(description: "Launch Services returned no running application")) }

@@ -35,6 +35,8 @@ The returned PID must equal the probe PID. Actual activation is awaited for at
 most three seconds, and actual visible document focus for at most two seconds;
 refusal retains native/app/frontmost-PID observations and fails case preconditions.
 This does not rely on the deprecated ignoring-other-apps activation option.
+The Launch Services completion has an explicit Sendable boundary and transfers
+only the returned process ID; native activation checks remain on the main actor.
 
 Public in-process `CGEvent`-backed `NSEvent`s go directly to the exact web view's
 `NSResponder.keyDown`, `keyUp` and `flagsChanged` boundary. The app does not enqueue
