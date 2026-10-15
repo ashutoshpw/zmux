@@ -100,3 +100,21 @@ Parent acceptance: isolated index snapshot passed `scripts/check` (207 Rust test
 formatting, strict Clippy, notices and C ABI). Fresh independent review accepted the
 catalog/migration/host/receipt boundaries and independently reran the real CLI profile
 lifecycle test. Native compile, packaged isolation/reopen and app-relaunch remain gates.
+
+## Native profile menu slice
+
+The Workspace menu now exposes existing durable profiles under New Browser Tab with
+Profile. Items carry immutable UUIDs and revalidate the live catalog before invoking
+the same create-browser action as the CLI. Unavailable catalogs have no actionable
+entries; ordinary New Browser Tab keeps its existing private behavior.
+
+The packaged profile journey invokes the actual AppKit item, verifies its new selected
+surface and reads the existing cookie/localStorage data through that surface. This
+distinct menu-to-runtime boundary is required by `browser_profile_menu`; it remains a
+hosted gate until executed. Profile creation/rename/clear/delete UI remains open.
+
+Native d92573f run38762433983 reached Swift compilation and exposed a remaining
+presentation fallback that called the old BrowserView constructor without a datastore.
+Presentation now consumes only the host created by profile-validating reconciliation;
+if that host is unavailable it shows an error placeholder. It never creates a private
+or substitute store. Hosted compile and the profile journeys must verify this repair.

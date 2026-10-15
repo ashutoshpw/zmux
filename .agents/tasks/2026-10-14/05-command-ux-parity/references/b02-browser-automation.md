@@ -265,3 +265,41 @@ Hosted receipt: Browser live-title observation repair executed successfully at5f
 macOS38753451286 (universal build and packaged smoke). Parent downloaded and checked
 archive/source/required flags. This closes that subset native gate only; full package
 parity and applicable physical/external-host gates remain open.
+
+## DOM harness ownership and timeout diagnostics
+
+Foundation `38759082378` timed out its Chrome subprocess after 20 seconds without
+preserving browser diagnostics. Subsequent hosted `38760632422` passed all 35 cases;
+its runner manifest reports Chrome 155.0.8059.39. The original CI stall is not diagnosed
+as a locator defect or a particular browser bug.
+
+Local Chrome 151.0.7922.108 reproduces a pre-fixture stall: the browser opens TCP
+connections to the loopback port, but the server receives no HTTP GET before timeout.
+Unique profile, load gating and virtual-clock removal did not reliably repair it;
+those experiments are not claimed as the hosted Chrome 155 root cause.
+
+The harness now prints its exact browser version, creates a private profile for each
+invocation, and owns its browser process group. The original 20-second deadline and
+all 35 DOM assertions remain. `scripts/browser_process.py` independently drains both
+pipes while retaining at most a 1 MiB stdout prefix and 64 KiB stderr tail; output
+beyond either cap is counted and drained, and truncated DOM output is rejected.
+Timeout kills only that invocation's group, allows at most one second to drain pipes,
+and bounds leader reaping to three seconds. Successful leader exit also stops owned
+descendants, including those that have already closed both output streams. Diagnostics
+report the browser version, bounded retained output, total byte counts and fixture GETs.
+
+The existing terminal-feasibility lifecycle fixture now also calls the real browser
+helper through a result adapter. All nine real-process tests pass: both runners cover
+early EOF, successful-leader descendants, exited leaders whose children hold pipes and
+2 MiB stdout floods; a simultaneous stdout/stderr flood separately checks the browser's
+independent prefix/tail bounds and complete byte counts. An in-memory control retaining
+the old unbounded capture and missing success-path cleanup fails specifically on a live
+descendant and the oversized retained output. No fake browser supplies DOM success.
+
+Fresh Chromium 155.0.8059.79 passes all 35 cases with this helper. An intentionally
+wrong accessible name fails through the real DOM assertion; an intentionally blocked
+real renderer receives one fixture GET, hits the unchanged deadline and completes owned
+cleanup in 20.93 seconds. The earlier diagnostic
+iteration also passed two simultaneous invocations and reported local Chrome 151's
+version and zero fixture GETs on its timeout; those results do not diagnose hosted
+Chrome 155. Fresh hosted execution remains a separate delivery gate.

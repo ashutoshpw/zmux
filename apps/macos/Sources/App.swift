@@ -91,6 +91,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var metadataPopover: NSPopover?
     private var metadataInspector: WorkspaceMetadataViewController?
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
+    private let browserProfilesMenu = NSMenu(title: "Browser Profiles")
     private var workspaceCount = 1
     private var didSetInitialTerminalFocus = false
 
@@ -451,6 +452,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             let item = workspaceMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = self
         }
+        let profilesItem = NSMenuItem(title: "New Browser Tab with Profile", action: nil, keyEquivalent: "")
+        profilesItem.submenu = browserProfilesMenu
+        browserProfilesMenu.delegate = self
+        workspaceMenu.insertItem(profilesItem, at: 3)
         // AppKit matches the resulting character, as it does for uppercase T/W.
         // Shift-brackets produce braces on the standard keyboard layout.
         let next = workspaceMenu.addItem(withTitle: "Next Tab", action: #selector(nextTab), keyEquivalent: "}")
@@ -817,10 +822,17 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 terminals[session] = terminal
                 view = terminal
             } else {
-                let browser = browsers[pane.selectedSurface] ?? BrowserView(surface: pane.selected, owner: self)
-                browser.update(pane.selected)
-                browsers[pane.selectedSurface] = browser
-                view = browser
+                // Reconciliation owns profile validation, datastore selection and
+                // automation binding. Presentation must never bypass that owner.
+                if let browser = browsers[pane.selectedSurface], browser.profileID == pane.selected.browserProfileId {
+                    browser.update(pane.selected)
+                    view = browser
+                } else {
+                    let unavailable = NSTextField(wrappingLabelWithString: "This browser could not be opened. Check its profile and try again.")
+                    unavailable.textColor = .secondaryLabelColor
+                    unavailable.alignment = .center
+                    view = unavailable
+                }
             }
             view.removeFromSuperview()
             let container = BackgroundView(color: ZmuxPalette.terminal)
@@ -889,6 +901,19 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     @objc func newBrowser() {
         guard let pane = focusedPane else { return }
         createBrowser(in: pane.id, url: "about:blank")
+    }
+    @objc private func newBrowserWithProfile(_ item: NSMenuItem) {
+        guard let pane = focusedPane, let profile = profileForMenuItem(item) else {
+            showError("Browser profile is unavailable")
+            return
+        }
+        createBrowser(in: pane.id, url: "about:blank", profile: profile)
+    }
+    private func profileForMenuItem(_ item: NSMenuItem) -> UUID? {
+        guard let id = item.representedObject as? String, let profile = UUID(uuidString: id),
+              let state = snapshot?.browserProfiles, !state.loading, state.error == nil,
+              state.profiles.contains(where: { $0.id == profile }) else { return nil }
+        return profile
     }
     func createBrowser(in pane: UInt64, url: String, profile: UUID? = nil) { enqueue(.browser("create_browser", nil, pane, url, nil, profile)) }
     func navigateBrowser(_ id: UInt64, url: String) { enqueue(.browser("navigate_browser", id, nil, url, nil, nil)) }
@@ -975,6 +1000,23 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         enqueue(.surface("move_surface", id, paneID, index, nil))
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === browserProfilesMenu {
+            menu.removeAllItems()
+            if let state = snapshot?.browserProfiles, !state.loading, state.error == nil {
+                for profile in state.profiles {
+                    let item = menu.addItem(withTitle: profile.name, action: #selector(newBrowserWithProfile(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = profile.id.uuidString
+                    item.toolTip = "Open a browser tab using this profile’s cookies and website data"
+                }
+            }
+            if menu.items.isEmpty {
+                let title = snapshot?.browserProfiles.loading == true ? "Loading profiles…" : "No browser profiles available"
+                let item = menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
+                item.isEnabled = false
+            }
+            return
+        }
         guard menu === recentlyClosedMenu else { return }
         menu.removeAllItems()
         for item in (snapshot?.model.closedItems ?? []).reversed() {
@@ -994,6 +1036,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         case #selector(browserForward): return focusedBrowser?.webView.canGoForward == true
         case #selector(browserReload), #selector(browserFind), #selector(browserZoomIn), #selector(browserZoomOut), #selector(browserZoomReset): return focusedBrowser != nil
         case #selector(newBrowser), #selector(focusBrowserAddress): return focusedPane != nil
+        case #selector(newBrowserWithProfile(_:)):
+            return focusedPane != nil && profileForMenuItem(item) != nil
         case #selector(nextTab), #selector(previousTab), #selector(lastTab): return (focusedPane?.surfaces.count ?? 0) > 1
         case #selector(nextWorkspace), #selector(previousWorkspace), #selector(lastWorkspace): return (snapshot?.model.workspaces.count ?? 0) > 1
         case #selector(nextPane), #selector(previousPane), #selector(lastPane), #selector(focusPaneLeft), #selector(focusPaneRight), #selector(focusPaneUp), #selector(focusPaneDown): return (snapshot?.workspace?.root.panes.count ?? 0) > 1
@@ -1548,6 +1592,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "browser_cli_automation": true,
             "browser_locators_waits": true,
             "browser_profiles_isolation_reopen": true,
+            "browser_profile_menu": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
             "browser_title_observation": true,
@@ -1867,6 +1912,27 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await waitUntil { [weak self] _ in self?.browsers[popup.id]?.webView.title == "First fixture" && self?.browsers[popup.id]?.webView.isLoading == false }
         guard try await eval("localStorage.getItem('zmuxProfile')", popup.id) as? String == "ownerA" else { throw BridgeFailure(message: "Popup did not use its parent's datastore") }
         for id in [popup.id, separate, reopened] { _ = try await nativeCLI(["close-surface", "--surface", String(id)]) }
+        selectTab(privateSurface)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface == privateSurface }
+        // Exercise the real AppKit menu item and its shared create-browser route.
+        let priorMenuSurfaces = Set(browsers.keys)
+        menuNeedsUpdate(browserProfilesMenu)
+        guard let index = browserProfilesMenu.items.firstIndex(where: { ($0.representedObject as? String)?.lowercased() == a }),
+              validateMenuItem(browserProfilesMenu.items[index]) else {
+            throw BridgeFailure(message: "Browser profile menu did not expose the durable profile")
+        }
+        browserProfilesMenu.performActionForItem(at: index)
+        try await waitUntil { value in
+            guard let selected = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
+            return !priorMenuSurfaces.contains(selected.id) && selected.browserProfileId?.uuidString.lowercased() == a
+        }
+        guard let menuSurface = focusedPane?.selectedSurface else { throw BridgeFailure(message: "Profile menu did not select its new tab") }
+        _ = try await nativeCLI(["browser", "goto", origin + "/first", "--surface", String(menuSurface)])
+        try await waitUntil { [weak self] _ in self?.browsers[menuSurface]?.webView.title == "First fixture" && self?.browsers[menuSurface]?.webView.isLoading == false }
+        guard try await eval("localStorage.getItem('zmuxProfile') === 'ownerA' && document.cookie.includes('zmuxProfile=ownerA')", menuSurface) as? Bool == true else {
+            throw BridgeFailure(message: "Native profile menu opened a substitute website datastore")
+        }
+        _ = try await nativeCLI(["close-surface", "--surface", String(menuSurface)])
         selectTab(privateSurface)
         try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface == privateSurface }
     }

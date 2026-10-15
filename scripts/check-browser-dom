@@ -12,14 +12,24 @@ import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import threading
+import tempfile
+from browser_process import run_browser
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--browser', default=os.environ.get('CHROMIUM', shutil.which('chromium')))
 args = parser.parse_args()
 if not args.browser:
     parser.error('Chromium is required; set CHROMIUM or --browser')
+try:
+    version_result = run_browser([args.browser, '--version'], timeout=5)
+except (OSError, RuntimeError) as error:
+    raise SystemExit(f'Cannot identify DOM browser {args.browser}: {error}') from error
+version = (version_result.stdout or version_result.stderr).strip()[:256]
+if version_result.returncode or version_result.timed_out or version_result.output_truncated or not version:
+    raise SystemExit(f'Cannot identify DOM browser {args.browser}: {version}')
+print(f'DOM browser: {version}', flush=True)
+
 root = Path(__file__).resolve().parent.parent
 swift = (root / 'apps/macos/Sources/BrowserAutomation.swift').read_text()
 source = swift.split('static let source = #"""\n', 1)[1].split('\n    """#', 1)[0]
@@ -92,6 +102,8 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
 page = ('<!doctype html><meta charset="utf-8"><body><script>' + suite.replace('</script', '<\\/script') + '</script>').encode()
 class Fixture(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        with self.server.fixture_lock:
+            self.server.fixture_gets += 1
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(page)))
@@ -100,19 +112,29 @@ class Fixture(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture) as server:
+# A directory under home is also visible to a confined Snap Chromium; its /tmp
+# namespace differs from the Python process's. Only this owned directory is removed.
+with tempfile.TemporaryDirectory(prefix='zmux-browser-dom-', dir=Path.home()) as profile, \
+        http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture) as server:
+    server.fixture_lock = threading.Lock()
+    server.fixture_gets = 0
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        result = subprocess.run([args.browser, '--headless', '--no-sandbox', '--disable-gpu',
-                                 '--disable-dev-shm-usage', '--virtual-time-budget=3000',
-                                 '--dump-dom', f'http://127.0.0.1:{server.server_port}/'],
-                                text=True, capture_output=True, timeout=20)
+        result = run_browser([args.browser, '--headless', '--no-sandbox', '--disable-gpu',
+                              '--disable-dev-shm-usage', f'--user-data-dir={profile}',
+                              '--virtual-time-budget=3000', '--dump-dom',
+                              f'http://127.0.0.1:{server.server_port}/'], timeout=20)
     finally:
         server.shutdown()
         worker.join()
+    if result.timed_out or result.output_truncated:
+        reason = 'timed out after 20 seconds' if result.timed_out else 'exceeded retained-output limits'
+        raise SystemExit(f'DOM fixture {reason}; browser={version}; fixture GETs={server.fixture_gets}\n'
+                         f'bytes seen: stdout={result.stdout_bytes_seen}, stderr={result.stderr_bytes_seen}\n'
+                         f'stdout tail: {result.stdout[-2000:]}\nstderr tail: {result.stderr[-2000:]}')
     matches = re.findall(r'<output id="result">(.*?)</output>', result.stdout, re.S)
     message = html.unescape(matches[-1]) if matches else result.stderr[-2000:]
     if result.returncode or not re.fullmatch(r'\d+ DOM cases passed', message):
-        raise SystemExit(message or 'Chromium did not finish the DOM suite')
+        raise SystemExit(message or f'{version} did not finish the DOM suite; fixture GETs={server.fixture_gets}')
     print(message)
