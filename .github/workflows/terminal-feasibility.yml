@@ -1,0 +1,66 @@
+name: Terminal engine feasibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-feasibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Verify process cleanup and retained-log bounds
+        run: python3 -B -m unittest discover -s tools/terminal-feasibility -p test_runner.py -v
+      - name: Compile and execute isolated Linux fixtures
+        run: python3 tools/terminal-feasibility/run.py --output "$RUNNER_TEMP/terminal-feasibility-results"
+      - name: Upload bounded receipts and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terminal-feasibility-linux-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/terminal-feasibility-results/receipt.json
+            ${{ runner.temp }}/terminal-feasibility-results/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust and both Mac standard libraries
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - name: Verify process cleanup and retained-log bounds
+        run: python3 -B -m unittest discover -s tools/terminal-feasibility -p test_runner.py -v
+      - name: Compile both Mac architectures and execute the runner architecture
+        run: python3 tools/terminal-feasibility/run.py --macos-universal --output "$RUNNER_TEMP/terminal-feasibility-results"
+      - name: Upload bounded receipts and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terminal-feasibility-macos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/terminal-feasibility-results/receipt.json
+            ${{ runner.temp }}/terminal-feasibility-results/*.log
+          if-no-files-found: ignore
+          retention-days: 7
