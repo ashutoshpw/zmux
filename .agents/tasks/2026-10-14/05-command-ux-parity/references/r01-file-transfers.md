@@ -30,7 +30,8 @@ These Actions receipts are diagnostic; V01 remains false and no build link is sh
 
 Local `scripts/check` passes: 78 Rust tests, fmt, Clippy with warnings denied, notices
 and C ABI. First and second reviews returned `fix-first`; the final retention-before-ACK repair passed a new fresh review (`ship`, no material findings).
-Exact-SHA native compilation/smoke are pending.
+Runtime `c9cd45c` passes Linux/macOS Foundation checks (`38716147517`), universal
+native compilation and packaged rendering smoke (`38716147327`).
 
 The existing real CLI/socket/OpenSSH journey is extended rather than duplicated. It
 removes the fixture's authorized key after login, then verifies successful shared-channel
@@ -70,7 +71,7 @@ paths remain reported after later failure/cancellation.
 
 The catalog finding is repaired: `paste-files` uses the shared targeted-command route.
 Task next actions are updated. A final fresh read-only review returned `ship` with no
-material findings. Exact-SHA native validation remains pending.
+material findings. Exact-SHA native compilation/packaged smoke now pass at `c9cd45c`.
 
 ## Hosted Darwin repair
 
@@ -79,13 +80,13 @@ At `d7db8fe`, Linux Foundation checks passed but macOS runs `38715393808` and
 uses select(2) on Darwin and rejects POSIX-poll-style disabled placeholders. The repair
 constructs a bounded vector containing only active stdout/stderr/input descriptors.
 The same full real SSH journey provides the hosted red/green acceptance; it is not skipped.
-Fresh focused repair review returned `ship` with no findings. Exact-SHA hosted verification
-is pending after push.
+Fresh focused repair review returned `ship` with no findings. Repair `c9cd45c` passes
+Linux/macOS Foundation checks (`38716147517`), including the same real SSH journey.
+Universal native compilation and packaged rendering smoke pass (`38716147327`).
 
 ## Remaining gates
 
-Exact-SHA Linux/macOS tests and native compile/smoke; physical
-Finder/clipboard/drag feedback and UI state review. Raw clipboard image preparation and
+Physical Finder/clipboard/drag feedback and UI state review. Raw clipboard image preparation and
 cleanup, directory/symlink contracts, custom uploads, password and host-key/jump routes,
 real two-host transfer/disconnect/performance and all broader parity remain open.
 Regular-file filesystem calls can stall inside the kernel despite O_NONBLOCK; cancellation

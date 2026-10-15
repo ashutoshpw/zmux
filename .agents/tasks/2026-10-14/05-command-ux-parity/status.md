@@ -8,7 +8,8 @@
 - R01c committed/pushed (`d7db8fe`), final fresh review passed: private authenticated terminal channels; bounded regular
   file uploads, progress/cancel and origin-bound insertion; native file drop/Finder paste.
   Local checks passed with 78 Rust tests plus C ABI. Hosted macOS exposed a Darwin poll
-  incompatibility (`-1` descriptors); repair and exact-SHA validation are in progress. Raw clipboard images, directories,
+  incompatibility (`-1` descriptors); repair `c9cd45c` now passes Linux/macOS Foundation
+  checks (`38716147517`) and universal/native packaged smoke (`38716147327`). Raw clipboard images, directories,
   two-host/physical/native acceptance and full R01/V01 remain open.
   See [receipt](references/r01-file-transfers.md).
 
@@ -66,6 +67,11 @@
 
 ## Verification and download
 
+R01c runtime `c9cd45ca41ac256356329f7b7c2b668d3938ce48` passes all 78 Rust tests,
+fmt/Clippy/notices/C ABI on Linux and macOS (`38716147517`), plus universal native
+compilation and packaged rendering smoke (`38716147327`). The workflow archive is
+diagnostic only; V01 is false and no new user-facing artifact is shared.
+
 Current foundation evidence: `c572484` (run `38706071891`) and `a1c621f`
 (run `38707343689`) passed macOS universal compile and packaged smoke. R01 descriptor `d06818a` passed Foundation checks (`38707919043`) and macOS
 compile/packaged smoke (`38707919132`). R01b `ec9422e` passed Linux/macOS Foundation checks (`38711025578`) and
@@ -95,10 +101,25 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 - Cloud is not deployed. Origin is https://zmux.w3dev.app; provider/database selection is deferred.
   All deployments must use GitHub Actions.
 
+## Local draft awaiting integration
+
+`apps/macos/Sources/ClipboardImagePreparation.swift` is an untracked, independently authored
+helper from `clipboard_image_preparation`. Source review repairs are applied, but it has
+not compiled against the Apple SDK and is not part of `c9cd45c`. API: actor `prepare(data:)`
+returns Sendable `PreparedClipboardImage` (UUID/fileURL/byte and pixel dimensions);
+`release(_:)` removes the exact private cache entry. Bounds: 32 MiB input/output, 16M pixels,
+256 MiB cache and seven-day inactive retention. Ownership, symlink and mode checks,
+bounded shallow enumeration, unlink/rmdir cleanup are included. Local paths remain cached.
+
+Next integration must capture origin surface/session before async work, bound pending
+preparations, keep UI command input flowing, correlate remote upload/source cleanup, handle
+closed/rejected/cancelled origins, classify file URLs before raw images before text, and add
+real native ImageIO/cache/pasteboard smoke. Do not claim raw clipboard-image support yet.
+
 ## Next action
 
-Repair R01c Darwin polling, review/push and verify exact-SHA Linux/macOS/native checks. Then implement raw clipboard image preparation and
-cleanup, directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
+Integrate the local clipboard-image draft with captured origin surface/session, bounded
+preparation admission, cleanup correlation and real native pasteboard/cache smoke. Continue directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based

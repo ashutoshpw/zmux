@@ -163,7 +163,7 @@
         "r01-file-transfers.md"
       ],
       "remaining_gates": [
-        "R01c exact-SHA hosted/native verification",
+        "Physical native Finder drop/file paste and progress/cancel visual acceptance; c9cd45c Linux/macOS tests and universal packaged smoke pass",
         "Raw clipboard image preparation/cleanup and directory/custom upload contracts",
         "Remaining SSH option/config compatibility, password/host-key/jump-host acceptance and remote cwd restore",
         "Real two-host/physical native transfer and stress acceptance"
