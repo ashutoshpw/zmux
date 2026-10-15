@@ -178,7 +178,8 @@ while not (root/'release').exists():
 value=b'';reply=b'\x1b[1;5R'
 while reply not in value:value+=os.read(0,4096)
 prefix,suffix=value.split(reply,1)
-assert prefix and set(prefix)=={ord('p')} and len(prefix)%4096==0,repr((len(prefix),prefix[-40:]))
+expected_prefix=int((root/'expected-prefix').read_text())
+assert len(prefix)==expected_prefix and set(prefix)=={ord('p')},repr((expected_prefix,len(prefix),prefix[-40:]))
 while b'POST' not in suffix:suffix+=os.read(0,4096)
 prior,after=suffix.split(b'POST',1)
 assert set(prior)<={ord('p')} and not after,repr((prior[-40:],after))
@@ -186,7 +187,7 @@ mark('received',json.dumps({'prefix':len(prefix),'reply':reply.hex()}))
 os.write(1,b'\r\nDONE')
 while True:time.sleep(1)
 "#;
-fn block_input(session: &Session) -> Vec<InputReceipt> {
+fn block_input(session: &Session) -> (usize, Vec<InputReceipt>) {
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut receipts = Vec::new();
     while receipts.len() < 16 {
@@ -209,6 +210,8 @@ fn block_input(session: &Session) -> Vec<InputReceipt> {
                 && let Ok(result) = receipt.try_recv()
             {
                 assert_eq!(result.status, InputWriteStatus::Complete);
+                assert_eq!(result.bytes_written, 4096);
+                assert_eq!(result.total_bytes, 4096);
                 finished[index] = true;
             }
         }
@@ -221,7 +224,9 @@ fn block_input(session: &Session) -> Vec<InputReceipt> {
             previous = count;
             unchanged = Instant::now();
         }
-        if count > 0 && unchanged.elapsed() >= Duration::from_millis(100) {
+        // Darwin can fill its PTY during the first chunk. A completed chunk is
+        // not required: final receipts/child bytes prove positive acceptance.
+        if unchanged.elapsed() >= Duration::from_millis(100) {
             break;
         }
         if Instant::now() >= deadline {
@@ -265,11 +270,14 @@ fn block_input(session: &Session) -> Vec<InputReceipt> {
     }
     // Already-received receipts have been independently verified. Retain only
     // unfinished receipts so later checks never poll a completed channel twice.
-    receipts
+    let completed = finished.iter().filter(|done| **done).count();
+    eprintln!("blocked fixture completed receipts before stage: {completed}");
+    let pending = receipts
         .into_iter()
         .zip(finished)
         .filter_map(|(receipt, done)| (!done).then_some(receipt))
-        .collect()
+        .collect();
+    (completed, pending)
 }
 
 #[test]
@@ -277,7 +285,12 @@ fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suf
     let fixture = Fixture::new();
     let mut session = fixture.session(BLOCKED, Duration::from_secs(4));
     let before = wait(&session, |s| s.viewport.title == "published");
-    let mut receipts = block_input(&session);
+    let (completed, mut receipts) = block_input(&session);
+    fs::write(
+        fixture.0.join("expected-prefix"),
+        ((completed + 1) * 4096).to_string(),
+    )
+    .unwrap();
     fixture.mark("query");
     fixture.wait_file("query-sent");
     let staged = wait(&session, |s| s.bytes_read >= before.bytes_read + 4);
@@ -291,13 +304,17 @@ fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suf
         .unwrap();
     fixture.mark("release");
     let report = fixture.wait_file("received");
+    eprintln!("blocked fixture child-observed ordering: {report}");
     assert!(report.contains("1b5b313b3552"));
     let snapshot = wait(&session, |s| {
         s.viewport.title == "candidate" && s.viewport.size == Size { rows: 5, cols: 20 }
     });
     assert_eq!(snapshot.state, State::Running);
     for receipt in &mut receipts {
-        assert_eq!(self::receipt(receipt).status, InputWriteStatus::Complete);
+        let result = self::receipt(receipt);
+        assert_eq!(result.status, InputWriteStatus::Complete);
+        assert_eq!(result.bytes_written, 4096);
+        assert_eq!(result.total_bytes, 4096);
     }
     assert_eq!(receipt(&mut post).status, InputWriteStatus::Complete);
     session.shutdown(Duration::from_secs(3)).unwrap();
@@ -316,7 +333,7 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
             },
         );
         let before = wait(&session, |s| s.viewport.title == "published");
-        let mut receipts = block_input(&session);
+        let (completed, mut receipts) = block_input(&session);
         fixture.mark("query");
         fixture.wait_file("query-sent");
         let staged = wait(&session, |s| s.bytes_read >= before.bytes_read + 4);
@@ -342,10 +359,19 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
         assert_eq!(last.viewport.title, "published");
         assert_eq!(last.viewport.contents, "GOOD");
         let results: Vec<_> = receipts.iter_mut().map(receipt).collect();
+        let accepted_prefix = completed * 4096
+            + results
+                .iter()
+                .map(|result| result.bytes_written)
+                .sum::<usize>();
+        eprintln!(
+            "blocked fixture cancel={cancel} accepted-prefix={accepted_prefix} receipts: {results:?}"
+        );
+        assert!(accepted_prefix > 0, "fixture accepted no physical input");
         assert!(
             results
                 .iter()
-                .any(|r| r.status != InputWriteStatus::Complete)
+                .all(|r| r.status != InputWriteStatus::Complete)
         );
         assert!(session.send_input(b"no replay").is_err());
     }

@@ -315,7 +315,7 @@ def main():
                     session["raw_pty_capacity"] = json.loads(run(
                         [sys.executable, str(HERE / "probe-pty-capacity.py")], "probe-pty-capacity", timeout=10))
                     session["execution"] = "attempted_on_arm64_host"
-                    stdout = run([str(retained / "session-engine"), "--test-threads=1", "--nocapture"], "execute-session-arm64", timeout=60)
+                    stdout = run([str(retained / "session-engine"), "--test-threads=1", "--show-output"], "execute-session-arm64", timeout=60)
                     if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in SESSION_TEST_NAMES):
                         raise Rejected("ARM64 Session did not execute all four required PTY cases")
                     session["execution"] = "passed_on_arm64_host"
