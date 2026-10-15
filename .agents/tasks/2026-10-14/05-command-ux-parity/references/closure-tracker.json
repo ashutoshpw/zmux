@@ -217,11 +217,20 @@
       ],
       "exit_gate": "Hidden-terminal attention remains visible; normal output does not flood inbox; stale acknowledgements cannot clear new arrivals; denied OS permission preserves in-app operation; hook-produced attention verified again with A02.",
       "implemented_slices": [
-        "N01a session-bound native delivery, ordered permission observations and confirmed actions (hosted native verification pending)",
-        "N01b notification metadata and atomic scoped read/dismiss/clear receipts (portable verification passed)"
+        "N01a session-bound native delivery, ordered permission observations and confirmed actions; hosted packaged validation passed at c9db69c",
+        "N01b notification metadata and atomic scoped read/dismiss/clear receipts; hosted packaged validation passed at c9db69c",
+        "N01c exact workspace destinations and N01d immutable UUID handles/shared unread navigation; hosted packaged validation passed at c9db69c",
+        "N01e once-only exact-session replies with bounded PTY receipts; 180 Rust tests and full local checks pass at 920a2ab; hosted reply acceptance pending"
       ],
       "verification_receipts": [
         "n01-desktop-notifications.md"
+      ],
+      "remaining_gates": [
+        "Actual OS banner/text-reply interaction and denied/regrant behavior on a named Mac",
+        "Resizable sidebar and keyboard/accessibility acceptance",
+        "Hook-produced attention with A02",
+        "Multiwindow routing with T03",
+        "V01 full parity signoff"
       ]
     },
     {
