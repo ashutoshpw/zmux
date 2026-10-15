@@ -7,7 +7,7 @@ struct DownloadFilesProbe {
     static func require(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
         if try !condition() { throw BrowserDownloadFileFailure(message: message) }
     }
-    static func expectFailure(_ operation: () async throws -> Void) async throws {
+    static func expectFailure(_ operation: @Sendable () async throws -> Void) async throws {
         do { try await operation() }
         catch is BrowserDownloadFileFailure { return }
         throw BrowserDownloadFileFailure(message: "Expected an explicit owned-filesystem refusal")

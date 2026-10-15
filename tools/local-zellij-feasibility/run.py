@@ -240,10 +240,13 @@ def credential_fixture(api, root, environment):
     listener.settimeout(5)
     children = []
     observations = []
+    # Framework Python launchers on Darwin can exec a different interpreter image.
+    # Spawn the independently inspected current image and verify that exact inode.
+    interpreter = api.process(os.getpid())["executable"]
     try:
         for role in ("owned", "unrelated"):
             began = time.time()
-            child = subprocess.Popen([sys.executable, "-B", str(HERE / "run.py"),
+            child = subprocess.Popen([interpreter, "-B", str(HERE / "run.py"),
                                       "--peer-child", str(path), role], env=environment,
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, start_new_session=True)
@@ -254,7 +257,8 @@ def credential_fixture(api, root, environment):
                 credentials = api.peer(connection)
                 peer = {**api.process(credentials["pid"]), **credentials}
                 require(peer["pid"] == child.pid and peer["uid"] == os.geteuid(), "SDK did not return real child identity")
-                require(os.path.samefile(peer["executable"], sys.executable), "Unexpected peer executable")
+                require(os.path.samefile(peer["executable"], interpreter),
+                        "Unexpected peer executable: " + peer["executable"] + "; expected " + interpreter)
                 if platform.system() == "Darwin":
                     require(began - 2 <= peer["start_a"] <= time.time() + 2, "Darwin process start fields do not match spawn time")
                     require(peer["start_b"] < 1000000, "Darwin start microseconds invalid")
