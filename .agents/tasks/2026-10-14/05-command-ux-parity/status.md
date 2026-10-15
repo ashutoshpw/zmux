@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- Browser double-click, hover, DOM focus, check/uncheck and centered-scroll aliases
+  now share admitted document-bound actions. Parent integrated `scripts/check`
+  and all106 Chromium DOM cases pass. Browser startup-focus precondition repaired
+  after diagnostics reproduced a missing focus event before document readiness;
+  exact event assertions remain. Original opaque failure remains unattributable.
+  Packaged WebKit execution is required and not yet claimed.
+
 - Foundation `38794349737` at `9a30dec` passes Linux but exposes a macOS
   notification fixture snapshot `Busy` at line880. The suite now retries only
   snapshot publication contention through its existing bounded helper, and fails

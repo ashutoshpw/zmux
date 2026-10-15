@@ -257,7 +257,7 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
     assert_eq!(frozen["behavioral_parity_verified"], false);
     let entries = frozen["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 428);
-    for spelling in ["new-window", "browser dblclick"] {
+    for spelling in ["new-window", "browser press"] {
         let row = entries
             .iter()
             .find(|row| row["reference_command"] == spelling)
@@ -265,6 +265,26 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
         assert_eq!(row["status"], "unresolved");
         assert!(row["local_contract"].is_null());
         assert!(!contracts.iter().any(|leaf| leaf["name"] == spelling));
+    }
+    for (id, name) in [
+        ("CMD-245", "browser dblclick"),
+        ("CMD-246", "browser hover"),
+        ("CMD-247", "browser focus"),
+        ("CMD-248", "browser check"),
+        ("CMD-249", "browser uncheck"),
+        ("CMD-250", "browser scroll-into-view"),
+    ] {
+        let row = entries
+            .iter()
+            .find(|row| row["inventory_id"] == id)
+            .unwrap();
+        assert_eq!(row["status"], "local_counterpart_compatibility_unverified");
+        assert_eq!(row["local_contract"], name);
+        assert!(
+            contracts
+                .iter()
+                .any(|leaf| leaf["name"] == name && leaf["contract_status"] == "partial")
+        );
     }
     let click = entries
         .iter()

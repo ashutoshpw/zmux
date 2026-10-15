@@ -1,8 +1,9 @@
 //! Browser automation submits once, then polls bounded native execution receipts.
 use super::*;
 use zmux_desktop_runtime::browser::{
-    BrowserAction, BrowserLocator, BrowserRequest, BrowserZoom, DEFAULT_OPERATION_TIMEOUT_MS,
-    GetKind, LocatorKind, MAX_OPERATION_TIMEOUT_MS, SnapshotOptions, WaitState,
+    BrowserAction, BrowserInteraction, BrowserLocator, BrowserRequest, BrowserZoom,
+    DEFAULT_OPERATION_TIMEOUT_MS, GetKind, LocatorKind, MAX_OPERATION_TIMEOUT_MS, SnapshotOptions,
+    WaitState,
 };
 use zmux_workspace_core::targets::{TargetRef, TargetScope};
 
@@ -84,21 +85,34 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             &args.iter().map(OsString::from).collect::<Vec<_>>(),
         );
     }
-    if !matches!(
-        verb,
-        "get"
-            | "is"
-            | "find"
-            | "wait"
-            | "eval"
-            | "snapshot"
-            | "back"
-            | "forward"
-            | "reload"
-            | "zoom"
-            | "fill"
-            | "click"
-    ) {
+    let interaction = match verb {
+        "dblclick" => Some(BrowserInteraction::Dblclick),
+        "hover" => Some(BrowserInteraction::Hover),
+        "focus" => Some(BrowserInteraction::Focus),
+        "check" => Some(BrowserInteraction::Check),
+        "uncheck" => Some(BrowserInteraction::Uncheck),
+        "scroll-into-view" | "scrollintoview" | "scrollinto" => {
+            Some(BrowserInteraction::ScrollIntoView)
+        }
+        _ => None,
+    };
+    if interaction.is_none()
+        && !matches!(
+            verb,
+            "get"
+                | "is"
+                | "find"
+                | "wait"
+                | "eval"
+                | "snapshot"
+                | "back"
+                | "forward"
+                | "reload"
+                | "zoom"
+                | "fill"
+                | "click"
+        )
+    {
         return Err(CliError(format!("unknown browser subcommand `{verb}`")));
     }
     if help_requested(&tail[1..]) {
@@ -202,10 +216,11 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 index += 2;
             }
             "--selector"
-                if matches!(
-                    verb,
-                    "get" | "is" | "snapshot" | "find" | "wait" | "fill" | "click"
-                ) =>
+                if interaction.is_some()
+                    || matches!(
+                        verb,
+                        "get" | "is" | "snapshot" | "find" | "wait" | "fill" | "click"
+                    ) =>
             {
                 set(&mut selector, value(&args, index, flag)?, flag)?;
                 index += 2;
@@ -300,7 +315,8 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 index += 1;
             }
             "--snapshot-after"
-                if matches!(verb, "back" | "forward" | "reload" | "fill" | "click") =>
+                if interaction.is_some()
+                    || matches!(verb, "back" | "forward" | "reload" | "fill" | "click") =>
             {
                 flag_once(&mut snapshot_after, flag)?;
                 index += 1;
@@ -321,19 +337,28 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         }
     }
     let action = match verb {
-        "click" => {
+        _ if interaction.is_some() || verb == "click" => {
             if selector.is_none() && values.len() == 1 {
                 selector = values.pop();
             }
             if !values.is_empty() {
-                return Err(CliError(
-                    "browser click accepts exactly one selector".into(),
-                ));
+                return Err(CliError(format!(
+                    "browser {verb} accepts exactly one selector"
+                )));
             }
-            BrowserAction::Click {
-                selector: selector
-                    .ok_or_else(|| CliError("browser click requires a selector".into()))?,
-                snapshot_after,
+            let selector =
+                selector.ok_or_else(|| CliError(format!("browser {verb} requires a selector")))?;
+            if let Some(operation) = interaction {
+                BrowserAction::Interact {
+                    operation,
+                    selector,
+                    snapshot_after,
+                }
+            } else {
+                BrowserAction::Click {
+                    selector,
+                    snapshot_after,
+                }
             }
         }
         "fill" => {

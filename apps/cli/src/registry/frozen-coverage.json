@@ -1722,43 +1722,43 @@
       "inventory_id": "CMD-245",
       "reference_command": "browser dblclick",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser dblclick"
     },
     {
       "inventory_id": "CMD-246",
       "reference_command": "browser hover",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser hover"
     },
     {
       "inventory_id": "CMD-247",
       "reference_command": "browser focus",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser focus"
     },
     {
       "inventory_id": "CMD-248",
       "reference_command": "browser check",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser check"
     },
     {
       "inventory_id": "CMD-249",
       "reference_command": "browser uncheck",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser uncheck"
     },
     {
       "inventory_id": "CMD-250",
       "reference_command": "browser scroll-into-view",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser scroll-into-view"
     },
     {
       "inventory_id": "CMD-251",

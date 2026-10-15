@@ -1,5 +1,117 @@
 # B02a browser automation bridge
 
+## B02f browser interaction family (2026-10-15)
+
+CMD-245–250 now have bounded local counterparts: `browser dblclick`, `hover`,
+`focus`, `check`, `uncheck` and `scroll-into-view`; `scrollintoview` and `scrollinto`
+alias the last command. All accept `[--selector SELECTOR | SELECTOR]`, named target
+options and optional `--snapshot-after`. CSS chooses the first match, while refs
+retain their exact host/document identity. Selector byte/NUL bounds and single
+selector grammar apply before admission. Discovery marks only these six frozen
+rows as local counterparts with historical compatibility unverified.
+
+The behavioral audit used pinned cmux
+`3ba653b9e5afb11d0bc578031142950d6136697e`, `Sources/TerminalController.swift`
+near 8820–8870, 9164–9182 and 9269–9282. No reference implementation, tests or
+assets were imported or translated. The independent Zmux implementation retains
+Click's existing wire variant and shares original event-phase, activation and
+inherited native-property helpers with the new supported-operation enum. Fill
+uses the same native-property setter without changing its event contract.
+
+Dblclick rejects native disabled targets, scrolls nearest, performs two complete
+click attempts, then dispatches one synthetic `dblclick` with detail 2. Each
+attempt preserves Click's over/enter/move/down/focus/up/activation ordering and
+cancellation behavior. Hover scrolls nearest and emits pointer/mouse over, enter
+and move only; disabled targets are allowed and it does not focus or activate.
+Synthetic events do not establish trusted OS input or guarantee CSS `:hover`.
+Focus calls ordinary DOM `focus()` if available, preserving default scrolling;
+there is no disabled guard and completion does not promise a focusable element.
+It remains separate from native app/tab focus.
+
+Check/uncheck first require a `checked` property, then reject native disabled
+controls. They scroll nearest and focus with preventScroll before inspecting the
+state. An already satisfied state emits no activation/input/change. A change uses
+one DOM activation for checkboxes and radio check; radio uncheck instead uses the
+inherited native checked setter and input/change without click. Every path
+verifies the final strict Boolean state. A canceled activation that leaves the
+wrong state fails `not_changed`; it is not forced or replayed. Scroll-into-view
+uses center/center/instant scrolling without synthetic focus or activation.
+
+All six are mutation-policy operations: focus/scroll handlers can execute page
+code, so read-only sockets deny admission. They share exact owner/document and
+absolute-deadline fencing, physical callback capacity, optional bounded snapshot
+and submit-once transport. They are not explicit navigation requests. A dispatched
+navigation/deadline failure can be uncertain and is never retried automatically.
+Successful values report `{dispatched:true, ref}`; they do not promise a successful
+default action, a trusted gesture or page readiness. App selection and native
+key/responder ownership are retained.
+
+Test authoring boundaries: public CLI capture protects grammar/aliases and literal
+wire payloads; a real control socket protects read-only denial and honest
+native-unavailable failure. Runtime tests protect selector admission, queued
+versus dispatched timeout uncertainty and document changes that must invalidate,
+rather than promote/replay, an interaction receipt. DOM observers independently
+check delivered events, native default actions and resulting checked/focus/scroll
+state. No test-only production seam was added. The initial CLI wire regression
+failed with `unknown browser subcommand dblclick`; the actual production-script
+DOM suite failed its double-click dispatch assertion before implementation.
+
+The real Chromium suite passes 106 cases (62 prior plus 44 family cases), including
+two complete activations/detail 2, checkbox double-toggle, disabled hover,
+ordinary focus scrolling, first CSS/ref reuse, no-op checked state, native radio
+group changes, inherited radio uncheck setter, canceled check/uncheck with
+`not_changed`, center positioning and invalid/missing/disconnected targets. The
+scroll assertion uses the document's actual scrollport dimensions, excluding
+scrollbar gutters. Portable browser suites pass 9 CLI and 15 runtime tests.
+
+`BrowserInteractionSmoke` is authored against a never-selected real HTTP WebKit
+host through the bundled CLI. It checks first-match double activation/detail 2,
+two checkbox defaults, disabled hover, DOM focus scrolling, checked/ref/no-op
+state, radio uncheck, canceled check without replay, both center-scroll aliases,
+optional snapshots and selector/ref failures. Every successful mutation verifies
+actual receipt host/document identity and canonical model/native focus retention.
+The App runs it after Click and requires `browser_interactions`. Exact-source
+strict Swift compilation, actual packaged WebKit execution and physical keyboard/
+pointer behavior remain separate hosted gates; this Linux evidence claims none.
+
+Isolated verification archived committed baseline `2360fb0` and overlaid only the
+15 browser-owned files/blocks, excluding concurrent R03 and surface-order work.
+Full `scripts/check` passes 264 Rust tests across 49 suite outputs, formatting,
+strict workspace Clippy, dependency notices and C ABI. The same frozen source
+passes all 106 Chromium DOM cases and `commands --check` passes 65 parser probes
+for 428 frozen rows with compatibility false. Logs and source manifest are under
+`/tmp/zmux-b02f-interactions-isolated-20261015/`. No staging/commit/push was performed
+by this author; parent owns independent review, integration and native evidence.
+
+The first opaque strict-click sequence failure remains individually unresolved:
+its log contains no observed events/result. A later diagnostic-only run reproduced
+the same assertion with `dispatched: true`, the correct first target, every
+synthetic pointer/mouse/activation event in order, and only the native `focus`
+event missing. The document was visible but still loading and `hasFocus: false`
+before/after; `activeElement` correctly changed to the clicked button. This
+reproduction establishes a startup/document-focus precondition race for the new
+failure, without retrospectively proving the opaque failure had identical data.
+Raw diagnostics are retained in the v2 snapshot; no automation fix was justified.
+
+The DOM harness now waits at most two seconds for `readyState == complete` and
+actual document focus, asking the window to focus and failing with context if
+that precondition cannot be established. Its original 20-second subprocess bound
+and every one of the 106 assertion predicates remain unchanged. Click failures
+retain the returned envelope, observed events, other-target events and before/
+after focus/loading/visibility/scroll state. Failure rendering uses textContent so
+HTML-like observed text is preserved. The exact diagnostic/precondition snapshot
+passes all 106 cases once at
+`/tmp/zmux-b02f-interactions-isolated-v3-20261015/dom.log`.
+
+Native Click and Interaction fixtures already exclude native `focus` events from
+their strict event lists; their DOM-activeElement assertions and native responder
+retention checks remain intact. They now retain observed event/state/focus JSON
+on failure, including document focus/loading/visibility. Their hidden-host checks
+were not given a foreground-focus precondition. Automation production and Rust/
+CLI bytes are unchanged from the validated interaction freeze. The 16-file v3
+freeze adds only runner preconditions/diagnostics, native fixture diagnostics and
+this evidence note; exact-source Swift/native execution still awaits hosting.
+
 ## B02e click candidate (2026-10-15)
 
 Frozen CMD-244 has a bounded local counterpart: `browser click [--selector SELECTOR |
