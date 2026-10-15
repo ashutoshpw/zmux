@@ -2131,6 +2131,15 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
     }
 
+    // Keep this async boundary outside the large smoke method's local-function
+    // context. Detached work performs filesystem cleanup away from AppKit.
+    private nonisolated static func removeNativeKeyFixture(_ fixture: URL) async throws {
+        let cleanup = Task<Void, Error>.detached {
+            try FileManager.default.removeItem(at: fixture)
+        }
+        try await cleanup.value
+    }
+
     /// Native key dispatch is checked at the PTY byte boundary. The raw child has
     /// a deadline, restores its tty, and reports bytes rather than echoing key names.
     private func smokeTerminalSpecialKeys() async throws {
@@ -2221,12 +2230,6 @@ emit("done")
             }
             return root
         }.value
-        func removeFixture() async throws {
-            let cleanup = Task<Void, Error>.detached {
-                try FileManager.default.removeItem(at: fixture)
-            }
-            try await cleanup.value
-        }
         do {
             let path = fixture.appendingPathComponent("keys.py").path
             terminal.insertText("python3 '" + path.replacingOccurrences(of: "'", with: "'\\''") + "'\r", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -2325,11 +2328,11 @@ emit("done")
             try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == previous }
         } catch {
             let primary = error
-            do { try await removeFixture() }
+            do { try await Self.removeNativeKeyFixture(fixture) }
             catch { throw BridgeFailure(message: "\(primary.localizedDescription); key fixture cleanup failed: \(error.localizedDescription)") }
             throw primary
         }
-        try await removeFixture()
+        try await Self.removeNativeKeyFixture(fixture)
     }
 
     private func smokeHistoryNavigation() async throws {

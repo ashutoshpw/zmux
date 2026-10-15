@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+probe_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+probe_source="$probe_root/tools/native-fixtures/cleanup-probe.swift"
+probe_work=$(mktemp -d /tmp/zmux-swift-cleanup-XXXXXX)
+trap 'rm -rf "$probe_work"' EXIT HUP INT TERM
+xcrun swiftc --version
+# Retain diagnostic evidence if the minimal nested shape does not reproduce the
+# large App.swift failure; this baseline does not determine candidate acceptance.
+if xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors -O -g -D NESTED "$probe_source" -o "$probe_work/nested" > "$probe_work/nested.log" 2>&1; then
+    echo 'Nested minimal probe compiled; original failure requires more App.swift context.'
+    "$probe_work/nested"
+else
+    cat "$probe_work/nested.log"
+    echo 'Nested minimal probe failed; diagnostic retained above.'
+fi
+# The candidate must compile and exercise successful/error cleanup before any
+# expensive Rust/universal build. Full App.swift compilation remains a later gate.
+xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors -O -g "$probe_source" -o "$probe_work/extracted"
+"$probe_work/extracted"

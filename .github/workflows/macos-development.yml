@@ -13,6 +13,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'scripts/**'
+      - 'tools/native-fixtures/**'
       - 'LICENSE'
       - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/macos-development.yml'
@@ -30,6 +31,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Check Swift fixture cleanup boundary
+        run: scripts/check-swift-fixture-cleanup
       - name: Install pinned Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Install isolated tmux fixture dependency
