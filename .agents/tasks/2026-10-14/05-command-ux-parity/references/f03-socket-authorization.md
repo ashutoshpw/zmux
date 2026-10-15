@@ -52,7 +52,7 @@ these F03 changes or establish final artifact acceptance.
 
 ## Remaining gates
 
-- Packaged native build/runtime on macOS and native settings/Keychain integration.
+- Native per-mode credential/access/reload journeys and native settings/Keychain integration.
 - Forced managed preferences, cross-native-entrypoint enforcement and resource cancellation.
 - Object-scoped relay authorization and remote command/content-effect analysis in R02.
 - Per-mode source configuration/reload UI and deployed/native policy lifecycle acceptance.
@@ -64,3 +64,9 @@ Initial `/root/control_authorization_review`: **fix-first**, three issues repair
 Requested `gpt-5.6-sol / high`; realized model/effort unobservable. Fresh `/root/control_authorization_repair_review`: **ship**, no material findings.
 Requested `gpt-5.6-sol / high`; realized model/effort unobservable.
 The integrated workspace including separate R01 descriptor work also passes (65 tests).
+
+Hosted follow-up: macOS Actions run `38707343689` at `a1c621f` passed Rust/C ABI
+checks (including the framing regression), universal native compilation and packaged
+default-mode smoke. This does not verify native password-mode configuration journeys,
+Intel runtime, physical input, deployed services or whole parity. No archive is shared
+as the requested artifact.

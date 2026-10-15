@@ -140,7 +140,7 @@
     {
       "id": "R01",
       "title": "Managed SSH with file/image drop and paste",
-      "status": "planned",
+      "status": "implementing",
       "owner": "new Rust remote/transfer owners, AppKit pasteboard adapter",
       "depends_on": [
         "F02",
@@ -151,7 +151,20 @@
         "Implement bounded authenticated upload worker plus file/image/clipboard classification, progress/cancel and quoted remote-path insertion",
         "Wire native drop/paste and CLI paste to the originating surface generation and connection; integrate local-file path behavior"
       ],
-      "exit_gate": "Real two-host SSH and file/image drop/paste work together; verify host-key/auth failures, spaces/Unicode, jump hosts, disconnect and tab-switch/close during upload; no local fallback or wrong-terminal insertion. Does not wait for cloud deployment or full engine replacement."
+      "exit_gate": "Real two-host SSH and file/image drop/paste work together; verify host-key/auth failures, spaces/Unicode, jump hosts, disconnect and tab-switch/close during upload; no local fallback or wrong-terminal insertion. Does not wait for cloud deployment or full engine replacement.",
+      "implemented_slices": [
+        "R01a typed SSH descriptor/endpoint renderer foundation only"
+      ],
+      "verification_receipts": [
+        "r01-ssh-descriptor.md"
+      ],
+      "remaining_gates": [
+        "Public CLI and managed remote workspace creation",
+        "Private authenticated connection ownership and no local fallback",
+        "File/image upload and native drop/paste with progress/cancel and exact target generation",
+        "Remaining SSH option/config compatibility",
+        "Real two-host and native packaged acceptance"
+      ]
     },
     {
       "id": "R02",

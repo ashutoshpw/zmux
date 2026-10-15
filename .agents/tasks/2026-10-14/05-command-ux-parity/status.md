@@ -5,18 +5,23 @@
 
 ## Delivered slices
 
-- F03a implemented locally: local socket access/password modes, credential precedence
+- R01a descriptor foundation integrated: validated SSH endpoints/jump routes,
+  host-key/config defaults, forwarding, bounded options and argv. Eight descriptor tests
+  pass; full workspace checks pass (65 Rust tests plus C ABI). Managed SSH and uploads
+  remain unimplemented. Fresh review passed. See [receipt](references/r01-ssh-descriptor.md).
+
+- F03a committed/pushed (`a1c621f`): local socket access/password modes, credential precedence
   and private-file validation, executor admission revocation and deny-by-default remote
   policy. Full checks pass (57 Rust tests plus C ABI); native/managed/resource gates
   remain open. Fresh repair review passed. See [receipt](references/f03-socket-authorization.md).
 
-- F01a implemented locally: shared command registry, grouped/task/leaf offline help,
+- F01a committed/pushed (`c572484`): shared command registry, grouped/task/leaf offline help,
   guide/skill alias, executable JSON catalog and app capabilities. Parser regressions
   for literal stdin markers and malformed browser help repaired; full checks pass
   (49 Rust tests plus C ABI). See [receipt](references/f01-command-registry.md).
   F01/full parity and native gates remain open.
 
-- F02a implemented locally: live UUIDs/typed refs/indices, scoped target resolution on
+- F02a committed/pushed (`d1393cb`): live UUIDs/typed refs/indices, scoped target resolution on
   the workspace executor, caller defaults, revision guards and real shell context.
   `scripts/check` passes (47 tests plus C ABI); fresh repair review passed. Native gates remain; F02 and
   whole parity are incomplete. See [receipt](references/f02-target-routing.md).
@@ -49,6 +54,11 @@
 
 ## Verification and download
 
+Current foundation evidence: `c572484` (run `38706071891`) and `a1c621f`
+(run `38707343689`) passed macOS universal compile and packaged smoke. R01 descriptor
+local checks pass with 65 Rust tests; its current hosted check follows the next push.
+These are diagnostic receipts; V01 remains false and no new artifact is shared.
+
 The next artifact shared with the user must pass full feature parity (V01). Existing
 links below are historical evidence for earlier subsets, not the requested new delivery.
 
@@ -74,8 +84,9 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 
 ## Next action
 
-Follow F02a/F01a/F03a then R01a/R01b in the execution plan; run the F04 terminal-engine
-and Mac-budget evaluation alongside them. Preserve all existing working subsets.
+Continue R01a managed SSH workspace/authentication and R01b file/image transfer integration
+from the validated descriptor foundation. Continue remaining F02/F01/F03 contracts and the
+F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based
 parity. Prioritize the managed SSH + remote file/image transfer journey and complete owner/
