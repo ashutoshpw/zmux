@@ -157,6 +157,9 @@ enum RemoteClipboardImageSmoke {
                 .contains("REMOTE_IMAGE_TEXT_MUST_NOT_BE_PASTED") == false else {
                 throw BridgeFailure(message: "Remote image paste leaked its text representation into the terminal")
             }
+            try await validateFileURLs(config: config, workspace: workspace.id, original: original,
+                                       pane: pane, session: session, view: view, cli: cli, root: root,
+                                       snapshot: snapshot)
             try await close(workspace: workspace.id, original: original, cli: cli, root: root)
             try await waitUntil { snapshot()?.model.focusedWorkspace == original }
         } catch {
@@ -167,6 +170,158 @@ enum RemoteClipboardImageSmoke {
             }
             throw primary
         }
+    }
+
+    private struct FileURLFixture: Sendable {
+        let alias: URL
+        let directory: URL
+        let directoryAlias: URL
+        let contents: Data
+    }
+
+    /// This extends the native entrypoint contract. Filesystem classification and
+    /// transfer edge cases remain owned by the real CLI/OpenSSH regression suite.
+    @MainActor
+    private static func validateFileURLs(
+        config: Configuration, workspace: UInt64, original: UInt64, pane: Pane,
+        session: UInt64, view: TerminalView, cli: URL, root: URL,
+        snapshot: @MainActor () -> DesktopSnapshot?
+    ) async throws {
+        let fixture = try await Task.detached {
+            let source = root.appendingPathComponent("native-file-source.txt")
+            let alias = root.appendingPathComponent("selected ' link-画像.txt")
+            let directory = root.appendingPathComponent("native-refused-directory", isDirectory: true)
+            let directoryAlias = root.appendingPathComponent("native-refused-directory-alias")
+            let contents = Data("Native file URL selection.\n".utf8)
+            try contents.write(to: source, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source.path)
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: source)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            try Data("Directory contents must not transfer.\n".utf8)
+                .write(to: directory.appendingPathComponent("private.txt"))
+            try FileManager.default.createSymbolicLink(at: directoryAlias, withDestinationURL: directory)
+            try FileManager.default.removeItem(at: root.appendingPathComponent("inserted-path"))
+            return FileURLFixture(alias: alias, directory: directory, directoryAlias: directoryAlias, contents: contents)
+        }.value
+        guard let window = view.window, let content = window.contentView,
+              let header = findHeader(in: content), snapshot()?.model.focusedWorkspace == workspace else {
+            throw BridgeFailure(message: "Native file URL acceptance lost its mounted SSH terminal/header")
+        }
+        let previous = Set(snapshot()?.uploads.map(\.id) ?? [])
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.declareTypes([.fileURL, .string], owner: nil)
+        guard pasteboard.setString(fixture.alias.absoluteString, forType: .fileURL),
+              pasteboard.setString("FILE_URL_TEXT_MUST_NOT_BE_PASTED", forType: .string),
+              view.paste(from: pasteboard) else {
+            throw BridgeFailure(message: "Managed SSH terminal rejected the selected file URL")
+        }
+        _ = try await Task.detached {
+            try run(cli, arguments: ["select-workspace", String(original)], root: root)
+        }.value
+        try await waitUntil {
+            snapshot()?.model.focusedWorkspace == original && snapshot()?.uploads.contains {
+                !previous.contains($0.id) && $0.surfaceId == pane.selectedSurface && $0.sourceReleased
+            } == true
+        }
+        guard let uploaded = snapshot()?.uploads.first(where: { !previous.contains($0.id) }),
+              uploaded.sessionId == session, uploaded.state == "completed", uploaded.delivery == "inserted",
+              !uploaded.remoteResultUncertain, uploaded.error == nil, uploaded.remotePaths.count == 1,
+              let path = uploaded.remotePaths.first else {
+            throw BridgeFailure(message: "Native file URL did not complete on its original authenticated SSH terminal")
+        }
+        try await Task.detached {
+            let remote = URL(fileURLWithPath: path)
+            guard remote.lastPathComponent == fixture.alias.lastPathComponent,
+                  remote.deletingLastPathComponent().deletingLastPathComponent().path == config.uploads,
+                  try Data(contentsOf: remote) == fixture.contents,
+                  !FileManager.default.fileExists(atPath: root.appendingPathComponent("inserted-path").path) else {
+                throw BridgeFailure(message: "Native file URL changed its selected alias name, bytes or submit behavior")
+            }
+        }.value
+        guard snapshot()?.frames.allSatisfy({ $0.snapshot?.viewport.contents.contains("zmux-upload.") != true }) == true else {
+            throw BridgeFailure(message: "Native file URL was pasted into the newly selected local terminal")
+        }
+        _ = try await Task.detached {
+            try run(cli, arguments: ["select-workspace", String(workspace)], root: root)
+        }.value
+        try await waitUntil {
+            snapshot()?.model.focusedWorkspace == workspace && view.window === window && snapshot()?.frames.contains {
+                $0.sessionId == session && $0.snapshot?.viewport.contents.contains("zmux-upload.") == true
+            } == true
+        }
+        view.insertText("\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await waitForFile(root.appendingPathComponent("inserted-path"))
+        try await Task.detached {
+            guard try String(contentsOf: root.appendingPathComponent("inserted-path"), encoding: .utf8) == path else {
+                throw BridgeFailure(message: "Native file URL insertion did not preserve the alias path through the remote shell")
+            }
+        }.value
+        guard snapshot()?.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents
+            .contains("FILE_URL_TEXT_MUST_NOT_BE_PASTED") == false else {
+            throw BridgeFailure(message: "Native file URL paste leaked the text representation")
+        }
+
+        let remoteEntries = try await Task.detached {
+            Set(try FileManager.default.contentsOfDirectory(atPath: config.uploads))
+        }.value
+        for rejected in [fixture.directory, fixture.directoryAlias] {
+            let beforeSubmission = try await Task.detached {
+                try Data(contentsOf: root.appendingPathComponent("inserted-path"))
+            }.value
+            let before = Set(snapshot()?.uploads.map(\.id) ?? [])
+            pasteboard.clearContents()
+            pasteboard.declareTypes([.fileURL, .string], owner: nil)
+            guard pasteboard.setString(rejected.absoluteString, forType: .fileURL),
+                  pasteboard.setString("DIRECTORY_TEXT_MUST_NOT_BE_PASTED", forType: .string),
+                  view.paste(from: pasteboard) else {
+                throw BridgeFailure(message: "Native directory file URL did not reach transfer admission")
+            }
+            try await waitUntil {
+                snapshot()?.uploads.contains { !before.contains($0.id) && $0.sourceReleased && $0.delivery == "failed" } == true
+            }
+            guard let refused = snapshot()?.uploads.first(where: { !before.contains($0.id) }),
+                  refused.surfaceId == pane.selectedSurface, refused.sessionId == session,
+                  refused.state == "failed", refused.remotePaths.isEmpty, !refused.remoteResultUncertain,
+                  let error = refused.error, error.contains("directories and special files"),
+                  snapshot()?.model.focusedWorkspace == workspace else {
+                throw BridgeFailure(message: "Native directory refusal lost its origin or remote outcome")
+            }
+            try await waitUntil {
+                !header.isHiddenOrHasHiddenAncestor && !header.detailLabel.isHiddenOrHasHiddenAncestor
+                    && header.detailLabel.stringValue == error
+            }
+            guard let screen = snapshot()?.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents,
+                  !screen.contains(rejected.lastPathComponent), !screen.contains("DIRECTORY_TEXT_MUST_NOT_BE_PASTED") else {
+                throw BridgeFailure(message: "Refused native directory selection wrote into the SSH terminal")
+            }
+            try await Task.detached {
+                guard Set(try FileManager.default.contentsOfDirectory(atPath: config.uploads)) == remoteEntries,
+                      try Data(contentsOf: root.appendingPathComponent("inserted-path")) == beforeSubmission else {
+                    throw BridgeFailure(message: "Refused native directory selection changed remote storage or submitted the shell")
+                }
+                try FileManager.default.removeItem(at: root.appendingPathComponent("inserted-path"))
+            }.value
+            // Observe the remote read buffer independently of wrapped viewport
+            // text: an explicit Return must submit an empty line after refusal.
+            view.insertText("\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+            try await waitForFile(root.appendingPathComponent("inserted-path"))
+            try await Task.detached {
+                guard try Data(contentsOf: root.appendingPathComponent("inserted-path")).isEmpty else {
+                    throw BridgeFailure(message: "Refused native directory file URL left text in the remote input buffer")
+                }
+            }.value
+        }
+    }
+
+    @MainActor
+    private static func findHeader(in view: NSView) -> MainHeaderView? {
+        if let header = view as? MainHeaderView { return header }
+        for child in view.subviews {
+            if let header = findHeader(in: child) { return header }
+        }
+        return nil
     }
 
     private static func close(workspace: UInt64, original: UInt64, cli: URL, root: URL) async throws {
@@ -194,7 +349,7 @@ enum RemoteClipboardImageSmoke {
             if predicate() { return }
             try await Task.sleep(for: .milliseconds(32))
         }
-        throw BridgeFailure(message: "Combined native remote image acceptance timed out")
+        throw BridgeFailure(message: "Combined native remote image/file URL acceptance timed out")
     }
 
     private static func waitForFile(_ url: URL) async throws { try await waitForExistence(url, exists: true) }
