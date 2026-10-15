@@ -248,3 +248,23 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   UN call-out queue hits a Swift main-actor assertion in refreshPermission's callback.
   Explicit Sendable completion boundaries repair the identified cause; next hosted
   execution must verify it. No partial artifact is shared.
+
+## N01a-d hosted integration accepted
+
+- `c9db69c` passes Foundation38739600484 and universal/packaged macOS38739600592,
+  including permission ordering, metadata, workspace destination and unread navigation.
+  The captured callback assertion is repaired on the actual native path.
+- Downloaded archive checksum/integrity/source verified; AppKit and WebKit images
+  inspected. Full-window compositor capture remains unavailable on the hosted runner.
+- Local cloud HTTP health/readiness still pass at3530. Public zmux.w3dev.app did not
+  resolve from this host on2026-10-15; tunnel setup remains external.
+- N01e bounded PTY write receipts are in progress before reply integration. V01 stays
+  open and no subset artifact has been handed off.
+
+## N01e phase1 locally accepted
+
+- Bounded PTY input receipts pass 175-test parent full verification and fresh race/
+  cleanup review. Queued expiration cannot write later; active partial/unknown results
+  never authorize replay. Complete establishes local PTY acceptance only.
+- Next: immutable terminal reply opt-in and bounded core receipt polling, then native
+  text-input category and confirmed outcomes. Native/remote reply parity stays open.

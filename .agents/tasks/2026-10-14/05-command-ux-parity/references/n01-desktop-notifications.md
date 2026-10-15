@@ -127,3 +127,44 @@ become a Sendable enum and errors become bounded strings before the main-actor h
 all delivery state remains actor-owned. No unsafe actor assumption or bypass is added.
 The same packaged workflow is the native regression gate; portable checks cannot
 establish the repair. Actual banners/reply behavior remain separate open gates.
+
+## N01e reply delivery phases
+
+1. Add optional once-only write receipts to the existing bounded session input queue.
+   The PTY worker reports full local-PTY acceptance, no bytes written, or incomplete
+   writes with uncertain effect. One absolute deadline covers queue delay and writes;
+   shutdown, errors and dropped work finalize ownership. No input replay, side queue
+   or UI/core executor waiting is permitted. Local PTY acceptance is not proof that a
+   remote SSH program consumed the bytes.
+2. Capture terminal-only reply opt-in at notification admission. A bounded desktop
+   pending-reply owner polls receipts and acknowledges read only after full write and
+   exact epoch/namespace/session validation. Replies cannot borrow focused terminals,
+   and consumed generations cannot resend. Native completion waits off the UI thread.
+3. Add a native text-input action only to eligible reply requests, with Sendable
+   callback values, bounded UTF-8 text including terminator, and exact result handling.
+   Empty/failure fallback must not resend input or falsely acknowledge delivery.
+
+Phase1 is authorized and in progress; subsequent integration is not yet implemented.
+
+## Hosted acceptance of N01a-d integration
+
+At `c9db69c9b75a79c7082b09108d7d894f88b2f319`, Foundation38739600484 and macOS
+38739600592 pass. The latter executes universal compilation and the real packaged
+permission-ordering, CLI metadata, workspace-target and unread-navigation journeys.
+The previously failing UN callback path now completes. This verifies the callback repair
+and packaged integration, not visible OS banner/reply acceptance or full parity.
+
+Parent downloaded the diagnostic archive, checked source/evidence agreement, ZIP
+integrity and SHA256 `744dd7853507e967566d82c0c509d3efa64079b6b8979e288ad567a54883acec`.
+The AppKit rendering and separate WebKit content images were inspected. Full window
+capture returned status1 on CI; the AppKit bitmap does not capture embedded WebKit
+content, while the separate WebKit PNG shows the loaded CSP fixture. No full-window
+compositor/physical UX claim or user-facing artifact handoff is made.
+
+N01e phase1 now passes parent full checks (175 Rust tests plus formatting, strict
+Clippy, notices and C ABI). Fresh review accepts queued cancellation/start CAS,
+once-only results, bounded ordering and shutdown cleanup. Three real-PTY cases cover
+FIFO delivery receipts, expired queued writes remaining absent after reader resume,
+and active backpressure/deadline/shutdown results. The deadline case failed before
+repair by returning Complete after expiry. Panic fallback is source-reviewed rather
+than fault-injected. No desktop/native reply support is claimed by this phase.
