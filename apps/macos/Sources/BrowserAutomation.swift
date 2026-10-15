@@ -227,6 +227,46 @@ enum BrowserHostEvent: Encodable, Sendable {
 @MainActor
 enum BrowserAutomationScript {
     static let isolatedWorld = WKContentWorld.world(name: "app.w3dev.zmux.automation")
+    // The callback acknowledges installation before native delivery. A matching
+    // trusted event posts a separate MessageChannel task: its resolution cannot
+    // precede the event's remaining listeners and synchronous native defaults.
+    static let armKeyboardObservation = #"""
+    const request = JSON.parse(payload);
+    globalThis.__zmuxNativeKeyboardObservation?.finish(false, 'Observer replaced');
+    let resolve;
+    const promise = new Promise(done => { resolve = done });
+    const channel = new MessageChannel();
+    let index = 0, finished = false, posted = false;
+    const finish = (ok, message) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      window.removeEventListener('keydown', observe, true);
+      window.removeEventListener('keyup', observe, true);
+      channel.port1.close(); channel.port2.close();
+      resolve({ok, message});
+    };
+    const observe = event => {
+      if (!event.isTrusted || finished || posted) return;
+      const expected = request.expected[index];
+      if (!expected || event.type !== expected.type || event.key !== expected.key ||
+          event.shiftKey !== expected.shift || event.ctrlKey !== expected.control ||
+          event.altKey !== expected.alt || event.metaKey !== expected.meta) {
+        finish(false, 'Trusted keyboard sequence did not match the prepared native events');
+        return;
+      }
+      if (++index === request.expected.length) {
+        posted = true;
+        channel.port2.postMessage(null);
+      }
+    };
+    channel.port1.onmessage = () => finish(true, '');
+    const timer = setTimeout(() => finish(false, 'Trusted native keyboard acknowledgment deadline'), request.timeout_ms);
+    window.addEventListener('keydown', observe, true);
+    window.addEventListener('keyup', observe, true);
+    globalThis.__zmuxNativeKeyboardObservation = {token:request.token, promise, finish};
+    return request.token;
+    """#
     static let resultBytes = 60 * 1024
     // This fixed probe receives no user script. A policy decision is made before
     // user code starts, so a script's own CSP-looking exception cannot cause retry.
@@ -624,7 +664,14 @@ enum BrowserAutomationScript {
       else if (req.action === 'find') value = find(req.locator);
       else if (req.action === 'wait') value = wait();
       else if (req.action === 'keyboard') {
-        if (input.native_keyboard) value = {dispatched:true, input:'native'};
+        if (input.native_keyboard) {
+          const observation = globalThis.__zmuxNativeKeyboardObservation;
+          if (!observation || observation.token !== input.keyboard_observation_token) fault('native_input_unacknowledged', 'Native keyboard observer identity changed');
+          const acknowledgment = await observation.promise;
+          if (!acknowledgment.ok) fault('native_input_unacknowledged', acknowledgment.message);
+          if (globalThis.__zmuxNativeKeyboardObservation === observation) delete globalThis.__zmuxNativeKeyboardObservation;
+          value = {dispatched:true, input:'native', native_event_observed:true};
+        }
         else {
           const target = document.activeElement || document.body;
           if (!target) fault('element_not_found', 'Document has no keyboard target');

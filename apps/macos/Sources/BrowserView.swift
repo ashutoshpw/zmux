@@ -54,11 +54,15 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         var isolatedEval = false
         var mutationStarted = false
         var nativeKeyboard = false
+        var keyboardObservationToken: String?
+        var unownedKeyGeneration: UInt64?
     }
     private var operations: [UInt64: PendingAutomation] = [:]
     // A timed-out page promise cannot be cancelled by WebKit. Keep its actual
     // callback slot charged until WebKit resolves it, so retries cannot grow it.
     private var javaScriptInFlight: Set<UInt64> = []
+    private var nativeKeyboardOperation: UInt64?
+    private var keyboardUnknownGeneration: UInt64?
     private lazy var back = IconButton(symbol: "chevron.left", label: "Back", target: self, action: #selector(goBack))
     private lazy var forward = IconButton(symbol: "chevron.right", label: "Forward", target: self, action: #selector(goForward))
     private lazy var reload = IconButton(symbol: "arrow.clockwise", label: "Reload or stop", target: self, action: #selector(reloadPage))
@@ -201,6 +205,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             cancelOperations(code: "host_replaced", message: "Browser runtime owner changed")
             emitAutomation?(.detach(owner: current))
         }
+        keyboardUnknownGeneration = nil
         emitAutomation = emit
         let current = BrowserOwner(epoch: epoch, identityNamespace: identityNamespace, surfaceId: surfaceID, hostId: hostID, documentGeneration: documentGeneration, modelNavigation: generation ?? 0)
         automationOwner = current
@@ -282,7 +287,11 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             return
         }
         lastOperationID = request.operationId
-        if request.action.isKeyboard, operations.values.contains(where: { $0.request.action.isKeyboard }) {
+        if request.action.isKeyboard, keyboardUnknownGeneration == documentGeneration {
+            emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "native_keyboard_state_unknown", message: "Earlier native keyboard input was not acknowledged; navigate or replace this document before sending another key", outcomeUnknown: false)))
+            return
+        }
+        if request.action.isKeyboard, nativeKeyboardOperation != nil || operations.values.contains(where: { $0.request.action.isKeyboard }) {
             emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "keyboard_busy", message: "Another keyboard operation is still being observed", outcomeUnknown: false)))
             return
         }
@@ -335,35 +344,86 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             failOperation(id, code: "host_busy", message: "Browser keyboard observation capacity is unavailable", outcomeUnknown: false)
             return
         }
+        guard let events = (NSApp as? BrowserInputApplication)?.browserKeyboardEvents,
+              events.unownedKeyGeneration < UInt64.max else {
+            failOperation(id, code: "native_input_unavailable", message: "Native keyboard interference tracking is unavailable", outcomeUnknown: false)
+            return
+        }
+        let delivery: BrowserKeyboardDelivery
+        let payload: String
+        let token = UUID().uuidString
         do {
-            // After this boundary the native operation is never replayed, even if
-            // its following observation or snapshot misses the deadline.
-            try keyboard.execute(operation, key: native, on: webView) {
-                guard let current = self.operations[id] else {
-                    throw BridgeFailure(message: "Browser keyboard operation ended before delivery")
-                }
-                guard !self.closed, self.automationOwner == current.owner else {
-                    self.failOperation(id, code: "document_changed", message: "Browser owner or document changed before keyboard delivery", outcomeUnknown: false)
-                    throw BridgeFailure(message: "Browser keyboard owner changed before delivery")
-                }
-                guard !self.processTerminated else {
-                    self.failOperation(id, code: "web_process_terminated", message: "Web content process stopped before keyboard delivery", outcomeUnknown: false)
-                    throw BridgeFailure(message: "Browser content process stopped before delivery")
-                }
-                guard self.documentReady, !self.webView.isLoading else {
-                    self.failOperation(id, code: "document_loading", message: "Browser document is not ready for keyboard delivery", outcomeUnknown: false)
-                    throw BridgeFailure(message: "Browser document is not ready for delivery")
-                }
-                guard self.beforeDeadline(id, current) else {
-                    throw BridgeFailure(message: "Browser keyboard deadline elapsed before delivery")
-                }
-                self.operations[id]?.mutationStarted = true
+            delivery = try keyboard.prepare(operation, key: native)
+            struct ObservationInput: Encodable {
+                let token: String
+                let expected: [BrowserKeyboardDelivery.Expected]
+                let timeoutMs: Int64
             }
-            operations[id]?.nativeKeyboard = true
-            runJavaScript(id, action: pending.request.action)
+            let remaining = ContinuousClock.now.duration(to: pending.deadline).components
+            let milliseconds = max(1, min(30_000, remaining.seconds * 1000 + remaining.attoseconds / 1_000_000_000_000_000))
+            let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
+            payload = String(decoding: try encoder.encode(ObservationInput(token: token, expected: delivery.expected, timeoutMs: milliseconds)), as: UTF8.self)
         } catch {
-            guard let current = operations[id] else { return }
-            failOperation(id, code: "native_input_failed", message: error.localizedDescription, outcomeUnknown: current.mutationStarted)
+            failOperation(id, code: "native_input_failed", message: error.localizedDescription, outcomeUnknown: false)
+            return
+        }
+        operations[id]?.keyboardObservationToken = token
+        operations[id]?.unownedKeyGeneration = events.unownedKeyGeneration
+        nativeKeyboardOperation = id
+        javaScriptInFlight.insert(id)
+        webView.callAsyncJavaScript(BrowserAutomationScript.armKeyboardObservation, arguments: ["payload": payload], in: nil, in: BrowserAutomationScript.isolatedWorld) { [weak self] result in
+            guard let self else { return }
+            // Keep this physical callback's capacity charged through delivery;
+            // transfer the same slot directly to the acknowledgment callback.
+            var handedToObservation = false
+            defer {
+                if !handedToObservation {
+                    self.javaScriptInFlight.remove(id)
+                    if self.nativeKeyboardOperation == id { self.nativeKeyboardOperation = nil }
+                }
+            }
+            guard let current = self.operations[id], self.beforeDeadline(id, current) else { return }
+            guard case .success(let value) = result, value as? String == token else {
+                self.failOperation(id, code: "native_input_unavailable", message: "Native keyboard observer could not be armed", outcomeUnknown: false)
+                return
+            }
+            do {
+                // After this boundary the native operation is never replayed, even if
+                // its following observation or snapshot misses the deadline.
+                try delivery.deliver(on: self.webView) {
+                    guard let current = self.operations[id] else {
+                        throw BridgeFailure(message: "Browser keyboard operation ended before delivery")
+                    }
+                    guard !self.closed, self.automationOwner == current.owner else {
+                        self.failOperation(id, code: "document_changed", message: "Browser owner or document changed before keyboard delivery", outcomeUnknown: false)
+                        throw BridgeFailure(message: "Browser keyboard owner changed before delivery")
+                    }
+                    guard !self.processTerminated else {
+                        self.failOperation(id, code: "web_process_terminated", message: "Web content process stopped before keyboard delivery", outcomeUnknown: false)
+                        throw BridgeFailure(message: "Browser content process stopped before delivery")
+                    }
+                    guard self.documentReady, !self.webView.isLoading else {
+                        self.failOperation(id, code: "document_loading", message: "Browser document is not ready for keyboard delivery", outcomeUnknown: false)
+                        throw BridgeFailure(message: "Browser document is not ready for delivery")
+                    }
+                    guard self.beforeDeadline(id, current) else {
+                        throw BridgeFailure(message: "Browser keyboard deadline elapsed before delivery")
+                    }
+                    guard events.unownedKeyGeneration == current.unownedKeyGeneration,
+                          events.unownedKeyGeneration < UInt64.max else {
+                        self.failOperation(id, code: "native_input_interference", message: "Other native keyboard input interrupted observer preparation", outcomeUnknown: false)
+                        throw BridgeFailure(message: "Browser keyboard observer was interrupted before delivery")
+                    }
+                    self.operations[id]?.nativeKeyboard = true
+                    self.operations[id]?.mutationStarted = true
+                }
+                self.javaScriptInFlight.remove(id)
+                self.runJavaScript(id, action: current.request.action)
+                handedToObservation = self.javaScriptInFlight.contains(id)
+            } catch {
+                guard let current = self.operations[id] else { return }
+                self.failOperation(id, code: "native_input_failed", message: error.localizedDescription, outcomeUnknown: current.mutationStarted)
+            }
         }
     }
     private func executeZoom(_ id: UInt64, operation: BrowserZoom) {
@@ -408,6 +468,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private func advanceDocument(causedBy operationID: UInt64?, previousOwner: BrowserOwner? = nil) {
         // Never replay a previous document's held keys into its replacement.
         keyboard.clear()
+        keyboardUnknownGeneration = nil
         invalidateTitleObservation()
         guard let previous = previousOwner ?? automationOwner else {
             if documentGeneration < UInt64.max { documentGeneration += 1 }
@@ -434,6 +495,9 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     }
     private func failOperation(_ id: UInt64, code: String, message: String, outcomeUnknown: Bool) {
         guard let operation = operations.removeValue(forKey: id) else { return }
+        if operation.nativeKeyboard, operation.mutationStarted, automationOwner == operation.owner {
+            keyboardUnknownGeneration = operation.owner.documentGeneration
+        }
         operation.timer?.cancel()
         operation.waitTask?.cancel()
         emitAutomation?(.fail(operationId: id, owner: operation.owner, error: .init(code: code, message: String(message.prefix(1024)), outcomeUnknown: outcomeUnknown)))
@@ -515,11 +579,11 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: operation.mutationStarted || operation.request.action.isNavigation)
             return
         }
-        struct Input: Encodable { let action: BrowserAction; let hostId: String; let documentGeneration: String; let nativeKeyboard: Bool; let keyboardModifiers: [String: Bool] }
+        struct Input: Encodable { let action: BrowserAction; let hostId: String; let documentGeneration: String; let nativeKeyboard: Bool; let keyboardModifiers: [String: Bool]; let keyboardObservationToken: String? }
         let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
         let payload: String
         do {
-            payload = String(decoding: try encoder.encode(Input(action: action, hostId: hostID.uuidString.lowercased(), documentGeneration: String(operation.owner.documentGeneration), nativeKeyboard: operation.nativeKeyboard, keyboardModifiers: keyboard.modifiers)), as: UTF8.self)
+            payload = String(decoding: try encoder.encode(Input(action: action, hostId: hostID.uuidString.lowercased(), documentGeneration: String(operation.owner.documentGeneration), nativeKeyboard: operation.nativeKeyboard, keyboardModifiers: keyboard.modifiers, keyboardObservationToken: operation.keyboardObservationToken)), as: UTF8.self)
         } catch { failOperation(id, code: "invalid_argument", message: error.localizedDescription, outcomeUnknown: operation.mutationStarted || operation.request.action.isNavigation); return }
         let world: WKContentWorld
         if case .eval = action {
@@ -534,11 +598,20 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         webView.callAsyncJavaScript(BrowserAutomationScript.source, arguments: ["payload": payload], in: nil, in: world) { [weak self] result in
             guard let self else { return }
             self.javaScriptInFlight.remove(id)
+            if self.nativeKeyboardOperation == id { self.nativeKeyboardOperation = nil }
             guard let pending = self.operations[id] else { return }
             guard self.beforeDeadline(id, pending) else { return }
             guard !self.closed, self.automationOwner == pending.owner else {
                 self.failOperation(id, code: "document_changed", message: "Browser document changed during JavaScript execution", outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
                 return
+            }
+            if pending.nativeKeyboard {
+                guard let events = (NSApp as? BrowserInputApplication)?.browserKeyboardEvents,
+                      events.unownedKeyGeneration < UInt64.max,
+                      events.unownedKeyGeneration == pending.unownedKeyGeneration else {
+                    self.failOperation(id, code: "native_input_interference", message: "Other native keyboard input made acknowledgment ambiguous", outcomeUnknown: true)
+                    return
+                }
             }
             switch result {
             case .failure(let error): self.failOperation(id, code: "javascript_failed", message: error.localizedDescription, outcomeUnknown: pending.request.action.outcomeMayBeUnknown)

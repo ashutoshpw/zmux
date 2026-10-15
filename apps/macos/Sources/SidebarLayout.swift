@@ -42,6 +42,7 @@ final class SidebarFocusWindow: NSWindow {
     var onWorkspaceNumber: ((Int) -> Void)?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.contain(event) == true { return true }
+        (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.observeUnowned(event)
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.type == .keyDown, modifiers == [.command],
            let key = event.charactersIgnoringModifiers, key.count == 1,
@@ -55,6 +56,7 @@ final class SidebarFocusWindow: NSWindow {
 
     override func sendEvent(_ event: NSEvent) {
         if (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.contain(event) == true { return }
+        (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.observeUnowned(event)
         var divider: SidebarDividerView?
         if event.type == .leftMouseDown, let content = contentView {
             let point = content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow

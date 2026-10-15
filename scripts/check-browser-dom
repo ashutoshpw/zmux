@@ -42,10 +42,12 @@ print(f'DOM browser: {version}', flush=True)
 root = Path(__file__).resolve().parent.parent
 swift = (root / 'apps/macos/Sources/BrowserAutomation.swift').read_text()
 source = swift.split('static let source = #"""\n', 1)[1].split('\n    """#', 1)[0]
+keyboard_arm = swift.split('static let armKeyboardObservation = #"""\n', 1)[1].split('\n    """#', 1)[0]
 # Extraction runs the production-owned script unchanged. Expectations below are
 # public locator/readiness examples, not copies of its private helper algorithms.
 suite = r'''
 const runScript = new (Object.getPrototypeOf(async function(){}).constructor)('payload', SOURCE);
+const armKeyboard = new (Object.getPrototypeOf(async function(){}).constructor)('payload', KEYBOARD_ARM);
 let generation = '1', passed = 0;
 const call = async action => JSON.parse(await runScript(JSON.stringify({action, host_id:'fixture', document_generation:generation})));
 const assert = (condition, label, diagnostic) => { if (!condition) throw new Error(label + (diagnostic ? ': ' + JSON.stringify(diagnostic()) : '')); passed++; };
@@ -61,6 +63,22 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
    if (performance.now() >= startupDeadline) throw new Error('DOM fixture could not establish loaded document focus: ' + JSON.stringify({readyState:document.readyState,visibility:document.visibilityState,hasFocus:document.hasFocus()}));
    await new Promise(resolve => setTimeout(resolve, 10));
  }
+
+ // Page-created events cannot acknowledge native input. This real-DOM negative
+ // contract protects the observer's trust/identity boundary, not WebKit delivery.
+ const expectedKeys = ['keydown','keyup'].map(type => ({type,key:'x',shift:false,control:false,alt:false,meta:false}));
+ const arm = token => armKeyboard(JSON.stringify({token,expected:expectedKeys,timeout_ms:25}));
+ const native = token => runScript(JSON.stringify({action:{action:'keyboard',operation:'press',key:'x'},host_id:'fixture',document_generation:generation,native_keyboard:true,keyboard_observation_token:token})).then(JSON.parse);
+ await arm('untrusted');
+ const untrustedNative = native('untrusted');
+ for (const type of ['keydown','keyup']) document.body.dispatchEvent(new KeyboardEvent(type,{key:'x',bubbles:true}));
+ code(await untrustedNative,'native_input_unacknowledged');
+ await arm('owner');
+ code(await native('other-owner'),'native_input_unacknowledged');
+ const replacedNative = native('owner');
+ await arm('replacement');
+ code(await replacedNative,'native_input_unacknowledged');
+ code(await native('replacement'),'native_input_unacknowledged');
 
  // Opaque compatibility keys are explicitly synthetic and cannot invent native defaults.
  document.body.innerHTML='<input id="opaque-entry" value="unchanged">';
@@ -357,7 +375,7 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  code(await find({kind:'first',selector:'#many-nodes'}), 'dom_scan_limit');
  document.documentElement.innerHTML = `<body><output id="result">${passed} DOM cases passed</output></body>`;
 })().catch(error => { document.documentElement.innerHTML = '<body><output id="result"></output></body>'; document.getElementById('result').textContent = 'FAIL: ' + String(error.stack); });
-'''.replace('SOURCE', json.dumps(source), 1)
+'''.replace('SOURCE', json.dumps(source), 1).replace('KEYBOARD_ARM', json.dumps(keyboard_arm), 1)
 page = ('<!doctype html><meta charset="utf-8"><body><script>' + suite.replace('</script', '<\\/script') + '</script>').encode()
 class Fixture(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
