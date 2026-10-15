@@ -5,7 +5,13 @@
 
 ## Delivered slices
 
-- R01b implemented and fresh review passed: public `zmux ssh`, validated wire routing, real SSH PTYs,
+- R01c implemented, final fresh review passed: private authenticated terminal channels; bounded regular
+  file uploads, progress/cancel and origin-bound insertion; native file drop/Finder paste.
+  Current local checks pass with 78 Rust tests plus C ABI. Raw clipboard images, directories,
+  two-host/physical/native acceptance and full R01/V01 remain open.
+  See [receipt](references/r01-file-transfers.md).
+
+- R01b committed/pushed (`ec9422e`), fresh review passed: public `zmux ssh`, validated wire routing, real SSH PTYs,
   no-focus creation results, endpoint-preserving tabs/splits/reopen without startup replay.
   Full local checks pass (73 Rust tests plus C ABI), including isolated real OpenSSH.
   Connection sharing, upload/drop/paste and full R01/V01 remain open.
@@ -61,7 +67,8 @@
 
 Current foundation evidence: `c572484` (run `38706071891`) and `a1c621f`
 (run `38707343689`) passed macOS universal compile and packaged smoke. R01 descriptor `d06818a` passed Foundation checks (`38707919043`) and macOS
-compile/packaged smoke (`38707919132`). R01b currently has local checks only.
+compile/packaged smoke (`38707919132`). R01b `ec9422e` passed Linux/macOS Foundation checks (`38711025578`) and
+macOS universal/native smoke (`38711037026`).
 These are diagnostic receipts; V01 remains false and no new artifact is shared.
 
 The next artifact shared with the user must pass full feature parity (V01). Existing
@@ -81,7 +88,7 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
   anchors, richer attention/hook/status operations, browser automation/profiles/downloads and
   remaining UX/command contracts are tracked in their references and phase plan.
 - P4–P8 persistence/customization, automation/content tools, agents, remote/cloud and platform
-  behavior remain open. Reopening creates fresh local shells, not resurrected jobs or remote sessions.
+  behavior remain open. Reopening creates fresh local shells or remote logins; job/session resurrection remains open.
 - Interactive drag/IME/VoiceOver, Intel runtime, actual HTTP/TLS/permission journeys and numerical
   resource/remote-stress evidence remain open. Cloud callback smoke is not live cloud sign-in.
 - Cloud is not deployed. Origin is https://zmux.w3dev.app; provider/database selection is deferred.
@@ -89,8 +96,8 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 
 ## Next action
 
-Review and land R01b SSH workspace integration, then implement private authenticated
-connection ownership and bounded file/image transfer with native origin-bound drop/paste. Continue remaining F02/F01/F03 contracts and the
+Commit/push the reviewed R01c transfer slice and verify exact-SHA Linux/macOS/native checks. Then implement raw clipboard image preparation and
+cleanup, directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based

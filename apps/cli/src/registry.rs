@@ -39,12 +39,36 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "paste-files",
+        "automation",
+        true,
+        true,
+        "paste-files [--workspace TARGET] [--pane TARGET] [--surface TARGET] -- PATH ...",
+        "Insert quoted local paths, or upload regular files through the target SSH terminal's authenticated connection and insert remote paths. Never submits a command. Up to 16 files, 64 MiB each and 256 MiB total. Directories and raw clipboard images remain unavailable."
+    ),
+    command!(
+        "list-uploads",
+        "inspect",
+        false,
+        true,
+        "list-uploads",
+        "Show bounded upload progress, remote paths, errors and origin-bound insertion results."
+    ),
+    command!(
+        "cancel-upload",
+        "automation",
+        false,
+        true,
+        "cancel-upload ID",
+        "Cancel an upload and suppress path insertion. Already completed remote files remain reported; cancellation does not remove them."
+    ),
+    command!(
         "ssh",
         "remote",
         false,
         true,
         "ssh DESTINATION [--name NAME] [--port PORT] [--identity PATH] [--ssh-config PATH] [-A|-a] [--jump HOST] [--ssh-option KEY=VALUE] [--command TEXT] [--focus true|false|--no-focus] [-- REMOTE_ARG ...]",
-        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. File/image upload, connection sharing and reconnect are not implemented yet. Extra SSH options use a bounded allowlist; mosh is unavailable."
+        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. Regular file/image uploads reuse this terminal's private authenticated connection. Raw clipboard images, cross-tab connection sharing and reconnect remain unavailable. Extra SSH options use a bounded allowlist; mosh is unavailable."
     ),
     command!(
         "new-workspace",

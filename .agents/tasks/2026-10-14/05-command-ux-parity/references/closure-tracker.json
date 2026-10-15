@@ -154,18 +154,19 @@
       "exit_gate": "Real two-host SSH and file/image drop/paste work together; verify host-key/auth failures, spaces/Unicode, jump hosts, disconnect and tab-switch/close during upload; no local fallback or wrong-terminal insertion. Does not wait for cloud deployment or full engine replacement.",
       "implemented_slices": [
         "R01a typed SSH descriptor/endpoint renderer foundation only",
-        "R01b real SSH workspace/PTY launch, no-focus IDs and endpoint-preserving fresh tabs/splits/reopen; fresh review passed"
+        "R01b real SSH workspace/PTY launch, no-focus IDs and endpoint-preserving fresh tabs/splits/reopen; fresh review passed",
+        "R01c private terminal channel, bounded regular-file uploads and native file drop/paste; final fresh review passed"
       ],
       "verification_receipts": [
         "r01-ssh-descriptor.md",
-        "r01-ssh-workspaces.md"
+        "r01-ssh-workspaces.md",
+        "r01-file-transfers.md"
       ],
       "remaining_gates": [
-        "Exact-SHA hosted verification of SSH workspace integration",
-        "Private authenticated connection ownership and sharing",
-        "File/image upload and native drop/paste with progress/cancel and exact target generation",
-        "Remaining SSH option/config compatibility and remote cwd restore",
-        "Real two-host and native packaged acceptance"
+        "R01c exact-SHA hosted/native verification",
+        "Raw clipboard image preparation/cleanup and directory/custom upload contracts",
+        "Remaining SSH option/config compatibility, password/host-key/jump-host acceptance and remote cwd restore",
+        "Real two-host/physical native transfer and stress acceptance"
       ]
     },
     {

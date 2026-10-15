@@ -10,6 +10,9 @@ description = "Validated remote connection descriptors for zmux"
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
+filedescriptor.workspace = true
+nix.workspace = true
+socket2.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

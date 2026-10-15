@@ -35,7 +35,13 @@ struct Frame: Decodable, Sendable {
     let sessionId: UInt64; let processId: UInt32?; let starting: Bool
     let snapshot: TerminalSnapshot?; let failure: String?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64 }
+struct RemoteEndpoint: Decodable, Sendable { let destination: String }
+struct UploadProgress: Decodable, Sendable {
+    let id: UInt64; let surfaceId: UInt64; let sessionId: UInt64
+    let state: String; let bytesSent: UInt64; let totalBytes: UInt64
+    let remotePaths: [String]; let remoteResultUncertain: Bool; let error: String?; let delivery: String; let deliveryError: String?
+}
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let remote: RemoteEndpoint? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
@@ -74,6 +80,7 @@ struct AttentionNotification: Decodable, Sendable {
     let timestampMs: UInt64; let read: Bool
 }
 struct DesktopSnapshot: Decodable, Sendable {
+    let uploads: [UploadProgress]
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
     let revision: UInt64; let model: Model; let frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool

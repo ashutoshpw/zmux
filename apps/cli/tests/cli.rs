@@ -410,9 +410,20 @@ fn local_socket_credentials_and_live_access_changes_protect_real_mutations() {
     let caps: Value = serde_json::from_slice(&caps.stdout).unwrap();
     assert_eq!(caps["authorization"], "same_uid_and_password");
     assert_eq!(caps["access"], "read_only");
-    let denied = run(&["new-workspace", "ReadOnlyDenied"], Some(secret));
-    assert!(!denied.status.success());
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    for args in [
+        vec!["new-workspace", "ReadOnlyDenied"],
+        vec![
+            "paste-files",
+            "--",
+            "/nonexistent/read-only-must-deny-before-file-IO",
+        ],
+        vec!["cancel-upload", "999"],
+    ] {
+        let denied = run(&args, Some(secret));
+        assert!(!denied.status.success());
+        assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    }
+    assert!(run(&["list-uploads"], Some(secret)).status.success());
     let output = run(&["status"], Some(secret));
     let current: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(

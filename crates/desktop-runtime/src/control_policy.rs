@@ -223,7 +223,8 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
-        ControlCommand::Status
+        ControlCommand::ListUploads
+        | ControlCommand::Status
         | ControlCommand::Capabilities
         | ControlCommand::ListPaneSurfaces { .. }
         | ControlCommand::RecentlyClosed
@@ -237,7 +238,8 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
                 | TargetOperation::ListPanes
                 | TargetOperation::ListPaneSurfaces
         ),
-        ControlCommand::Action { .. }
+        ControlCommand::Transfer { .. }
+        | ControlCommand::Action { .. }
         | ControlCommand::Attention { .. }
         | ControlCommand::NewWorkspace { .. }
         | ControlCommand::RenameWorkspace { .. }

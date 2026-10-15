@@ -56,6 +56,12 @@ actor NativeBridge {
         if let active { action["active"] = active }
         try await send(["command": "attention", "action": action])
     }
+    func pasteFiles(surface: UInt64, paths: [String]) async throws {
+        try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface, "paths": paths]])
+    }
+    func cancelUpload(id: UInt64) async throws {
+        try await send(["command": "transfer", "action": ["operation": "cancel", "id": id]])
+    }
     func input(session: UInt64, text: String) async throws {
         guard text.utf8.count <= 16_384 else { throw BridgeFailure(message: "Development build pastes are limited to 16 KiB") }
         // Split only at Unicode scalar boundaries; each JSON request stays below the ABI limit.

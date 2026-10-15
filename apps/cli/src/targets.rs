@@ -176,6 +176,30 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
             optional_target(values, &mut scope.pane)?;
             return request(scope, expected_model_revision, TargetOperation::ReadScreen);
         }
+        "paste-files" => {
+            if values.is_empty() {
+                return Err(CliError(
+                    "paste-files requires paths after target options".into(),
+                ));
+            }
+            let cwd = env::current_dir()?;
+            let paths = values
+                .iter()
+                .map(|s| {
+                    let path = PathBuf::from(s);
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        cwd.join(path)
+                    }
+                })
+                .collect();
+            return request(
+                scope,
+                expected_model_revision,
+                TargetOperation::PasteFiles { paths },
+            );
+        }
         "send-text" => {
             let text = target_and_value(values, &mut scope.pane, "pane and text|--stdin")?;
             let text = if !literal && text == "--stdin" {

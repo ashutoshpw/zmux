@@ -189,6 +189,23 @@ fn parse(
         Some("capabilities") => app_no_args("capabilities", tail, ControlCommand::Capabilities)?,
         Some("doctor") => help_or_no_args("doctor", tail, Offline::Doctor)?,
         Some("ssh") => ssh::parse(tail)?,
+        Some("list-uploads") => app_no_args("list-uploads", tail, ControlCommand::ListUploads)?,
+        Some("cancel-upload") => {
+            let args = utf8_args(tail)?;
+            match args.as_slice() {
+                _ if help_requested(tail) => {
+                    Parsed::Offline(Offline::Help(Some("cancel-upload".into())))
+                }
+                [id] => Parsed::App(ControlCommand::Transfer {
+                    action: zmux_desktop_runtime::transfers::TransferCommand::Cancel {
+                        id: id
+                            .parse()
+                            .map_err(|_| CliError("upload ID must be an integer".into()))?,
+                    },
+                }),
+                _ => return Err(CliError("cancel-upload requires an upload ID".into())),
+            }
+        }
         Some("status") => app_no_args("status", tail, ControlCommand::Status)?,
         Some("list-workspaces") => {
             app_no_args("list-workspaces", tail, ControlCommand::ListWorkspaces)?
