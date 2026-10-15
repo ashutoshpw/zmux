@@ -90,7 +90,7 @@ enum BrowserZoomSmoke {
             }
             _ = try await cli(["close-surface", "--surface", String(id)], false)
             hidden = nil
-            try await command(String(initial), target: surface, expected: initial)
+            try await command(String(Double(initial)), target: surface, expected: initial)
             FileHandle.standardError.write(Data("Native browser zoom: CLI/menu steps, limits, hidden host, exact receipts and focus retention passed\n".utf8))
         } catch {
             if let hidden {
