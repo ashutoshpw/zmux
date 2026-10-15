@@ -1,0 +1,40 @@
+name: Session shutdown diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: session-shutdown-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  owned-child-diagnostics:
+    runs-on: macos-15
+    timeout-minutes: 8
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Observe raw owned children and actual parallel and serial shutdown cases
+        run: python3 -B tools/session-shutdown-diagnostics/run.py --output "$RUNNER_TEMP/session-shutdown-diagnostics"
+      - name: Retain exact sources and child evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: session-shutdown-diagnostics-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/session-shutdown-diagnostics/receipt.json
+            ${{ runner.temp }}/session-shutdown-diagnostics/*.log
+            ${{ runner.temp }}/session-shutdown-diagnostics/source/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
