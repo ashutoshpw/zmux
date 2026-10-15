@@ -117,7 +117,7 @@ static void native_transfer_receipts_are_session_bound(void) {
     assert(zmux_desktop_notification_event(desktop.value, bad_event, 16385) == ZMUX_INVALID_ARGUMENT);
     assert(zmux_desktop_notification_event(desktop.value, bad_event, sizeof bad_event - 1) == ZMUX_INVALID_ARGUMENT);
     assert(zmux_desktop_notification_action(desktop.value, NULL, 1).status == ZMUX_INVALID_ARGUMENT);
-    assert(zmux_desktop_notification_action(desktop.value, bad_event, 16385).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_notification_action(desktop.value, bad_event, 32769).status == ZMUX_INVALID_ARGUMENT);
     assert(zmux_desktop_notification_action(desktop.value, bad_event, sizeof bad_event - 1).status == ZMUX_INVALID_ARGUMENT);
     uint64_t surface = 0;
     uint64_t session = 0;
@@ -135,6 +135,60 @@ static void native_transfer_receipts_are_session_bound(void) {
         nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
     }
     assert(surface != 0 && session != 0);
+
+    /* The native reply channel reserves response capacity before consuming an
+     * opted-in generation, including empty-reply navigation fallbacks. */
+    char notification[512];
+    snprintf(notification, sizeof notification, "{\"version\":1,\"request_id\":90,\"payload\":{\"command\":\"attention\",\"action\":{\"operation\":\"notify\",\"surface_id\":%llu,\"title\":\"ABI reply capacity\",\"desktop\":false,\"reply\":true}}}", (unsigned long long)surface);
+    ZmuxResult notification_admission = zmux_desktop_dispatch(desktop.value, (const uint8_t *)notification, strlen(notification));
+    assert(notification_admission.status == ZMUX_OK);
+    free(consume(notification_admission.value));
+    char target[1024] = {0};
+    for (int attempt = 0; attempt < 500 && target[0] == '\0'; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        char *start = strstr(text, "\"target\":{");
+        if (start != NULL) {
+            start += strlen("\"target\":");
+            char *end = start;
+            int depth = 0;
+            do { if (*end == '{') { depth++; } else if (*end == '}') { depth--; } end++; } while (*end != '\0' && depth > 0);
+            assert(depth == 0 && (size_t)(end - start) < sizeof target);
+            memcpy(target, start, (size_t)(end - start));
+        }
+        free(text);
+        if (target[0] == '\0') { nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL); }
+    }
+    assert(target[0] != '\0');
+    uint64_t held_buffers[16];
+    size_t held_count = 0;
+    for (;;) {
+        ZmuxResult held = zmux_desktop_snapshot(desktop.value, 0);
+        if (held.status == ZMUX_CAPACITY) { break; }
+        if (held.status == ZMUX_BUSY) { continue; }
+        assert(held.status == ZMUX_OK && held_count < 16);
+        held_buffers[held_count++] = held.value;
+    }
+    char empty_reply[1400];
+    snprintf(empty_reply, sizeof empty_reply, "{\"action\":\"reply\",\"target\":%s,\"text\":\"\"}", target);
+    assert(zmux_desktop_notification_action(desktop.value, (const uint8_t *)empty_reply, strlen(empty_reply)).status == ZMUX_CAPACITY);
+    for (size_t index = 0; index < held_count; index++) { assert(zmux_buffer_release(held_buffers[index]) == ZMUX_OK); }
+    char *unconsumed = desktop_snapshot(desktop.value);
+    assert(strstr(unconsumed, "\"reply_state\":\"ready\"") != NULL);
+    assert(strstr(unconsumed, "\"read\":false") != NULL);
+    free(unconsumed);
+
+    /* Valid bounded raw text may exceed 16 KiB after JSON escaping. An invalid
+     * owner reaches executor rejection, rather than being rejected as bytes. */
+    char *escaped_reply = calloc(32768, 1);
+    assert(escaped_reply != NULL);
+    const char *prefix = "{\"action\":\"reply\",\"target\":{\"epoch\":\"00000000-0000-0000-0000-000000000000\",\"identity_namespace\":\"00000000-0000-0000-0000-000000000000\",\"notification_id\":1,\"destination\":{\"kind\":\"surface\",\"surface_id\":1,\"session_id\":1}},\"text\":\"";
+    size_t escaped_length = strlen(prefix);
+    memcpy(escaped_reply, prefix, escaped_length);
+    for (size_t index = 0; index < 4095; index++) { memcpy(escaped_reply + escaped_length, "\\u0001", 6); escaped_length += 6; }
+    memcpy(escaped_reply + escaped_length, "\"}", 2); escaped_length += 2;
+    assert(escaped_length > 16384 && escaped_length < 32768);
+    assert(zmux_desktop_notification_action(desktop.value, (const uint8_t *)escaped_reply, escaped_length).status == ZMUX_INTERNAL);
+    free(escaped_reply);
 
     char path[96];
     snprintf(path, sizeof path, "/tmp/zmux-abi-transfer-%ld", (long)getpid());

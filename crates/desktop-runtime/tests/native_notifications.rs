@@ -80,6 +80,333 @@ fn execute(desktop: &Desktop, id: u64, payload: Command) -> Arc<Snapshot> {
         .unwrap();
     wait(desktop, |snapshot| snapshot.last_request_id == id)
 }
+
+fn reply_desktop(script: &str) -> Desktop {
+    let desktop = Desktop::new(Shell {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), script.into()],
+        cwd: None,
+    })
+    .unwrap();
+    wait(&desktop, |snapshot| {
+        snapshot.frames.iter().any(|frame| {
+            frame
+                .snapshot
+                .as_ref()
+                .is_some_and(|frame| frame.viewport.contents.contains("REPLY_READY"))
+        })
+    });
+    desktop
+}
+fn reply_notification(
+    desktop: &Desktop,
+    request_id: u64,
+    surface: zmux_workspace_core::SurfaceId,
+) -> zmux_desktop_runtime::attention::NotificationTarget {
+    let action = serde_json::from_value(serde_json::json!({
+        "operation":"notify", "surface_id":surface.0, "title":"Explicit terminal reply",
+        "desktop":false, "reply":true,
+    }))
+    .expect("reply opt-in must be accepted");
+    let created = execute(desktop, request_id, Command::Attention { action });
+    assert!(created.last_error.is_none(), "{:?}", created.last_error);
+    let row = created.notifications.last().unwrap();
+    assert_eq!(serde_json::to_value(row).unwrap()["reply_enabled"], true);
+    row.target.clone().unwrap()
+}
+fn reply_action(
+    target: &zmux_desktop_runtime::attention::NotificationTarget,
+    text: &str,
+) -> NativeAttentionAction {
+    serde_json::from_value(serde_json::json!({"action":"reply", "target":target, "text":text}))
+        .unwrap()
+}
+
+#[test]
+fn native_reply_confirms_full_write_without_focus_change_and_never_replays_a_consumed_generation() {
+    let desktop = reply_desktop(
+        "stty -echo; printf REPLY_READY; i=0; while IFS= read -r line; do i=$((i+1)); printf '\\nREPLY_%s:%s\\n' \"$i\" \"$line\"; done",
+    );
+    let initial = desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let surface = first.root.panes()[0].selected();
+    let session_id = surface.session_id.unwrap();
+    let foreground = execute(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Keep foreground".into(),
+            },
+        },
+    )
+    .model
+    .focused_workspace;
+    let target = reply_notification(&desktop, 2, surface.id);
+    assert!(
+        desktop
+            .native_notification_action(reply_action(&target, &"é".repeat(2048)))
+            .is_err()
+    );
+    let mut forged = target.clone();
+    if let NotificationDestination::Surface { session_id, .. } = &mut forged.destination {
+        *session_id = Some(zmux_workspace_core::SessionId(999_999));
+    }
+    assert!(
+        desktop
+            .native_notification_action(reply_action(&forged, "wrong owner"))
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(desktop.snapshot().unwrap().notifications.last().unwrap()).unwrap()["reply_state"],
+        "ready"
+    );
+    let result = desktop
+        .native_notification_action(reply_action(&target, " \nhello 世界\t "))
+        .unwrap();
+    let wire = serde_json::to_value(result).unwrap();
+    assert_eq!(
+        wire["reply"]["target"],
+        serde_json::to_value(&target).unwrap()
+    );
+    assert_eq!(wire["reply"]["outcome"], "complete");
+    assert_eq!(wire["reply"]["bytes_written"], "hello 世界".len() + 1);
+    assert_eq!(wire["reply"]["total_bytes"], "hello 世界".len() + 1);
+    assert!(wire["navigation"].is_null());
+    assert!(wire["focused_workspace_id"].is_null());
+    let written = wait(&desktop, |snapshot| {
+        snapshot.control_frames.iter().any(|frame| {
+            frame.session_id == session_id
+                && frame
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|frame| frame.viewport.contents.contains("REPLY_1:hello 世界"))
+        })
+    });
+    assert_eq!(written.model.focused_workspace, foreground);
+    assert!(
+        written
+            .notifications
+            .iter()
+            .find(|row| row.id == target.notification_id)
+            .unwrap()
+            .read
+    );
+    assert!(
+        desktop
+            .native_notification_action(reply_action(&target, "duplicate"))
+            .is_err()
+    );
+    execute(
+        &desktop,
+        3,
+        Command::Input {
+            session_id,
+            text: "BARRIER\n".into(),
+        },
+    );
+    let barrier = wait(&desktop, |snapshot| {
+        snapshot.control_frames.iter().any(|frame| {
+            frame.session_id == session_id
+                && frame
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|frame| frame.viewport.contents.contains("REPLY_2:BARRIER"))
+        })
+    });
+    assert_eq!(barrier.model.focused_workspace, foreground);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn empty_and_definite_zero_byte_reply_failures_open_only_the_exact_owner_with_truthful_outcomes() {
+    for (script, text, expected) in [
+        (
+            "stty -echo; printf REPLY_READY; exec sleep 60",
+            " \t\n",
+            "empty",
+        ),
+        ("printf REPLY_READY; exit 0", "not written", "not_written"),
+    ] {
+        let desktop = reply_desktop(script);
+        let initial = desktop.snapshot().unwrap();
+        let first = initial.model.workspaces[0].clone();
+        let surface = first.root.panes()[0].selected().id;
+        if expected == "not_written" {
+            wait(&desktop, |snapshot| {
+                snapshot.frames.iter().all(|frame| {
+                    frame
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|frame| frame.state == zmux_session_runtime::State::Exited)
+                })
+            });
+        }
+        execute(
+            &desktop,
+            1,
+            Command::Action {
+                action: Action::CreateWorkspace {
+                    name: "Other".into(),
+                },
+            },
+        );
+        let target = reply_notification(&desktop, 2, surface);
+        let result = desktop
+            .native_notification_action(reply_action(&target, text))
+            .unwrap();
+        let wire = serde_json::to_value(result).unwrap();
+        assert_eq!(wire["reply"]["outcome"], expected);
+        assert_eq!(wire["reply"]["bytes_written"], 0);
+        assert_eq!(wire["navigation"]["opened"], true);
+        assert_eq!(
+            wire["navigation"]["target"],
+            serde_json::to_value(&target).unwrap()
+        );
+        assert_eq!(wire["focused_workspace_id"], first.id.0);
+        assert!(
+            desktop
+                .native_notification_action(reply_action(&target, "duplicate"))
+                .is_err()
+        );
+        desktop.shutdown(Duration::from_secs(5)).unwrap();
+    }
+}
+
+#[test]
+fn pending_reply_keeps_the_executor_responsive_and_expires_without_writing_or_replaying() {
+    let desktop = Arc::new(reply_desktop(
+        "stty raw -echo; printf REPLY_READY; kill -STOP $$; cat",
+    ));
+    let initial = desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let surface = first.root.panes()[0].selected();
+    let session_id = surface.session_id.unwrap();
+    let process_id = initial
+        .frames
+        .iter()
+        .find(|frame| frame.session_id == session_id)
+        .unwrap()
+        .process_id
+        .unwrap();
+    for index in 0..8 {
+        let sent = execute(
+            &desktop,
+            10 + index,
+            Command::Input {
+                session_id,
+                text: "x".repeat(4096),
+            },
+        );
+        assert!(sent.last_error.is_none());
+    }
+    let foreground = execute(
+        &desktop,
+        20,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Still responsive".into(),
+            },
+        },
+    )
+    .model
+    .focused_workspace
+    .unwrap();
+    let target = reply_notification(&desktop, 21, surface.id);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let owned_desktop = Arc::clone(&desktop);
+    let owned_target = target.clone();
+    let task = thread::spawn(move || {
+        sender
+            .send(
+                owned_desktop
+                    .native_notification_action(reply_action(&owned_target, "MUST_NOT_REPLAY")),
+            )
+            .unwrap()
+    });
+    let pending = wait(&desktop, |snapshot| {
+        snapshot.notifications.iter().any(|row| {
+            row.id == target.notification_id
+                && serde_json::to_value(row).unwrap()["reply_state"] == "pending"
+        })
+    });
+    assert_eq!(pending.model.focused_workspace, Some(foreground));
+    assert!(
+        !pending
+            .native_notifications
+            .desired
+            .iter()
+            .any(|request| request.target == target)
+    );
+    let responsive = execute(
+        &desktop,
+        22,
+        Command::Action {
+            action: Action::RenameWorkspace {
+                workspace_id: foreground,
+                name: "Renamed while writing".into(),
+            },
+        },
+    );
+    assert!(responsive.last_error.is_none());
+    assert!(
+        !responsive
+            .notifications
+            .iter()
+            .find(|row| row.id == target.notification_id)
+            .unwrap()
+            .read
+    );
+    let result = receiver
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .unwrap();
+    task.join().unwrap();
+    let wire = serde_json::to_value(result).unwrap();
+    assert_eq!(wire["reply"]["outcome"], "not_written");
+    assert_eq!(wire["reply"]["bytes_written"], 0);
+    assert_eq!(wire["navigation"]["opened"], true);
+    assert_eq!(wire["focused_workspace_id"], first.id.0);
+    assert!(
+        desktop
+            .native_notification_action(reply_action(&target, "MUST_NOT_REPLAY"))
+            .is_err()
+    );
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(process_id as i32),
+        nix::sys::signal::Signal::SIGCONT,
+    )
+    .unwrap();
+    execute(
+        &desktop,
+        23,
+        Command::Input {
+            session_id,
+            text: "\r\nAFTER_REPLY\r\n".into(),
+        },
+    );
+    let after = wait(&desktop, |snapshot| {
+        snapshot.control_frames.iter().any(|frame| {
+            frame.session_id == session_id
+                && frame
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|frame| frame.viewport.contents.contains("AFTER_REPLY"))
+        })
+    });
+    let contents = &after
+        .control_frames
+        .iter()
+        .find(|frame| frame.session_id == session_id)
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .viewport
+        .contents;
+    assert!(!contents.contains("MUST_NOT_REPLAY"));
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
 fn persist(desktop: &Desktop, id: u64, action: SessionCommand) -> Arc<Snapshot> {
     let accepted = execute(desktop, id, Command::Session { action });
     assert!(accepted.last_error.is_none(), "{:?}", accepted.last_error);
@@ -130,6 +457,7 @@ fn a_pre_restore_notification_cannot_open_a_new_shell_reusing_its_surface_id() {
             action: AttentionCommand::Notify {
                 subtitle: String::new(),
                 desktop: None,
+                reply: false,
                 surface_id: target.id,
                 title: "Earlier shell".into(),
                 body: "Review its output".into(),
@@ -271,6 +599,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
             action: AttentionCommand::Notify {
                 subtitle: String::new(),
                 desktop: None,
+                reply: false,
                 surface_id: first_surface.id,
                 title: "Exact target".into(),
                 body: "".into(),
@@ -369,6 +698,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
             action: AttentionCommand::Notify {
                 subtitle: String::new(),
                 desktop: None,
+                reply: false,
                 surface_id: second_surface.id,
                 title: "Dismiss this row".into(),
                 body: "".into(),
@@ -414,6 +744,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
             action: AttentionCommand::Notify {
                 subtitle: String::new(),
                 desktop: None,
+                reply: false,
                 surface_id: second_surface.id,
                 title: "Inbox only".into(),
                 body: "".into(),
@@ -476,6 +807,7 @@ fn native_inbox_callbacks_reject_coalesced_and_closed_targets_without_acknowledg
         action: AttentionCommand::Notify {
             subtitle: String::new(),
             desktop: None,
+            reply: false,
             surface_id: surface.id,
             title: "Repeated event".into(),
             body: "Same content".into(),

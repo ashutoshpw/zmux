@@ -71,6 +71,7 @@ impl App {
                 subtitle: String::new(),
                 body: String::new(),
                 desktop: None,
+                reply: false,
             },
         });
         assert!(snapshot.last_error.is_none());
@@ -172,6 +173,7 @@ fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live
                 subtitle: String::new(),
                 body: String::new(),
                 desktop: Some(false),
+                reply: false,
             },
         },
     });
@@ -336,6 +338,7 @@ fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_
                     subtitle: String::new(),
                     body: String::new(),
                     desktop: Some(false),
+                    reply: false,
                 },
             },
         });
@@ -389,6 +392,7 @@ fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_
                     subtitle: String::new(),
                     body: String::new(),
                     desktop: None,
+                    reply: false,
                 },
             },
         });
@@ -419,6 +423,7 @@ fn active_workspace_acknowledges_workspace_rows_without_reading_hidden_surface_r
                 subtitle: String::new(),
                 body: String::new(),
                 desktop: None,
+                reply: false,
             },
         },
     });
@@ -453,6 +458,7 @@ fn active_workspace_acknowledges_workspace_rows_without_reading_hidden_surface_r
                 subtitle: String::new(),
                 body: String::new(),
                 desktop: None,
+                reply: false,
             },
         },
     });
@@ -508,6 +514,7 @@ fn workspace_notification_open_survives_selected_surface_close_and_preserves_wor
                 subtitle: String::new(),
                 body: String::new(),
                 desktop: Some(false),
+                reply: false,
             },
         },
     });

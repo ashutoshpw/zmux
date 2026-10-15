@@ -155,6 +155,7 @@ struct NativeNotificationRequest: Codable, Sendable, Equatable {
     let title: String
     let subtitle: String
     let body: String
+    let replyEnabled: Bool
 }
 
 struct NativeNotificationSnapshot: Codable, Sendable {
@@ -169,6 +170,16 @@ struct NativeNotificationExecution: Decodable, Sendable {
     let focusedWorkspaceId: UInt64?
     let focusedSurfaceId: UInt64?
     let navigation: NotificationNavigation?
+    let reply: NotificationReply?
+}
+
+struct NotificationReply: Decodable, Sendable {
+    enum Outcome: String, Decodable, Sendable { case complete, empty, notWritten = "not_written", partial, unknown }
+    let target: NotificationTarget
+    let outcome: Outcome
+    let bytesWritten: UInt64
+    let totalBytes: UInt64
+    let reason: String?
 }
 
 struct NotificationNavigation: Decodable, Sendable {
@@ -206,7 +217,8 @@ enum NativeAttentionAction: Encodable, Sendable {
     case openInbox(target: NotificationTarget)
     case dismiss(target: NotificationTarget)
     case jumpToUnread
-    private enum CodingKeys: String, CodingKey { case action, target }
+    case reply(target: NotificationTarget, text: String)
+    private enum CodingKeys: String, CodingKey { case action, target, text }
     func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -214,6 +226,9 @@ enum NativeAttentionAction: Encodable, Sendable {
         case .openInbox(let target): try c.encode("open_inbox", forKey: .action); try c.encode(target, forKey: .target)
         case .dismiss(let target): try c.encode("dismiss", forKey: .action); try c.encode(target, forKey: .target)
         case .jumpToUnread: try c.encode("jump_to_unread", forKey: .action)
+        case .reply(let target, let text):
+            try c.encode("reply", forKey: .action); try c.encode(target, forKey: .target)
+            try c.encode(text, forKey: .text)
         }
     }
 }
@@ -245,6 +260,9 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     private var refreshRequested = false
     private var authorizationInFlight = false
     private var actionsInFlight = 0
+    // Runtime tombstones remain authoritative after this bounded callback cache evicts.
+    private var replyAttempts: [NotificationTarget] = []
+    private static let replyActionIdentifier = "zmux.reply"
     private var stopped = false
 
     init(sendEvent: @escaping @MainActor (NativeNotificationEvent) async throws -> Void,
@@ -255,7 +273,11 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         self.activate = activate; self.reportError = reportError
         super.init()
         center.delegate = self
-        center.setNotificationCategories([UNNotificationCategory(identifier: "zmux.inbox", actions: [], intentIdentifiers: [], options: [.customDismissAction])])
+        let reply = UNTextInputNotificationAction(identifier: Self.replyActionIdentifier, title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Reply to terminal")
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: "zmux.inbox", actions: [], intentIdentifiers: [], options: [.customDismissAction]),
+            UNNotificationCategory(identifier: "zmux.inbox.reply", actions: [reply], intentIdentifiers: [], options: [.customDismissAction])
+        ])
         // A previous process's tokens must never target this process's inbox.
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
@@ -265,7 +287,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         guard !stopped else { return }
         if epoch != snapshot.epoch {
             remove(Array(desired.keys))
-            desired.removeAll(); attempted.removeAll()
+            desired.removeAll(); attempted.removeAll(); replyAttempts.removeAll()
             epoch = snapshot.epoch
             observedAuthorization = .unknown
         }
@@ -281,6 +303,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         for request in snapshot.desired {
             guard request.target.epoch == snapshot.epoch,
                   request.identifier == Self.identifier(request.target),
+                  !request.replyEnabled || Self.isTerminal(request.target),
                   next.updateValue(request, forKey: request.identifier) == nil else {
                 reportError("Invalid native notification snapshot; delivery is paused")
                 remove(Array(desired.keys)); desired.removeAll()
@@ -386,7 +409,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         guard !stopped else { return }
         stopped = true
         remove(Array(Set(desired.keys).union(pending.keys)))
-        desired.removeAll(); attempted.removeAll(); events.removeAll()
+        desired.removeAll(); attempted.removeAll(); replyAttempts.removeAll(); events.removeAll()
         for identifier in pending.keys { pending[identifier]?.timer?.cancel() }
         eventTask?.cancel(); eventTask = nil
         center.delegate = nil
@@ -394,6 +417,10 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
 
     private static func identifier(_ target: NotificationTarget) -> String {
         "zmux.notification.\(target.epoch.uuidString.lowercased()).\(target.notificationId)"
+    }
+    private static func isTerminal(_ target: NotificationTarget) -> Bool {
+        if case .surface(_, let session) = target.destination { return session != nil }
+        return false
     }
     private func remove(_ identifiers: [String]) {
         guard !identifiers.isEmpty else { return }
@@ -415,7 +442,8 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             attempted[request.identifier] = request.authorizationGeneration
             let content = UNMutableNotificationContent()
             content.title = String(request.title.prefix(128)); content.subtitle = String(request.subtitle.prefix(128))
-            content.body = String(request.body.prefix(2048)); content.sound = .default; content.categoryIdentifier = "zmux.inbox"
+            content.body = String(request.body.prefix(2048)); content.sound = .default
+            content.categoryIdentifier = request.replyEnabled ? "zmux.inbox.reply" : "zmux.inbox"
             pending[request.identifier] = Pending(request: request)
             pending[request.identifier]?.timer = Task { [weak self] in
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
@@ -503,15 +531,58 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let identifier = response.notification.request.identifier
         let action = response.actionIdentifier
-        await receive(identifier, action: action)
+        // Only Sendable values cross the framework callback's actor boundary. Reject
+        // oversized raw UTF-8 rather than truncating a command. Rust appends the CR.
+        let rawText = (response as? UNTextInputNotificationResponse)?.userText
+        let oversized = rawText.map { $0.utf8.prefix(4096).count > 4095 } ?? false
+        let text = oversized ? nil : rawText
+        await receive(identifier, action: action, text: text, oversized: oversized)
     }
-    private func receive(_ identifier: String, action: String) async {
+    private func receive(_ identifier: String, action: String, text: String?, oversized: Bool) async {
         guard !stopped, actionsInFlight < 8, let request = desired[identifier], current(request) else { remove([identifier]); return }
-        guard action == UNNotificationDefaultActionIdentifier || action == UNNotificationDismissActionIdentifier else { return }
+        guard action == UNNotificationDefaultActionIdentifier || action == UNNotificationDismissActionIdentifier || action == Self.replyActionIdentifier else { return }
+        if action == Self.replyActionIdentifier {
+            guard request.replyEnabled, Self.isTerminal(request.target), !oversized, text != nil else {
+                reportError("Notification reply is unavailable or exceeds 4095 UTF-8 bytes")
+                return
+            }
+            guard !replyAttempts.contains(request.target) else { return }
+            if replyAttempts.count == 256 { replyAttempts.removeFirst() }
+            replyAttempts.append(request.target) // Claim before suspension; never retry a lost reply.
+        }
         actionsInFlight += 1
         defer { actionsInFlight -= 1 }
         do {
-            if action == UNNotificationDismissActionIdentifier {
+            if action == Self.replyActionIdentifier, let text {
+                let receipt = try await performAction(.reply(target: request.target, text: text))
+                guard let reply = receipt.reply, reply.target == request.target,
+                      reply.bytesWritten <= reply.totalBytes,
+                      reply.totalBytes <= UInt64(text.utf8.count + 1) else {
+                    throw BridgeFailure(message: "Notification reply returned an invalid receipt; it will not be resent")
+                }
+                guard !stopped, epoch == request.target.epoch else { return }
+                switch reply.outcome {
+                case .complete:
+                    // Rust owns Unicode trimming and the appended CR. A nonempty
+                    // canonical payload has at least one text byte and one CR.
+                    guard reply.bytesWritten == reply.totalBytes, reply.totalBytes >= 2, receipt.navigation == nil else {
+                        throw BridgeFailure(message: "Notification reply returned an inconsistent completion; it will not be resent")
+                    }
+                    // Complete means local PTY acceptance. It never steals focus.
+                case .empty, .notWritten:
+                    guard reply.bytesWritten == 0,
+                          reply.outcome != .empty || reply.totalBytes == 0 else {
+                        throw BridgeFailure(message: "Notification reply returned an inconsistent zero-byte receipt; it will not be resent")
+                    }
+                    if let navigation = receipt.navigation, navigation.opened,
+                       navigation.target == request.target,
+                       navigation.notificationId == request.target.notificationId,
+                       request.target.matches(receipt) { activate() }
+                    if reply.outcome == .notWritten { reportError("Notification reply was not written; no input was resent") }
+                case .partial, .unknown:
+                    reportError("Notification reply may be incomplete; it will not be resent")
+                }
+            } else if action == UNNotificationDismissActionIdentifier {
                 _ = try await performAction(.dismiss(target: request.target))
             } else {
                 let receipt = try await performAction(.open(target: request.target))
@@ -519,6 +590,11 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
                 if !stopped, epoch == request.target.epoch, request.target.matches(receipt) { activate() }
             }
             remove([identifier])
-        } catch { reportError("Notification target is unavailable: " + error.localizedDescription) }
+        } catch {
+            if action == Self.replyActionIdentifier {
+                remove([identifier])
+                reportError("Notification reply was not confirmed and will not be resent: " + error.localizedDescription)
+            } else { reportError("Notification target is unavailable: " + error.localizedDescription) }
+        }
     }
 }

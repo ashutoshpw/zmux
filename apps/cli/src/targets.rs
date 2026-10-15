@@ -251,6 +251,7 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
     let mut subtitle = None;
     let mut body = None;
     let mut desktop = None;
+    let mut reply = false;
     let mut clear = false;
     let mut all = false;
     let mut all_read = false;
@@ -297,6 +298,10 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
                     _ => return Err(CliError("--desktop requires true or false".into())),
                 });
                 cursor += 2;
+            }
+            "--reply" if command == "notify" && !reply => {
+                reply = true;
+                cursor += 1;
             }
             "--clear" if command == "notify" && !clear => {
                 clear = true;
@@ -349,13 +354,15 @@ fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliErro
                     subtitle: subtitle.unwrap_or_default(),
                     body: body.unwrap_or_default(),
                     desktop,
+                    reply,
                 },
             );
         }
         "notify" => {
-            if title.is_some() || subtitle.is_some() || body.is_some() || desktop.is_some() {
+            if title.is_some() || subtitle.is_some() || body.is_some() || desktop.is_some() || reply
+            {
                 return Err(CliError(
-                    "notify --clear conflicts with content and --desktop options".into(),
+                    "notify --clear conflicts with content, --desktop and --reply options".into(),
                 ));
             }
             if scope.pane.is_some() {

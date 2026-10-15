@@ -1184,6 +1184,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read && $0.body == "Second review" } }
         showNotifications()
         guard sidebarModes?.selectedSegment == 1, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
+        try await smokeNotificationReply(surface: originalPane.selectedSurface, session: originalSession)
         _ = try await nativeCLI(["notify", "--surface", String(originalPane.selectedSurface), "--title", "CLI review", "--subtitle", "CLI follow up", "--body", "Review queued", "--desktop", "false"])
         try await waitUntil { value in
             value.notifications.contains { $0.surfaceId == originalPane.selectedSurface && $0.title == "CLI review" && $0.subtitle == "CLI follow up" && !$0.read }
@@ -1357,6 +1358,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "notification_cli_metadata": true,
             "notification_workspace_target": true,
             "notification_jump_to_unread": true,
+            "notification_reply_pty": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
@@ -1442,6 +1444,41 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         return value
     }
+    /// Exercises the Swift reply wire against a real PTY, without OS permission or
+    /// a synthetic UserNotifications response. Native banner/text-input UI is a separate gate.
+    private func smokeNotificationReply(surface: UInt64, session: UInt64) async throws {
+        guard let before = snapshot, let workspace = before.workspace,
+              let pane = workspace.root.panes.first(where: { $0.surfaces.contains { $0.id == surface } }),
+              pane.selectedSurface != surface else {
+            throw BridgeFailure(message: "Reply smoke requires a background terminal")
+        }
+        let selected = Dictionary(uniqueKeysWithValues: workspace.root.panes.map { ($0.id, $0.selectedSurface) })
+        let nonce = UUID().uuidString.lowercased()
+        let title = "CLI reply \(nonce)"
+        _ = try await nativeCLI(["notify", "--surface", String(surface), "--title", title, "--reply", "--desktop", "false"])
+        try await waitUntil { $0.notifications.contains { $0.title == title && !$0.read } }
+        guard let item = snapshot?.notifications.last(where: { $0.title == title }), let target = item.target else {
+            throw BridgeFailure(message: "Reply notification omitted its exact inbox target")
+        }
+        let command = "printf '\\nZMUX_REPLY_%s\\n' '\(nonce)'"
+        let text = " \t" + command + "\t "
+        let receipt = try await bridge.notificationAction(.reply(target: target, text: text))
+        guard let reply = receipt.reply, reply.target == target, reply.outcome == .complete,
+              reply.bytesWritten == UInt64(command.utf8.count + 1), reply.totalBytes == reply.bytesWritten,
+              receipt.navigation == nil, receipt.focusedWorkspaceId == nil, receipt.focusedSurfaceId == nil else {
+            throw BridgeFailure(message: "Reply did not confirm the canonical text and terminator without navigation")
+        }
+        try await waitUntil { value in
+            value.notifications.first(where: { $0.id == item.id })?.read == true
+                && value.frames.contains { $0.sessionId == session && $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("ZMUX_REPLY_\(nonce)") == true }
+        }
+        guard let after = snapshot, after.model.focusedWorkspace == workspace.id,
+              after.workspace?.focusedPane == workspace.focusedPane,
+              after.workspace?.root.panes.allSatisfy({ selected[$0.id] == $0.selectedSurface }) == true else {
+            throw BridgeFailure(message: "A completed background reply changed focus or selected tabs")
+        }
+    }
+
     private func smokeWorkspaceNotification(workspaceID: UInt64, foregroundWorkspace: UInt64) async throws {
         guard let retained = snapshot?.model.workspaces.first(where: { $0.id == workspaceID }),
               snapshot?.model.focusedWorkspace == foregroundWorkspace else {
