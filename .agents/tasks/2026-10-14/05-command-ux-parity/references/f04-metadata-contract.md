@@ -374,3 +374,17 @@ Parent `scripts/check` passed an isolated snapshot at
 `/tmp/zmux-metadata-parent-check.log`, before that fixture/contract-only delta.
 Hosted metadata execution, production adapter changes, PTY delivery, native
 presentation and named-Mac numeric workload gates remain open.
+
+## Hosted isolated metadata acceptance
+
+Workflow `38777353391` at `b86a7005dc316fef0504edf409aa3c8d73560dea`
+passed Linux x86_64 and macOS arm64. Parent downloaded receipts/logs to
+`/tmp/zmux-f04-metadata-hosted-38777353391` and verified every one of29 input
+hashes against the committed source. Mac receipt SHA256
+`53f29c4227e0483e4f158895d30267a5025a8924d0992a04111c62345ae20084`;
+Linux receipt `31c0ec9d05a7bc8d61b3a1976dd7c3fe04692e6a43b30f879b5418ed1c2de5db`.
+Normal metadata execution and both expected assertion controls pass on each host.
+Mac universal raw compile passes; metadata execution is host architecture only.
+Darwin RLIMIT_AS remains unavailable (ValueError); explicit allocator accounting
+is separate from process/RSS limits. No real PTY round trip, app engine switch,
+production rendering/input integration or measured-workload acceptance follows.
