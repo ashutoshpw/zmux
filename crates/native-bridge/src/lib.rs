@@ -10,7 +10,8 @@ use std::{
     sync::{Arc, Mutex, OnceLock, TryLockError},
 };
 use zmux_desktop_runtime::{
-    Desktop, DesktopError, Request as DesktopRequest, Shell, control::ControlServer,
+    Command as DesktopCommand, Desktop, DesktopError, Request as DesktopRequest, Shell,
+    control::ControlServer, transfers::TransferCommand,
 };
 use zmux_workspace_core::{Action, WorkspaceStore};
 
@@ -170,6 +171,14 @@ fn guard(f: impl FnOnce() -> Result<u64, i32>) -> ZmuxResult {
 }
 fn error_reply(code: &str, message: String) -> serde_json::Value {
     json!({"version": ABI_VERSION, "ok": false, "error": {"code": code, "message": message.chars().take(256).collect::<String>()}})
+}
+
+fn transfer_error_reply(message: String, outcome_unknown: bool) -> serde_json::Value {
+    json!({
+        "ok": false,
+        "error": {"message": message.chars().take(256).collect::<String>()},
+        "outcome_unknown": outcome_unknown,
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -380,6 +389,68 @@ pub unsafe extern "C" fn zmux_desktop_dispatch(
             },
         };
         reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Execute one session-bound native file transfer and return its worker acknowledgement.
+///
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call. This call may
+/// block for up to two seconds and must run off the native UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_transfer_files(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_REQUEST_BYTES || (request.is_null() && length != 0) {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = desktop(id)?;
+        // Reserve the only response resource that can be exhausted before enqueueing work.
+        let reservation = Reservation::new()?;
+        // SAFETY: same checked pointer/length and caller ownership contract as desktop dispatch.
+        let bytes = if length == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(request, length) }
+        };
+        let reply = match serde_json::from_slice::<DesktopRequest>(bytes) {
+            Err(error) => transfer_error_reply(error.to_string(), false),
+            Ok(request) if request.version != ABI_VERSION => {
+                transfer_error_reply("expected protocol version 1".into(), false)
+            }
+            Ok(request) => match &request.payload {
+                DesktopCommand::Transfer {
+                    action:
+                        TransferCommand::PasteFiles {
+                            expected_session_id: Some(_),
+                            ..
+                        },
+                } => match desktop.execute_transfer_receipt(request) {
+                    Ok(execution) => match execution.result {
+                        Ok(()) => json!({
+                            "ok": true,
+                            "revision": execution.revision,
+                            "upload_id": execution.upload_id,
+                        }),
+                        Err(error) => transfer_error_reply(error.to_string(), false),
+                    },
+                    Err(error) => {
+                        transfer_error_reply(error.error.to_string(), error.outcome_unknown)
+                    }
+                },
+                _ => transfer_error_reply(
+                    "native transfer receipt requires paste_files with expected_session_id".into(),
+                    false,
+                ),
+            },
+        };
+        let response = serde_json::to_vec(&reply).unwrap_or_else(|_| {
+            br#"{"ok":false,"error":{"message":"response serialization failed"},"outcome_unknown":true}"#.to_vec()
+        });
+        reservation.publish(response)
     })
 }
 /// OK/value=0 means no change since revision; otherwise value owns a JSON snapshot buffer.

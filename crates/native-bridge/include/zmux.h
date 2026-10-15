@@ -36,6 +36,10 @@ int32_t zmux_buffer_release(uint64_t buffer);
    Destroy waits for cleanup and MUST run off the native UI thread. */
 ZmuxResult zmux_desktop_create(void);
 ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_t length);
+/* Executes only ABI-v1 transfer/paste_files requests with expected_session_id. The call
+   waits at most two seconds for that envelope's worker acknowledgement and MUST run off
+   the native UI thread. A nonzero C status or outcome_unknown=true must not be retried. */
+ZmuxResult zmux_desktop_transfer_files(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_snapshot(uint64_t desktop, uint64_t revision);
 int32_t zmux_desktop_destroy(uint64_t desktop);
 

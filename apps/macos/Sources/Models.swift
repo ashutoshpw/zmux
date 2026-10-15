@@ -38,6 +38,7 @@ struct Frame: Decodable, Sendable {
 struct RemoteEndpoint: Decodable, Sendable { let destination: String }
 struct UploadProgress: Decodable, Sendable {
     let id: UInt64; let surfaceId: UInt64; let sessionId: UInt64
+    let sourceReleased: Bool
     let state: String; let bytesSent: UInt64; let totalBytes: UInt64
     let remotePaths: [String]; let remoteResultUncertain: Bool; let error: String?; let delivery: String; let deliveryError: String?
 }

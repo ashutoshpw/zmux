@@ -7,6 +7,7 @@
 #include <string.h>
 #include <signal.h>
 #include <time.h>
+#include <unistd.h>
 
 /* Foreign hosts do not inherit Rust main's ignored SIGPIPE disposition. Closing an
  * already-exited terminal must survive that default and leave the host alive. */
@@ -70,23 +71,98 @@ static const char *create = "{\"version\":1,\"command\":{\"method\":\"apply\",\"
 static ZmuxResult dispatch(uint64_t core, const char *request) {
     return zmux_core_dispatch(core, (const uint8_t *)request, strlen(request));
 }
-static void emit(uint64_t buffer) {
+static char *consume(uint64_t buffer) {
     ZmuxResult length = zmux_buffer_length(buffer);
     assert(length.status == ZMUX_OK && length.value > 0 && length.value <= 1048576);
     char *text = malloc((size_t)length.value + 1);
     assert(text != NULL);
     assert(zmux_buffer_copy(buffer, (uint8_t *)text, (size_t)length.value) == ZMUX_OK);
     text[length.value] = '\0';
-    puts(text);
-    free(text);
     assert(zmux_buffer_release(buffer) == ZMUX_OK);
     assert(zmux_buffer_release(buffer) == ZMUX_INVALID_HANDLE);
     assert(zmux_buffer_length(buffer).status == ZMUX_INVALID_HANDLE);
+    return text;
+}
+static void emit(uint64_t buffer) {
+    char *text = consume(buffer);
+    puts(text);
+    free(text);
 }
 static void command(uint64_t core, const char *request) {
     ZmuxResult response = dispatch(core, request);
     assert(response.status == ZMUX_OK);
     emit(response.value);
+}
+
+static void native_transfer_receipts_are_session_bound(void) {
+    ZmuxResult desktop = zmux_desktop_create();
+    assert(desktop.status == ZMUX_OK);
+    uint64_t surface = 0;
+    uint64_t session = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *snapshot = desktop_snapshot(desktop.value);
+        char *surfaces = strstr(snapshot, "\"surfaces\":[");
+        char *surface_field = surfaces == NULL ? NULL : strstr(surfaces, "\"id\":");
+        char *session_field = surface_field == NULL ? NULL : strstr(surface_field, "\"session_id\":");
+        if (surface_field != NULL && session_field != NULL && strstr(snapshot, "\"state\":\"running\"") != NULL) {
+            surface = strtoull(surface_field + strlen("\"id\":"), NULL, 10);
+            session = strtoull(session_field + strlen("\"session_id\":"), NULL, 10);
+        }
+        free(snapshot);
+        if (surface != 0 && session != 0) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(surface != 0 && session != 0);
+
+    char path[96];
+    snprintf(path, sizeof path, "/tmp/zmux-abi-transfer-%ld", (long)getpid());
+    FILE *source = fopen(path, "w");
+    assert(source != NULL);
+    assert(fputs("native transfer receipt\n", source) >= 0);
+    assert(fclose(source) == 0);
+
+    char request[512];
+    snprintf(request, sizeof request, "{\"version\":1,\"request_id\":91,\"payload\":{\"command\":\"transfer\",\"action\":{\"operation\":\"paste_files\",\"surface_id\":%llu,\"paths\":[\"%s\"]}}}", (unsigned long long)surface, path);
+    ZmuxResult missing_session = zmux_desktop_transfer_files(desktop.value, (const uint8_t *)request, strlen(request));
+    assert(missing_session.status == ZMUX_OK);
+    char *reply = consume(missing_session.value);
+    assert(strstr(reply, "\"ok\":false") != NULL);
+    assert(strstr(reply, "\"outcome_unknown\":false") != NULL);
+    assert(strstr(reply, "expected_session_id") != NULL);
+    free(reply);
+
+    snprintf(request, sizeof request, "{\"version\":1,\"request_id\":91,\"payload\":{\"command\":\"transfer\",\"action\":{\"operation\":\"paste_files\",\"surface_id\":%llu,\"expected_session_id\":%llu,\"paths\":[\"%s\"]}}}", (unsigned long long)surface, (unsigned long long)(session + 1), path);
+    ZmuxResult stale = zmux_desktop_transfer_files(desktop.value, (const uint8_t *)request, strlen(request));
+    assert(stale.status == ZMUX_OK);
+    reply = consume(stale.value);
+    assert(strstr(reply, "\"ok\":false") != NULL);
+    assert(strstr(reply, "\"outcome_unknown\":false") != NULL);
+    assert(strstr(reply, "session changed") != NULL);
+    free(reply);
+
+    char *snapshot_after_stale = desktop_snapshot(desktop.value);
+    assert(strstr(snapshot_after_stale, path) == NULL);
+    free(snapshot_after_stale);
+
+    snprintf(request, sizeof request, "{\"version\":1,\"request_id\":91,\"payload\":{\"command\":\"transfer\",\"action\":{\"operation\":\"paste_files\",\"surface_id\":%llu,\"expected_session_id\":%llu,\"paths\":[\"%s\"]}}}", (unsigned long long)surface, (unsigned long long)session, path);
+    ZmuxResult accepted = zmux_desktop_transfer_files(desktop.value, (const uint8_t *)request, strlen(request));
+    assert(accepted.status == ZMUX_OK);
+    reply = consume(accepted.value);
+    assert(strstr(reply, "\"ok\":true") != NULL);
+    assert(strstr(reply, "\"revision\":") != NULL);
+    assert(strstr(reply, "\"upload_id\":null") != NULL);
+    free(reply);
+    int inserted = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *snapshot = desktop_snapshot(desktop.value);
+        inserted = strstr(snapshot, path) != NULL;
+        free(snapshot);
+        if (inserted) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(inserted);
+    assert(unlink(path) == 0);
+    assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
 }
 
 int main(void) {
@@ -138,6 +214,7 @@ int main(void) {
     for (size_t i = 0; i < count; i++) { assert(zmux_buffer_release(buffers[i]) == ZMUX_OK); }
     command(replacement.value, snapshot);
     assert(zmux_core_destroy(replacement.value) == ZMUX_OK);
+    native_transfer_receipts_are_session_bound();
     exited_desktop_survives_close();
     return 0;
 }

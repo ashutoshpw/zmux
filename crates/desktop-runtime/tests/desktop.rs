@@ -1,11 +1,13 @@
 use std::{
+    sync::{Arc, Barrier},
     thread,
     time::{Duration, Instant},
 };
 use zmux_desktop_runtime::{
     Command, Desktop, DesktopError, MAX_TERMINALS, Request, Shell, Snapshot,
+    transfers::TransferCommand,
 };
-use zmux_workspace_core::{Action, Axis};
+use zmux_workspace_core::{Action, Axis, SessionId};
 
 fn desktop() -> Desktop {
     Desktop::new(Shell {
@@ -98,6 +100,104 @@ fn native_commands_route_input_and_resize_to_a_live_shell() {
     assert!(observed.last_error.is_none());
     desktop.shutdown(Duration::from_secs(5)).unwrap();
     assert!(desktop.snapshot().unwrap().closed);
+}
+
+#[test]
+fn native_transfer_receipts_are_per_call_and_reject_a_stale_session_before_input() {
+    let desktop = Arc::new(desktop());
+    let initial = wait(&desktop, ready);
+    let surface = initial.model.workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    let session_id = surface.session_id.unwrap();
+    let unsupported = desktop
+        .execute_transfer_receipt(Request {
+            version: 2,
+            request_id: 40,
+            payload: Command::Transfer {
+                action: TransferCommand::PasteFiles {
+                    surface_id: surface.id,
+                    expected_session_id: Some(session_id),
+                    paths: vec!["/tmp/zmux-receipt-unsupported".into()],
+                },
+            },
+        })
+        .unwrap_err();
+    assert!(!unsupported.outcome_unknown);
+    assert!(unsupported.error.to_string().contains("protocol version 1"));
+    let barrier = Arc::new(Barrier::new(3));
+    let spawn = |expected_session_id, path: &'static str| {
+        let desktop = Arc::clone(&desktop);
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            barrier.wait();
+            desktop.execute_transfer_receipt(Request {
+                version: 1,
+                request_id: 41,
+                payload: Command::Transfer {
+                    action: TransferCommand::PasteFiles {
+                        surface_id: surface.id,
+                        expected_session_id: Some(expected_session_id),
+                        paths: vec![path.into()],
+                    },
+                },
+            })
+        })
+    };
+    let valid = spawn(session_id, "/tmp/zmux-receipt-valid");
+    let stale = spawn(
+        SessionId(session_id.0.checked_add(1).unwrap()),
+        "/tmp/zmux-receipt-stale",
+    );
+    barrier.wait();
+
+    let valid = valid.join().unwrap().unwrap_or_else(|error| {
+        panic!(
+            "valid receipt failed before acknowledgement: {}, unknown={}",
+            error.error, error.outcome_unknown
+        )
+    });
+    let stale = stale.join().unwrap().unwrap_or_else(|error| {
+        panic!(
+            "stale receipt failed before acknowledgement: {}, unknown={}",
+            error.error, error.outcome_unknown
+        )
+    });
+    assert!(valid.result.is_ok());
+    assert!(valid.upload_id.is_none());
+    assert!(
+        stale
+            .result
+            .as_ref()
+            .is_err_and(|error| error.to_string().contains("session changed"))
+    );
+    assert!(stale.upload_id.is_none());
+    assert_ne!(valid.revision, stale.revision);
+    let observed = wait(&desktop, |snapshot| {
+        snapshot.frames[0]
+            .snapshot
+            .as_ref()
+            .is_some_and(|frame| frame.viewport.contents.contains("/tmp/zmux-receipt-valid"))
+    });
+    assert!(
+        !observed.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("/tmp/zmux-receipt-stale")
+    );
+    assert!(
+        !observed.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("/tmp/zmux-receipt-unsupported")
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
 }
 
 #[test]

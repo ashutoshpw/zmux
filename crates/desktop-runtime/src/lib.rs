@@ -36,6 +36,7 @@ pub const MAX_TERMINALS: usize = 8;
 pub const MAX_BROWSERS: usize = 4;
 const MAX_COMMANDS: usize = 32;
 const UPDATE_INTERVAL: Duration = Duration::from_millis(16);
+const TRANSFER_RECEIPT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct Shell {
@@ -177,6 +178,19 @@ pub(crate) struct Execution {
     pub created_uploads: Vec<u64>,
 }
 
+#[derive(Debug)]
+pub struct TransferExecution {
+    pub result: Result<(), DesktopError>,
+    pub revision: u64,
+    pub upload_id: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct TransferExecutionError {
+    pub error: DesktopError,
+    pub outcome_unknown: bool,
+}
+
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
@@ -262,6 +276,70 @@ impl Desktop {
         receiver.recv_timeout(timeout).map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
             mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+        })
+    }
+
+    /// Execute one native file transfer on the workspace worker and return that envelope's
+    /// acknowledgement. The caller must remain off the native UI thread for up to two seconds.
+    pub fn execute_transfer_receipt(
+        &self,
+        request: Request,
+    ) -> Result<TransferExecution, TransferExecutionError> {
+        if request.version != 1 {
+            return Err(TransferExecutionError {
+                error: DesktopError::Failure(
+                    "native transfer receipt requires protocol version 1".into(),
+                ),
+                outcome_unknown: false,
+            });
+        }
+        self.validate(&request)
+            .map_err(|error| TransferExecutionError {
+                error,
+                outcome_unknown: false,
+            })?;
+        match &request.payload {
+            Command::Transfer {
+                action:
+                    TransferCommand::PasteFiles {
+                        expected_session_id: Some(_),
+                        ..
+                    },
+            } => {}
+            _ => {
+                return Err(TransferExecutionError {
+                    error: DesktopError::Failure(
+                        "native transfer receipt requires paste_files with expected_session_id"
+                            .into(),
+                    ),
+                    outcome_unknown: false,
+                });
+            }
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Envelope {
+            request,
+            acknowledgement: Some(sender),
+            authorization: None,
+        })
+        .map_err(|error| TransferExecutionError {
+            error,
+            outcome_unknown: false,
+        })?;
+        let execution = receiver
+            .recv_timeout(TRANSFER_RECEIPT_TIMEOUT)
+            .map_err(|error| TransferExecutionError {
+                error: match error {
+                    mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+                    mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+                },
+                outcome_unknown: true,
+            })?;
+        debug_assert!(execution.created_uploads.len() <= 1);
+        Ok(TransferExecution {
+            result: execution.result,
+            revision: execution.snapshot.revision,
+            upload_id: execution.created_uploads.into_iter().next(),
         })
     }
 
@@ -648,6 +726,7 @@ impl Worker {
                 let target = request.scope.resolve(&model, &request.caller)?;
                 self.transfer(TransferCommand::PasteFiles {
                     surface_id: target.surface,
+                    expected_session_id: None,
                     paths,
                 })
             }
