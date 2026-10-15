@@ -60,4 +60,5 @@ jobs:
             ${{ runner.temp }}/terminal-engine-reuse/receipt.json
             ${{ runner.temp }}/terminal-engine-reuse/download-identity.json
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 7
