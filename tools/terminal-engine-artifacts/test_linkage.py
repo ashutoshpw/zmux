@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import stat
+import struct
 import tempfile
 import unittest
 import warnings
@@ -91,6 +92,13 @@ class RetainedLinkageChecks(unittest.TestCase):
                         {"reason": "build-script-executed", "package_id": "bridge-id", "out_dir": str(owner)}]
             encode = lambda records: "\n".join(json.dumps(record) for record in records)
             self.assertEqual(linkage.cargo_outputs(encode(messages), "adapter-id", "bridge-id", root), (executable, owner))
+            session_messages = copy.deepcopy(messages)
+            session_messages[0]["package_id"] = "session-id"
+            session_messages[0]["target"]["name"] = "engine"
+            self.assertEqual(linkage.cargo_outputs(encode(session_messages), "session-id", "bridge-id", root, "engine"), (executable, owner))
+            with self.assertRaisesRegex(Rejected, "one exact"):
+                linkage.cargo_outputs(encode(session_messages), "session-id", "bridge-id", root)
+
             with self.assertRaisesRegex(Rejected, "one exact"):
                 linkage.cargo_outputs(encode(messages), "different-adapter", "bridge-id", root)
             outside = copy.deepcopy(messages)
@@ -101,6 +109,30 @@ class RetainedLinkageChecks(unittest.TestCase):
             ambiguous.append(dict(messages[0], executable=str(root / "second-test")))
             with self.assertRaisesRegex(Rejected, "one exact"):
                 linkage.cargo_outputs(encode(ambiguous), "adapter-id", "bridge-id", root)
+
+    def test_session_runtime_closure_only_adds_the_documented_system_proc_library(self):
+        def commands(libraries, rpath=False):
+            # Mach-O load command bytes from the published ABI. The production
+            # driver separately validates complete executable/version geometry.
+            values = []
+            for library in libraries:
+                name = library.encode() + b"\0"
+                length = (24 + len(name) + 7) & ~7
+                values.append(struct.pack("<6I", 0xC, length, 24, 0, 0, 0) + name + b"\0" * (length - 24 - len(name)))
+            if rpath:
+                values.append(struct.pack("<4I", 0x8000001C, 16, 12, 0))
+            return struct.pack("<8I", 0xfeedfacf, 0x100000C, 0, 2, len(values), sum(map(len, values)), 0, 0) + b"".join(values)
+        system = "/usr/lib/libSystem.B.dylib"
+        proc = "/usr/lib/libproc.dylib"
+        for libraries in ([system], [system, proc]):
+            self.assertEqual(linkage.dynamic_libraries(commands(libraries), linkage.SESSION_OPTIONAL_DYLIBS), libraries)
+        with self.assertRaisesRegex(Rejected, "unexplained"):
+            linkage.dynamic_libraries(commands([system, proc]))  # Adapter remains System only.
+        for libraries in ([proc], [system, system], [system, "/opt/homebrew/lib/libssl.dylib"]):
+            with self.subTest(libraries=libraries), self.assertRaisesRegex(Rejected, "unexplained"):
+                linkage.dynamic_libraries(commands(libraries), linkage.SESSION_OPTIONAL_DYLIBS)
+        with self.assertRaisesRegex(Rejected, "search path"):
+            linkage.dynamic_libraries(commands([system], rpath=True), linkage.SESSION_OPTIONAL_DYLIBS)
 
 
 if __name__ == "__main__":

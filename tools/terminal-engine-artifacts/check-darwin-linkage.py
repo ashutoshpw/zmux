@@ -20,12 +20,22 @@ MAX_ARCHIVE = 16 * 1024 * 1024
 MAX_EXPANDED = 128 * 1024 * 1024
 MAX_FILES = 1024
 TARGETS = (("aarch64-apple-darwin", "arm64"), ("x86_64-apple-darwin", "x86_64"))
-TEST_NAMES = {
+ADAPTER_TEST_NAMES = {
     "default_backend_stages_zero_reply_frames_and_abort_preserves_last_publication",
     "linked_engine_publishes_cells_modes_metadata_and_reply_as_one_exact_generation",
     "linked_engine_failure_and_partial_reply_cancellation_keep_published_metadata",
     "linked_engine_exact_history_scroll_and_alternate_remain_bounded",
 }
+
+SESSION_TEST_NAMES = {
+    "actual_child_receives_engine_replies_raw_input_and_kernel_resize_through_session",
+    "blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suffix_first",
+    "blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued_input",
+    "engine_constructor_failure_precedes_child_launch_and_releases_resource_on_worker",
+}
+# The pinned darwin-libproc-sys0.2.0 build script links proc. Linker dead stripping
+# may omit an unused dylib; no other extra dependency is justified by this fixture.
+SESSION_OPTIONAL_DYLIBS = ("/usr/lib/libproc.dylib",)
 
 
 def check_inputs():
@@ -96,14 +106,14 @@ def supplement_bytes(response, expected_path, expected_digest):
     return data
 
 
-def cargo_outputs(log, adapter_id, bridge_id, target_directory):
+def cargo_outputs(log, package_id, bridge_id, target_directory, test_name="staged_engine"):
     executables, owners = set(), set()
     for line in log.splitlines():
         if not line.startswith("{"):
             continue  # Retained Cargo stderr diagnostics are not JSON messages.
         record = json.loads(line)
-        if (record.get("reason") == "compiler-artifact" and record["package_id"] == adapter_id
-                and record["target"]["name"] == "staged_engine" and record["target"]["kind"] == ["test"]
+        if (record.get("reason") == "compiler-artifact" and record["package_id"] == package_id
+                and record["target"]["name"] == test_name and record["target"]["kind"] == ["test"]
                 and record.get("executable")):
             executables.add(record["executable"])
         if record.get("reason") == "build-script-executed" and record["package_id"] == bridge_id:
@@ -116,7 +126,7 @@ def cargo_outputs(log, adapter_id, bridge_id, target_directory):
     return executable, owner
 
 
-def dynamic_libraries(data):
+def dynamic_libraries(data, optional_system_libraries=()):
     # Called only after inspect_macho validates every load-command length/boundary.
     count = struct.unpack_from("<I", data, 16)[0]
     offset, libraries = 32, []
@@ -136,15 +146,20 @@ def dynamic_libraries(data):
                 raise Rejected("unterminated dylib load name")
             libraries.append(value[:end].decode("utf-8", errors="strict"))
         offset += length
-    if sorted(libraries) != ["/usr/lib/libSystem.B.dylib"]:
+    required = "/usr/lib/libSystem.B.dylib"
+    allowed = {required, *optional_system_libraries}
+    if libraries.count(required) != 1 or len(set(libraries)) != len(libraries) or not set(libraries) <= allowed:
         raise Rejected("unexplained dynamic runtime dependency: " + repr(libraries))
     return libraries
 
 
-def source_hashes():
+def source_hashes(include_session_runtime=False):
     paths = {REPO / "Cargo.toml", REPO / "Cargo.lock", REPO / "scripts/process_group.py",
              REPO / ".github/workflows/terminal-engine-linkage.yml"}
-    for directory in (REPO / "crates/ghostty-vt", REPO / "crates/terminal-adapter", HERE):
+    directories = [REPO / "crates/ghostty-vt", REPO / "crates/terminal-adapter", HERE]
+    if include_session_runtime:
+        directories += [REPO / "crates/session-runtime", REPO / "vendor/darwin-libproc"]
+    for directory in directories:
         paths.update(path for path in directory.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
     paths.update(REPO / name for name in document(HERE / "candidate.json")["repository_inputs_sha256"])
     return {str(path.relative_to(REPO)): digest(read_bounded(path, 2 * 1024 * 1024)) for path in sorted(paths)}
@@ -154,11 +169,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--check-inputs", action="store_true")
+    parser.add_argument("--session-runtime", action="store_true",
+                        help="Also compile both optional Session targets and execute ARM PTY tests")
     args = parser.parse_args()
     if args.check_inputs:
         accepted, _ = check_inputs()
         print(json.dumps({"state": "linkage_inputs_verified", "download": accepted["download"],
-                          "sources": len(source_hashes()), "engine_rebuilt": False,
+                          "sources": len(source_hashes(args.session_runtime)), "session_runtime_requested": args.session_runtime,
+                          "engine_rebuilt": False,
                           "native_linkage_verified": False}, indent=2))
         return 0
     if args.output is None:
@@ -167,12 +185,12 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     receipt = {"schema_version": 1, "state": "starting", "phases": [], "targets": [],
                "claims": {"engine_rebuilt": False, "default_engine_changed": False,
-                          "session_worker_integrated": False, "appkit_linked": False,
+                          "optional_session_arm64_executed": False, "appkit_linked": False,
                           "intel_executed": False, "minimum_os_executed": False,
                           "performance_measured": False}}
     try:
         accepted, recipe = check_inputs()
-        frozen = source_hashes()
+        frozen = source_hashes(args.session_runtime)
         receipt["source_sha256"] = frozen
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise Rejected("new linkage execution requires a Darwin ARM64 host")
@@ -264,11 +282,36 @@ def main():
                 result.setdefault("outputs", {})[name] = {"sha256": digest(data), "bytes": len(data), **inventory}
             if architecture == "arm64":
                 stdout = run([str(retained / "staged-engine"), "--test-threads=1", "--nocapture"], "execute-arm64", timeout=30)
-                if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in TEST_NAMES):
+                if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in ADAPTER_TEST_NAMES):
                     raise Rejected("ARM64 adapter did not execute all four required behavioral cases")
                 result["execution"] = "passed_on_arm64_host"
+            if args.session_runtime:
+                session = {"execution": "not_executed", "dynamic_library_policy": {
+                    "required": ["/usr/lib/libSystem.B.dylib"], "allowed_optional": list(SESSION_OPTIONAL_DYLIBS),
+                    "source": "Cargo.lock pinned darwin-libproc-sys0.2.0 build.rs links dylib=proc"}}
+                result["session_runtime"] = session
+                log = run(["cargo", "test", "--locked", "-p", "zmux-session-runtime", "--features", "ghostty",
+                           "--test", "engine", "--target", target, "--no-run", "--message-format=json"],
+                          "compile-session-" + architecture, timeout=600, cwd=REPO)
+                executable, owner = cargo_outputs(log, packages["zmux-session-runtime"], packages["zmux-ghostty-vt"], target_directory, "engine")
+                object_data = read_bounded(owner / "zmux-vt.o", 16 * 1024 * 1024)
+                session["owner_object"] = {"sha256": digest(object_data), **inspect_macho(object_data, architecture)}
+                if session["owner_object"]["sha256"] != result["outputs"]["zmux-vt.o"]["sha256"]:
+                    raise Rejected("Session linked a different host shim object")
+                data = read_bounded(executable, 64 * 1024 * 1024)
+                inventory = inspect_macho(data, architecture, executable=True)
+                inventory["dynamic_libraries"] = dynamic_libraries(data, SESSION_OPTIONAL_DYLIBS)
+                shutil.copy2(executable, retained / "session-engine")
+                session["executable"] = {"sha256": digest(data), "bytes": len(data), **inventory}
+                if architecture == "arm64":
+                    stdout = run([str(retained / "session-engine"), "--test-threads=1", "--nocapture"], "execute-session-arm64", timeout=60)
+                    if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in SESSION_TEST_NAMES):
+                        raise Rejected("ARM64 Session did not execute all four required PTY cases")
+                    session["execution"] = "passed_on_arm64_host"
+                    receipt["claims"]["optional_session_arm64_executed"] = True
+                session["state"] = "compiled_linked_inspected"
             result["state"] = "compiled_linked_inspected"
-        if source_hashes() != frozen:
+        if source_hashes(args.session_runtime) != frozen:
             raise Rejected("linkage source inputs changed during validation")
         for target, architecture in TARGETS:
             checked_file(root / "original-upload/terminal-engine-artifacts/bundle", architecture + "/libghostty-vt.a", accepted["libraries"][target], 64 * 1024 * 1024)
@@ -276,7 +319,7 @@ def main():
         if receipt["bundle_bytes"] > MAX_EXPANDED:
             raise Rejected("retained linkage evidence exceeds upload bound")
         receipt["state"] = "complete"
-        receipt["scope"] = "production shim and adapter compile/link/inspection for both Apple targets, ARM64 tests only; original engines unchanged; no application/worker/default/input/performance acceptance"
+        receipt["scope"] = "production shim/adapter and requested optional Session compile/link/inspection for both Apple targets; ARM64 executed, Intel not executed; original engines unchanged; no native app/default/typed-input/performance acceptance"
     except Exception as error:
         receipt.update(state="failed", error=f"{type(error).__name__}: {error}")
     finally:

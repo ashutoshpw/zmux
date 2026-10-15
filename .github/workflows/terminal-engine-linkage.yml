@@ -2,6 +2,11 @@ name: Terminal engine retained Darwin linkage
 
 on:
   workflow_dispatch:
+    inputs:
+      include_session_runtime:
+        description: Also compile both optional Session targets and execute ARM PTY tests
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -30,10 +35,16 @@ jobs:
         run: |
           python3 -B -m unittest discover -s tools/terminal-engine-artifacts -p 'test_*.py' -v
           python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --check-inputs
-      - name: Link retained libraries to production shim and adapter; execute ARM only
+      - name: Link retained libraries and optional Session fixtures; execute ARM only
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --output "$RUNNER_TEMP/terminal-engine-linkage"
+          INCLUDE_SESSION_RUNTIME: ${{ inputs.include_session_runtime }}
+        run: |
+          if [ "$INCLUDE_SESSION_RUNTIME" = "true" ]; then
+            python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --session-runtime --output "$RUNNER_TEMP/terminal-engine-linkage"
+          else
+            python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --output "$RUNNER_TEMP/terminal-engine-linkage"
+          fi
       - name: Retain original provenance and new linkage evidence even after failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
