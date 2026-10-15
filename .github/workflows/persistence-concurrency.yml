@@ -10,14 +10,13 @@ jobs:
   macos:
     runs-on: macos-15
     timeout-minutes: 15
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/persistence-concurrency-target
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install pinned Rust
         run: rustup show active-toolchain
       - name: Repeat the real persistence concurrency contract
         run: |
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/persistence-concurrency-target"
           python3 - <<'PY'
           import json, os, pathlib, subprocess, sys
           root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'persistence-concurrency'
