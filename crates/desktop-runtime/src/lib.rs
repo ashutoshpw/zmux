@@ -4,8 +4,11 @@ pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
 pub mod targets;
+pub mod transfers;
 use attention::{Attention, AttentionCommand, Notification};
 use targets::{TargetOperation, TargetRequest};
+use transfers::{TransferCommand, TransferSlot, TransferSnapshot};
+use zmux_remote_runtime::connection::ManagedConnection;
 use zmux_workspace_core::targets::TargetError;
 
 use serde::{Deserialize, Serialize};
@@ -67,6 +70,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Transfer {
+        action: TransferCommand,
+    },
     Targeted {
         request: TargetRequest,
     },
@@ -138,6 +144,7 @@ pub struct Snapshot {
     pub frames: Vec<Frame>,
     pub notifications: Vec<Notification>,
     pub notifications_dropped: u64,
+    pub uploads: Vec<TransferSnapshot>,
     pub last_request_id: u64,
     pub last_error: Option<String>,
     pub closed: bool,
@@ -167,6 +174,7 @@ pub(crate) struct Execution {
     pub result: Result<(), DesktopError>,
     pub snapshot: Arc<Snapshot>,
     pub created_workspaces: Vec<zmux_workspace_core::WorkspaceId>,
+    pub created_uploads: Vec<u64>,
 }
 
 impl Desktop {
@@ -180,6 +188,7 @@ impl Desktop {
                 frames: Vec::new(),
                 notifications: Vec::new(),
                 notifications_dropped: 0,
+                uploads: Vec::new(),
                 last_request_id: 0,
                 last_error: None,
                 closed: false,
@@ -197,6 +206,8 @@ impl Desktop {
                 let mut worker = Worker {
                     model,
                     attention: Attention::default(),
+                    transfers: Vec::new(),
+                    next_transfer_id: 1,
                     app_active: false,
                     slots: HashMap::new(),
                     retired: Vec::new(),
@@ -330,6 +341,7 @@ impl Drop for Desktop {
 }
 struct Slot {
     session: Option<Session>,
+    connection: Option<Arc<ManagedConnection>>,
     cached: Option<Arc<TerminalSnapshot>>,
     starting: bool,
     failure: Option<String>,
@@ -339,10 +351,13 @@ struct Slot {
 struct Completion {
     id: SessionId,
     result: Result<Session, SessionError>,
+    connection: Option<Arc<ManagedConnection>>,
 }
 struct Worker {
     model: WorkspaceStore,
     attention: Attention,
+    transfers: Vec<TransferSlot>,
+    next_transfer_id: u64,
     app_active: bool,
     slots: HashMap<SessionId, Slot>,
     retired: Vec<Session>,
@@ -443,6 +458,7 @@ impl Worker {
                     dirty = true;
                 }
             }
+            dirty |= self.poll_transfers();
             self.retired.retain_mut(|session| {
                 if !session.is_finished() {
                     return true;
@@ -457,6 +473,7 @@ impl Worker {
             }
         }
         let deadline = Instant::now() + Duration::from_secs(3);
+        self.cancel_transfers();
         let sessions: Vec<_> = self
             .slots
             .values_mut()
@@ -486,8 +503,19 @@ impl Worker {
                 self.cleanup_error = Some(error.to_string());
             }
         }
+        while !self.transfers_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if !self.transfers_finished() {
+            self.cleanup_error = Some("upload workers exceeded the shutdown deadline".into());
+        }
         self.retired.clear();
         self.slots.clear();
+        if let Err(error) = zmux_remote_runtime::connection::drain_cleanup(
+            deadline.saturating_duration_since(Instant::now()),
+        ) {
+            self.cleanup_error = Some(error.to_string());
+        }
         self.publish(true);
     }
     fn retire(&mut self, session: Session) {
@@ -499,6 +527,7 @@ impl Worker {
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
         self.last_request_id = request.request_id;
+        let previous_upload_id = self.next_transfer_id;
         let previous_workspaces = if matches!(&request.payload, Command::Action { .. }) {
             Some(
                 self.model
@@ -536,6 +565,12 @@ impl Worker {
         if let Some(sender) = envelope.acknowledgement {
             let _ = sender.try_send(Execution {
                 result,
+                created_uploads: snapshot
+                    .uploads
+                    .iter()
+                    .filter(|u| u.id >= previous_upload_id)
+                    .map(|u| u.id)
+                    .collect(),
                 snapshot,
                 created_workspaces,
             });
@@ -543,6 +578,7 @@ impl Worker {
     }
     fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
         match command {
+            Command::Transfer { action } => self.transfer(action),
             Command::Targeted { request } => self.targeted(request),
             Command::Attention { action } => self.attention_action(action),
             Command::Action { action } => {
@@ -607,6 +643,13 @@ impl Worker {
                 self.action(action)?;
                 self.acknowledge_focused();
                 Ok(())
+            }
+            TargetOperation::PasteFiles { paths } => {
+                let target = request.scope.resolve(&model, &request.caller)?;
+                self.transfer(TransferCommand::PasteFiles {
+                    surface_id: target.surface,
+                    paths,
+                })
             }
             TargetOperation::Notify { title, body } => {
                 let target = request.scope.resolve(&model, &request.caller)?;
@@ -797,6 +840,7 @@ impl Worker {
                         session_id,
                         Slot {
                             session: None,
+                            connection: None,
                             cached: None,
                             starting: true,
                             failure: None,
@@ -828,22 +872,24 @@ impl Worker {
                         .name(format!("zmux-launch-{}", session_id.0))
                         .spawn(move || {
                             let result = (|| {
-                                if let Some(remote) = remote {
-                                    let process = remote
-                                        .validate()
-                                        .map_err(|e| {
+                                let connection = remote
+                                    .map(|remote| {
+                                        let descriptor = remote.validate().map_err(|e| {
                                             SessionError::Failure(format!(
                                                 "invalid SSH connection: {e}"
                                             ))
-                                        })?
-                                        .process_spec();
+                                        })?;
+                                        ManagedConnection::create(descriptor)
+                                            .map(Arc::new)
+                                            .map_err(|e| SessionError::Failure(e.to_string()))
+                                    })
+                                    .transpose()?;
+                                if let Some(connection) = &connection {
+                                    let process = connection.terminal_spec();
                                     shell.program = "/usr/bin/ssh".into();
                                     shell.args = process.args;
-                                    // Every managed terminal needs a remote PTY, including a
-                                    // requested command; endpoint-only file operations do not.
-                                    shell.args.insert(0, "-tt".into());
                                 }
-                                Session::spawn_with_environment(
+                                let session = Session::spawn_with_resource(
                                     Launch {
                                         program: shell.program,
                                         args: shell.args,
@@ -851,12 +897,19 @@ impl Worker {
                                         size: zmux_session_runtime::default_size(),
                                     },
                                     &context,
-                                )
+                                    connection.clone(),
+                                )?;
+                                Ok((session, connection))
                             })();
+                            let (result, connection) = match result {
+                                Ok((session, connection)) => (Ok(session), connection),
+                                Err(error) => (Err(error), None),
+                            };
                             // A dropped coordinator rejects the result; dropping Session cancels its worker.
                             if let Err(error) = sender.send(Completion {
                                 id: session_id,
                                 result,
+                                connection,
                             }) {
                                 drop(error.0);
                             }
@@ -880,7 +933,10 @@ impl Worker {
         if let Some(slot) = self.slots.get_mut(&completion.id) {
             slot.starting = false;
             match completion.result {
-                Ok(session) => slot.session = Some(session),
+                Ok(session) => {
+                    slot.session = Some(session);
+                    slot.connection = completion.connection;
+                }
                 Err(error) => {
                     let message = format!("terminal launch failed: {error}");
                     slot.failure = Some(message.clone());
@@ -939,6 +995,7 @@ impl Worker {
             frames,
             notifications: self.attention.items.clone(),
             notifications_dropped: self.attention.dropped,
+            uploads: self.transfer_snapshots(),
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),
             closed,

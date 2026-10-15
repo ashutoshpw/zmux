@@ -52,6 +52,10 @@ pub enum ControlCommand {
     Targeted {
         request: TargetRequest,
     },
+    ListUploads,
+    Transfer {
+        action: crate::transfers::TransferCommand,
+    },
     Status,
     Capabilities,
     /// Shared action transport; the same enum is used by the native bridge.
@@ -560,6 +564,13 @@ fn dispatch(
                 },
             ),
         },
+        ControlCommand::ListUploads => Ok(json!({"uploads": current_snapshot(desktop)?.uploads})),
+        ControlCommand::Transfer { action } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Transfer { action },
+        ),
         ControlCommand::Action { action } => mutate(
             desktop,
             admission,
@@ -760,6 +771,8 @@ fn mutate(
         .and_then(|w| w.root.panes().into_iter().find(|p| p.id == w.focused_pane))
         .map(|p| p.selected_surface);
     Ok(json!({
+        "created_uploads": execution.created_uploads,
+        "uploads": execution.snapshot.uploads,
         "created_workspaces": execution.created_workspaces.iter().filter_map(|id| execution.snapshot.model.workspaces.iter().find(|w| w.id == *id)).map(|w| {
             let pane = w.root.panes().into_iter().find(|pane| pane.id == w.focused_pane).expect("workspace focused pane exists");
             json!({"workspace_id": w.id, "workspace_uuid": execution.snapshot.model.object_uuid(TargetKind::Workspace, w.id.0),

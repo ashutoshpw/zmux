@@ -7,6 +7,8 @@ private enum UICommand: Sendable {
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case attention(String, UInt64?, UInt64?, Bool?)
     case browser(String, UInt64?, UInt64?, String, String?)
+    case pasteFiles(UInt64, [String])
+    case cancelUpload(UInt64)
     case input(UInt64, String)
     case resize(UInt64, Int, Int)
     case scroll(UInt64, Int)
@@ -34,6 +36,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private let canvas = BackgroundView(color: ZmuxPalette.terminal)
     private let workspaceList = FlippedStackView()
     private let mainHeader = MainHeaderView()
+    private lazy var cancelUploadButton = IconButton(symbol: "xmark.circle", label: "Cancel active upload", target: self, action: #selector(cancelActiveUpload))
     private var statusMessage = "Starting shell…"
     private lazy var cloudFooter = CloudFooterView(target: self, action: #selector(showCloudSettings))
     private var actionButtons: [IconButton] = []
@@ -90,6 +93,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title)
                     case .attention(let operation, let id, let through, let active):
                         try await self.bridge.attention(operation, id: id, through: through, active: active)
+                    case .pasteFiles(let surface, let paths):
+                        try await self.bridge.pasteFiles(surface: surface, paths: paths)
+                    case .cancelUpload(let id):
+                        try await self.bridge.cancelUpload(id: id)
                     case .input(let session, let text):
                         try await self.bridge.input(session: session, text: text)
                     case .wheel(let session, let lines, let row, let col, let modifiers, let history):
@@ -202,6 +209,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         sidebarPanel.addSubview(cloudFooter)
         sidebarPanel.addSubview(rightSeparator)
         sidebarChrome.addSubview(sidebarSeparator)
+        mainHeader.actions.addArrangedSubview(cancelUploadButton)
+        cancelUploadButton.isHidden = true
+        cancelUploadButton.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        cancelUploadButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
         content.addSubview(mainHeader)
         content.addSubview(canvas)
 
@@ -432,7 +443,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 subtitle = (workingDirectory as NSString).abbreviatingWithTildeInPath
             } else {
                 let panes = workspace.root.panes.count
-                subtitle = panes == 1 ? "Local shell" : "\(panes) local terminals"
+                subtitle = workspace.root.panes.flatMap { $0.surfaces }.compactMap { $0.remote?.destination }.first.map { "SSH · \($0)" } ?? (panes == 1 ? "Local shell" : "\(panes) local terminals")
             }
             let surfaces = Set(workspace.root.panes.flatMap { $0.surfaces }.map { $0.id })
             let unread = snapshot.notifications.filter { !$0.read && surfaces.contains($0.surfaceId) }.count
@@ -443,13 +454,25 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private func updateHeader(_ snapshot: DesktopSnapshot) {
         let title = terminalTitle(in: snapshot)
         let detail: String
-        let isError = snapshot.lastError != nil
-        if let error = snapshot.lastError {
+        let focusedSurface = focusedPane?.selectedSurface
+        let activeUpload = snapshot.uploads.last { $0.delivery == "pending" }
+        let latestUpload = snapshot.uploads.last { $0.surfaceId == focusedSurface }
+        let uploadFailure = latestUpload.flatMap { $0.delivery == "failed" ? $0 : nil }
+        cancelUploadButton.isHidden = activeUpload == nil
+        if let activeUpload { cancelUploadButton.toolTip = "Cancel upload \(activeUpload.id)" }
+        let isError = snapshot.lastError != nil || uploadFailure != nil
+        if let activeUpload {
+            detail = "Uploading \(ByteCountFormatter.string(fromByteCount: Int64(activeUpload.bytesSent), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(activeUpload.totalBytes), countStyle: .file))"
+        } else if let failure = uploadFailure {
+            detail = failure.deliveryError ?? failure.error ?? "Upload failed"
+        } else if let error = snapshot.lastError {
             detail = error
         } else if let pane = focusedPane, pane.selected.kind == "browser" {
             detail = pane.selected.url == "about:blank" ? "Private browser" : (pane.selected.url ?? "Private browser")
         } else if let workingDirectory = focusedViewport(in: snapshot)?.workingDirectory, !workingDirectory.isEmpty {
             detail = (workingDirectory as NSString).abbreviatingWithTildeInPath
+        } else if let endpoint = focusedPane?.selected.remote {
+            detail = "SSH · \(endpoint.destination)"
         } else if let workspace = snapshot.workspace {
             let count = workspace.root.panes.count
             detail = count == 1 ? "Local shell" : "\(count) local terminals"
@@ -458,6 +481,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         mainHeader.update(title: title, detail: detail, error: isError)
         window.title = title
+    }
+
+    @objc private func cancelActiveUpload(_ sender: Any?) {
+        if let upload = snapshot?.uploads.last(where: { $0.delivery == "pending" }) { enqueue(.cancelUpload(upload.id)) }
     }
 
     private func terminalTitle(in snapshot: DesktopSnapshot) -> String {
@@ -527,6 +554,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             if let session = pane.sessionId {
                 let terminal = terminals[session] ?? TerminalView(pane: pane)
                 terminal.pane = pane
+                terminal.onFiles = { [weak self] paths in self?.enqueue(.pasteFiles(pane.selectedSurface, paths)) }
                 terminal.onInput = { [weak self] text in self?.enqueue(.input(session, text)) }
                 terminal.onWheel = { [weak self] lines, row, col, modifiers, history in self?.enqueue(.wheel(session, lines, row, col, modifiers, history)) }
                 terminal.onScroll = { [weak self] lines in self?.enqueue(.scroll(session, lines)) }

@@ -183,6 +183,16 @@ impl Session {
         launch: Launch,
         environment: &[(String, String)],
     ) -> Result<Self, SessionError> {
+        Self::spawn_with_resource(launch, environment, ())
+    }
+
+    /// Keep a production-owned resource alive through PTY and child cleanup.
+    /// Its final release happens on the session worker, never the UI/core executor.
+    pub fn spawn_with_resource(
+        launch: Launch,
+        environment: &[(String, String)],
+        resource: impl Send + 'static,
+    ) -> Result<Self, SessionError> {
         // portable-pty may fall back to a home directory on a failed chdir. Restore
         // must fail visibly rather than launching a shell in an unexpected location.
         if let Some(cwd) = &launch.cwd {
@@ -267,6 +277,7 @@ impl Session {
         let worker = thread::Builder::new()
             .name(format!("zmux-session-{pid}"))
             .spawn(move || {
+                let _resource = resource;
                 let mut worker = Worker {
                     master: pair.master,
                     io,

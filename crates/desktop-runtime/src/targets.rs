@@ -23,6 +23,9 @@ pub enum TargetOperation {
     Action {
         action: TargetAction,
     },
+    PasteFiles {
+        paths: Vec<std::path::PathBuf>,
+    },
     SendText {
         text: String,
     },

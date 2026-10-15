@@ -1,10 +1,9 @@
 //! Validated SSH connection descriptors and deterministic process arguments.
 //!
-//! This crate does not open sockets, authenticate, create workspaces, or manage
-//! connection sharing. It provides the data boundary those owners can share.
-//! [`SshEndpoint::transport_args`] is the single rendering path for endpoint,
-//! host-key, authentication, and jump-route options. Terminal and future file
-//! operations must use that path rather than rebuilding SSH arguments.
+//! Descriptors validate routes; private connection owners bind auxiliary operations
+//! to one authenticated terminal. Upload workers perform bounded file and process I/O.
+//! [`SshEndpoint::transport_args`] renders the initial connection route. Auxiliary
+//! operations reuse its private authenticated socket and cannot reconnect independently.
 //!
 //! The descriptor deliberately supports a bounded OpenSSH subset. TCP local,
 //! remote, and dynamic forwarding are supported. Unix-socket forwarding,
@@ -13,6 +12,8 @@
 //! or an `ssh_config` alias; resolving configuration is left to OpenSSH.
 
 mod config;
+pub mod connection;
+pub mod upload;
 
 pub use config::{JumpConfig, SshConnectionConfig};
 

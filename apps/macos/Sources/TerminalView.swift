@@ -5,6 +5,8 @@ import AppKit
 // on the UI thread; preserve MainActor isolation and runtime checking at this boundary.
 final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var pane: Pane
+    var onFiles: (([String]) -> Void)?
+    private var receivingFiles = false
     var onInput: ((String) -> Void)?
     var onScroll: ((Int) -> Void)?
     var onWheel: ((Int, Int, Int, Int, Bool) -> Void)?
@@ -28,6 +30,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     init(pane: Pane) {
         self.pane = pane
         super.init(frame: .zero)
+        registerForDraggedTypes([.fileURL])
         setAccessibilityElement(true)
         setAccessibilityRole(.textArea)
         setAccessibilityLabel("Terminal")
@@ -59,6 +62,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         NSGraphicsContext.current?.shouldAntialias = true
         ZmuxPalette.terminal.setFill()
         bounds.fill()
+        if receivingFiles { NSColor.controlAccentColor.setStroke(); let border = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2)); border.lineWidth = 2; border.stroke() }
         guard let viewport else {
             (frameState as NSString).draw(at: NSPoint(x: contentInset, y: contentInset), withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
             return
@@ -154,7 +158,27 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }
+    private func filePaths(_ pasteboard: NSPasteboard) -> [String] {
+        (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []).filter { $0.isFileURL }.map { $0.path }
+    }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else { return [] }
+        receivingFiles = true; needsDisplay = true
+        return .copy
+    }
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { receivingFiles = false; needsDisplay = true }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { receivingFiles }
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        receivingFiles = false; needsDisplay = true
+        let paths = filePaths(sender.draggingPasteboard)
+        guard !paths.isEmpty, let onFiles else { return false }
+        onFiles(paths)
+        return true
+    }
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) { receivingFiles = false; needsDisplay = true }
     func pasteFromClipboard(_ sender: Any?) {
+        let paths = filePaths(NSPasteboard.general)
+        if !paths.isEmpty { onFiles?(paths); return }
         guard var text = NSPasteboard.general.string(forType: .string) else { return }
         if viewport?.bracketedPaste == true { text = "\u{1b}[200~" + text + "\u{1b}[201~" }
         else { text = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r") }

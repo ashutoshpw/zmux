@@ -31,13 +31,45 @@ input is not replayed. It opens a fresh connection and follows current ssh_confi
 defaults. Remote cwd restoration is not implemented; fresh remote terminals show unknown
 cwd until observed. Remote paths are never used as local launch directories.
 
-This subset does not yet implement connection sharing, durable remote sessions,
-automatic reconnect, mosh, remote CLI relays or file/image upload/drop/paste. Additional
-SSH options use a bounded allowlist; full option compatibility remains open. Ordinary
-text input works over the SSH PTY, while file/image transfer parity requires the next
-R01 work. No cloud deployment is required for this SSH path.
+File drops and Finder file paste use the same shared operation as:
 
-The loopback integration test covers actual key authentication, input/output, remote
-PTY allocation, no-focus creation, fresh reopen without command replay, and server-loss
-exit without local command fallback. It uses temporary host/client keys, private known
-hosts and a custom fixture shell; it does not establish two-host or packaged Mac parity.
+```sh
+zmux paste-files --surface SURFACE_UUID -- ./image.png ./notes.txt
+zmux list-uploads
+zmux cancel-upload UPLOAD_ID
+```
+
+For a local terminal these insert quoted local paths. For a managed SSH terminal,
+regular files upload through that terminal's private authenticated connection. Each
+terminal owns its connection; tabs do not share a terminal master with one another.
+File operations never authenticate again or fall back to another route. A closed or
+unavailable connection fails the upload. Successful paths are quoted and inserted into
+the originating surface/session, even after focus changes; no command is submitted.
+Closing the origin or cancelling suppresses insertion. Acknowledged completed files remain reported after a later failure/cancellation.
+`remote_result_uncertain` identifies a started operation whose result could not be
+confirmed, including connection loss before receipt; verify remote temporary storage
+in that case. Cancellation suppresses insertion and does not delete acknowledged files.
+
+The native header shows pending byte progress and an icon to cancel the latest active
+upload. CLI results distinguish bytes handed to SSH, remote completion, and insertion
+outcome. Remote completion requires an exact byte-count acknowledgement. Sources are
+opened on a worker without following symlinks; FIFOs/directories are rejected. Bounds:
+16 files, 64 MiB per file, 256 MiB total, four active jobs, eight recent records, and a
+two-minute operation deadline checked between I/O calls. A filesystem call stalled in
+the kernel cannot be forcibly interrupted; it stays off the UI/core executor and shutdown
+reports workers that miss its deadline. Remote uploads require a POSIX shell with mktemp,
+cat and wc.
+
+Image files work as files. Raw clipboard images, directory transfers, custom upload
+rules, durable remote sessions, automatic reconnect, mosh and remote CLI relays remain
+open. Additional SSH options use a bounded allowlist; full option compatibility remains
+open. No cloud deployment is required for this SSH path.
+
+The isolated loopback test covers actual key authentication, input/output, remote PTY,
+no-focus creation, fresh reopen without command replay, authenticated upload after the
+fixture's authorized key is removed, exact binary bytes and Unicode/quote/shell-shaped
+filenames. It checks insertion after switching to a local terminal, stalled cancellation,
+origin closure, late cancellation after a remote acknowledgement, failed-acknowledgement
+cleanup and server-loss failure without local fallback. Temporary fixture keys
+and configuration are removed. Two-host, password/jump-host, physical drop/paste, raw
+clipboard-image and packaged native acceptance remain separate gates.
