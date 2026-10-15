@@ -120,6 +120,9 @@ impl BrowserSocketDelay {
                     }
                     Err(error) => panic!("delayed socket accept: {error}"),
                 };
+                // Darwin accepts the listener's nonblocking mode; this worker
+                // performs bounded blocking reads of one complete wire request.
+                client.set_nonblocking(false).unwrap();
                 client
                     .set_read_timeout(Some(Duration::from_secs(3)))
                     .unwrap();
