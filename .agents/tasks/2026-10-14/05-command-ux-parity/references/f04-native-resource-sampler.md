@@ -80,3 +80,27 @@ These values establish that Darwin process lookup, successful socket attribution
 probe execution, unavailable states and artifact publication executed. Two startup
 samples from a failed journey establish no idle cost, percentile, sustained-output
 budget, remote-stall stability or comparative engine result.
+
+## Complete packaged-journey receipt
+
+macOS 38759082621 at 948e92282ddc84a30261b8a9628c88027ce504e3 passed Rust/ABI,
+universal compilation and the required packaged smoke flags. The downloaded
+build, smoke and resource documents name that exact SHA, and the development
+archive's SHA-256 matches its published checksum. Both architectures compiled;
+execution was on macOS 15.7.9 arm64 VirtualMac2,1. The artifact is ad-hoc signed
+and not notarized.
+
+The sampler finalized after 22.366 seconds with 19 observations: one explicit
+startup app-not-found state, 18 available resource samples and 18 successful CLI
+status probes. App RSS ranged from 48.09 to 106.58 MiB, current-PPID-tree summed
+RSS from 50.73 to 129.14 MiB, and reported interval app CPU from 6.61 to 48.19
+percent of one logical CPU. Bundled CLI process launch plus status round trip
+ranged from 11.297 to 143.325 ms, with a sample median of 23.868 ms.
+
+These are whole-journey observations with observer work and shared-page counting,
+not phase-isolated costs, percentile guarantees, performance budgets, physical
+footprint or input-to-display latency. Separately owned sshd and detached helpers
+remain outside current PPID-tree attribution. The native report's
+`window_capture_status` was 1; the archived PNGs do not establish successful OS
+window capture. This receipt establishes this instrumentation subset and does not
+close full F04 performance or comparative-engine acceptance.

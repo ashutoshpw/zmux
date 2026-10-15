@@ -92,10 +92,17 @@
       ],
       "exit_gate": "No engine choice from language preference alone; pinned license/provenance review and named Mac results; explicit gaps for graphics/keyboard/Unicode/reflow; bounded memory and latency budgets recorded before expanding limits.",
       "implemented_slices": [
-        "Bounded native resource sampler executed at5f5005e; controlled budgets/engine decision remain open"
+        "Bounded native resource sampler executed at5f5005e; controlled budgets/engine decision remain open",
+        "Isolated pinned Ghostty C/Rust feasibility and Viewport exporter committed3ac6fa4; Linux x86_64 and Mac arm64 exporter execution passes in38761104404; production engine unchanged"
       ],
       "verification_receipts": [
-        "f04-native-resource-sampler.md"
+        "f04-native-resource-sampler.md",
+        "f04-engine-evaluation.md"
+      ],
+      "remaining_gates": [
+        "Exact history and enforceable memory policy",
+        "Named controlled Mac workload budgets",
+        "Production engine decision and complete terminal fidelity"
       ]
     },
     {
@@ -201,7 +208,7 @@
     {
       "id": "R02",
       "title": "Durable remote sessions, relays and multiplexers",
-      "status": "planned",
+      "status": "implementing",
       "owner": "Rust remote/session owners and versioned remote daemon",
       "depends_on": [
         "R01",
@@ -212,7 +219,18 @@
         "Add SSH-tmux and local tmux/zellij lifecycle; add mosh with explicit fallback semantics",
         "Add remote-device routes and agent-session move after A03 supports transcript/checkpoint ownership"
       ],
-      "exit_gate": "Reconnect and daemon restart preserve exact session identity without duplicate commands; remote spawn executes remotely; detach versus kill verified; missing tools/unsupported versions fail clearly; A03 is an additional gate for session move."
+      "exit_gate": "Reconnect and daemon restart preserve exact session identity without duplicate commands; remote spawn executes remotely; detach versus kill verified; missing tools/unsupported versions fail clearly; A03 is an additional gate for session move.",
+      "implemented_slices": [
+        "Durable headless local tmux lifecycle committed57c9df4; app-bound attachment and descriptor restore in progress"
+      ],
+      "verification_receipts": [
+        "r02-local-tmux.md"
+      ],
+      "remaining_gates": [
+        "Native app attachment/reopen/restore",
+        "SSH-tmux, zellij, mosh and scoped daemon/relay/reconnect",
+        "Remote session move and full R02 acceptance"
+      ]
     },
     {
       "id": "N01",
@@ -284,7 +302,7 @@
     {
       "id": "B01",
       "title": "Browser lifecycle, profiles and user workflows",
-      "status": "planned",
+      "status": "implementing",
       "owner": "BrowserView/WebKit bridge and Rust browser descriptors",
       "depends_on": [
         "F02",
@@ -296,7 +314,18 @@
         "Implement downloads, file chooser, dialogs, permission/auth/certificate UX and cancellation",
         "Implement process-crash recovery, hidden-tab budgets, profile import/state and restoration"
       ],
-      "exit_gate": "Real local HTTPS fixtures, denied permissions, downloads, profile isolation, closed-tab recovery and WebContent termination pass; no browser page obtains native socket authority."
+      "exit_gate": "Real local HTTPS fixtures, denied permissions, downloads, profile isolation, closed-tab recovery and WebContent termination pass; no browser page obtains native socket authority.",
+      "implemented_slices": [
+        "Explicit persistent profile add/list/open bindings, durable catalog and session migration committed94725f1; portable tests and independent review passed"
+      ],
+      "verification_receipts": [
+        "b01-browser-profiles.md"
+      ],
+      "remaining_gates": [
+        "Packaged native profile isolation/reopen and actual app relaunch",
+        "Profile defaults, rename, clear/delete/import and remaining browser lifecycle",
+        "Dialogs/downloads/permissions/auth/certificates/WebContent recovery"
+      ]
     },
     {
       "id": "B02",
@@ -405,7 +434,7 @@
     {
       "id": "H01",
       "title": "Independent cloud identity and PR #1 requirements",
-      "status": "planned",
+      "status": "implementing",
       "owner": "services/control-plane, auth client, cloud settings",
       "depends_on": [
         "F01",
@@ -416,7 +445,18 @@
         "Complete org/admin/invite concurrency invariants, device presence/retention/revocation and session-bound ticket authority",
         "Rehearse protected DB migration and deployment configuration; add GitHub Actions deployment after host/database decision"
       ],
-      "exit_gate": "Every retained PR #1 matrix row has independent zmux evidence; real DB transactions and deployed callback/auth flows pass; origin remains zmux.w3dev.app; no raw-token handoff or operational upstream fallback."
+      "exit_gate": "Every retained PR #1 matrix row has independent zmux evidence; real DB transactions and deployed callback/auth flows pass; origin remains zmux.w3dev.app; no raw-token handoff or operational upstream fallback.",
+      "implemented_slices": [
+        "Local Docker identity/device/organization service plus bounded expired native credential cleanup d22b6a4; real PostgreSQL checks pass locally and hosted"
+      ],
+      "verification_receipts": [
+        "local-cloud.md"
+      ],
+      "remaining_gates": [
+        "Public tunnel and authenticated native callback verification",
+        "MFA, mail, member/admin/invite invariants and complete PR1 requirements",
+        "Protected migration/restore rehearsal and broader cloud lifecycle"
+      ]
     },
     {
       "id": "H02",

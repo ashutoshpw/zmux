@@ -49,3 +49,11 @@ No migration or cleanup was run against the persistent local service database.
 
 Fresh independent review accepted the transaction, skip-locked admission, counts-only
 operator output and retained-live-credential coverage. Broader H01/V01 remain open.
+
+Hosted receipt: Cloud service checks38760632159 atd22b6a4 passed migration002,
+service typecheck and all12 PostgreSQL integration tests, including the cleanup case.
+This is hosted test evidence, not migration or maintenance of the running local service.
+
+A public `/health` probe on2026-10-15 failed DNS resolution for `zmux.w3dev.app`
+from this environment; no public service response or sign-in was observed. The local
+loopback service still answers health/readiness and `bunx path-to-port` returns3530.

@@ -500,8 +500,8 @@ fn tab_switch_move_close_and_reopen_preserve_sibling_process_and_never_replay_in
 
 #[test]
 fn restore_uses_saved_cwd_and_missing_directory_retains_retryable_history() {
-    let directory = std::env::temp_dir().join(format!("zmux-restore-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
+    let directory = std::env::temp_dir().join(format!("zmux-restore-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
     let directory = std::fs::canonicalize(directory).unwrap();
     let desktop = desktop();
     let initial = wait(&desktop, ready);

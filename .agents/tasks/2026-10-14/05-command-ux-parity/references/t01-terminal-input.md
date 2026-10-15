@@ -67,3 +67,11 @@ cargo test --locked -p zmux-session-runtime --test lifecycle \
 This is a Linux pass, not a reproduction or closure of the observed Darwin
 corruption. macOS execution of that transport test and the revised packaged key
 smoke remain required. No production session-input behavior was changed.
+
+The unchanged multiline setup and exact special-key assertions subsequently passed
+at 948e922 in macOS 38759082621. The downloaded smoke/build/resource receipts name
+that exact SHA, and the archive SHA-256 matches its published checksum. Its
+`terminal_special_keys: true` flag is emitted after both cursor-mode hex assertions;
+raw per-key hex is not separately archived. This intermittent baseline pass does
+not close the earlier observed corruption or validate the later file-backed setup.
+The latter remains a separate native gate at its own source SHA.

@@ -4,11 +4,15 @@ use std::{
     fs,
     path::PathBuf,
     process::{Command, Output},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zmux_desktop_runtime::{Desktop, Shell, control::ControlServer};
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 struct App {
     desktop: Arc<Desktop>,
     server: ControlServer,
@@ -16,9 +20,11 @@ struct App {
 }
 impl App {
     fn new() -> Self {
+        // Parallel macOS tests can observe the same wall-clock tick.
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let socket = std::env::temp_dir()
             .join(format!(
-                "zm{:x}{:x}",
+                "zm{:x}{:x}-{sequence:x}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
