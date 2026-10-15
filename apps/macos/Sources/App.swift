@@ -95,7 +95,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
 
     override init() {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
-        window = NSWindow(
+        window = SidebarFocusWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
