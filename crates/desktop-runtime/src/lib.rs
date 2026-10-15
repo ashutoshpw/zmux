@@ -1508,6 +1508,25 @@ impl Worker {
             }
         }
         match request.operation {
+            TargetOperation::SelectWorkspaceNumber { digit } => {
+                if request.scope.workspace.is_some()
+                    || request.scope.pane.is_some()
+                    || request.scope.surface.is_some()
+                {
+                    return Err(DesktopError::Failure(
+                        "numbered workspace selection accepts only window scope".into(),
+                    ));
+                }
+                let window = request.scope.resolve_window(&model, &request.caller)?;
+                if let Some(workspace_id) = model
+                    .workspace_number(window, digit)
+                    .map_err(|error| DesktopError::Failure(error.to_string()))?
+                {
+                    self.action(Action::SelectWorkspace { workspace_id })?;
+                    self.acknowledge_focused();
+                }
+                Ok(())
+            }
             TargetOperation::Action { mut action } => {
                 if let zmux_workspace_core::targets::TargetAction::CreateBrowser {
                     profile: Some(selector),

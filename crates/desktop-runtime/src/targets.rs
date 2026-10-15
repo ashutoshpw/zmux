@@ -20,6 +20,9 @@ pub struct TargetRequest {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TargetOperation {
+    SelectWorkspaceNumber {
+        digit: u8,
+    },
     Action {
         action: TargetAction,
     },

@@ -505,3 +505,140 @@ fn workspace_moves_preflight_native_destination_and_preserve_two_real_sessions()
     assert_eq!(rejected.model, full.model);
     desktop.shutdown(Duration::from_secs(3)).unwrap();
 }
+
+#[test]
+fn numbered_workspace_requests_share_selection_action_and_consume_missing_rows_without_mutation() {
+    use zmux_desktop_runtime::targets::{TargetOperation, TargetRequest};
+    use zmux_workspace_core::workspace_order::WorkspaceOrder;
+    let desktop = Desktop::new(Shell {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        cwd: None,
+    })
+    .unwrap();
+    wait(&desktop, |s| {
+        s.control_frames.len() == 1 && s.control_frames[0].process_id.is_some()
+    });
+    for id in 1..=2 {
+        send(
+            &desktop,
+            id,
+            Command::Action {
+                action: Action::CreateWorkspace {
+                    name: format!("row {id}"),
+                },
+            },
+        );
+        wait(&desktop, |s| {
+            s.last_request_id == id
+                && s.control_frames.len() == (id + 1) as usize
+                && s.control_frames.iter().all(|f| f.process_id.is_some())
+        });
+    }
+    let snapshot = desktop.snapshot().unwrap();
+    let window = snapshot.model.windows[0].id;
+    let ids = snapshot.model.windows[0].workspace_ids.clone();
+    send(
+        &desktop,
+        3,
+        Command::Action {
+            action: Action::ReorderWorkspaces {
+                window_id: window,
+                order: WorkspaceOrder::Bulk {
+                    workspace_ids: vec![ids[1], ids[2], ids[0]],
+                },
+            },
+        },
+    );
+    let ordered = wait(&desktop, |s| s.last_request_id == 3);
+    let native_ids: Vec<_> = ordered
+        .control_frames
+        .iter()
+        .map(|f| (f.session_id, f.process_id))
+        .collect();
+    let number = |digit| Command::Targeted {
+        request: TargetRequest {
+            scope: TargetScope {
+                window: Some(
+                    ordered
+                        .model
+                        .object_uuid(zmux_workspace_core::targets::TargetKind::Window, window.0)
+                        .to_string()
+                        .parse()
+                        .unwrap(),
+                ),
+                ..Default::default()
+            },
+            operation: TargetOperation::SelectWorkspaceNumber { digit },
+            ..Default::default()
+        },
+    };
+    for (request, digit, expected) in [(4, 1, ids[1]), (5, 9, ids[0]), (6, 2, ids[2])] {
+        send(&desktop, request, number(digit));
+        let selected = wait(&desktop, |s| s.last_request_id == request);
+        assert!(selected.last_error.is_none());
+        assert_eq!(selected.model.focused_workspace, Some(expected));
+        assert_eq!(
+            selected.model.workspaces, ordered.model.workspaces,
+            "remembered panes/surfaces must stay selected"
+        );
+        assert_eq!(
+            selected
+                .control_frames
+                .iter()
+                .map(|f| (f.session_id, f.process_id))
+                .collect::<Vec<_>>(),
+            native_ids
+        );
+    }
+    let before = desktop.snapshot().unwrap().model.clone();
+    send(&desktop, 7, number(8));
+    let missing = wait(&desktop, |s| s.last_request_id == 7);
+    assert!(missing.last_error.is_none());
+    assert_eq!(
+        missing.model, before,
+        "unavailable numbers must not become a focus action"
+    );
+    for (request, digit) in [(8, 0), (9, 10)] {
+        send(&desktop, request, number(digit));
+        let rejected = wait(&desktop, |s| s.last_request_id == request);
+        assert!(
+            rejected
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("1–9"))
+        );
+        assert_eq!(rejected.model, before);
+    }
+    send(
+        &desktop,
+        10,
+        request(WindowAction::New { focus: true }, None),
+    );
+    let two = wait(&desktop, |s| {
+        s.last_request_id == 10 && s.model.windows.len() == 2
+    });
+    let foreground = two.model.windows[1].id;
+    for (offset, id) in ids.iter().enumerate() {
+        let sequence = 11 + offset as u64;
+        send(
+            &desktop,
+            sequence,
+            Command::Action {
+                action: Action::CloseWorkspace { workspace_id: *id },
+            },
+        );
+        wait(&desktop, |s| s.last_request_id == sequence);
+    }
+    let empty = desktop.snapshot().unwrap();
+    assert!(empty.model.windows[0].workspace_ids.is_empty());
+    assert_eq!(empty.model.focused_window, Some(foreground));
+    send(&desktop, 14, number(1));
+    let consumed = wait(&desktop, |s| s.last_request_id == 14);
+    assert!(consumed.last_error.is_none());
+    assert_eq!(
+        consumed.model, empty.model,
+        "empty hard window scope must not select a row from the other window"
+    );
+    desktop.shutdown(Duration::from_secs(3)).unwrap();
+}

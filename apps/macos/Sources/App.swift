@@ -6,7 +6,7 @@ import WebKit
 /// to its injected coordinator, including views retained while this host is hidden.
 @MainActor
 final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWindowDelegate {
-    let window: NSWindow
+    let window: SidebarFocusWindow
     var cloudWindow: NSWindowController?
     private(set) var snapshot: DesktopSnapshot?
 
@@ -59,6 +59,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var browserProfilesWindow: BrowserProfilesWindowController?
     private var workspaceCount = 1
     private var didSetInitialTerminalFocus = false
+    private var detachedContentResponder = false
+    private var pendingBrowserFocus: UInt64?
 
     init(coordinator: ApplicationCoordinator) {
         self.coordinator = coordinator
@@ -70,6 +72,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         )
         super.init()
         window.delegate = self
+        window.onWorkspaceNumber = { [weak self] digit in self?.selectWorkspaceNumber(digit) }
         window.title = "Terminal"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -114,9 +117,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         didSetInitialTerminalFocus = false
     }
     private func releaseContentResponder() {
-        if let responder = window.firstResponder as? NSView, responder.isDescendant(of: canvas) {
-            window.makeFirstResponder(nil)
-        }
+        // Capture before detaching shared views, including the window's field
+        // editor, which need not be a descendant of the browser's own view.
+        let browserOwned = browsers.values.contains { $0.rememberOwnedFocus(in: window) }
+        let contentOwned = (window.firstResponder as? NSView)?.isDescendant(of: canvas) == true
+        detachedContentResponder = browserOwned || contentOwned
+        if detachedContentResponder { window.makeFirstResponder(nil) }
     }
     func detachContent() {
         releaseContentResponder()
@@ -394,6 +400,14 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let item = workspaceMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.keyEquivalentModifierMask = modifiers; item.target = self
         }
+        workspaceMenu.addItem(.separator())
+        for digit in 1...9 {
+            let title = digit == 9 ? "Last Workspace in Sidebar" : "Workspace \(digit)"
+            let item = workspaceMenu.addItem(withTitle: title, action: #selector(selectWorkspaceNumberFromMenu(_:)), keyEquivalent: String(digit))
+            item.keyEquivalentModifierMask = [.command]
+            item.target = self
+            item.tag = digit
+        }
         workspaceItem.submenu = workspaceMenu
 
         let historyItem = NSMenuItem(title: "History", action: nil, keyEquivalent: "")
@@ -460,18 +474,26 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     func completePresentation(selectionChanged: Bool, layoutChanged: Bool) {
+        defer { detachedContentResponder = false }
         guard let snapshot else { return }
         if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }),
            let session = pane.sessionId, let terminal = terminals[session] {
+            pendingBrowserFocus = nil
             if selectionChanged || !didSetInitialTerminalFocus {
                 window.makeFirstResponder(terminal)
                 didSetInitialTerminalFocus = true
             } else if let responder = window.firstResponder as? TerminalView, responder !== terminal {
                 window.makeFirstResponder(terminal)
             }
-        } else if selectionChanged && !layoutChanged, let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
-            window.makeFirstResponder(browser.webView)
-        }
+        } else if let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
+            if selectionChanged || (layoutChanged && detachedContentResponder) {
+                pendingBrowserFocus = pane.selectedSurface
+            }
+            if pendingBrowserFocus == pane.selectedSurface, window.isKeyWindow,
+               browser.restorePreferredFocus() {
+                pendingBrowserFocus = nil
+            }
+        } else { pendingBrowserFocus = nil }
     }
 
     private func updateTabAttention(_ view: NSView, snapshot: DesktopSnapshot) {
@@ -649,7 +671,6 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         canvas.layoutSubtreeIfNeeded()
         canvas.subviews.forEach(initializeSplits)
         canvas.layoutSubtreeIfNeeded()
-        if let pane = focusedPane, let browser = browsers[pane.selectedSurface] { browser.focusAddress() }
     }
 
     private func paneView(_ tree: PaneTree) -> NSView {
@@ -985,6 +1006,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     @objc func workspaceSelected(_ sender: WorkspaceRowView) {
         if let id = workspaceRows[sender] { selectWorkspace(id) }
+    }
+
+    private func selectWorkspaceNumber(_ digit: Int) {
+        guard (1...9).contains(digit), nativeReady, NSApp.keyWindow === window, let windowUUID,
+              let identity, coordinator.snapshot?.model.identityNamespace == identity.namespace else { return }
+        enqueue(.workspaceNumber(windowUUID, digit))
+    }
+    @objc private func selectWorkspaceNumberFromMenu(_ sender: NSMenuItem) {
+        selectWorkspaceNumber(sender.tag)
     }
 
     func selectWorkspace(_ id: UInt64) {
@@ -1529,6 +1559,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "kernel_resize": true,
             "workspace_switch": true,
             "workspace_order": true,
+            "workspace_number": true,
             "pane_close": true,
             "terminal_tab_shortcut": true,
             "close_tab_shortcut": true,
@@ -2077,6 +2108,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await BrowserZoomSmoke.validate(surface: surface, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         try await BrowserFillSmoke.validate(cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         try await BrowserClickSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
+        try await WorkspaceNumberSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         try await WorkspaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, rows: { self.workspaceList.arrangedSubviews.compactMap { $0 as? WorkspaceRowView } }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),

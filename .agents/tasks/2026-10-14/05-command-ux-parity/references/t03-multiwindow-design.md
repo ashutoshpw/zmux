@@ -660,3 +660,106 @@ It still requires the exact expected cwd as the complete middle line. This setup
 reproduced the old predicate's timeout (`/tmp/zmux-t03-order-cwd-red.log`); the
 repaired full 12-test persistence suite passes
 (`/tmp/zmux-t03-order-persistence-final.log`). No persistence behavior changed.
+
+## Numbered workspace selection slice (2026-10-15)
+
+TOPO-011 / UX-ACTION-064 now has a bounded default numbered path. Read-only
+behavioral references at cmux `3ba653b9e5afb11d0bc578031142950d6136697e` are
+`Sources/TabManager+NumberedWorkspaceSelection.swift`,
+`Sources/KeyboardShortcutSettings.swift:687`, `Sources/AppDelegate.swift:16335`,
+and numbered menu entries in `Sources/cmuxApp.swift:1299`. The independent contract
+is Command-1 through Command-8 for those ordinary sidebar rows; Command-9 selects
+the last ordinary row, including when there are fewer or more than nine rows.
+Matched digits are consumed even when the requested row is unavailable. Reference
+group-header/collapsed-child filtering is not claimed: Zmux has no group model.
+No source implementation or tests were copied/imported/translated.
+
+The Rust snapshot maps a validated digit against the exact window's canonical
+membership. A targeted operation resolves the hard UUID window scope on the
+executor and uses the existing `SelectWorkspace` action for an available row.
+Unavailable rows, including empty windows while another window is focused, skip
+the action entirely: no model revision, selection, history or session mutation.
+Invalid digits reject. Remembered pane/tab selection and existing sessions remain
+owned by their workspaces. No new CLI grammar or global-index behavior was added.
+
+Native workspace menu entries and the production `SidebarFocusWindow` key-
+equivalent handler share UUID-scoped selection dispatch. The window handler
+consumes exact Command-digit defaults before terminal/browser fallback even if
+native startup has not supplied a selectable row. Menu entries store their digit and use the same host route as key events. That
+route requires the actual key owner and current namespace, then submits the
+current stable window UUID; a stale menu cannot activate another main window. Control/Option/Shift combinations and other digits retain
+their ordinary event routing. Shortcut rebinding/chords, group visibility and a
+Go To Workspace palette remain unresolved separate work.
+
+`WorkspaceNumberSmoke` drives actual `NSWindow.performKeyEquivalent` with synthetic
+Command-digit events and the real numbered menu. It switches between existing
+terminal/WebKit responders, verifies remembered panes/tabs and native view/host/
+document identities, checks live PID continuity, exercises unavailable slots from
+both content kinds, reverses canonical order and checks numbered/last semantics,
+then restores order and selection. The broad native report requires
+`workspace_number`. This fixture has not been compiled or executed on this Linux
+host; physical keyboard/IME and cross-window native acceptance remain separate
+hosted gates. Parent startup/menu diagnostic work is independently owned.
+
+Test authoring gate: the primary pure mapping table guards independent digit
+examples for counts 0/1/2/8/9/12 after reversal, wrong-window rows and invalid digits.
+Existing direction/history navigation tests cannot catch a 9-as-index regression.
+The separate real-PTY executor test protects unavailable-row no-mutation behavior,
+UUID window resolution, the existing selection action and unchanged sessions/
+remembered selections; it also checks an explicit empty source while a different
+window is focused. Native event/menu consumption cannot be established in Rust.
+No test-only production seam was introduced.
+
+Local scoped verification uses `/tmp/zmux-t03-number-target`:
+
+- New core API test first failed because the numbered owner did not exist
+  (`/tmp/zmux-t03-number-red.log`); the table passes after implementation
+  (`/tmp/zmux-t03-number-green.log`).
+- `cargo test -p zmux-desktop-runtime --test windows numbered_workspace_requests --locked`
+  passes the real-PTY/executor journey (`/tmp/zmux-t03-number-runtime.log`).
+- `cargo check -p zmux --locked` and strict Clippy for core/runtime all targets pass
+  (`/tmp/zmux-t03-number-check.log`, `/tmp/zmux-t03-number-clippy.log`).
+  Owned Rust formatting, `git diff --check` and native runner Python syntax pass.
+  Parent owns integrated checks, delivery and native execution.
+
+
+### Remembered native browser focus repair
+
+Independent numbered review exposed a shared owner gap: layout rebuilding always
+called `focusAddress`, and the completion owner skipped browser content focus
+when the layout changed. That contradicted the intended return to a previously
+document-focused loaded browser. Read-only comparison at the same pinned cmux
+source found that `Sources/Panels/BrowserPanel.swift:2432` defaults to document
+focus, `:8172–8253` captures/restores document versus address/find intent, and
+`:5090` keeps blank/unloaded content from taking address focus. This is behavioral
+comparison only; the repair remains original Zmux code.
+
+BrowserView now remembers its native address/document destination. It captures
+only an actual AppKit responder owned by the host immediately before detach,
+including its real address field editor and selection. It preserves the previous
+WebKit responder while that responder still belongs to the host. DOM focus/events
+in hidden documents do not set this preference. An explicit address action keeps
+address intent; submitting that address requests document intent. Newly created
+blank browsers begin with address intent, while a loaded URL begins with document
+intent. Find-field intent is not represented; the existing modal find UI and full
+reference focus parity remain separate.
+
+The shared layout builder no longer focuses the address field. Selection completion
+restores the selected browser through this owner after attachment, only in the
+actual key window. A deferred request survives background materialization until
+that window becomes key. Layout-only changes restore content only when detach
+actually released a content responder, so a no-focus tab insertion cannot steal
+focus from sidebar/non-content controls. Address selection ranges clamp to the
+current field text. No new DOM mutation/automation behavior or startup/menu-tree
+ownership change is included in this repair.
+
+The native journey now explicitly focuses its already loaded document before the
+Command-9/Command-1 roundtrip, retaining the strong document-focus assertion. It
+also drives the real Command-L menu route, selects a nontrivial address range,
+checks that range after switching away/back, consumes an unavailable workspace
+number while the address field is focused, and verifies that a genuinely new blank
+tab initially focuses its address editor. These assertions are authored regression
+checks. No native red/green execution has occurred locally, and source reasoning
+is not substituted for that required hosted result. Portable numbered mapping/PTY
+checks remain unchanged and passed; exact-source strict Swift and native execution
+remain pending.
