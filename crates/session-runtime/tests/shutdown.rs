@@ -125,7 +125,14 @@ fn actual_cleanup_failure_remains_an_error_after_join_for_both_shutdown_policies
             }
             assert!(
                 Instant::now() < deadline,
-                "auto-reaped child did not finish"
+                "auto-reaped child did not finish: policy={policy:?}; snapshot={:?}; group={:?}; child={:?}",
+                session
+                    .snapshot()
+                    .map(|s| (s.state, s.bytes_read, s.exit_code, s.failure.clone())),
+                nix::unistd::getpgid(Some(
+                    nix::unistd::Pid::from_raw(session.process_id() as i32)
+                )),
+                observe_child(session.process_id(), true)
             );
             thread::sleep(Duration::from_millis(5));
         }
@@ -292,7 +299,13 @@ fn graceful_deadline_escalates_only_the_retained_child_and_reports_forced_cleanu
         let outcome = session.shutdown(join_wait);
         assert!(
             matches!(outcome, Err(SessionError::Failure(ref failure)) if failure.contains("graceful shutdown deadline")),
-            "{outcome:?}"
+            "{outcome:?}; timeout={timeout:?}; shared_budget={shared_budget:?}; join_wait={join_wait:?}; snapshot={:?}; finished={}; group={:?}; child={:?}",
+            session
+                .snapshot()
+                .map(|s| (s.state, s.bytes_read, s.exit_code, s.failure.clone())),
+            session.is_finished(),
+            nix::unistd::getpgid(Some(nix::unistd::Pid::from_raw(pid as i32))),
+            observe_child(pid, true)
         );
         assert!(
             session.is_finished(),
