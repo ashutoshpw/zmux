@@ -10,6 +10,8 @@ import subprocess
 import contextlib
 import http.server
 import threading
+import shutil
+import tempfile
 from importlib.util import module_from_spec, spec_from_file_location
 
 fixture_spec = spec_from_file_location("native_ssh_fixture", Path(__file__).with_name("native-ssh-fixture.py"))
@@ -35,7 +37,7 @@ report = dist / "native-smoke.json"
 if report.exists(): report.unlink()
 stdout = dist / "native-stdout.log"
 stderr = dist / "native-stderr.log"
-def diagnose_startup():
+def diagnose_startup(native_environment):
     # Launch Services can report success even when the child crashes before stderr
     # opens. Run the same packaged executable for diagnostics only; this cannot
     # substitute for a successful Launch Services smoke check.
@@ -44,7 +46,7 @@ def diagnose_startup():
         try:
             result = subprocess.run([str(dist / "zmux.app/Contents/MacOS/zmux-app"),
                                      "--smoke-test", str(dist / "native-direct-smoke.json")],
-                                    stdout=log, stderr=subprocess.STDOUT, timeout=100)
+                                    stdout=log, stderr=subprocess.STDOUT, timeout=100, env=native_environment)
             log.write(f"\nPackaged executable return code: {result.returncode}\n")
         except subprocess.TimeoutExpired:
             log.write("\nPackaged executable diagnostic timed out\n")
@@ -60,6 +62,7 @@ def diagnose_startup():
                  "--", str(bundle / "MacOS/zmux-app"), "--smoke-test",
                  str(dist / "native-debugger-smoke.json")],
                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                env=native_environment,
             )
             try:
                 process.wait(timeout=60)
@@ -80,6 +83,30 @@ def diagnose_startup():
                 target = dist / ("native-crash-" + path.name + ".log")
                 target.write_text(path.read_text(errors="replace"))
                 print(target.read_text()[:24_000])
+@contextlib.contextmanager
+def local_tmux_fixture():
+    binary = shutil.which("tmux")
+    if binary is None:
+        raise SystemExit("Packaged local tmux acceptance requires an installed tmux executable")
+    # Keep HOME and the user's actual installation untouched. This is the same
+    # explicit profile configuration supported by production CLI/native hosts.
+    with tempfile.TemporaryDirectory(prefix="zmt-native-", dir="/tmp") as directory:
+        profile = Path(directory).resolve() / "profile"
+        native_environment = dict(os.environ, ZMUX_LOCAL_TMUX_ROOT=str(profile), ZMUX_LOCAL_TMUX_BIN=binary)
+        try:
+            listing = json.loads(subprocess.check_output([str(bundle / "Resources/bin/zmux"), "local-tmux", "list"],
+                                                         env=native_environment, text=True, timeout=10))
+            if listing["socket_path"] != str(profile / "server.sock") or listing["server_running"] or listing["sessions"]:
+                raise RuntimeError("Refusing to launch native smoke against an unexpected/nonempty tmux profile")
+            yield native_environment
+        finally:
+            socket = profile / "server.sock"
+            if socket.exists():
+                result = subprocess.run([binary, "-N", "-f", "/dev/null", "-S", str(socket), "kill-server"],
+                                        capture_output=True, text=True, timeout=10)
+                if result.returncode and "no server running" not in result.stderr and "No such file" not in result.stderr:
+                    raise RuntimeError("Owned native tmux fixture cleanup failed: " + result.stderr)
+
 @contextlib.contextmanager
 def browser_fixture():
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -110,7 +137,7 @@ def browser_fixture():
         server.server_close()
         worker.join(timeout=2)
 
-with browser_fixture(), fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
+with local_tmux_fixture() as native_environment, browser_fixture(), fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
     sampler = resource_module.NativeResourceSampler(
         bundle / "MacOS/zmux-app", bundle / "Resources/bin/zmux",
         dist / "native-resources.json", info.get("ZmuxSourceSHA"),
@@ -118,22 +145,25 @@ with browser_fixture(), fixture_module.native_ssh_fixture(dist / "native-ssh-fix
     try:
         try:
             sampler.start()
-            subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=150)
+            subprocess.run(["/usr/bin/open","-n","-W","--stdout",str(stdout),"--stderr",str(stderr),
+                            "--env", "ZMUX_LOCAL_TMUX_ROOT=" + native_environment["ZMUX_LOCAL_TMUX_ROOT"],
+                            "--env", "ZMUX_LOCAL_TMUX_BIN=" + native_environment["ZMUX_LOCAL_TMUX_BIN"],
+                            str(dist / "zmux.app"),"--args","--smoke-test",str(report)],check=True,timeout=180)
         finally:
             sampler.stop()
     except Exception:
         for path in [stdout,stderr]:
             if path.exists(): print(path.read_text())
-        diagnose_startup()
+        diagnose_startup(native_environment)
         raise
     if not report.exists():
         for path in [stdout,stderr]:
             if path.exists(): print(path.read_text())
-        diagnose_startup()
+        diagnose_startup(native_environment)
         raise SystemExit("The packaged app did not produce native smoke evidence")
 evidence = json.loads(report.read_text())
 metadata = json.loads((dist / "build-info.json").read_text())
 if evidence.get("source_sha") != metadata["source_sha"]: raise SystemExit("Smoke evidence does not match packaged source SHA")
-for key in ["success","remote_file_url_symlink","remote_file_url_directory_refusal","workspace_metadata","native_input","terminal_special_keys","ansi_color","split_panes","kernel_resize","workspace_switch","pane_close","active_terminal_title","native_cloud_callback","clipboard_image_preparation","clipboard_image_pasteboard","clipboard_image_local_paste","clipboard_image_remote_transfer","clipboard_image_remote_shell_path","clipboard_image_remote_source_lifetime","clipboard_image_remote_source_cleanup","clipboard_image_remote_managed_connection","clipboard_image_remote_focus_retained","bundled_cli_control","accessible_icon_controls","terminal_tab_shortcut","close_tab_shortcut","reopen_tab_shortcut","sibling_process_preserved","sidebar_toggle","sidebar_resize","notification_inbox","notification_target_routing","embedded_webkit","browser_hidden_state","balanced_browser_split","split_ratio_retained","tab_navigation_shared_actions","workspace_navigation_shortcuts","directional_pane_focus_shortcuts","directional_split_up","pane_reopen_original_split_anchor","global_focus_history_shortcuts","browser_directional_focus","browser_cli_automation","browser_locators_waits","browser_profiles_isolation_reopen","browser_profile_menu","browser_profile_management","browser_never_selected_viewport","browser_csp_eval_once","browser_title_observation","notification_permission_ordering","notification_cli_metadata","notification_workspace_target","notification_jump_to_unread","notification_reply_pty"]:
+for key in ["success","remote_file_url_symlink","remote_file_url_directory_refusal","workspace_metadata","native_input","terminal_special_keys","ansi_color","split_panes","kernel_resize","workspace_switch","pane_close","active_terminal_title","native_cloud_callback","clipboard_image_preparation","clipboard_image_pasteboard","clipboard_image_local_paste","clipboard_image_remote_transfer","clipboard_image_remote_shell_path","clipboard_image_remote_source_lifetime","clipboard_image_remote_source_cleanup","clipboard_image_remote_managed_connection","clipboard_image_remote_focus_retained","bundled_cli_control","accessible_icon_controls","terminal_tab_shortcut","close_tab_shortcut","reopen_tab_shortcut","sibling_process_preserved","sidebar_toggle","sidebar_resize","notification_inbox","notification_target_routing","embedded_webkit","browser_hidden_state","balanced_browser_split","split_ratio_retained","tab_navigation_shared_actions","workspace_navigation_shortcuts","directional_pane_focus_shortcuts","directional_split_up","pane_reopen_original_split_anchor","global_focus_history_shortcuts","browser_directional_focus","browser_cli_automation","browser_locators_waits","browser_profiles_isolation_reopen","browser_profile_menu","browser_profile_management","local_tmux_cli_native_reopen","browser_never_selected_viewport","browser_csp_eval_once","browser_title_observation","notification_permission_ordering","notification_cli_metadata","notification_workspace_target","notification_jump_to_unread","notification_reply_pty"]:
     if evidence.get(key) is not True: raise SystemExit(f"Native check failed: {key}")
 print(json.dumps(evidence,indent=2))

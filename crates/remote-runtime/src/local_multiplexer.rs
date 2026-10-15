@@ -202,6 +202,9 @@ pub struct LocalTmux {
 }
 impl LocalTmux {
     pub fn from_environment() -> Result<Self> {
+        if let Some(root) = env::var_os("ZMUX_LOCAL_TMUX_ROOT") {
+            return Self::new(PathBuf::from(root), selected_binary()?);
+        }
         let home = env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|p| p.is_absolute())
@@ -928,6 +931,7 @@ impl LocalTmux {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         clear_context(&mut command);
+        command.env("ZMUX_LOCAL_TMUX_ROOT", &self.root);
         command.env("ZMUX_LOCAL_TMUX_PROFILE", &self.root);
         command.env("ZMUX_LOCAL_TMUX_BIN", &self.binary);
         run_bounded(command, self.cancellation.as_deref())
