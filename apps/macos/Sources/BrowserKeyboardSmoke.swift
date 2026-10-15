@@ -94,8 +94,17 @@ enum BrowserKeyboardSmoke {
                     throw BridgeFailure(message: "Keyboard receipt lost input kind, snapshot or exact host/document ownership")
                 }
                 if let snapshotTitle {
-                    guard case .object(let fields)? = reply.snapshot, case .string(let title)? = fields["title"], title == snapshotTitle else {
-                        throw BridgeFailure(message: "Keyboard snapshot preceded the native input/default handler")
+                    let actualTitle: String?
+                    if case .object(let fields)? = reply.snapshot, case .string(let title)? = fields["title"] { actualTitle = title }
+                    else { actualTitle = nil }
+                    guard actualTitle == snapshotTitle else {
+                        let observed: String
+                        do {
+                            let value = try await observe()
+                            observed = String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+                        }
+                        catch { observed = "Diagnostic DOM observation failed: " + error.localizedDescription }
+                        throw BridgeFailure(message: "Keyboard snapshot preceded the native input/default handler: snapshotTitle=\(actualTitle ?? "<missing>"), expected=\(snapshotTitle), subsequentObservation=\(String(observed.prefix(4096))), appActive=\(NSApp.isActive), keyWindowRetained=\(NSApp.keyWindow === keyWindow), detached=\(view.webView.window == nil)")
                     }
                 }
                 try retained()

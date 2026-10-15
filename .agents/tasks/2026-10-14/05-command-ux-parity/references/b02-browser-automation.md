@@ -74,6 +74,20 @@ requires browser_keyboard. Strict Swift6 and packaged native execution of this
 production candidate remain pending. IME/physical input, inactive app delivery,
 full mapping and modifier lifecycle acceptance are not claimed. Native callback-pool saturation after expired page promises is guarded before keyboard delivery and every downstream observation rejection preserves mutation uncertainty; its actual WebKit saturation journey remains an additional native gate.
 
+Run 38822345401 at `924cd89e77a03e33b48381152183b29ba5aee53b` passed native
+source typing/build, sidebar resizing, document-focus restoration and the existing
+zoom/fill/click/interactions/edit-scroll journeys. It reached the production
+keyboard fixture for the first time, failing its first native `press x` snapshot
+title assertion. The original error did not record the returned title or DOM key
+events, so asynchronous snapshot ordering and missing input cannot yet be
+distinguished. The standalone feasibility probe waited before observing and does
+not prove production snapshot ordering. Failure-only diagnostics now retain the
+returned title, one subsequent actual DOM observation, app-active/key-window and
+detached-host state. They preserve the strict assertion and add no delay, retry,
+replay, synthetic event, default compensation or production behavior change.
+Native keyboard acceptance remains pending; the separate diagnostic relaunch's
+non-key-window sidebar drag failure is not the original failure.
+
 # B02a browser automation bridge
 
 ## B02g type, select and pixel scroll (2026-10-15)
