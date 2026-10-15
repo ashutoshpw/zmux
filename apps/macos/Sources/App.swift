@@ -2141,100 +2141,126 @@ finally:
 for mode, value in enumerate(records): emit("%d_%s_END" % (mode, value))
 emit("done")
 """#
-        terminal.insertText("python3 -c '" + program.replacingOccurrences(of: "'", with: "'\\''") + "'\r", replacementRange: NSRange(location: NSNotFound, length: 0))
-        for (mode, keys) in [normal, application].enumerated() {
-            do {
-                try await waitUntil { value in
-                    value.frames.contains { frame in
-                        frame.sessionId == session && frame.snapshot?.viewport.applicationCursor == (mode == 1)
-                            && frame.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_ready\(mode)") == true
+        // The key contract starts after Python is ready. A private file avoids
+        // feeding multiline setup source through interactive shell line editing;
+        // that separate transport issue remains under investigation.
+        let fixture = try await Task.detached {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("zmux-native-keys-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            guard FileManager.default.createFile(atPath: root.appendingPathComponent("keys.py").path,
+                                                  contents: Data(program.utf8), attributes: [.posixPermissions: 0o600]) else {
+                try FileManager.default.removeItem(at: root)
+                throw BridgeFailure(message: "Could not create native key fixture source")
+            }
+            return root
+        }.value
+        func removeFixture() async throws {
+            try await Task.detached { try FileManager.default.removeItem(at: fixture) }.value
+        }
+        do {
+            let path = fixture.appendingPathComponent("keys.py").path
+            terminal.insertText("python3 '" + path.replacingOccurrences(of: "'", with: "'\\''") + "'\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+            for (mode, keys) in [normal, application].enumerated() {
+                do {
+                    try await waitUntil { value in
+                        value.frames.contains { frame in
+                            frame.sessionId == session && frame.snapshot?.viewport.applicationCursor == (mode == 1)
+                                && frame.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_ready\(mode)") == true
+                        }
                     }
+                } catch {
+                    let readinessFailure = error.localizedDescription
+                    // Only this newly created fixture terminal is inspected. Escape
+                    // controls/non-ASCII and cap retained ASCII diagnostic bytes.
+                    func diagnosticText(_ text: String, limit: Int) -> String {
+                        let escaped = text.unicodeScalars.suffix(limit).map { scalar -> String in
+                            switch scalar.value {
+                            case 0x20...0x7e: return String(scalar)
+                            case 0x0a: return "\\n"
+                            case 0x0d: return "\\r"
+                            case 0x09: return "\\t"
+                            default: return "\\u{" + String(scalar.value, radix: 16) + "}"
+                            }
+                        }.joined()
+                        return String(escaped.suffix(limit))
+                    }
+                    let responder = window.firstResponder.map { "\(String(reflecting: type(of: $0)))@\(ObjectIdentifier($0))" } ?? "nil"
+                    var details = ["mode=\(mode)", "session=\(session)", "surface=\(surface)",
+                                   "expectedReady=KEY_\(token)_ready\(mode)", "windowKey=\(window.isKeyWindow)",
+                                   "firstResponder=\(responder)", "terminalMounted=\(terminal.window === window)"]
+                    if let frame = snapshot?.frames.first(where: { $0.sessionId == session }) {
+                        details.append("frameStarting=\(frame.starting),pid=\(frame.processId.map { String($0) } ?? "nil"),failure=\(diagnosticText(frame.failure ?? "nil", limit: 512))")
+                        if let value = frame.snapshot {
+                            let viewport = value.viewport
+                            details.append("frameState=\(value.state),bytesRead=\(value.bytesRead),exitCode=\(value.exitCode.map { String($0) } ?? "nil"),failure=\(diagnosticText(value.failure ?? "nil", limit: 512))")
+                            details.append("applicationCursor=\(viewport.applicationCursor),scrollbackOffset=\(viewport.scrollbackOffset),scrollbackLines=\(viewport.scrollbackLines),alternateScreen=\(viewport.alternateScreen),rows=\(viewport.size.rows),cols=\(viewport.size.cols)")
+                        } else { details.append("frameSnapshot=unavailable") }
+                    } else { details.append("frame=not-visible") }
+                    let diagnosticWorkspaces: [Workspace] = snapshot?.model.workspaces ?? []
+                    let diagnosticPanes: [Pane] = diagnosticWorkspaces.flatMap { $0.root.panes }
+                    let diagnosticSurfaces: [Surface] = diagnosticPanes.flatMap { $0.surfaces }
+                    let ownsTarget = diagnosticSurfaces.contains { candidate in
+                        candidate.id == surface && candidate.kind == "terminal" && candidate.sessionId == session
+                    }
+                    if ownsTarget {
+                        do {
+                            let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000, externalCaller: true)
+                            guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                  (screen["surface_id"] as? NSNumber)?.uint64Value == surface,
+                                  (screen["session_id"] as? NSNumber)?.uint64Value == session,
+                                  let contents = screen["contents"] as? String else {
+                                throw BridgeFailure(message: "Diagnostic screen did not identify the fixture surface/session")
+                            }
+                            details.append("readScreenFixtureTail=\(diagnosticText(contents, limit: 4096))")
+                        } catch { details.append("readScreenError=\(diagnosticText(error.localizedDescription, limit: 512))") }
+                    } else { details.append("readScreen=skipped-fixture-target-no-longer-owned") }
+                    throw BridgeFailure(message: readinessFailure + "; special-key readiness: " + details.joined(separator: "; "))
                 }
-            } catch {
-                let readinessFailure = error.localizedDescription
-                // Only this newly created fixture terminal is inspected. Escape
-                // controls/non-ASCII and cap retained ASCII diagnostic bytes.
-                func diagnosticText(_ text: String, limit: Int) -> String {
-                    let escaped = text.unicodeScalars.suffix(limit).map { scalar -> String in
-                        switch scalar.value {
-                        case 0x20...0x7e: return String(scalar)
-                        case 0x0a: return "\\n"
-                        case 0x0d: return "\\r"
-                        case 0x09: return "\\t"
-                        default: return "\\u{" + String(scalar.value, radix: 16) + "}"
-                        }
-                    }.joined()
-                    return String(escaped.suffix(limit))
+                for key in keys {
+                    let characters = String(UnicodeScalar(key.symbol)!)
+                    guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: key.modifiers.union(.function),
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                        characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: key.code) else {
+                        throw BridgeFailure(message: "Could not construct a native special-key event")
+                    }
+                    window.sendEvent(event)
+                    // Exercise encoding rather than saturating the bounded input queue.
+                    try await Task.sleep(for: .milliseconds(10))
                 }
-                let responder = window.firstResponder.map { "\(String(reflecting: type(of: $0)))@\(ObjectIdentifier($0))" } ?? "nil"
-                var details = ["mode=\(mode)", "session=\(session)", "surface=\(surface)",
-                               "expectedReady=KEY_\(token)_ready\(mode)", "windowKey=\(window.isKeyWindow)",
-                               "firstResponder=\(responder)", "terminalMounted=\(terminal.window === window)"]
-                if let frame = snapshot?.frames.first(where: { $0.sessionId == session }) {
-                    details.append("frameStarting=\(frame.starting),pid=\(frame.processId.map { String($0) } ?? "nil"),failure=\(diagnosticText(frame.failure ?? "nil", limit: 512))")
-                    if let value = frame.snapshot {
-                        let viewport = value.viewport
-                        details.append("frameState=\(value.state),bytesRead=\(value.bytesRead),exitCode=\(value.exitCode.map { String($0) } ?? "nil"),failure=\(diagnosticText(value.failure ?? "nil", limit: 512))")
-                        details.append("applicationCursor=\(viewport.applicationCursor),scrollbackOffset=\(viewport.scrollbackOffset),scrollbackLines=\(viewport.scrollbackLines),alternateScreen=\(viewport.alternateScreen),rows=\(viewport.size.rows),cols=\(viewport.size.cols)")
-                    } else { details.append("frameSnapshot=unavailable") }
-                } else { details.append("frame=not-visible") }
-                let diagnosticWorkspaces: [Workspace] = snapshot?.model.workspaces ?? []
-                let diagnosticPanes: [Pane] = diagnosticWorkspaces.flatMap { $0.root.panes }
-                let diagnosticSurfaces: [Surface] = diagnosticPanes.flatMap { $0.surfaces }
-                let ownsTarget = diagnosticSurfaces.contains { candidate in
-                    candidate.id == surface && candidate.kind == "terminal" && candidate.sessionId == session
-                }
-                if ownsTarget {
-                    do {
-                        let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000, externalCaller: true)
-                        guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              (screen["surface_id"] as? NSNumber)?.uint64Value == surface,
-                              (screen["session_id"] as? NSNumber)?.uint64Value == session,
-                              let contents = screen["contents"] as? String else {
-                            throw BridgeFailure(message: "Diagnostic screen did not identify the fixture surface/session")
-                        }
-                        details.append("readScreenFixtureTail=\(diagnosticText(contents, limit: 4096))")
-                    } catch { details.append("readScreenError=\(diagnosticText(error.localizedDescription, limit: 512))") }
-                } else { details.append("readScreen=skipped-fixture-target-no-longer-owned") }
-                throw BridgeFailure(message: readinessFailure + "; special-key readiness: " + details.joined(separator: "; "))
-            }
-            for key in keys {
-                let characters = String(UnicodeScalar(key.symbol)!)
-                guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: key.modifiers.union(.function),
+                // Control-Space emits NUL after all preceding key events on the same
+                // input route. The child uses it as an ordering fence, without timing guesses.
+                guard let sentinel = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control],
                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                    characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: key.code) else {
-                    throw BridgeFailure(message: "Could not construct a native special-key event")
+                    characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49) else {
+                    throw BridgeFailure(message: "Could not construct the native key ordering sentinel")
                 }
-                window.sendEvent(event)
-                // Exercise encoding rather than saturating the bounded input queue.
-                try await Task.sleep(for: .milliseconds(10))
+                window.sendEvent(sentinel)
             }
-            // Control-Space emits NUL after all preceding key events on the same
-            // input route. The child uses it as an ordering fence, without timing guesses.
-            guard let sentinel = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49) else {
-                throw BridgeFailure(message: "Could not construct the native key ordering sentinel")
+            try await waitUntil { value in
+                value.frames.contains { $0.sessionId == session && $0.snapshot?.viewport.applicationCursor == false
+                    && $0.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_done") == true }
             }
-            window.sendEvent(sentinel)
-        }
-        try await waitUntil { value in
-            value.frames.contains { $0.sessionId == session && $0.snapshot?.viewport.applicationCursor == false
-                && $0.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_done") == true }
-        }
-        let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000)
-        guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              (screen["session_id"] as? NSNumber)?.uint64Value == session,
-              let contents = screen["contents"] as? String else { throw BridgeFailure(message: "Key fixture screen was unavailable") }
-        let compact = contents.replacingOccurrences(of: "\n", with: "")
-        for (mode, keys) in [normal, application].enumerated() {
-            let expected = keys.map { $0.bytes }.joined().utf8.map { String(format: "%02x", $0) }.joined()
-            guard compact.contains("KEY_\(token)_\(mode)_\(expected)_END") else {
-                throw BridgeFailure(message: "Native special keys differed from xterm PTY bytes in mode \(mode): " + String(compact.suffix(2048)))
+            let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000)
+            guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  (screen["session_id"] as? NSNumber)?.uint64Value == session,
+                  let contents = screen["contents"] as? String else { throw BridgeFailure(message: "Key fixture screen was unavailable") }
+            let compact = contents.replacingOccurrences(of: "\n", with: "")
+            for (mode, keys) in [normal, application].enumerated() {
+                let expected = keys.map { $0.bytes }.joined().utf8.map { String(format: "%02x", $0) }.joined()
+                guard compact.contains("KEY_\(token)_\(mode)_\(expected)_END") else {
+                    throw BridgeFailure(message: "Native special keys differed from xterm PTY bytes in mode \(mode): " + String(compact.suffix(2048)))
+                }
             }
+            closeTerminalTab(surface)
+            try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == previous }
+        } catch {
+            let primary = error
+            do { try await removeFixture() }
+            catch { throw BridgeFailure(message: "\(primary.localizedDescription); key fixture cleanup failed: \(error.localizedDescription)") }
+            throw primary
         }
-        closeTerminalTab(surface)
-        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == previous }
+        try await removeFixture()
     }
 
     private func smokeHistoryNavigation() async throws {

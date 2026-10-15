@@ -208,6 +208,73 @@ fn input_and_resize_reach_the_real_terminal() {
 }
 
 #[test]
+fn interactive_shell_preserves_exact_multiline_input_across_native_chunk_boundaries() {
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    struct Fixture(PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let Err(error) = fs::remove_dir_all(&self.0) {
+                eprintln!("multiline input fixture cleanup: {error}");
+            }
+        }
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("zmux-multiline-{}-{nonce:x}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let fixture = Fixture(root);
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+    let payload: String = (0..24)
+        .map(|row| format!("row {row:02}: finally keeps its exact bytes.\n"))
+        .collect();
+    for (name, program, args) in [
+        ("bash", "/bin/bash", vec!["--noprofile", "--norc", "-i"]),
+        ("zsh", "/bin/zsh", vec!["-f", "-i"]),
+    ] {
+        // Both are stock macOS shells. Linux hosts without zsh still exercise
+        // bash's interactive line editor; no user startup files are loaded.
+        if !std::path::Path::new(program).is_file() {
+            assert_eq!(name, "zsh", "the bash fixture dependency is missing");
+            continue;
+        }
+        let output = fixture.0.join(format!("{name}.txt"));
+        let command = format!(
+            "python3 -c {} {} {}\r",
+            quote(
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(sys.argv[2].encode()); print('MULTILINE_'+'CAPTURED', flush=True)"
+            ),
+            quote(output.to_str().unwrap()),
+            quote(&payload)
+        );
+        assert!(command.len() > 1024 && command.len() < 2048);
+        let mut session = Session::spawn_with_environment(
+            Launch {
+                program: program.into(),
+                args: args.into_iter().map(String::from).collect(),
+                cwd: Some(fixture.0.clone()),
+                size: Size { rows: 31, cols: 63 },
+            },
+            &[("HOME".into(), fixture.0.to_string_lossy().into_owned())],
+        )
+        .unwrap();
+        // Match the native bridge's two 1024-byte admissions without bypassing
+        // the real session writer, shell line discipline, or shell argument parser.
+        for chunk in command.as_bytes().chunks(1024) {
+            session.send_input(chunk).unwrap();
+        }
+        wait_for(&session, |value| {
+            value.viewport.contents.contains("MULTILINE_CAPTURED")
+        });
+        assert_eq!(fs::read(output).unwrap(), payload.as_bytes(), "{name}");
+        session.shutdown(Duration::from_secs(3)).unwrap();
+    }
+}
+
+#[test]
 fn output_flood_does_not_prevent_cancel_and_leader_reaping() {
     let mut session = launch("while :; do printf 'busy-output\\n'; done");
     let pid = session.process_id();
