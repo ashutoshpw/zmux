@@ -86,6 +86,7 @@ pub(crate) fn current(snapshot: &Snapshot, limit: usize) -> Result<Value, (&'sta
                 "workspace": identity(snapshot, TargetKind::Workspace, workspace.id.0),
                 "window": identity(snapshot, TargetKind::Window, window.id.0),
                 "metadata": {
+                    "pull_request": metadata.and_then(|m| m.pull_request.as_ref()),
                     "status_entries": metadata.map_or(0, |m| m.statuses.len()),
                     "progress_value": metadata.and_then(|m| m.progress.as_ref()).map(|p| p.value),
                     "retained_logs": metadata.map_or(0, |m| m.logs.len()),

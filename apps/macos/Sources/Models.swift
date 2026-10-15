@@ -110,6 +110,10 @@ struct WorkspaceProgress: Decodable, Sendable, Equatable {
     let value: Double
     let label: String?
 }
+struct WorkspacePullRequest: Decodable, Sendable, Equatable {
+    let number: UInt64
+    let url: String
+}
 struct WorkspaceLog: Decodable, Sendable, Equatable {
     enum Level: String, Decodable, Sendable, Equatable { case info, progress, success, warning, error }
     let sequence: UInt64
@@ -119,15 +123,16 @@ struct WorkspaceLog: Decodable, Sendable, Equatable {
 }
 struct WorkspaceMetadata: Decodable, Sendable, Equatable {
     let workspaceId: UInt64
+    let pullRequest: WorkspacePullRequest?
     let statuses: [WorkspaceStatus]
     let progress: WorkspaceProgress?
     let logs: [WorkspaceLog]
     let logsDropped: UInt64
 
     static func empty(_ workspaceId: UInt64) -> Self {
-        Self(workspaceId: workspaceId, statuses: [], progress: nil, logs: [], logsDropped: 0)
+        Self(workspaceId: workspaceId, pullRequest: nil, statuses: [], progress: nil, logs: [], logsDropped: 0)
     }
-    var isEmpty: Bool { statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
+    var isEmpty: Bool { pullRequest == nil && statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
 }
 struct BrowserProfile: Decodable, Sendable, Equatable { let id: UUID; let name: String }
 struct BrowserProfileReceipt: Decodable, Sendable {

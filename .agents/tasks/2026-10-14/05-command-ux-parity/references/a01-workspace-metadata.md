@@ -2,6 +2,88 @@
 
 Updated: 2026-10-15. This is a partial A01 slice; the package remains open.
 
+## A01c manual pull-request metadata
+
+`pr <canonical-GitHub-pull-URL|positive-number>` and `pr clear` use the shared
+metadata owner, with `--workspace`, `--window` and `--expect-revision`. Options
+may precede/follow the single value. An explicit workspace or live caller is
+required; foreground focus is never a PR target. The initial shared-owner read
+returns `workspace_uuid`; both workspace and window UUIDs are pinned before
+lookup. Closing, replacing or moving that owner to another window cannot retarget
+the final mutation to a reused numeric/index selection.
+
+Set verifies the CLI's actual Git toplevel against at least one published local
+terminal directory in the target workspace. Remote-only/unmatched contexts fail.
+The GitHub `origin` must be HTTPS or `git@github.com:OWNER/REPO[.git]`, without URL
+credentials, alternate hosts or decorations. Authenticated `gh repo view` verifies
+origin and its optional fork parent; the actual provider parent schema is
+`{name,owner:{login}}`, independently observed by the parent agent in a read-only
+public query. URL inputs must match origin or that parent. Bare numbers select
+the parent for forks. `gh pr view` must return the same canonical repository and
+number. URLs allow only the exact `https://github.com/OWNER/REPO/pull/NUMBER`
+shape; queries, fragments, escapes, extra path segments, trailing slashes and
+leading-zero/overflow numbers fail. Numbers use positive Rust/Swift `UInt64`.
+
+All Git/gh work runs in the CLI, outside the action executor. One `--timeout`
+deadline covers all lookups and socket requests. Each physical child has one
+additional, nonrenewing two-second cleanup reserve. The reusable CLI capture
+owner uses the existing nonreaping Session child observer: retain the spawned
+leader through group cleanup, then reap it once. Both streams are nonblocking
+and capped at64KiB; EOF does not remove the deadline, and successful leaders do
+not leave pipe-closed descendants running. Darwin `EPERM` is accepted only after a
+bounded public `/bin/ps` snapshot, while the exact leader remains unreaped, proves
+that the reserved leader is present and every matching group member is a zombie.
+Live/missing/malformed/oversized/timed-out snapshots fail. The trusted process
+snapshot probe owns only its direct child and shares the original cleanup reserve.
+INT/TERM/HUP cancel before mutation.
+The private Zellij launcher cannot directly serve these noninteractive lookups
+because it also owns Zellij foreground/job-control policy. Tool environments
+retain authentication/config and network-trust inputs but exclude ambient
+Git/GitHub repository/host/compiler overrides. Child stderr is never promoted to
+metadata or CLI errors. Post-admission socket timeouts remain unknown outcomes;
+never automatically replay a mutation.
+
+The shared owner independently validates the record's number/URL and includes it
+in the existing512KiB aggregate encoded budget. `pull_request` is null or
+`{number,url}`. Clear changes only that field, needs no Git/gh and requires write
+access. `list-status`/`list-log` and `current` expose the same manual link.
+Native rows and the plain-text activity inspector project that record without
+focus or selection changes. Metadata is transient; automatic refresh,
+TTY/unique-worktree target inference and full frozen PR parity remain open.
+The machine catalog maps `pr`/`pr clear` only as compatibility-unverified local
+counterparts; discovery describes parser preflight and never runs tools.
+
+Test authoring boundary: real CLI/socket, temporary real Git worktrees and a
+controlled external gh protocol fixture for offline provider responses; direct
+wire requests independently cover owner validation bypassing CLI parsing. Existing
+status tests could not exercise PR parsing, repository lookup or physical lookup
+children. No test-only production seam was introduced. Initial focused CLI red
+failed with `unknown command pr`; the repaired CLI metadata suite passes9 cases,
+including slow lookup versus reused workspace index, fork-parent and repository
+named `pull`, foreign worktrees, read-only clear, malformed response/input,
+credential-safe failures, stream overflow, TERM owner cancellation,
+closed-stdio and pipe-holding descendants. The direct owner suite passes5 cases,
+including maximal u64, canonical URL/number agreement and strict clear fields.
+Only TERM cancellation was physically exercised; INT/HUP share its registered
+owner path. Optional nonrepository probes ignore only the exact C-locale Git
+exit128/not-repository response; cleanup/status/stream/UTF8 failures propagate.
+In an isolated source copy, swallowing those fatal errors makes the real second
+Git probe test fail with a misleading worktree mismatch; restoring and rebuilding
+the exact repaired source passes the same focused command. The provider-shape fix uses the parent's actual sanitized receipt
+`/tmp/zmux-a01-gh-parent-live-contract-20261015.json`.
+
+Final core `scripts/check` passes297 Rust behavioral tests, workspace formatting,
+strict Clippy, the notice inventory and actual C ABI executable. The only lockfile
+change adds the already resolved signal-hook dependency to the CLI package; no
+dependency versions changed. Native PR row/inspector execution, actual Darwin zombie-group confirmation and
+authenticated live GitHub PR resolution remain separate gates. The native
+supplement sends a real shared-socket action and checks max-u64 decoding, row/open
+inspector projection, no focus change and public `pr clear` preserving other
+metadata plus the selected status text. The inspector maps selection through
+unchanged document prefixes/suffixes so PR insertion/removal does not shift the
+reader to different text. No local Darwin execution or regression red/green for
+that native selection repair is claimed.
+
 ## Contract and provenance
 
 Implemented original MIT Rust/CLI code using the repository's target executor,
@@ -38,7 +120,7 @@ targets fail before mutation. Background updates do not select workspaces or pan
 ## State, limits and errors
 
 `Snapshot.workspace_metadata` contains workspace rows in stable numeric ID order:
-`{workspace_id,statuses,progress,logs,logs_dropped}`. Workspaces with no metadata are
+`{workspace_id,workspace_uuid,pull_request,statuses,progress,logs,logs_dropped}`. Workspaces with no metadata are
 absent. Status entries contain `{key,value,icon,color,priority}`; they replace by key
 and sort by priority descending (default 0), then key ascending. Progress is null or
 `{value,label}`; values must be finite and in 0–1, and completion remains until cleared.
@@ -102,7 +184,7 @@ than restating the accounting formula.
 
 Full-workspace checks and native presentation are integrated by the parent task.
 No claim of macOS display, downloaded-artifact behavior or full A01/parity is made by
-these portable checks. Events/replay, PR/todo owners, rules/hooks and richer inspection
+these portable checks. Events/replay, remaining PR compatibility, todo owners, rules/hooks and richer inspection
 remain separate A01 work.
 
 Parent full `scripts/check` passes189 Rust tests, formatting, strict Clippy,
