@@ -43,8 +43,12 @@ struct StoragePathsProbe {
         let target = Array((root + "/invalid-").utf8).map { CChar(bitPattern: $0) } + [CChar(bitPattern: 0xff), 0]
         // A lossy decode would select this different, otherwise usable directory.
         try files.createDirectory(atPath: root + "/invalid-\u{fffd}", withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        try require(target.withUnsafeBufferPointer { Darwin.mkdir($0.baseAddress!, 0o700) } == 0,
-                    "Cannot create raw-byte storage target")
+        let (created, creationCode) = target.withUnsafeBufferPointer { target in
+            let result = Darwin.mkdir(target.baseAddress!, 0o700)
+            return (result, result < 0 ? errno : 0)
+        }
+        FileHandle.standardError.write(Data("Raw storage target mkdir: returned=\(created) errno=\(creationCode)\n".utf8))
+        try require(created == 0, "Cannot create raw-byte storage target (errno \(creationCode))")
         do {
             let alias = root + "/non-utf8-link"
             let created = target.withUnsafeBufferPointer { target in
