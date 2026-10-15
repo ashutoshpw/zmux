@@ -669,12 +669,19 @@ def relay_half_close_fixture(api, root, environment, observations, *, backend_re
             else:
                 broker.request_attachment_cancel()
         release = root / (basename + "-release")
+        traffic = root / (basename + "-traffic")
+        if not backend_rejects_input:
+            traffic.write_text("positive delivery traffic may begin\n")
         # This is raw socket traffic, not a substitute zellij implementation.
         # Retain the connected peer until delivery is independently observed;
         # do not depend on kernel buffer size to keep Darwin credentials alive.
         code = ("import pathlib,socket,sys,time\n"
                 "s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n"
                 "s.connect(sys.argv[1]); s.shutdown(socket.SHUT_RD)\n"
+                "deadline=time.monotonic()+5\n"
+                "while not pathlib.Path(sys.argv[3]).is_file():\n"
+                " if time.monotonic() >= deadline: raise RuntimeError('raw traffic was not released')\n"
+                " time.sleep(0.01)\n"
                 "s.sendall(bytes(range(256))*1024); s.shutdown(socket.SHUT_WR)\n"
                 "deadline=time.monotonic()+5\n"
                 "while not pathlib.Path(sys.argv[2]).is_file():\n"
@@ -682,7 +689,7 @@ def relay_half_close_fixture(api, root, environment, observations, *, backend_re
                 " time.sleep(0.01)\n"
                 "s.close()\n")
         interpreter = api.process(os.getpid())["executable"]
-        child = subprocess.Popen([interpreter, "-c", code, str(broker.path), str(release)], env=broker.environment,
+        child = subprocess.Popen([interpreter, "-c", code, str(broker.path), str(release), str(traffic)], env=broker.environment,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, start_new_session=True)
         broker.bind_child(child)
@@ -690,9 +697,16 @@ def relay_half_close_fixture(api, root, environment, observations, *, backend_re
         with connection:
             connection.settimeout(5)
             if backend_rejects_input:
-                connection.shutdown(socket.SHUT_RD)
-            connection.sendall(b"R")
-            if backend_rejects_input:
+                wait_until(lambda: len(broker.records) == 1, "raw backend peer authorization", 2)
+                require(same_process(broker.records[0]["server"], broker.server), "Raw backend was not authenticated")
+                observations["backend_authenticated_before_close"] = True
+                # Read shutdown does not imply write rejection on Darwin. Close
+                # the authenticated socket, then independently release traffic.
+                # Its owning process remains live throughout this control.
+                connection.close()
+                require(connection.fileno() == -1, "Raw backend descriptor did not close")
+                observations["backend_descriptor_closed_before_traffic"] = True
+                traffic.write_text("authenticated backend descriptor closed\n")
                 wait_until(lambda: broker.input_rejections, "live backend input rejection", 5)
                 require(same_process(api.process(os.getpid()), broker.server), "Live raw backend identity changed")
                 try:
@@ -707,6 +721,7 @@ def relay_half_close_fixture(api, root, environment, observations, *, backend_re
                 require(confirmation_denied is not None and broker.confirmed_terminal_phase is None,
                         "Live backend input loss was reclassified as completed shutdown")
             else:
+                connection.sendall(b"R")
                 while data := connection.recv(16384):
                     received += len(data)
                     require(received <= 4 * LIMIT, "Raw transport input exceeded its bound")

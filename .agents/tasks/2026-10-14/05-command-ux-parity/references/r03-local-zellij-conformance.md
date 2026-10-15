@@ -362,3 +362,36 @@ accepted the foreground-exit repair; no remaining blocker in this fixture scope.
 Parent full repository checks also pass on the contemporary isolated T03 snapshot
 (`/tmp/zmux-t03-parent-check.log`); this standalone Python fixture has no Rust/app
 dependency changes. Exact-source macOS execution remains pending.
+
+
+### Portable real write-rejection control
+
+Hosted `38783041993` at `12588aa` stopped before starting Zellij: the negative raw
+socket case timed out waiting for a backend write rejection after `shutdown(SHUT_RD)`.
+Darwin accepted8192 bytes before backpressure and queued65536; the required rejection
+was not observed during the five-second wait. A read-side shutdown is therefore not
+a portable way to induce a write error. The classifier did not accept the missing
+proof, and the earlier positive262144-byte delivery case passed.
+
+The negative cases now keep the real client socket connected behind a bounded
+private traffic gate. The fixture accepts the real backend connection, waits until
+the actual broker has authenticated its kernel peer and full process identity, then
+closes that accepted descriptor completely before releasing upstream traffic. The
+backend's independently inspected process remains live. A real write to that closed
+peer must produce a typed rejection; no transport error is injected or fabricated.
+Both owner-shutdown and attachment-cancel cases still require the classifier to deny
+completion and broker cleanup to reject unconfirmed input loss. The positive reverse
+close case retains its strict ordered-delivery/no-upstream-discard requirement.
+Classifier, terminal outcome proofs, process APIs and foreground-exit gates are
+unchanged by this fixture repair.
+
+Focused real socket cases pass at
+`/tmp/zmux-zellij-authenticated-rejection-focused-20261015.json` (SHA256
+`9b4cf4dfa45f2bf5932ddf8bbb7a3e213650751960e41abbb604c1c4c86744a5`). The complete pinned Linux fixture passes at
+`/tmp/zmux-zellij-authenticated-rejection-20261015/receipt.json` (SHA256
+`69dc3169847a87c7cce702f2c3c7a0f4fa917d45ac16c6083c0cde4ca3228be3`). All seven harness hashes match the source
+freeze. Both negative cases record authentication before descriptor close and close
+before traffic; proofs remain denied, original live backend preserved, errors/loss
+retained and workers joined. The full run confirms original server/shell/wrapper exit
+and scratch removal. Prior independent proof-bypass controls remain applicable because
+the classifier was not changed. Exact-source Darwin execution remains required.
