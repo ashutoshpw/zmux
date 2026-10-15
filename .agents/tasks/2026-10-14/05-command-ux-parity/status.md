@@ -5,6 +5,17 @@
 
 ## Active implementation
 
+- `ac28cf2` repairs two Darwin socket-readiness fixture assumptions and twelve
+  immediate notification snapshot reads. Hosted `38800293490`/`38800305050`
+  expose the former, foundation `38800293474` exposes `Busy` in the latter.
+  Actions, denial/loss/hash assertions and notification expectations are unchanged;
+  only bounded read/pump readiness is retried. Combined isolated fullcheck280 and
+  independent source reviews pass. Native revalidation remains pending.
+- Keyboard `38800309699` compiles but traps during exact-self activation before
+  dispatch. `6807cec` adds opt-in bounded LLDB diagnostics against unchanged Swift;
+  the actor-boundary hypothesis is unconfirmed without a stack. No browser key
+  delivery or hidden-host conclusion follows from either failed setup run.
+
 - `824bb9f` repairs production Zellij Unix socket path limits using checked
   canonical `/tmp` and unchanged private namespace ownership. Kernel/public CLI
   long-TMPDIR regressions fail before the fix and pass afterward; isolated
