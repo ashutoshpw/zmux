@@ -2,7 +2,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use zmux_session_runtime::{INPUT_CHUNK_BYTES, Launch, Session, SessionError, Snapshot, State};
+use zmux_session_runtime::{
+    INPUT_CHUNK_BYTES, InputReceipt, InputWriteFailure, InputWriteResult, InputWriteStatus, Launch,
+    Session, SessionError, Snapshot, State,
+};
 use zmux_terminal_adapter::Size;
 
 fn launch(script: &str) -> Session {
@@ -31,6 +34,138 @@ fn wait_for(session: &Session, predicate: impl Fn(&Snapshot) -> bool) -> std::sy
             "session did not reach expected state"
         );
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn write_result(receipt: &mut InputReceipt) -> InputWriteResult {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match receipt.try_recv() {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(error) => panic!("write completion disappeared: {error}"),
+        }
+        assert!(Instant::now() < deadline, "PTY write did not complete");
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn write_receipt_confirms_full_pty_acceptance_in_the_existing_input_order() {
+    let mut session = launch("stty raw -echo; printf READY; cat");
+    wait_for(&session, |s| s.viewport.contents.contains("READY"));
+    session.send_input(b"before-").unwrap();
+    let mut receipt = session
+        .send_input_with_receipt(b"reply-", Instant::now() + Duration::from_secs(2))
+        .unwrap();
+    session.send_input(b"after").unwrap();
+    let result = write_result(&mut receipt);
+    assert_eq!(result.status, InputWriteStatus::Complete);
+    assert_eq!(result.bytes_written, 6);
+    assert_eq!(result.total_bytes, 6);
+    assert_eq!(result.reason, None);
+    wait_for(&session, |s| {
+        s.viewport.contents.contains("before-reply-after")
+    });
+    assert!(matches!(
+        receipt.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Disconnected)
+    ));
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+#[test]
+fn queued_write_deadline_cancels_before_a_blocked_predecessor_drains_without_replay() {
+    let mut session = launch("stty raw -echo; printf READY; kill -STOP $$; cat");
+    wait_for(&session, |s| s.viewport.contents.contains("READY"));
+    for _ in 0..8 {
+        session.send_input(&[b'x'; INPUT_CHUNK_BYTES]).unwrap();
+    }
+    let mut receipt = session
+        .send_input_with_receipt(b"EXPIRED_TOKEN", Instant::now() + Duration::from_millis(40))
+        .unwrap();
+    let result = write_result(&mut receipt);
+    assert_eq!(result.status, InputWriteStatus::NotWritten);
+    assert_eq!(result.bytes_written, 0);
+    assert_eq!(result.reason, Some(InputWriteFailure::Deadline));
+    // The child cannot drain its input until this explicit release, so expiry
+    // must complete while an earlier input is still blocked in the PTY.
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(session.process_id() as i32),
+        nix::sys::signal::Signal::SIGCONT,
+    )
+    .unwrap();
+    session.send_input(b"\r\nAFTER_DEADLINE\r\n").unwrap();
+    let after = wait_for(&session, |s| s.viewport.contents.contains("AFTER_DEADLINE"));
+    assert!(!after.viewport.contents.contains("EXPIRED_TOKEN"));
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+#[test]
+fn bounded_write_receipts_finish_once_under_backpressure_deadline_and_shutdown() {
+    for shutdown in [false, true] {
+        let mut session = launch("stty raw -echo; printf READY; exec sleep 60");
+        wait_for(&session, |s| s.viewport.contents.contains("READY"));
+        let deadline = Instant::now()
+            + if shutdown {
+                Duration::from_secs(30)
+            } else {
+                Duration::from_millis(80)
+            };
+        let mut receipts = Vec::new();
+        for _ in 0..zmux_session_runtime::INPUT_QUEUE_CHUNKS {
+            receipts.push(
+                session
+                    .send_input_with_receipt(&[b'x'; INPUT_CHUNK_BYTES], deadline)
+                    .unwrap(),
+            );
+        }
+        if shutdown {
+            session.shutdown(Duration::from_secs(3)).unwrap();
+        }
+        let results: Vec<_> = receipts.iter_mut().map(write_result).collect();
+        assert!(
+            results
+                .iter()
+                .any(|result| result.status != InputWriteStatus::Complete),
+            "a non-reading PTY must apply backpressure"
+        );
+        for (receipt, result) in receipts.iter_mut().zip(results) {
+            assert_eq!(result.total_bytes, INPUT_CHUNK_BYTES);
+            match result.status {
+                InputWriteStatus::Complete => {
+                    assert_eq!(result.bytes_written, INPUT_CHUNK_BYTES);
+                    assert_eq!(result.reason, None);
+                }
+                InputWriteStatus::NotWritten => assert_eq!(result.bytes_written, 0),
+                InputWriteStatus::Partial => {
+                    assert!(result.bytes_written > 0 && result.bytes_written < INPUT_CHUNK_BYTES)
+                }
+                InputWriteStatus::Unknown => {
+                    panic!("normal deadline/shutdown lost worker ownership")
+                }
+            }
+            if result.status != InputWriteStatus::Complete {
+                assert_eq!(
+                    result.reason,
+                    Some(if shutdown {
+                        InputWriteFailure::SessionClosed
+                    } else {
+                        InputWriteFailure::Deadline
+                    })
+                );
+            }
+            // The worker may still own a cancelled queued input, but cannot
+            // issue another result or write it after the receipt was returned.
+            assert!(receipt.try_recv().is_err());
+        }
+        if !shutdown {
+            session.shutdown(Duration::from_secs(3)).unwrap();
+        }
+        assert!(receipts.iter_mut().all(|receipt| matches!(
+            receipt.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        )));
     }
 }
 

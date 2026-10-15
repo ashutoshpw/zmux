@@ -19,8 +19,8 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex, TryLockError,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender, TrySendError},
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -82,8 +82,144 @@ pub struct Snapshot {
     pub failure: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputWriteStatus {
+    Complete,
+    NotWritten,
+    Partial,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputWriteFailure {
+    Deadline,
+    SessionClosed,
+    SessionExited,
+    WorkerFailed,
+    WorkerStopped,
+}
+
+/// Completion of one bounded input chunk. Complete means acceptance by the
+/// local PTY, not consumption by the child or a remote application.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct InputWriteResult {
+    pub status: InputWriteStatus,
+    /// Confirmed accepted bytes. For Unknown this is only a lower bound;
+    /// zero does not prove that replay is safe.
+    pub bytes_written: usize,
+    pub total_bytes: usize,
+    pub reason: Option<InputWriteFailure>,
+}
+
+const WRITE_QUEUED: u8 = 0;
+const WRITE_ACTIVE: u8 = 1;
+const WRITE_FINISHED: u8 = 2;
+
+/// A receive-only handle; callers poll without blocking their executor. An
+/// admission error has no handle and did not enqueue any input.
+pub struct InputReceipt {
+    receiver: Receiver<InputWriteResult>,
+    queued_completion: Option<WriteCompletion>,
+    deadline: Instant,
+}
+impl InputReceipt {
+    pub fn try_recv(&mut self) -> Result<InputWriteResult, TryRecvError> {
+        let mut result = self.receiver.try_recv();
+        if matches!(result, Err(TryRecvError::Empty)) && Instant::now() >= self.deadline {
+            if let Some(completion) = &mut self.queued_completion {
+                completion.expire_queued();
+            }
+            result = self.receiver.try_recv();
+        }
+        if result.is_ok() {
+            self.queued_completion = None;
+        }
+        result
+    }
+}
+
+struct WriteCompletion {
+    sender: Option<SyncSender<InputWriteResult>>,
+    state: Arc<AtomicU8>,
+    total: usize,
+    written: usize,
+    owns_input: bool,
+}
+impl WriteCompletion {
+    fn expire_queued(&mut self) {
+        // Starting the write and cancelling queued input race on one state
+        // transition. A successful cancellation proves no write can follow.
+        if self
+            .state
+            .compare_exchange(
+                WRITE_QUEUED,
+                WRITE_FINISHED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+            && let Some(sender) = self.sender.take()
+        {
+            let _ = sender.try_send(InputWriteResult {
+                status: InputWriteStatus::NotWritten,
+                bytes_written: 0,
+                total_bytes: self.total,
+                reason: Some(InputWriteFailure::Deadline),
+            });
+        }
+    }
+    fn start(&self) -> bool {
+        self.state
+            .compare_exchange(
+                WRITE_QUEUED,
+                WRITE_ACTIVE,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+    fn finish(&mut self, reason: Option<InputWriteFailure>, unknown: bool) {
+        let previous = self.state.swap(WRITE_FINISHED, Ordering::AcqRel);
+        if previous == WRITE_FINISHED {
+            self.sender = None;
+            return;
+        }
+        let status = if unknown {
+            InputWriteStatus::Unknown
+        } else if reason.is_none() {
+            InputWriteStatus::Complete
+        } else if self.written == 0 {
+            InputWriteStatus::NotWritten
+        } else {
+            InputWriteStatus::Partial
+        };
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(InputWriteResult {
+                status,
+                bytes_written: self.written,
+                total_bytes: self.total,
+                reason,
+            });
+        }
+    }
+}
+impl Drop for WriteCompletion {
+    fn drop(&mut self) {
+        if self.owns_input {
+            let active = self.state.load(Ordering::Acquire) == WRITE_ACTIVE;
+            self.finish(Some(InputWriteFailure::WorkerStopped), active);
+        }
+    }
+}
+
 enum Input {
-    Bytes(Vec<u8>),
+    Bytes {
+        bytes: Vec<u8>,
+        completion: Option<WriteCompletion>,
+        deadline: Option<Instant>,
+    },
     Scroll(i32),
     Wheel(Wheel),
 }
@@ -292,10 +428,13 @@ impl Session {
                     eof: false,
                     pending: Vec::new(),
                     written: 0,
+                    pending_completion: None,
+                    pending_deadline: None,
                 };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let state = worker.run()?;
                     if state == State::Exited {
+                        worker.finish_inputs(InputWriteFailure::SessionExited);
                         worker.shared.exited.store(true, Ordering::Release);
                         worker.publish(state, None);
                         worker.review_history()?;
@@ -304,9 +443,21 @@ impl Session {
                 }));
                 worker.shared.stop.store(true, Ordering::Release);
                 match result {
-                    Ok(Ok(state)) => worker.publish(state, None),
-                    Ok(Err(error)) => worker.publish(State::Failed, Some(error.to_string())),
+                    Ok(Ok(state)) => {
+                        worker.finish_inputs(InputWriteFailure::SessionClosed);
+                        worker.publish(state, None);
+                    }
+                    Ok(Err(error)) => {
+                        worker.finish_inputs(InputWriteFailure::WorkerFailed);
+                        worker.publish(State::Failed, Some(error.to_string()));
+                    }
                     Err(_) => {
+                        // Dropping guards reports queued input as not written
+                        // and active input as unknown before process cleanup.
+                        drop(worker.pending_completion.take());
+                        for input in worker.input.try_iter() {
+                            drop(input);
+                        }
                         // Do not enter a possibly corrupted parser after a worker panic.
                         match worker.shared.snapshot.lock() {
                             Ok(mut slot) => {
@@ -367,8 +518,57 @@ impl Session {
             return Err(SessionError::InputSize);
         }
         self.ensure_running()?;
+        self.enqueue_bytes(bytes, None, None)
+    }
+
+    /// Enqueue once in the ordinary input queue and report actual PTY write
+    /// completion. The absolute deadline bounds writing, including queue time.
+    /// Never replay a partial, unknown, or missing result automatically.
+    pub fn send_input_with_receipt(
+        &self,
+        bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<InputReceipt, SessionError> {
+        if bytes.is_empty() || bytes.len() > INPUT_CHUNK_BYTES {
+            return Err(SessionError::InputSize);
+        }
+        self.ensure_running()?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let state = Arc::new(AtomicU8::new(WRITE_QUEUED));
+        let queued_completion = WriteCompletion {
+            sender: Some(sender.clone()),
+            state: Arc::clone(&state),
+            total: bytes.len(),
+            written: 0,
+            owns_input: false,
+        };
+        let completion = WriteCompletion {
+            sender: Some(sender),
+            state,
+            total: bytes.len(),
+            written: 0,
+            owns_input: true,
+        };
+        self.enqueue_bytes(bytes, Some(completion), Some(deadline))?;
+        Ok(InputReceipt {
+            receiver,
+            queued_completion: Some(queued_completion),
+            deadline,
+        })
+    }
+
+    fn enqueue_bytes(
+        &self,
+        bytes: &[u8],
+        completion: Option<WriteCompletion>,
+        deadline: Option<Instant>,
+    ) -> Result<(), SessionError> {
         self.input
-            .try_send(Input::Bytes(bytes.to_vec()))
+            .try_send(Input::Bytes {
+                bytes: bytes.to_vec(),
+                completion,
+                deadline,
+            })
             .map_err(|e| match e {
                 TrySendError::Full(_) => SessionError::QueueFull,
                 TrySendError::Disconnected(_) => SessionError::Closed,
@@ -495,6 +695,8 @@ struct Worker {
     eof: bool,
     pending: Vec<u8>,
     written: usize,
+    pending_completion: Option<WriteCompletion>,
+    pending_deadline: Option<Instant>,
 }
 
 impl Worker {
@@ -524,6 +726,16 @@ impl Worker {
                 dirty = true;
             }
             dirty |= self.load_input();
+            if self
+                .pending_deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                if let Some(mut completion) = self.pending_completion.take() {
+                    completion.finish(Some(InputWriteFailure::Deadline), false);
+                }
+                self.pending.clear();
+                self.pending_deadline = None;
+            }
             if !self.pending.is_empty() {
                 match self.io.write(&self.pending[self.written..]) {
                     Ok(0) => {
@@ -533,8 +745,15 @@ impl Worker {
                     }
                     Ok(count) => {
                         self.written += count;
+                        if let Some(completion) = &mut self.pending_completion {
+                            completion.written = self.written;
+                        }
                         if self.written == self.pending.len() {
+                            if let Some(mut completion) = self.pending_completion.take() {
+                                completion.finish(None, false);
+                            }
                             self.pending.clear();
+                            self.pending_deadline = None;
                         }
                     }
                     Err(e) if retryable(&e) => {}
@@ -616,6 +835,9 @@ impl Worker {
             } else {
                 IDLE_WAIT
             };
+            let timeout = self.pending_deadline.map_or(timeout, |deadline| {
+                timeout.min(deadline.saturating_duration_since(Instant::now()))
+            });
             match poll(&mut fds, Some(timeout)) {
                 Ok(_) => {}
                 Err(filedescriptor::Error::Poll(e)) if e.kind() == io::ErrorKind::Interrupted => {
@@ -651,7 +873,11 @@ impl Worker {
                         self.terminal.scroll(event.lines);
                         dirty = true;
                     }
-                    Input::Bytes(_) => {}
+                    Input::Bytes { mut completion, .. } => {
+                        if let Some(completion) = &mut completion {
+                            completion.finish(Some(InputWriteFailure::SessionExited), false);
+                        }
+                    }
                 }
             }
             if dirty {
@@ -684,14 +910,30 @@ impl Worker {
     }
 
     fn load_input(&mut self) -> bool {
-        if self.pending.is_empty()
-            && let Ok(input) = self.input.try_recv()
-        {
+        if !self.pending.is_empty() {
+            return false;
+        }
+        for _ in 0..INPUT_QUEUE_CHUNKS {
+            let Ok(input) = self.input.try_recv() else {
+                break;
+            };
             match input {
-                Input::Bytes(bytes) => {
+                Input::Bytes {
+                    bytes,
+                    completion,
+                    deadline,
+                } => {
+                    if completion
+                        .as_ref()
+                        .is_some_and(|completion| !completion.start())
+                    {
+                        continue;
+                    }
                     self.terminal.scroll(0);
                     self.pending = bytes;
                     self.written = 0;
+                    self.pending_completion = completion;
+                    self.pending_deadline = deadline;
                 }
                 Input::Scroll(lines) => self.terminal.scroll(lines),
                 Input::Wheel(event) => {
@@ -702,6 +944,21 @@ impl Worker {
             return true;
         }
         false
+    }
+
+    fn finish_inputs(&mut self, reason: InputWriteFailure) {
+        if let Some(mut completion) = self.pending_completion.take() {
+            completion.finish(Some(reason), false);
+        }
+        self.pending.clear();
+        self.pending_deadline = None;
+        for input in self.input.try_iter() {
+            if let Input::Bytes { mut completion, .. } = input
+                && let Some(completion) = &mut completion
+            {
+                completion.finish(Some(reason), false);
+            }
+        }
     }
 
     fn publish(&self, state: State, failure: Option<String>) {
