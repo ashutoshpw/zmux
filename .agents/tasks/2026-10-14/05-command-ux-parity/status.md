@@ -8,7 +8,8 @@
 - H01 authenticator/recovery API and web UI pass 17 real PostgreSQL tests and
   15 real Chrome checks, including pre-fix sign-out red/repaired green. Independent
   review, TypeScript, production Docker image and parent core checks pass.
-  Local runtime promotion and public/native callback remain separate gates.
+  Hosted service checks38821504830 pass at0eb2198. Local Docker promotion and
+  12-table backup restore rehearsal pass; public/native callback remains open.
   See [MFA](references/h01-mfa.md).
 
 - H01 native credential fix `352ba3b` passes the early actual macOS HTTP/Keychain

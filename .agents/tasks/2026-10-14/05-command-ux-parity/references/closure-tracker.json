@@ -452,7 +452,7 @@
         "Local Docker identity/device/organization service plus bounded expired native credential cleanup d22b6a4; real PostgreSQL checks pass locally and hosted",
         "Isolated backup restore rehearsal fb999a7 and PostgreSQL transaction ownership 54a0e52; private local Docker runtime health verified",
         "Native credential generation/cancellation ownership 352ba3b; actual macOS baseline red/current green and Keychain cleanup in run38818645717",
-        "Authenticator/recovery API and web UI; 17 real PostgreSQL tests, 15 real Chrome checks and independent review pass; local runtime promotion pending"
+        "Authenticator/recovery API and web UI; 17 real PostgreSQL tests, 15 real Chrome checks and independent review pass; 0eb2198 hosted service checks, local runtime promotion and 12-table restore rehearsal pass"
       ],
       "verification_receipts": [
         "local-cloud.md",
@@ -2676,7 +2676,9 @@
       "audit_status": "partial",
       "delivery_status": "implementing",
       "acceptance_source": "audit-cloud-platform.json#CLOUD-003",
-      "implementation_commits": [],
+      "implementation_commits": [
+        "0eb2198"
+      ],
       "verification_receipts": [
         "h01-mfa.md"
       ],

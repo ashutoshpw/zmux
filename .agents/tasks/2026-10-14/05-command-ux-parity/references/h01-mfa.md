@@ -57,3 +57,19 @@ Combined final API/UI receipt SHA256:
 `8ac4f45cd5cd20fc4c14d9b34747bb2b52b9abec4eb610f8dd1150e7fa2e6f5c`.
 Parent isolated `scripts/check` also passes on the combined source snapshot;
 native/public auth and full H01 remain open.
+
+## Local runtime and hosted service acceptance
+
+Cloud service checks run38821504830 passed on exact commit `0eb2198` using
+PostgreSQL 18 and the production image build. The owned local Docker service was
+backed up, migrated and rebuilt from the same commit. Parent verified all five
+running auth/app/page/database/maintenance files against committed hashes.
+Health and database readiness both returned HTTP200 at `http://127.0.0.1:3530`.
+
+At 23:07UTC, a fresh 24,599-byte backup restored transactionally into an owned
+new database: all 12 expected tables (including `twoFactor`), both versioned
+migrations, and zero invalid constraints. The temporary database was removed;
+the serving database was never replaced. Backup SHA256:
+`c32feef89b859e2ad2089a65ec6adfe32909c1328bc654471dd2ab725949ed9f`.
+The public hostname did not resolve from this workspace during verification;
+Cloudflare Tunnel mapping and authenticated public/native callback remain open.
