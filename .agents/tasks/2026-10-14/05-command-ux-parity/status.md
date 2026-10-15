@@ -5,6 +5,11 @@
 
 ## Active implementation
 
+- Reopen diagnostics now retain bounded public status/persistence/profile reads
+  and the generated fixture session/allocator JSON, including failure artifacts.
+  Isolated fullcheck271 and focused capture/receipt probes pass. This adds evidence
+  for the next native run; it does not claim to repair the unresolved restore fault.
+
 - Same-pane tab reordering now uses shared final-position planning, explicit
   focus (defaultfalse), CLI anchors/legacy syntax, native menu/shortcut/context
   actions and guarded same-pane drag. Isolated fullcheck passes271 Rust tests
