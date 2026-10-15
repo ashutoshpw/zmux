@@ -1,0 +1,191 @@
+# F04 ordered kernel PTY replies
+
+2026-10-15. Approved next isolated slice after metadata acceptance. No production
+engine switch, native app change, new parser or modification of the accepted
+terminal/metadata implementation inputs. A separately documented subprocess-runner
+lifecycle repair changes only the shared verification helper and its tests.
+New standalone tooling lives in
+`tools/terminal-pty-feasibility/`; its lock records the accepted owner input hashes.
+
+## Owner and observable contract
+
+One original transport owns an actual kernel PTY master, one exec'd Python child,
+and two fixed control/result pipes. The child uses the raw, no-echo slave as its
+stdin/stdout. It remains in the fixture subprocess group so outer deadline cleanup
+also reaches it; no controlling-terminal, shell/job-control or production session
+claim is made. No shell command or source text is injected into a terminal.
+
+The accepted Resource remains the only terminal/Probe/allocator owner. The Rust
+coordinator reuses the accepted metadata normalization and staged export/validation;
+it reserves bounded reply capacity before reading at most 512 PTY output bytes.
+It never reads bytes it cannot admit or parses terminal escapes outside the engine.
+Fixed readiness/results are a separate fixture protocol, not another VT parser.
+
+Validated export seals the current generation. Replies are copied into fixed input
+storage and advanced using the actual nonblocking write result. The coordinator
+defers exact C commit and frame/metadata slot swap until all replies for that
+generation have been accepted by the kernel. While a prefix is pending, further
+PTY reads, engine operations and user/resize admission pause or return explicit
+Busy. A 250-ms experiment deadline bounds each sealed reply lifetime; deadline or
+explicit cancellation quarantines the owner and stops/reaps only its child.
+
+Kernel acceptance does not mean the child consumed the bytes. Normal cases require
+the actual child to independently compare `PRE + literal replies + POST sentinel`
+in order; the sentinel detects missing/duplicated/reordered replies. A failure after
+a partial write cannot retract that external prefix. The candidate frame/metadata
+remain unpublished, the last committed generation remains readable and no retry,
+replay, fallback, hidden reset or consumed-byte receipt is claimed.
+
+Resize is admitted only while idle: stage/export/validate the engine resize, perform
+kernel `TIOCSWINSZ`, then nonallocating exact commit/swap. An ioctl failure quarantines
+the candidate; it does not claim rollback of in-place engine/kernel changes. A
+resize attempt during a blocked reply must leave both owners unchanged and be
+retried explicitly after progress, rather than being silently coalesced or lost.
+
+## Acceptance shape
+
+- Small child journey: actual PRE bytes precede generated cursor/status replies;
+  POST follows them; child checks literal response order, raw PTY identity and
+  resized kernel geometry. Metadata and frame are the same committed generation.
+- Paused-reader flood: actual kernel EAGAIN, retained bytes/offset, resumed exact
+  child stream and explicit Busy/retry resize. Count real short writes separately
+  from a deterministic small syscall budget that exercises partial progress.
+- Stalled-reader deadline and explicit cancel: finite reply lifetime, immutable
+  last-good publication, no resumed/replayed input, physical child/FD cleanup.
+- Child consumes a confirmed short prefix then closes: detect the real peer loss,
+  discard the unpublished candidate and preserve irreversible-prefix accounting.
+- Real resize error and engine/normalization failure: no candidate metadata/frame
+  commit, no generated reply sent from a failed operation, quarantine and cleanup.
+- Temporary original-fixture controls duplicate/reorder actual reply bytes or
+  publish while blocked; they must fail their named independent assertions.
+
+The runner reuses verified archive/patch/build/containment helpers and records
+every base/new source, command, result and mutation hash. Linux and macOS execute
+their own host architecture; no universal/native/UI or total-RSS claim follows.
+Bounded transport storage, engine mappings, host publication slots and child/kernel
+resources are reported separately. Independent review and hosted execution precede
+any production adapter integration or measured native workload decision.
+
+## Local acceptance and cleanup repair
+
+The first seven-input run and independent parent run both passed before review
+found a partial-construction cleanup defect: a control-pipe failure could enter
+cleanup while the report pipe was still blocking and its writer remained open.
+Saving a report then waited indefinitely. Those successful PTY receipts are
+predecessor evidence, not acceptance of the repair.
+
+The original `construction.c` regression uses the public transport constructor in
+a separate bounded subprocess. It sets `RLIMIT_NOFILE=15` and occupies descriptors
+3..9; the PTY relocation and report pipe leave only one free slot, so creation of
+the control pipe fails with real `EMFILE` before child creation. The predecessor
+timed out after 2.080 seconds and was killed by outer process-group containment.
+Guarding report preservation on completed nonblocking initialization makes the
+same regression return promptly and checks descriptors 10..14 are all physically
+closed while caller-owned 3..9 remain intact. Red/green logs and phase receipts:
+`/tmp/zmux-pty-construction-20261015/`; repaired execution took 0.084 seconds.
+Cleanup wait/syscall failures remain explicit errors; exercised successful cleanup
+does not establish reaping under every possible operating-system failure.
+
+The transport-cleanup eight-input freeze, before the later runner-only repair, is
+`/tmp/zmux-f04-pty-cleanup-frozen-manifest-20261015.json`, SHA-256
+`a574932787d376983764724e101b5d7a4f04e899c19730a579d7a821462e6fc4`.
+It adds `construction.c` and freezes the repaired transport, runner and contract.
+All 29 accepted base hashes remain unchanged.
+
+The fresh-source Linux x86_64 transport-cleanup receipt, also before the later
+runner-only repair, is
+`/tmp/zmux-f04-pty-cleanup-final-20261015/receipt.json`, SHA-256
+`393951390bae42b50edded868adbc1137f6f3c484ffbc9d0109be310594c38ed`.
+It matches all eight final hashes, verifies fresh source/archive/license/patch
+inputs, explicitly reuses only the labeled dependency cache, rebuilds the engine
+and C shims and runs the construction regression and all seven PTY modes. Engine
+library SHA-256:
+`3c9a2240ef05e50e3af24b951819ffff1d478b8f2a457af35581e30e427ce504`.
+Construction passed in 0.061 seconds; the normal PTY journey passed in 1.319
+seconds. Flood/stall observed 1/235 actual EAGAIN returns, zero kernel short-write
+returns and a 768-byte observed queue high-water. The syscall-capped three-byte
+prefix is separately confirmed consumed by the real child before cancel/close.
+The stalled queue hit its 250-ms deadline; TERM-resistant cancellation required
+SIGKILL and checked reaped status 137. All exercised teardown paths checked zero
+live mappings, no live child and physical closure of all owned descriptors.
+
+Both temporary original-coordinator controls exited 101 without timeout at their
+intended assertions: `child exact input order differs` for duplicate reply data,
+and `blocked/failing replies must not publish candidate` for early publication.
+No base or upstream source was mutated by these controls. A focused author
+rerun using preserved accepted engine objects/library also passed:
+`/tmp/zmux-f04-pty-author-cleanup-focused-20261015/receipt.json`.
+
+## Shared verification-helper repair
+
+Subsequent independent review found a separate process ownership defect in the
+shared verification runner: `Popen.poll()` could reap the leader before final
+`killpg`, releasing the PID/group identity before its last signal. Earlier
+successful kernel PTY results remain predecessor observations; they do not prove
+the repaired containment lifecycle.
+
+The runner-only repair shares original `scripts/process_group.py` between the
+terminal and browser callers. It uses public `waitid(...WNOWAIT)` to observe exit
+while retaining the unreaped leader through all group signals, then reaps it.
+Capture-setup failure also stops/reaps the already-created actual child and closes
+its descriptors. Darwin EPERM is accepted only with the retained exited leader
+and a bounded public process snapshot proving every remaining group member is a
+zombie; a live/unknown group remains an error. This is verification tooling,
+not a terminal-engine change.
+
+The actual ownership-boundary regression failed before the repair because the
+leader was no longer a waitable child at the signal boundary; the setup-failure
+case likewise failed for both callers with an unreaped actual child. Both focused
+checks and all 11 lifecycle tests passed after repair. Evidence is
+`/tmp/zmux-shared-process-group-20261015/`; its four-source manifest SHA-256 is
+`8547c2dffe89ca4cd4002770b0c0bd293f100a7fd40e1f8e649a7f1f260967fe`.
+
+The final PTY lock now verifies 31 inputs: 28 original terminal/metadata inputs
+unchanged, the revised runner, its regression tests and the shared helper.
+`runner_revision` records the original runner hash and exact revised hashes.
+The eight-input PTY freeze is
+`/tmp/zmux-f04-pty-shared-helper-frozen-manifest-20261015.json`, SHA-256
+`c42a57fa7642fc68d4ee3285483175d481db2569bab16cab3b65b5d165d205d6`.
+Intermediate lifecycle/doc freezes were superseded; an interrupted build and a
+source-drift failure are not final acceptance evidence.
+
+The final fresh-source Linux x86_64 acceptance is
+`/tmp/zmux-f04-pty-shared-helper-final-20261015/receipt.json`, SHA-256
+`6956cbfc0d1b4c44a0387b277dbd5899964b68fd6988e99f9324f7a4b74b6520`.
+It matches all eight PTY input hashes and all 31 locked input hashes before/after
+execution. Source/license/archive checks, unchanged resource/metadata patch
+application, a fresh engine/C rebuild, actual construction exhaustion and all
+seven PTY modes pass with the repaired shared helper. Only the explicit labeled
+dependency cache is reused. Fresh engine library SHA-256:
+`70b20e3c7b426307f288f1eb025a7b1adabe90ea3506c2c348f508cf3b69d93f`.
+The construction case passes in 0.063 seconds, normal PTY in 1.310 seconds and both
+controls fail their intended named assertions with exit 101 and no timeout.
+Flood/stall observe 1/234 actual EAGAIN returns, zero kernel short-return writes
+and 768 pending bytes at high-water; fixed capacities remain as listed below.
+This is local native-host Linux evidence, separate from hosted Darwin execution.
+
+## Capacity ledger and remaining boundary
+
+These are allocated/reserved capacities or configured limits, separately from
+the observed 768-byte pending high-water. Linux sizes from the frozen local run:
+
+| Storage | Bytes / bound | Accounting |
+| --- | --- | --- |
+| Engine mappings | 16,777,216 combined configured maximum | Same accepted bounded allocator; all mappings, including temporary/cached storage, charged until release. |
+| Accepted fixed C owner/collector/metadata sidecar | 201,056 | Same accepted fixed charge; includes Probe/collector reply payloads and fixed event/raw metadata capture. |
+| Accepted Rust backing allocations | 1,693,696 | Both preallocated frame/effect/metadata slots and operation scratch; no coordinator duplication. |
+| Complete new Rust coordinator inline storage | 12,096 | Includes the accepted metadata owner's 3,064 inline bytes, transport handle, 8,192-byte input, 512-byte read storage and 256 report flags; do not add accepted inline bytes again. |
+| New fixed C transport owner | 280 | Descriptor/status fields and 128-byte saved report; separate from accepted fixed C charge. |
+| Reserved reply/input payload subset | 24,576 | Probe 4,096 + collector 4,096 + two publication slots 8,192 + transport input 8,192; already included in rows above, never additive. |
+
+The original Probe's reply storage remains reserved even though the active
+collector handles callbacks. Engine transient reply allocations stay charged to
+the engine quota. Report scratch, call stacks, fixture-created observation copies,
+child heap/threads, runtime/allocator overhead and kernel PTY/pipe buffers are
+separate and excluded from a total-RSS claim. No per-operation coordinator payload
+allocation is needed for prepare/validate/exact commit/slot swap.
+
+Hosted execution of this new eight-input slice remains separate from local
+acceptance. The already accepted metadata workflow cannot prove the new kernel
+transport. Native input/shell/job-control, production adapter integration and
+representative workloads remain open gates; the application engine is unchanged.

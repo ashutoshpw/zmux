@@ -1,0 +1,42 @@
+name: Terminal kernel PTY feasibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-pty-feasibility-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  kernel-pty:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Exercise real kernel PTY replies on the runner architecture
+        run: python3 -B tools/terminal-pty-feasibility/run.py --output "$RUNNER_TEMP/terminal-pty-feasibility"
+      - name: Upload bounded receipts and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terminal-kernel-pty-${{ matrix.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/terminal-pty-feasibility/receipt.json
+            ${{ runner.temp }}/terminal-pty-feasibility/*.log
+            tools/terminal-pty-feasibility/NOTICE.md
+          if-no-files-found: error
+          retention-days: 7

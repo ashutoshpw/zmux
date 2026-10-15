@@ -51,19 +51,19 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
-- [F04 metadata contract](references/f04-metadata-contract.md) — isolated bounded provenance/normalization and publication; hosted and production gates remain.
-- [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — isolated real peer and transport checks; Darwin and production gates remain.
-- [R03 headless owner design](references/r03-local-zellij-owner-design.md) — proposed peer-fenced ownership and native acceptance gates.
-- [B01 browser downloads](references/b01-browser-downloads.md) — bounded native resource ownership, CLI list/wait and pending hosted acceptance.
-- [F04 integrated owner](references/f04-integrated-owner.md) — one bounded terminal/collector, aggregate accounting and failure-fenced publication acceptance.
-- [T03 multiwindow design](references/t03-multiwindow-design.md) — singleton model v6/session v4 foundation passes portable core/runtime checks; shared native coordinator, no-focus moves, caller/attention ownership and last-close recovery remain pending.
-- [F04 callback effects](references/f04-effects-slice.md) — isolated ordered BEL/reply/RESET batches, overflow/publication contracts and remaining metadata provenance gates.
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.
+- [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — pinned MIT 0.43.0 lifecycle, exact-peer and resurrection/prefix guard evidence; production owner design remains next.
+- [R03 headless owner design](references/r03-local-zellij-owner-design.md) — proposed peer-fenced broker, headless ownership and isolated public-API macOS proof gates; no owner implementation.
 
+- [B01 browser downloads](references/b01-browser-downloads.md) — independent native resource owner, list/wait contract, safe publication and pending native acceptance.
 - [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.
 - [F04 engine evaluation](references/f04-engine-evaluation.md) — pinned permissive sources, isolated C/Rust snapshot/reflow evidence and remaining engine/native decision gates.
 - [F04 candidate adapter](references/f04-adapter-candidate-design.md) — Viewport/input/effect ownership, page-allocation/history blockers, static packaging and executable fidelity/Mac workload gates.
 - [F04 resource options](references/f04-resource-options.md) — native allocator/exact-prefix experiment, helper/Wasm tradeoffs and remaining resource gates.
+- [F04 callback effects](references/f04-effects-slice.md) — isolated ordered BEL/reply/RESET batches, overflow/publication contracts and remaining metadata provenance gates.
+- [F04 integrated owner](references/f04-integrated-owner.md) — one bounded terminal/collector, aggregate accounting and failure-fenced publication acceptance.
+- [F04 metadata contract](references/f04-metadata-contract.md) — isolated provenance/capture owner, approved migration policies, local boundary evidence and production closure gates.
+- [F04 kernel PTY replies](references/f04-pty-replies.md) — isolated real-child ordering, bounded reply lifetime, resize/backpressure/cancel and publication acceptance.
 - [A01 workspace metadata](references/a01-workspace-metadata.md) — scoped status/progress/log commands, aggregate bounds and native presentation gates.
 - [F04 resource telemetry](references/f04-native-resource-sampler.md) — bounded external Mac measurements and remaining workload/budget gates.
 - [T01 terminal input](references/t01-terminal-input.md) — legacy special-key encoding and real PTY acceptance.
@@ -73,6 +73,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [S01 session persistence](references/s01-session-persistence.md) — durable topology, transactional restore, identity reservations and remaining session gates.
 - [Local cloud](references/local-cloud.md) — Docker service, tunnel target, configuration isolation and verification limits.
 - [T02 navigation](references/t02-navigation.md) — shared directional actions, focus history, split-close restoration and current verification gates.
+- [T03 multiwindow design](references/t03-multiwindow-design.md) — two-window lifecycle passes independent portable checks; native execution, cross-window moves, groups and canvas remain open.
 - [R01d clipboard images](references/r01-clipboard-images.md) — bounded native image preparation, exact-session receipts and upload-source lifetime; universal/native smoke passed, broader remote gates open.
 - [R01c authenticated file transfer](references/r01-file-transfers.md) — private terminal channels, bounded upload/cancel, native file drop/paste and remaining image/directory gates.
 - [R01b SSH workspaces](references/r01-ssh-workspaces.md) — real OpenSSH launch, remote tab lifecycle, no-focus results and remaining upload gates.
