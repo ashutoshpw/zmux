@@ -84,6 +84,11 @@ pub enum BrowserAction {
         #[serde(default)]
         snapshot_after: bool,
     },
+    Click {
+        selector: String,
+        #[serde(default)]
+        snapshot_after: bool,
+    },
     Eval {
         script: String,
     },
@@ -255,6 +260,9 @@ impl BrowserAction {
     }
     pub fn validate(&self) -> Result<(), BrowserError> {
         match self {
+            Self::Click {
+                selector: value, ..
+            } => selector(Some(value))?,
             Self::Fill {
                 selector: value,
                 text,

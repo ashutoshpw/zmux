@@ -1715,8 +1715,8 @@
       "inventory_id": "CMD-244",
       "reference_command": "browser click",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser click"
     },
     {
       "inventory_id": "CMD-245",

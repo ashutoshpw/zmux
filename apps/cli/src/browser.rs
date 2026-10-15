@@ -97,6 +97,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             | "reload"
             | "zoom"
             | "fill"
+            | "click"
     ) {
         return Err(CliError(format!("unknown browser subcommand `{verb}`")));
     }
@@ -201,7 +202,10 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 index += 2;
             }
             "--selector"
-                if matches!(verb, "get" | "is" | "snapshot" | "find" | "wait" | "fill") =>
+                if matches!(
+                    verb,
+                    "get" | "is" | "snapshot" | "find" | "wait" | "fill" | "click"
+                ) =>
             {
                 set(&mut selector, value(&args, index, flag)?, flag)?;
                 index += 2;
@@ -295,7 +299,9 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 flag_once(&mut compact, flag)?;
                 index += 1;
             }
-            "--snapshot-after" if matches!(verb, "back" | "forward" | "reload" | "fill") => {
+            "--snapshot-after"
+                if matches!(verb, "back" | "forward" | "reload" | "fill" | "click") =>
+            {
                 flag_once(&mut snapshot_after, flag)?;
                 index += 1;
             }
@@ -315,6 +321,21 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         }
     }
     let action = match verb {
+        "click" => {
+            if selector.is_none() && values.len() == 1 {
+                selector = values.pop();
+            }
+            if !values.is_empty() {
+                return Err(CliError(
+                    "browser click accepts exactly one selector".into(),
+                ));
+            }
+            BrowserAction::Click {
+                selector: selector
+                    .ok_or_else(|| CliError("browser click requires a selector".into()))?,
+                snapshot_after,
+            }
+        }
         "fill" => {
             if selector.is_none() && !values.is_empty() {
                 selector = Some(values.remove(0));

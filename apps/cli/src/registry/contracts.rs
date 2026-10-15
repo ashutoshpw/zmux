@@ -499,6 +499,29 @@ fn definitions() -> Vec<Contract> {
         c.limitations = "Live public WKWebView page zoom mutation; read-only clients reject. In/out step 0.1; explicit finite factors and step results clamp to 0.25..5. Reset selects 1; reset to a configured default is unresolved. Completion reports the actual native factor and exact host/document identity. Preserves selection; no persistence, viewport emulation or replay after uncertainty. Historical compatibility remains unverified.";
         result.push(c);
     }
+    let mut click = contract(
+        "browser click",
+        &["--surface", "1", "--selector", "#example"],
+        target_arguments(),
+        "browser",
+    );
+    click.route = "browser";
+    click.requirements = &["running_app", "native_webkit_host"];
+    click.expected.push(("/request/action/action", "click"));
+    click.arguments.extend([
+        option("selector", &["--selector"], ValueKind::Text),
+        positional("selector_operand", ValueKind::Text, false),
+        option("snapshot_after", &["--snapshot-after"], ValueKind::Flag),
+    ]);
+    click
+        .argument_rules
+        .push(json!({"exactly_one": ["selector", "selector_operand"]}));
+    click.default_pointers.extend([
+        ("snapshot_after", "/request/action/snapshot_after"),
+        ("operation_timeout_ms", "/request/timeout_ms"),
+    ]);
+    click.limitations = "Synthetic DOM pointer/mouse sequence followed by one DOM click activation; not a trusted OS gesture. First CSS match or exact document ref. Native disabled property rejects before events. Scrolls nearest, focuses the DOM element without selecting its app tab; down-event cancellation does not suppress the later activation, while click cancellation controls the native default. Completion establishes dispatch only, not navigation readiness or successful default action. Unknown navigation/deadline outcomes never replay. Optional snapshot-after reads once after activation; read-only sockets deny. Full historical compatibility remains unverified.";
+    result.push(click);
     let mut fill = contract(
         "browser fill",
         &["--surface", "1", "--selector", "#example"],

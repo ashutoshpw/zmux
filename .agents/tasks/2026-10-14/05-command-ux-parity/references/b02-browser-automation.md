@@ -1,5 +1,69 @@
 # B02a browser automation bridge
 
+## B02e click candidate (2026-10-15)
+
+Frozen CMD-244 has a bounded local counterpart: `browser click [--selector SELECTOR |
+SELECTOR] [TARGET_OPTIONS] [--snapshot-after]`. The behavior audit used cmux
+`3ba653b9e5afb11d0bc578031142950d6136697e`, `CLI/cmux.swift` around 19500–19548 and
+`Sources/TerminalController.swift` around 8805–8820/8896–8918. No reference
+implementation, tests or assets were imported or translated.
+
+CSS chooses its first match; a document ref addresses its exact element. Selectors
+retain the 2048 UTF-8 byte/NUL bounds. A native disabled property rejects before
+scroll/event dispatch. The fixed isolated-world script scrolls nearest, sends
+pointer/mouse over/enter/move/down, focuses the DOM element with preventScroll,
+sends up, then invokes exactly one DOM click activation. Non-HTMLElement targets
+without a click method receive one MouseEvent fallback. Enter events do not bubble;
+mouse down/up carry detail 1. Pointer/mouse events are synthetic and this is not a
+trusted OS gesture or a claim of keyboard/pointer injection into the native app.
+
+Native DOM activation owns checkbox/link/default behavior and cancellation. As in
+the audited reference, canceling down events does not suppress the later click;
+canceling the click itself can roll back a checkbox default action. A successful
+value contains `dispatched: true` and a reusable ref. It establishes dispatch,
+without promising that a page allowed its default action or that navigation has
+finished. Snapshot-after reads the bounded snapshot after the same activation;
+it cannot repeat the mutation if observation fails.
+
+Click uses the existing mutation admission and physical callback owner. Read-only
+clients deny it. Epoch/host/document and absolute deadline fencing apply; a page
+handler can run arbitrary work or navigate, so a dispatched failure can have an
+unknown outcome and is never replayed. Click is not classified as an explicit
+navigation request: navigation can complete after its dispatch receipt, or replace
+the document before callback completion and produce an uncertain failure. Callers
+must inspect/wait for the resulting page rather than blindly retrying the click.
+No modifiers, multiple clicks, check/type/press, frames, shadow traversal, trusted
+input or complete B02/F01/V01 parity are claimed. CMD-244 discovery maps to a
+local counterpart with compatibility explicitly unverified; no behavioral parity
+status is promoted. Other historical rows are unchanged.
+
+The same CLI wire regression first failed with `unknown browser subcommand click`,
+then passed after implementation. Targeted local browser suites pass 9 CLI and 14
+runtime tests. Existing mutation deadline coverage now includes click: queued
+expiry is known unexecuted, dispatched expiry is uncertain, and drain never
+replays it. Selector bounds and real socket read-policy/native-owner failures are
+covered at their production owners.
+
+The production-owned script passes 62 real Chromium DOM cases (previous 48 plus
+14 click cases); the added cases failed on the pre-click script. Independent DOM
+observers check the pointer/mouse/focus sequence, synthetic event identity,
+enter bubbling/button/detail state, nearest scroll/center coordinates, first CSS
+match and exact refs, one activation plus snapshot, native checkbox activation,
+down-event cancellation, click default rollback, disabled rejection, SVG fallback
+and missing/invalid/disconnected targets. This is Chromium DOM evidence, without
+WebKit, isolated-world or native lifecycle claims.
+
+`BrowserClickSmoke` is authored through the bundled CLI against a never-selected
+HTTP WebKit host. It checks actual page events/default actions/cancellation and
+receipt identity. Its link navigates to the real second fixture page, counts one
+source click through sessionStorage, accepts only a dispatch completion or an
+explicit no-retry uncertain navigation/deadline error, waits for actual native
+and published page readiness, and rejects the old document ref. The fixture also
+requires native key/responder and every model selection to remain unchanged.
+The App calls it after fill and before ordering/download fixtures; packaged
+acceptance requires `browser_click`. Exact-source strict Swift compilation and
+native execution remain required; no native pass is established for this slice.
+
 ## B02d fill candidate (2026-10-15)
 
 Frozen CMD-252 has a local counterpart: `browser fill [--selector SELECTOR | SELECTOR]

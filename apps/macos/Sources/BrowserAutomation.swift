@@ -70,6 +70,7 @@ enum BrowserAction: Codable, Sendable {
     case reload(snapshotAfter: Bool)
     case zoom(operation: BrowserZoom)
     case fill(selector: String, text: String, snapshotAfter: Bool)
+    case click(selector: String, snapshotAfter: Bool)
     case eval(script: String)
     case snapshot(options: BrowserSnapshotOptions)
     case get(kind: String, selector: String?, attribute: String?, property: String?)
@@ -85,6 +86,7 @@ enum BrowserAction: Codable, Sendable {
         case "reload": self = .reload(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "zoom": self = .zoom(operation: try c.decode(BrowserZoom.self, forKey: .operation))
         case "fill": self = .fill(selector: try c.decode(String.self, forKey: .selector), text: try c.decode(String.self, forKey: .text), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
+        case "click": self = .click(selector: try c.decode(String.self, forKey: .selector), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "eval": self = .eval(script: try c.decode(String.self, forKey: .script))
         case "snapshot": self = .snapshot(options: try c.decodeIfPresent(BrowserSnapshotOptions.self, forKey: .options) ?? .init())
         case "find": self = .find(locator: try c.decode(BrowserLocator.self, forKey: .locator))
@@ -105,6 +107,9 @@ enum BrowserAction: Codable, Sendable {
         case .fill(let selector, let text, let after):
             try c.encode("fill", forKey: .action); try c.encode(selector, forKey: .selector)
             try c.encode(text, forKey: .text); try c.encode(after, forKey: .snapshotAfter)
+        case .click(let selector, let after):
+            try c.encode("click", forKey: .action); try c.encode(selector, forKey: .selector)
+            try c.encode(after, forKey: .snapshotAfter)
         case .snapshot(let options): try c.encode("snapshot", forKey: .action); try c.encode(options, forKey: .options)
         case .find(let locator): try c.encode("find", forKey: .action); try c.encode(locator, forKey: .locator)
         case .wait(let selector, let state):
@@ -116,7 +121,7 @@ enum BrowserAction: Codable, Sendable {
     }
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
-    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill: true; default: false } }
+    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .click: true; default: false } }
     var isWait: Bool { if case .wait = self { return true }; return false }
 }
 
@@ -361,6 +366,28 @@ enum BrowserAutomationScript {
       }
       return {matched,state:req.state,ref:matched && node ? reference(node) : null};
     };
+    const click = () => {
+      const node = resolve(req.selector);
+      if (!node) fault('element_not_found', 'Click selector did not match an element');
+      if (node.disabled) fault('element_disabled', 'Click target is disabled');
+      node.scrollIntoView({block:'nearest', inline:'nearest'});
+      const box = node.getBoundingClientRect();
+      const x = Math.floor(box.left + box.width / 2), y = Math.floor(box.top + box.height / 2);
+      const location = {cancelable:true, composed:true, view:window, button:0, clientX:x, clientY:y, screenX:x, screenY:y};
+      for (const phase of ['over','enter','move','down','up']) {
+        if (phase === 'up' && typeof node.focus === 'function') node.focus({preventScroll:true});
+        const properties = {...location, bubbles:phase !== 'enter', buttons:phase === 'down' ? 1 : 0};
+        if (typeof PointerEvent === 'function') {
+          node.dispatchEvent(new PointerEvent('pointer' + phase, {...properties, pointerId:1, pointerType:'mouse', isPrimary:true}));
+        }
+        node.dispatchEvent(new MouseEvent('mouse' + phase, {...properties, detail:['down','up'].includes(phase) ? 1 : 0}));
+      }
+      // Let the DOM activation algorithm own defaults and click cancellation.
+      // A second manually dispatched click would toggle controls twice.
+      if (typeof node.click === 'function') node.click();
+      else node.dispatchEvent(new MouseEvent('click', {...location, bubbles:true, buttons:0, detail:1}));
+      return {dispatched:true, ref:reference(node)};
+    };
     const fill = () => {
       const node = resolve(req.selector);
       if (!node) fault('element_not_found', 'Fill selector did not match an element');
@@ -481,8 +508,9 @@ enum BrowserAutomationScript {
       else if (req.action === 'find') value = find(req.locator);
       else if (req.action === 'wait') value = wait();
       else if (req.action === 'fill') value = fill();
+      else if (req.action === 'click') value = click();
       else fault('unsupported_action', 'Unsupported browser action');
-      const result = JSON.stringify({value, ...(req.action === 'fill' && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
+      const result = JSON.stringify({value, ...(['fill','click'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
       if (new TextEncoder().encode(result).length > 58000) fault('result_too_large', 'Browser result exceeds the byte limit; narrow the selector');
       return result;
     } catch (error) {

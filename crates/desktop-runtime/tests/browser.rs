@@ -561,39 +561,49 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
     let now = Instant::now();
     let mut runtime = BrowserRuntime::default();
     attach(&mut runtime, &model, surface, now);
-    let mut queued = request(
-        &model,
-        surface,
+    for action in [
         BrowserAction::Eval {
             script: "window.value = 1".into(),
         },
-    );
-    queued.timeout_ms = 10;
-    let id = runtime
-        .admit(&model.snapshot(), queued.clone(), now)
-        .unwrap();
-    runtime.reconcile(&model.snapshot(), now + Duration::from_millis(10));
-    assert!(
-        !runtime
-            .receipt(id)
-            .unwrap()
-            .error
-            .as_ref()
-            .unwrap()
-            .outcome_unknown
-    );
-    let id = runtime.admit(&model.snapshot(), queued, now).unwrap();
-    runtime.drain_requests(&model.snapshot(), now);
-    runtime.reconcile(&model.snapshot(), now + Duration::from_millis(10));
-    assert!(
-        runtime
-            .receipt(id)
-            .unwrap()
-            .error
-            .as_ref()
-            .unwrap()
-            .outcome_unknown
-    );
+        BrowserAction::Click {
+            selector: "#send".into(),
+            snapshot_after: false,
+        },
+    ] {
+        let mut queued = request(&model, surface, action);
+        queued.timeout_ms = 10;
+        let id = runtime
+            .admit(&model.snapshot(), queued.clone(), now)
+            .unwrap();
+        runtime.reconcile(&model.snapshot(), now + Duration::from_millis(10));
+        assert!(
+            !runtime
+                .receipt(id)
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .outcome_unknown
+        );
+        let id = runtime.admit(&model.snapshot(), queued, now).unwrap();
+        runtime.drain_requests(&model.snapshot(), now);
+        runtime.reconcile(&model.snapshot(), now + Duration::from_millis(10));
+        assert!(
+            runtime
+                .receipt(id)
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .outcome_unknown
+        );
+        assert!(
+            runtime
+                .drain_requests(&model.snapshot(), now + Duration::from_millis(10))
+                .requests
+                .is_empty()
+        );
+    }
     for _ in 0..MAX_PENDING_BROWSER_OPERATIONS {
         runtime
             .admit(&model.snapshot(), request(&model, surface, read()), now)
@@ -621,7 +631,7 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
 }
 
 #[test]
-fn fill_text_validation_is_bounded_and_empty_replacement_is_a_mutation() {
+fn input_selectors_and_fill_text_are_bounded_before_mutation_dispatch() {
     let (model, surface) = fixture();
     let now = Instant::now();
     let before = model.snapshot();
@@ -633,6 +643,18 @@ fn fill_text_validation_is_bounded_and_empty_replacement_is_a_mutation() {
         snapshot_after: false,
     };
     for rejected in [
+        BrowserAction::Click {
+            selector: String::new(),
+            snapshot_after: false,
+        },
+        BrowserAction::Click {
+            selector: "x".repeat(MAX_SELECTOR_BYTES + 1),
+            snapshot_after: false,
+        },
+        BrowserAction::Click {
+            selector: "bad\0selector".into(),
+            snapshot_after: false,
+        },
         action("", String::new()),
         action("#entry", "x".repeat(MAX_INPUT_TEXT_BYTES + 1)),
         action("#entry", "bad\0text".into()),
