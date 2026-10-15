@@ -10,14 +10,21 @@
 - N01a-d notification integration and the callback-isolation crash repair passed
   real macOS packaged checks at c9db69c. Session write receipts also pass Linux/Darwin
   checks and native packaging at6cea10a.
-- N01e terminal reply opt-in, asynchronous receipt polling and native text actions are
-  implemented and pass 180 Rust tests plus full local checks and fresh review. Hosted
-  reply acceptance remains pending. Replies must not acknowledge queue admission as delivery,
-  replay uncertain writes, borrow mutable focus, or recreate consumed OS banners.
-- Local Docker cloud is healthy on3530; public hostname did not resolve at last check.
-  The user owns tunnel setup. VM/relay/email and full cloud parity remain open.
-- A browser title observation gap was found in inspected native artifacts; repair is
-  queued after replies. Other package/acceptance gaps stay tracked below and in V01.
+- N01e reply journey executed successfully at3a9ab8e in macOS38745262578;
+  that run failed later on live browser titles. Actual OS text-action interaction remains open.
+- Browser owner fencing and bounded live-title KVO repair are committed; native title
+  regression was observed before repair. Rerun is blocked earlier by sidebar acceptance.
+- Sidebar resizing compiles universally but macOS38747700382 failed the compound
+  drag/focus check. Diagnostic-only df3f8ff adds width, event-hit and responder evidence;
+  macOS38749608349 is running. No speculative production repair is claimed.
+- T01a F1–F12/modified navigation encoder is committed; native PTY-byte acceptance
+  has not yet executed because of the earlier sidebar failure.
+- F04 bounded external resource sampler committed at2095b5b and pushed with df3f8ff;
+  portable review/checks pass, first Darwin measurements pending.
+- A01 workspace status/progress/log Rust/CLI slice passes full local checks (189 tests).
+  Native row/inspector integration is under independent review and not yet committed.
+- Local Docker cloud is healthy on3530; `bunx path-to-port` confirmed3530 after
+  health checks. Public tunnel is unverified; VM/relay/email remain unavailable.
 
 ## Delivered slices
 

@@ -86,6 +86,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var terminals: [UInt64: TerminalView] = [:]
     private var browsers: [UInt64: BrowserView] = [:]
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
+    private var workspaceRowsNamespace: UUID?
+    private var metadataPopover: NSPopover?
+    private var metadataInspector: WorkspaceMetadataViewController?
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
     private var workspaceCount = 1
     private var didSetInitialTerminalFocus = false
@@ -206,6 +209,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
+        metadataPopover?.performClose(nil)
+        metadataPopover = nil; metadataInspector = nil
         await imagePastes.stopAccepting()
         try await bridge.close()
         await imagePastes.desktopClosed()
@@ -603,8 +608,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func rebuildWorkspaceRowsIfNeeded(_ snapshot: DesktopSnapshot) {
-        guard modelRevision != snapshot.model.revision else { return }
+        guard modelRevision != snapshot.model.revision || workspaceRowsNamespace != snapshot.model.identityNamespace else { return }
         modelRevision = snapshot.model.revision
+        workspaceRowsNamespace = snapshot.model.identityNamespace
         workspaceList.arrangedSubviews.forEach {
             workspaceList.removeArrangedSubview($0)
             $0.removeFromSuperview()
@@ -614,6 +620,11 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             let row = WorkspaceRowView(workspaceID: workspace.id)
             row.target = self
             row.action = #selector(workspaceSelected(_:))
+            let namespace = snapshot.model.identityNamespace
+            let workspaceID = workspace.id
+            row.onMetadata = { [weak self] source in
+                self?.showWorkspaceMetadata(workspaceID, namespace: namespace, from: source)
+            }
             row.menu = workspaceMenu(for: workspace)
             row.translatesAutoresizingMaskIntoConstraints = false
             workspaceList.addArrangedSubview(row)
@@ -637,8 +648,32 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 subtitle = workspace.root.panes.flatMap { $0.surfaces }.compactMap { $0.remote?.destination }.first.map { "SSH · \($0)" } ?? (panes == 1 ? "Local shell" : "\(panes) local terminals")
             }
             let unread = snapshot.notifications.filter { !$0.read && $0.identityNamespace == snapshot.model.identityNamespace && $0.workspaceId == workspace.id }.count
-            row.update(title: workspace.name, subtitle: subtitle, isSelected: isSelected, isRunning: isRunning, unread: unread)
+            row.update(title: workspace.name, subtitle: subtitle, isSelected: isSelected, isRunning: isRunning, unread: unread,
+                       metadata: snapshot.workspaceMetadata?.first { $0.workspaceId == workspaceID })
         }
+        if let inspector = metadataInspector {
+            guard metadataPopover?.isShown == true, inspector.identityNamespace == snapshot.model.identityNamespace,
+                  let workspace = snapshot.model.workspaces.first(where: { $0.id == inspector.workspaceID }) else {
+                metadataPopover?.performClose(nil)
+                metadataPopover = nil; metadataInspector = nil
+                return
+            }
+            inspector.update(snapshot.workspaceMetadata?.first { $0.workspaceId == inspector.workspaceID } ?? .empty(inspector.workspaceID), name: workspace.name)
+        }
+    }
+
+    private func showWorkspaceMetadata(_ workspaceID: UInt64, namespace: UUID, from source: NSView) {
+        guard source.window === window, let snapshot, snapshot.model.identityNamespace == namespace,
+              let workspace = snapshot.model.workspaces.first(where: { $0.id == workspaceID }) else { return }
+        metadataPopover?.performClose(nil)
+        let inspector = WorkspaceMetadataViewController(workspaceID: workspaceID, identityNamespace: namespace)
+        inspector.update(snapshot.workspaceMetadata?.first { $0.workspaceId == workspaceID } ?? .empty(workspaceID), name: workspace.name)
+        let popover = NSPopover()
+        popover.contentViewController = inspector
+        popover.contentSize = NSSize(width: 420, height: 460)
+        popover.behavior = .transient
+        metadataInspector = inspector; metadataPopover = popover
+        popover.show(relativeTo: source.bounds, of: source, preferredEdge: .maxX)
     }
 
     private func updateHeader(_ snapshot: DesktopSnapshot) {
@@ -1398,6 +1433,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await waitUntil { $0.model.workspaces.count == 2 && $0.frames.count == 1 && $0.frames.first?.snapshot?.state == "running" }
         guard let secondWorkspace = snapshot?.workspace?.id else { throw BridgeFailure(message: "Missing second workspace") }
         try await smokeWorkspaceNotification(workspaceID: first.id, foregroundWorkspace: secondWorkspace)
+        try await smokeWorkspaceMetadata(workspaceID: first.id, foregroundWorkspace: secondWorkspace)
         try performShortcut("[", modifiers: [.command, .control])
         try await waitUntil { $0.model.focusedWorkspace == first.id && $0.frames.count == 2 }
         try performShortcut("]", modifiers: [.command, .control])
@@ -1491,6 +1527,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "notification_workspace_target": true,
             "notification_jump_to_unread": true,
             "notification_reply_pty": true,
+            "workspace_metadata": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
@@ -1628,6 +1665,72 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
               after.workspace?.focusedPane == workspace.focusedPane,
               after.workspace?.root.panes.allSatisfy({ selected[$0.id] == $0.selectedSurface }) == true else {
             throw BridgeFailure(message: "A completed background reply changed focus or selected tabs")
+        }
+    }
+
+    private func smokeWorkspaceMetadata(workspaceID: UInt64, foregroundWorkspace: UInt64) async throws {
+        guard let before = snapshot, before.model.focusedWorkspace == foregroundWorkspace else {
+            throw BridgeFailure(message: "Workspace metadata fixture requires a background target")
+        }
+        let responder = window.firstResponder
+        let selected = Dictionary(uniqueKeysWithValues: before.model.workspaces.map { workspace in
+            (workspace.id, Dictionary(uniqueKeysWithValues: workspace.root.panes.map { ($0.id, $0.selectedSurface) }))
+        })
+        let target = ["--workspace", String(workspaceID)]
+        let literal = "<b>Native metadata</b>"
+        let log = "<script>literal log</script>\n" + String(repeating: "Retained context.\n", count: 30)
+        _ = try await nativeCLI(["set-status", "notes", "Lower priority", "--priority", "1"] + target, externalCaller: true)
+        _ = try await nativeCLI(["set-status", "build", literal, "--priority", "20", "--icon", "hammer.fill", "--color", "#33AA77"] + target, externalCaller: true)
+        _ = try await nativeCLI(["set-progress", "0.42", "--label", "Indexing source"] + target, externalCaller: true)
+        _ = try await nativeCLI(["log", log, "--level", "warning", "--source", "native-smoke"] + target, externalCaller: true)
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.logs.count == 1 }
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard let row = workspaceRows.first(where: { $0.value == workspaceID })?.key,
+              row.subviews.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "build: " + literal && !$0.isHidden }),
+              row.subviews.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue == "42% · Indexing source" && !$0.isHidden }),
+              row.subviews.compactMap({ $0 as? NSProgressIndicator }).contains(where: { abs($0.doubleValue - 0.42) < 0.001 && !$0.isHidden }),
+              row.bounds.height <= 86.5,
+              window.firstResponder === responder,
+              let button = row.subviews.compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel()?.hasPrefix("Show workspace activity") == true }) else {
+            throw BridgeFailure(message: "CLI metadata did not reach the bounded native status/progress preview or changed input focus")
+        }
+        button.performClick(nil)
+        guard metadataPopover?.isShown == true, let inspector = metadataInspector, inspector.workspaceID == workspaceID,
+              let scroll = inspector.view.subviews.compactMap({ $0 as? NSScrollView }).first,
+              let details = scroll.documentView as? NSTextView,
+              details.string.contains(literal), details.string.contains("notes · priority 1"),
+              details.string.contains("WARNING · native-smoke"), details.string.contains("<script>literal log</script>"),
+              details.string.contains("0 older entries omitted"), !details.isEditable, !details.isRichText,
+              scroll.hasVerticalScroller else { throw BridgeFailure(message: "Workspace activity details lost status/log fields or treated metadata as rich text") }
+        let selection = (details.string as NSString).range(of: literal)
+        details.setSelectedRange(selection)
+        if let layout = details.layoutManager, let container = details.textContainer { layout.ensureLayout(for: container) }
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 40))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let origin = scroll.contentView.bounds.origin
+        _ = try await nativeCLI(["log", "Build complete", "--level", "success", "--source", "native-smoke"] + target, externalCaller: true)
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.logs.count == 2 }
+        guard details.string.contains("Build complete"), details.selectedRange() == selection,
+              abs(scroll.contentView.bounds.origin.y - origin.y) < 1 else {
+            throw BridgeFailure(message: "Live workspace log refresh lost the reader's selection or scroll position")
+        }
+        _ = try await nativeCLI(["clear-status", "build"] + target, externalCaller: true)
+        _ = try await nativeCLI(["clear-status", "notes"] + target, externalCaller: true)
+        _ = try await nativeCLI(["clear-progress"] + target, externalCaller: true)
+        _ = try await nativeCLI(["clear-log"] + target, externalCaller: true)
+        try await waitUntil { $0.workspaceMetadata?.contains(where: { $0.workspaceId == workspaceID }) != true }
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard row.bounds.height <= 50.5, button.isHidden, details.string.contains("No statuses"),
+              details.string.contains("No progress"), details.string.contains("No log entries") else {
+            throw BridgeFailure(message: "Clearing workspace metadata did not update the row and open details")
+        }
+        metadataPopover?.performClose(nil)
+        guard let after = snapshot, after.model.focusedWorkspace == foregroundWorkspace,
+              after.workspace?.focusedPane == before.workspace?.focusedPane,
+              Dictionary(uniqueKeysWithValues: after.model.workspaces.map { workspace in
+                  (workspace.id, Dictionary(uniqueKeysWithValues: workspace.root.panes.map { ($0.id, $0.selectedSurface) }))
+              }) == selected, window.firstResponder === responder else {
+            throw BridgeFailure(message: "Workspace metadata updates changed the selected target or did not restore input focus after details")
         }
     }
 

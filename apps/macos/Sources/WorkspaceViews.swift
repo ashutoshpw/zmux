@@ -94,10 +94,20 @@ final class IconButton: NSButton {
 @MainActor
 final class WorkspaceRowView: NSControl {
     let workspaceID: UInt64
+    var onMetadata: (@MainActor (NSView) -> Void)?
     private let terminalIcon = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let statusDot = NSView()
+    private let metadataIcon = NSImageView()
+    private let metadataLabel = NSTextField(labelWithString: "")
+    private let progress = NSProgressIndicator()
+    private let progressLabel = NSTextField(labelWithString: "")
+    private lazy var metadataButton = IconButton(symbol: "ellipsis.circle", label: "Show workspace activity", target: self, action: #selector(showMetadata))
+    private var rowHeight: NSLayoutConstraint?
+    private var progressWidth: NSLayoutConstraint?
+    private var progressSpacing: NSLayoutConstraint?
+    private var metadata: WorkspaceMetadata?
 
     init(workspaceID: UInt64) {
         self.workspaceID = workspaceID
@@ -132,22 +142,54 @@ final class WorkspaceRowView: NSControl {
         labels.setContentHuggingPriority(.defaultLow, for: .horizontal)
         labels.translatesAutoresizingMaskIntoConstraints = false
 
+        metadataIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
+        metadataLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
+        metadataLabel.lineBreakMode = .byTruncatingTail
+        metadataLabel.maximumNumberOfLines = 1
+        progressLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        progressLabel.textColor = ZmuxPalette.subdued
+        progressLabel.lineBreakMode = .byTruncatingTail
+        progressLabel.maximumNumberOfLines = 1
+        progress.style = .bar; progress.isIndeterminate = false
+        progress.minValue = 0; progress.maxValue = 1; progress.controlSize = .small
+        for view in [metadataIcon, metadataLabel, progress, progressLabel, metadataButton] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.isHidden = true
+            addSubview(view)
+        }
+
         for view in [terminalIcon, labels, statusDot] {
             addSubview(view)
         }
+        rowHeight = heightAnchor.constraint(equalToConstant: 50)
+        progressWidth = progress.widthAnchor.constraint(equalToConstant: 44)
+        progressSpacing = progressLabel.leadingAnchor.constraint(equalTo: progress.trailingAnchor, constant: 6)
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 50),
+            rowHeight!, progressWidth!, progressSpacing!,
             terminalIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             terminalIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             terminalIcon.widthAnchor.constraint(equalToConstant: 17),
             terminalIcon.heightAnchor.constraint(equalToConstant: 17),
             labels.leadingAnchor.constraint(equalTo: terminalIcon.trailingAnchor, constant: 9),
-            labels.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labels.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             labels.trailingAnchor.constraint(lessThanOrEqualTo: statusDot.leadingAnchor, constant: -8),
             statusDot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -11),
-            statusDot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            statusDot.topAnchor.constraint(equalTo: topAnchor, constant: 22),
             statusDot.widthAnchor.constraint(equalToConstant: 6),
-            statusDot.heightAnchor.constraint(equalToConstant: 6)
+            statusDot.heightAnchor.constraint(equalToConstant: 6),
+            metadataIcon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            metadataIcon.topAnchor.constraint(equalTo: topAnchor, constant: 45),
+            metadataIcon.widthAnchor.constraint(equalToConstant: 12), metadataIcon.heightAnchor.constraint(equalToConstant: 12),
+            metadataLabel.leadingAnchor.constraint(equalTo: metadataIcon.trailingAnchor, constant: 5),
+            metadataLabel.centerYAnchor.constraint(equalTo: metadataIcon.centerYAnchor),
+            metadataLabel.trailingAnchor.constraint(equalTo: metadataButton.leadingAnchor, constant: -4),
+            metadataButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            metadataButton.centerYAnchor.constraint(equalTo: metadataIcon.centerYAnchor),
+            metadataButton.widthAnchor.constraint(equalToConstant: 20), metadataButton.heightAnchor.constraint(equalToConstant: 20),
+            progress.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            progress.topAnchor.constraint(equalTo: topAnchor, constant: 68), progress.heightAnchor.constraint(equalToConstant: 8),
+            progressLabel.centerYAnchor.constraint(equalTo: progress.centerYAnchor),
+            progressLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10)
         ])
     }
 
@@ -155,7 +197,7 @@ final class WorkspaceRowView: NSControl {
 
     override var acceptsFirstResponder: Bool { true }
 
-    func update(title: String, subtitle: String, isSelected: Bool, isRunning: Bool, unread: Int = 0) {
+    func update(title: String, subtitle: String, isSelected: Bool, isRunning: Bool, unread: Int = 0, metadata: WorkspaceMetadata? = nil) {
         titleLabel.stringValue = title
         subtitleLabel.stringValue = unread > 0 ? "\(unread) unread · \(subtitle)" : subtitle
         statusDot.layer?.backgroundColor = (unread > 0 ? NSColor.systemOrange : (isRunning ? ZmuxPalette.success : ZmuxPalette.inactive)).cgColor
@@ -164,10 +206,54 @@ final class WorkspaceRowView: NSControl {
         terminalIcon.contentTintColor = isSelected ? .white : .secondaryLabelColor
         titleLabel.textColor = isSelected ? .white : .labelColor
         subtitleLabel.textColor = isSelected ? NSColor.white.withAlphaComponent(0.74) : ZmuxPalette.subdued
-        setAccessibilityLabel("\(title), \(subtitle)")
+        updateMetadata(metadata)
+        metadataButton.setAccessibilityLabel("Show workspace activity for \(title)")
+        let activity = self.metadata.map { value in
+            "\(value.statuses.count) statuses, \(value.logs.count) log entries" + (value.progress.map { ", \(Int($0.value * 100)) percent" } ?? "")
+        } ?? ""
+        setAccessibilityLabel("\(title), \(subtitle)" + (activity.isEmpty ? "" : ", " + activity))
+        setAccessibilityValue(self.metadata == nil ? "" : metadataLabel.stringValue + ", " + progressLabel.stringValue)
         setAccessibilitySelected(isSelected)
         needsDisplay = true
     }
+
+    private func updateMetadata(_ value: WorkspaceMetadata?) {
+        let value = value.flatMap { $0.isEmpty ? nil : $0 }
+        guard value != metadata else { return }
+        metadata = value
+        setAccessibilityChildren(value == nil ? [] : [metadataButton])
+        rowHeight?.constant = value == nil ? 50 : 86
+        for view in [metadataIcon, metadataLabel, progressLabel, metadataButton] { view.isHidden = value == nil }
+        guard let value else { progress.isHidden = true; return }
+        let first = value.statuses.first
+        let symbol = first?.icon ?? (value.progress == nil ? "text.bubble" : "circle.dotted")
+        metadataIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
+        let color = first?.color.flatMap { hexColor($0) } ?? NSColor.secondaryLabelColor
+        metadataIcon.contentTintColor = color
+        metadataLabel.textColor = color
+        metadataLabel.stringValue = first.map { "\($0.key): \($0.value)" } ?? (value.progress == nil ? "Workspace log" : "Task progress")
+        metadataLabel.toolTip = metadataLabel.stringValue
+        metadataButton.toolTip = "Show all \(value.statuses.count) statuses and \(value.logs.count) log entries"
+        progress.isHidden = value.progress == nil
+        progressWidth?.constant = value.progress == nil ? 0 : 44
+        progressSpacing?.constant = value.progress == nil ? 0 : 6
+        if let task = value.progress {
+            progress.doubleValue = min(1, max(0, task.value))
+            let percent = Int(progress.doubleValue * 100)
+            progressLabel.stringValue = "\(percent)%" + (task.label.map { " · " + $0 } ?? "")
+            progress.setAccessibilityLabel(task.label ?? "Workspace progress")
+        } else { progressLabel.stringValue = "\(value.logs.count) log entries" + (value.logsDropped > 0 ? " · \(value.logsDropped) older omitted" : "") }
+        progressLabel.toolTip = progressLabel.stringValue
+    }
+    private func hexColor(_ text: String) -> NSColor? {
+        guard text.count == 7, text.first == "#", let value = UInt32(text.dropFirst(), radix: 16) else { return nil }
+        return NSColor(calibratedRed: CGFloat((value >> 16) & 255) / 255,
+                       green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
+    }
+    // Anchor details to the row, which remains present when metadata is cleared
+    // and the button itself hides during an open inspection.
+    @objc private func showMetadata() { onMetadata?(self) }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -198,6 +284,94 @@ final class WorkspaceRowView: NSControl {
     }
 
     override var focusRingMaskBounds: NSRect { bounds }
+}
+
+/// A single bounded, plain-text document keeps all retained metadata accessible
+/// without growing sidebar rows or interpreting caller text as markup.
+@MainActor
+final class WorkspaceMetadataViewController: NSViewController {
+    let workspaceID: UInt64
+    let identityNamespace: UUID
+    private let heading = NSTextField(labelWithString: "Workspace activity")
+    private let workspaceLabel = NSTextField(labelWithString: "")
+    private let scroll = NSScrollView()
+    private let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 380))
+    private var displayed: WorkspaceMetadata?
+
+    init(workspaceID: UInt64, identityNamespace: UUID) {
+        self.workspaceID = workspaceID; self.identityNamespace = identityNamespace
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        let root = BackgroundView(color: ZmuxPalette.chrome)
+        root.frame = NSRect(x: 0, y: 0, width: 420, height: 460)
+        heading.font = .systemFont(ofSize: 14, weight: .semibold)
+        workspaceLabel.font = .systemFont(ofSize: 11)
+        workspaceLabel.textColor = .secondaryLabelColor
+        workspaceLabel.lineBreakMode = .byTruncatingTail
+        scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false
+        scroll.drawsBackground = false
+        text.isEditable = false; text.isSelectable = true; text.isRichText = false
+        text.importsGraphics = false; text.isAutomaticLinkDetectionEnabled = false
+        text.drawsBackground = false; text.textColor = .labelColor
+        text.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        text.isVerticallyResizable = true; text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.minSize = .zero; text.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        text.textContainer?.containerSize = NSSize(width: 420, height: .greatestFiniteMagnitude)
+        text.textContainer?.widthTracksTextView = true
+        text.textContainerInset = NSSize(width: 14, height: 12)
+        scroll.documentView = text
+        for child in [heading, workspaceLabel, scroll] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            root.addSubview(child)
+        }
+        NSLayoutConstraint.activate([
+            heading.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
+            heading.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            heading.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            workspaceLabel.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
+            workspaceLabel.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
+            workspaceLabel.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 4),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor), scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: workspaceLabel.bottomAnchor, constant: 10),
+            scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor)
+        ])
+        view = root
+    }
+    func update(_ metadata: WorkspaceMetadata, name: String) {
+        _ = view
+        workspaceLabel.stringValue = name
+        text.setAccessibilityLabel("Workspace activity details for \(name)")
+        guard displayed != metadata else { return }
+        displayed = metadata
+        var lines = ["STATUSES · \(metadata.statuses.count)"]
+        if metadata.statuses.isEmpty { lines.append("No statuses") }
+        for status in metadata.statuses {
+            lines += ["\(status.key) · priority \(status.priority)", status.value]
+            let appearance = [status.icon.map { "Icon: " + $0 }, status.color.map { "Color: " + $0 }].compactMap { $0 }
+            if !appearance.isEmpty { lines.append(appearance.joined(separator: " · ")) }
+            lines.append("")
+        }
+        lines += ["", "PROGRESS"]
+        if let task = metadata.progress {
+            lines.append("\(Int(task.value * 100))%" + (task.label.map { " · " + $0 } ?? ""))
+        } else { lines.append("No progress") }
+        lines += ["", "LOGS · \(metadata.logs.count) retained · \(metadata.logsDropped) older entries omitted"]
+        if metadata.logs.isEmpty { lines.append("No log entries") }
+        for log in metadata.logs {
+            lines += ["#\(log.sequence) · \(log.level.rawValue.uppercased()) · \(log.source ?? "Unspecified source")", log.message, ""]
+        }
+        let selection = text.selectedRange()
+        let origin = scroll.contentView.bounds.origin
+        text.string = lines.joined(separator: "\n")
+        let length = (text.string as NSString).length
+        let location = min(selection.location, length)
+        text.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+        scroll.contentView.scroll(to: origin)
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
 }
 
 @MainActor

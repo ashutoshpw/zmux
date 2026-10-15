@@ -90,6 +90,36 @@ struct SessionPersistence: Decodable, Sendable {
     let lastSavedRevision: UInt64?
     let error: String?
 }
+struct WorkspaceStatus: Decodable, Sendable, Equatable {
+    let key: String
+    let value: String
+    let icon: String?
+    let color: String?
+    let priority: Int32
+}
+struct WorkspaceProgress: Decodable, Sendable, Equatable {
+    let value: Double
+    let label: String?
+}
+struct WorkspaceLog: Decodable, Sendable, Equatable {
+    enum Level: String, Decodable, Sendable, Equatable { case info, progress, success, warning, error }
+    let sequence: UInt64
+    let message: String
+    let level: Level
+    let source: String?
+}
+struct WorkspaceMetadata: Decodable, Sendable, Equatable {
+    let workspaceId: UInt64
+    let statuses: [WorkspaceStatus]
+    let progress: WorkspaceProgress?
+    let logs: [WorkspaceLog]
+    let logsDropped: UInt64
+
+    static func empty(_ workspaceId: UInt64) -> Self {
+        Self(workspaceId: workspaceId, statuses: [], progress: nil, logs: [], logsDropped: 0)
+    }
+    var isEmpty: Bool { statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
+}
 struct DesktopSnapshot: Decodable, Sendable {
     let nativeNotifications: NativeNotificationSnapshot
     let browserEpoch: UUID
@@ -97,6 +127,7 @@ struct DesktopSnapshot: Decodable, Sendable {
     let persistence: SessionPersistence?
     let cleanupError: String?
     let uploads: [UploadProgress]
+    let workspaceMetadata: [WorkspaceMetadata]?
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
     let revision: UInt64; let model: Model; let frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool

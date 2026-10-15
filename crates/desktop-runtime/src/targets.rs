@@ -44,6 +44,9 @@ pub enum TargetOperation {
     Notifications {
         action: crate::attention::NotificationAction,
     },
+    Metadata {
+        action: crate::metadata::MetadataAction,
+    },
     ReadScreen,
     #[default]
     ListPanes,
@@ -118,4 +121,25 @@ pub(crate) fn notification_address(
     scope
         .resolve(model, &CallerContext::default())
         .map(|target| NotificationAddress::Workspace(target.workspace))
+}
+
+/// Metadata belongs to the caller workspace when present. Validate an accompanying
+/// surface claim instead of borrowing foreground selection or crossing owners.
+pub(crate) fn metadata_workspace(
+    model: &Snapshot,
+    scope: &TargetScope,
+    caller: &CallerContext,
+) -> Result<zmux_workspace_core::WorkspaceId, TargetError> {
+    if scope.workspace.is_some() || scope.pane.is_some() || scope.surface.is_some() {
+        return scope
+            .resolve(model, &CallerContext::default())
+            .map(|t| t.workspace);
+    }
+    TargetScope {
+        workspace: caller.workspace.clone(),
+        surface: caller.surface.clone(),
+        ..Default::default()
+    }
+    .resolve(model, &CallerContext::default())
+    .map(|t| t.workspace)
 }

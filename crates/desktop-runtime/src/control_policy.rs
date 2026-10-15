@@ -240,6 +240,10 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
             TargetOperation::ReadScreen
                 | TargetOperation::ListPanes
                 | TargetOperation::ListPaneSurfaces
+                | TargetOperation::Metadata {
+                    action: crate::metadata::MetadataAction::ListStatus
+                        | crate::metadata::MetadataAction::ListLog { .. }
+                }
         ),
         ControlCommand::Session { .. }
         | ControlCommand::Transfer { .. }

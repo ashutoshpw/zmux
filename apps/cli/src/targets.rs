@@ -18,6 +18,19 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     ) {
         return parse_notifications(command, &args);
     }
+    if matches!(
+        command,
+        "set-status"
+            | "clear-status"
+            | "list-status"
+            | "set-progress"
+            | "clear-progress"
+            | "log"
+            | "clear-log"
+            | "list-log"
+    ) {
+        return parse_metadata(command, &args);
+    }
     if navigation_command(command) {
         return parse_navigation(command, &args);
     }
@@ -792,4 +805,108 @@ fn parse_direction(values: &[String]) -> Result<Direction, CliError> {
             "expected one direction: left, right, up or down".into(),
         )),
     }
+}
+
+fn parse_metadata(command: &str, args: &[String]) -> Result<Parsed, CliError> {
+    use zmux_desktop_runtime::metadata::{LogLevel, MetadataAction};
+    let mut scope = TargetScope::default();
+    let mut revision = None;
+    let mut options = std::collections::BTreeMap::new();
+    let mut values = Vec::new();
+    let mut cursor = 0;
+    while cursor < args.len() {
+        let flag = args[cursor].as_str();
+        if flag == "--" {
+            values.extend_from_slice(&args[cursor + 1..]);
+            break;
+        }
+        if flag.starts_with("--") {
+            if options.contains_key(flag) {
+                return Err(CliError(format!("repeated {flag}")));
+            }
+            let accepted = match flag {
+                "--workspace" | "--expect-revision" => true,
+                "--icon" | "--color" | "--priority" => command == "set-status",
+                "--label" => command == "set-progress",
+                "--level" | "--source" => command == "log",
+                "--limit" => command == "list-log",
+                _ => false,
+            };
+            if !accepted {
+                return Err(CliError(format!("unknown {command} option {flag}")));
+            }
+            let value = option_value(args, cursor, flag)?.to_owned();
+            if flag == "--workspace" {
+                scope.workspace = Some(target(&value)?);
+            }
+            if flag == "--expect-revision" {
+                revision = Some(value.parse::<u64>().map_err(|_| {
+                    CliError("model revision must be a nonnegative integer".into())
+                })?);
+            }
+            options.insert(flag, value);
+            cursor += 2;
+        } else {
+            values.push(args[cursor].clone());
+            cursor += 1;
+        }
+    }
+    let action = match (command, values.as_slice()) {
+        ("set-status", [key, value]) => MetadataAction::SetStatus {
+            key: key.clone(),
+            value: value.clone(),
+            icon: options.remove("--icon"),
+            color: options.remove("--color"),
+            priority: options
+                .remove("--priority")
+                .map(|v| {
+                    v.parse::<i32>()
+                        .map_err(|_| CliError("priority must be a 32-bit integer".into()))
+                })
+                .transpose()?
+                .unwrap_or(0),
+        },
+        ("clear-status", [key]) => MetadataAction::ClearStatus { key: key.clone() },
+        ("list-status", []) => MetadataAction::ListStatus,
+        ("set-progress", [value]) => MetadataAction::SetProgress {
+            value: value
+                .parse::<f64>()
+                .map_err(|_| CliError("progress must be a number from 0 to 1".into()))?,
+            label: options.remove("--label"),
+        },
+        ("clear-progress", []) => MetadataAction::ClearProgress,
+        ("log", [message]) => MetadataAction::Log {
+            message: message.clone(),
+            source: options.remove("--source"),
+            level: match options.get("--level").map(String::as_str).unwrap_or("info") {
+                "info" => LogLevel::Info,
+                "progress" => LogLevel::Progress,
+                "success" => LogLevel::Success,
+                "warning" => LogLevel::Warning,
+                "error" => LogLevel::Error,
+                _ => {
+                    return Err(CliError(
+                        "level must be info, progress, success, warning, or error".into(),
+                    ));
+                }
+            },
+        },
+        ("clear-log", []) => MetadataAction::ClearLog,
+        ("list-log", []) => MetadataAction::ListLog {
+            limit: options
+                .remove("--limit")
+                .map(|v| {
+                    v.parse::<usize>()
+                        .map_err(|_| CliError("log limit must be from 1 to 256".into()))
+                })
+                .transpose()?,
+        },
+        _ => {
+            return Err(CliError(format!(
+                "invalid {command} arguments; read zmux help {command}"
+            )));
+        }
+    };
+    action.validate().map_err(|e| CliError(e.to_string()))?;
+    request(scope, revision, TargetOperation::Metadata { action })
 }

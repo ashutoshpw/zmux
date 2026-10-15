@@ -4,6 +4,7 @@ pub mod browser;
 pub mod control;
 pub mod control_credentials;
 pub mod control_policy;
+pub mod metadata;
 pub mod persistence;
 mod replies;
 pub mod sessions;
@@ -143,6 +144,8 @@ pub enum DesktopError {
     #[error("{0}")]
     Attention(#[from] attention::AttentionError),
     #[error("{0}")]
+    Metadata(#[from] metadata::MetadataError),
+    #[error("{0}")]
     Browser(#[from] browser::BrowserError),
     #[error("{0}")]
     Policy(#[from] control_policy::PolicyError),
@@ -177,6 +180,7 @@ pub struct Snapshot {
     pub model: Model,
     pub frames: Vec<Frame>,
     pub notifications: Vec<Notification>,
+    pub workspace_metadata: Vec<metadata::WorkspaceMetadata>,
     pub notifications_dropped: u64,
     pub notification_cursor: u64,
     pub native_notifications: NativeNotificationSnapshot,
@@ -219,6 +223,7 @@ pub(crate) struct Execution {
     pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
     pub session_operation_id: Option<u64>,
+    pub metadata_result: Option<metadata::WorkspaceMetadata>,
     pub notification_mutation: Option<NotificationMutation>,
     pub notification_navigation: Option<NotificationNavigation>,
     pub notification_reply: Option<attention::NotificationReply>,
@@ -277,6 +282,7 @@ impl Desktop {
                 model: model.snapshot(),
                 frames: Vec::new(),
                 notifications: Vec::new(),
+                workspace_metadata: Vec::new(),
                 notifications_dropped: 0,
                 notification_cursor: 0,
                 native_notifications: attention.native_snapshot(&model.snapshot()),
@@ -308,6 +314,8 @@ impl Desktop {
                     restoring: None,
                     session_operation_id: None,
                     attention,
+                    metadata: metadata::MetadataStore::default(),
+                    metadata_result: None,
                     notification_mutation: None,
                     notification_navigation: None,
                     notification_reply: None,
@@ -715,6 +723,8 @@ struct Worker {
     restoring: Option<sessions::PendingRestore>,
     session_operation_id: Option<u64>,
     attention: Attention,
+    metadata: metadata::MetadataStore,
+    metadata_result: Option<metadata::WorkspaceMetadata>,
     notification_mutation: Option<NotificationMutation>,
     notification_navigation: Option<NotificationNavigation>,
     notification_reply: Option<attention::NotificationReply>,
@@ -911,6 +921,7 @@ impl Worker {
         let previous_upload_id = self.next_transfer_id;
         self.session_operation_id = None;
         self.notification_mutation = None;
+        self.metadata_result = None;
         self.notification_navigation = None;
         self.notification_reply = None;
         self.browser_operation_id = None;
@@ -990,6 +1001,7 @@ impl Worker {
             let _ = sender.try_send(Execution {
                 result,
                 session_operation_id: self.session_operation_id,
+                metadata_result: self.metadata_result.take(),
                 notification_mutation: self.notification_mutation.take(),
                 notification_navigation: self.notification_navigation.take(),
                 notification_reply: self.notification_reply.take(),
@@ -1159,6 +1171,13 @@ impl Worker {
                         reply,
                     },
                 )
+            }
+            TargetOperation::Metadata { action } => {
+                let workspace =
+                    targets::metadata_workspace(&model, &request.scope, &request.caller)?;
+                self.metadata.reconcile(&model);
+                self.metadata_result = Some(self.metadata.apply(workspace, action)?);
+                Ok(())
             }
             TargetOperation::Notifications { action } => {
                 self.scoped_notifications(&model, &request.scope, &request.caller, action)
@@ -1726,6 +1745,7 @@ impl Worker {
         self.revision += 1;
         let model = self.model.snapshot();
         self.attention.reconcile(&model);
+        self.metadata.reconcile(&model);
         let control_frames: Vec<_> = model
             .workspaces
             .iter()
@@ -1768,6 +1788,7 @@ impl Worker {
             model,
             frames,
             notifications: self.attention.items.clone(),
+            workspace_metadata: self.metadata.snapshot(),
             notifications_dropped: self.attention.dropped,
             notification_cursor: self.attention.cursor(),
             native_notifications,

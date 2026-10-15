@@ -39,6 +39,70 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "set-status",
+        "automation",
+        true,
+        true,
+        "set-status KEY VALUE [--workspace TARGET] [--icon NAME] [--color #RRGGBB] [--priority N]",
+        "Set or replace a workspace status key. Higher priority sorts first, then key. At most 64 keys; names use 1–128 bytes, values at most 2048 bytes. Metadata stays in this app process. All workspaces share a conservative 512 KiB encoded metadata budget; adding data beyond it fails atomically. Clear metadata to release capacity."
+    ),
+    command!(
+        "clear-status",
+        "automation",
+        true,
+        true,
+        "clear-status KEY [--workspace TARGET]",
+        "Remove a workspace status key. Clearing a missing key succeeds."
+    ),
+    command!(
+        "list-status",
+        "automation",
+        true,
+        true,
+        "list-status [--workspace TARGET]",
+        "List workspace status entries, progress and bounded log metadata as JSON."
+    ),
+    command!(
+        "set-progress",
+        "automation",
+        true,
+        true,
+        "set-progress <0.0-1.0> [--workspace TARGET] [--label TEXT]",
+        "Replace workspace progress with a finite value from 0 to 1 and an optional label of at most 2048 bytes. Completion remains until cleared."
+    ),
+    command!(
+        "clear-progress",
+        "automation",
+        true,
+        true,
+        "clear-progress [--workspace TARGET]",
+        "Clear workspace progress."
+    ),
+    command!(
+        "log",
+        "automation",
+        true,
+        true,
+        "log [--workspace TARGET] [--level LEVEL] [--source NAME] [--] MESSAGE",
+        "Append a workspace log message (at most 1024 bytes). Levels: info (default), progress, success, warning, error. Retains the newest 256 entries and reports logs_dropped; entries list oldest first."
+    ),
+    command!(
+        "clear-log",
+        "automation",
+        true,
+        true,
+        "clear-log [--workspace TARGET]",
+        "Clear workspace log entries and their dropped count."
+    ),
+    command!(
+        "list-log",
+        "automation",
+        true,
+        true,
+        "list-log [--workspace TARGET] [--limit N]",
+        "List workspace metadata with the newest N log entries, in chronological order. N is 1–256; omit it to include all retained logs."
+    ),
+    command!(
         "restore-session",
         "start",
         false,
@@ -503,7 +567,21 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
 ];
 
 const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client response deadline (50–30000 ms; checked after decoding; output rendering may finish later)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
-const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --workspace only.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  Explicit selectors override inherited caller defaults. Without them,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Surface caller identity follows tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
+const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --workspace only.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  Explicit selectors override inherited caller defaults. Workspace metadata\n  uses ZMUX_WORKSPACE_ID with caller surface ownership checked, and allows\n  options after values; consult its command help. For other target commands,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Those surface callers follow tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
+const METADATA_TARGETS: &str = "Workspace metadata targets:\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Explicit --workspace overrides inherited caller defaults. Otherwise,\n  ZMUX_WORKSPACE_ID selects the workspace, and any ZMUX_SURFACE_ID\n  (or ZMUX_TAB_ID) must belong to it. A moved or mismatched caller fails.\n  Without a caller workspace, the caller surface or current focus applies.\n  Closed/stale targets fail. Pane/surface selector flags are unavailable.\n  Options may appear before or after values; -- preserves literal text.\n";
+fn metadata_command(name: &str) -> bool {
+    matches!(
+        name,
+        "set-status"
+            | "clear-status"
+            | "list-status"
+            | "set-progress"
+            | "clear-progress"
+            | "log"
+            | "clear-log"
+            | "list-log"
+    )
+}
 pub(super) fn find(name: &str) -> Option<&'static CommandSpec> {
     COMMANDS
         .iter()
@@ -545,7 +623,11 @@ pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
         }
         if spec.targeted {
             out.push('\n');
-            out.push_str(TARGETS);
+            out.push_str(if metadata_command(spec.name) {
+                METADATA_TARGETS
+            } else {
+                TARGETS
+            });
         }
         out.push('\n');
         out.push_str(GLOBAL);

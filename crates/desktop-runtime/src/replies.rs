@@ -245,6 +245,7 @@ fn reply_execution(
     mutation: Option<NotificationMutation>,
 ) -> Execution {
     Execution {
+        metadata_result: None,
         result,
         snapshot,
         notification_reply: Some(reply),
