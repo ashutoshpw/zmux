@@ -194,3 +194,32 @@ Passed C fixture run38787914932 on ARM64 macOS15.7.9/SDK15.5 at
 3622aac43d58720ee17c3b629d5c13d6bcc4968816afcb02e35c1e3d1c294461,
 proves its documented live-peer/TERM/retained-Quit fixture only. It does not establish
 production foreground job control, safe Rust wrappers, registry policy or GUI parity.
+
+First production host run38797306939 at adf51320a80e10db85bd8c9b2c01e1e42d268dbd
+passed all24 focused Linux checks. ARM64 macOS15.7.9/SDK15.5 compiled the safe
+identity/wait wrappers and passed live identity, then the existing stopped-child
+regression exposed a nonterminal Stop result from exit-only observation. The shared
+owner now filters Stop/Continue unless job-control observation was requested; no
+consumer may treat suspension as exit or enter final wait on that observation.
+Native/Foundation compilation also exposed an incorrect nix getpeereid module path;
+the safe pinned API is nix::unistd::getpeereid with existing user+socket features.
+Both repairs require fresh native execution; broker/CLI Darwin tests were not reached
+in the failed run. Downloaded host receipts/logs are under
+`/tmp/zmux-r03-hosted-38797306939`.
+
+Repair validation also caught a real pre-exec workload admission race: a bound
+record stored the inherited CLI executable for workload PID2416234, then the same
+PID/start/PPID independently appeared as `/usr/bin/bash`. Startup now waits within
+the existing deadline for the canonical selected shell executable, while requiring
+unchanged PID/UID/PPID/start/boot and polling foreground cancellation. The actual CLI
+owner test additionally requires that exact selected executable in its bound record.
+Fast-exec commands and nonstandard executable shell wrappers that never expose that
+selected image remain uncertain with no replay. Legitimate later user exec changes
+also remain an attach/preservation semantics gap; no same-PID relaxation is implied.
+The socket rejection fixture now explicitly shuts down its physical endpoint before
+dropping its descriptor, so concurrent forks cannot keep a shared endpoint open and
+invalidate the intended real EPIPE control.
+Each actual attachment/input probe now writes a fresh nonce and requires exact
+marker contents before signaling that client, preventing delayed input from a prior
+attachment from falsely establishing readiness. Signal failures retain bounded final
+PTY output for diagnosis; successful clean detach remains required.

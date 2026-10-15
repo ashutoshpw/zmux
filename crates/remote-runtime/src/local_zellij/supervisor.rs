@@ -188,14 +188,34 @@ pub(super) fn create(
     terminal.startup_events()?;
     send(&mut connection, &"spawn_once")?;
     let pid: u32 = receive(&mut connection)?;
-    let workload = process_identity(pid)?;
-    if workload.parent_pid != record.supervisor.as_ref().expect("bound supervisor").pid
-        || workload.uid != spec.starter.uid
+    let initial = process_identity(pid)?;
+    if initial.parent_pid != record.supervisor.as_ref().expect("bound supervisor").pid
+        || initial.uid != spec.starter.uid
     {
         return Err(fail(
             "workload is not the supervisor's directly owned child",
         ));
     }
+    // A process can retain PID/start/parent across exec. Do not commit its
+    // inherited supervisor image while the selected shell is still starting.
+    // An immediately exec-changing shell remains uncertain, never adopted.
+    let workload = loop {
+        terminal.startup_events()?;
+        check_deadline(deadline, "selected workload shell exec")?;
+        let current = process_identity(pid)?;
+        if current.pid != initial.pid
+            || current.uid != initial.uid
+            || current.parent_pid != initial.parent_pid
+            || current.start != initial.start
+            || current.boot != initial.boot
+        {
+            return Err(fail("workload identity changed before selected shell exec"));
+        }
+        if current.executable == spec.shell {
+            break current;
+        }
+        thread::sleep(Duration::from_millis(5));
+    };
     record.workload = Some(workload);
     record.state = "bound".into();
     record.verify()?;

@@ -112,6 +112,13 @@ impl Client {
             thread::sleep(Duration::from_millis(5));
         }
     }
+    fn prove_input(&mut self, path: &std::path::Path, mut ready: impl FnMut() -> bool) {
+        let token = format!("proof-{}", uuid::Uuid::new_v4().simple());
+        let request = format!("{token}\r");
+        self.probe(request.as_bytes(), || {
+            fs::read_to_string(path).is_ok_and(|text| text == token) && ready()
+        });
+    }
     fn until(&mut self, mut predicate: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(8);
         while !predicate() {
@@ -139,6 +146,9 @@ impl Client {
             assert!(Instant::now() < deadline, "CLI exit deadline");
             thread::sleep(Duration::from_millis(5));
         };
+        for _ in 0..32 {
+            self.pump(false);
+        }
         assert_eq!(
             self.pair.master.get_termios().unwrap(),
             self.before,
@@ -214,7 +224,7 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     let proof = f.root.join("input-proof");
     let size = f.root.join("size-proof");
     let script = format!(
-        "printf x >> '{}'; while IFS= read -r -t 20 line; do case \"$line\" in proof) stty size > '{}.pending' && mv '{}.pending' '{}' && printf yes > '{}' ;; esac; done",
+        "printf x >> '{}'; while IFS= read -r -t 20 line; do case \"$line\" in proof-*) stty size > '{}.pending' && mv '{}.pending' '{}' && printf '%s' \"$line\" > '{}' ;; esac; done",
         count.display(),
         size.display(),
         size.display(),
@@ -234,6 +244,11 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     );
     first.until(|| f.records().is_some_and(|r| r[0]["state"] == "bound"));
     let record = f.records().unwrap()[0].clone();
+    assert_eq!(
+        record["workload"]["executable"],
+        serde_json::json!(fs::canonicalize("/bin/bash").unwrap()),
+        "bound workload must have independently executed the explicitly selected shell"
+    );
     let id = record["id"].as_str().unwrap().to_owned();
     for (field, parent) in [("supervisor", "server"), ("workload", "supervisor")] {
         assert_eq!(record[field]["parent_pid"], record[parent]["pid"]);
@@ -248,7 +263,7 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
         first.pump(true);
         thread::sleep(Duration::from_millis(10));
     }
-    first.probe(b"proof\r", || proof.exists());
+    first.prove_input(&proof, || true);
     let initial_size = fs::read_to_string(&size).unwrap();
     fs::remove_file(&proof).unwrap();
     first
@@ -271,7 +286,7 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
         }
     };
     let initial_dimensions = dimensions(&initial_size).expect("actual initial stty dimensions");
-    first.probe(b"proof\r", || {
+    first.prove_input(&proof, || {
         fs::read_to_string(&size)
             .ok()
             .and_then(|size| dimensions(&size))
@@ -305,9 +320,14 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     );
     kill(Pid::from_raw(first.pid() as i32), Signal::SIGCONT).unwrap();
     fs::remove_file(&proof).unwrap();
-    first.probe(b"proof\r", || proof.exists());
+    first.prove_input(&proof, || true);
     kill(Pid::from_raw(first.pid() as i32), Signal::SIGTERM).unwrap();
-    assert_eq!(first.finish(), 0);
+    assert_eq!(
+        first.finish(),
+        0,
+        "{}",
+        String::from_utf8_lossy(&first.output)
+    );
     let status = f.output(&["local-zellij", "status", "--id", &id]);
     assert!(
         status.status.success(),
@@ -371,10 +391,15 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
         second.pump(true);
         thread::sleep(Duration::from_millis(10));
     }
-    second.probe(b"proof\r", || proof.exists());
+    second.prove_input(&proof, || true);
     assert_eq!(fs::read(&count).unwrap(), b"x");
     kill(Pid::from_raw(second.pid() as i32), Signal::SIGHUP).unwrap();
-    assert_eq!(second.finish(), 0);
+    assert_eq!(
+        second.finish(),
+        0,
+        "{}",
+        String::from_utf8_lossy(&second.output)
+    );
     let current: Value =
         serde_json::from_slice(&f.output(&["local-zellij", "status", "--id", &id]).stdout).unwrap();
     assert_eq!(current["state"], "identity_present");
@@ -383,9 +408,14 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     }
     fs::remove_file(&proof).unwrap();
     let mut third = Client::new(&f, &["local-zellij", "attach", "--headless", "--id", &id]);
-    third.probe(b"proof\r", || proof.exists());
+    third.prove_input(&proof, || true);
     kill(Pid::from_raw(third.pid() as i32), Signal::SIGINT).unwrap();
-    assert_eq!(third.finish(), 0);
+    assert_eq!(
+        third.finish(),
+        0,
+        "{}",
+        String::from_utf8_lossy(&third.output)
+    );
     let third_output = String::from_utf8_lossy(&third.output);
     let third_receipt: Value = serde_json::from_str(
         third_output
@@ -405,7 +435,7 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     assert_eq!(third_receipt["original_owner_preserved"], true);
     fs::remove_file(&proof).unwrap();
     let mut fourth = Client::new(&f, &["local-zellij", "attach", "--headless", "--id", &id]);
-    fourth.probe(b"proof\r", || proof.exists());
+    fourth.prove_input(&proof, || true);
     // End the explicitly finite test workload through its input EOF. No product
     // close path or global/adopted daemon signal is used for cleanup.
     fourth.send(b"\x04");

@@ -5,6 +5,22 @@
 
 ## Active implementation
 
+- Darwin process repairs filter nonterminal observations from exit-only child
+  polling and use the correct safe peer-credential API. Workload admission now
+  waits boundedly for the selected canonical shell before registry binding,
+  retaining PID/start/parent/boot checks and no-replay semantics. Fullcheck280,
+  realCLI5 and parent child2/broker3 pass; hosted repair acceptance remains pending.
+
+- Hosted batch `adf5132`: native `38797286030` fails Rust compilation on the
+  Darwin peer-credential API path before reaching reopen. Zellij owner
+  `38797306939` passes Linux but Darwin exposes stopped-child observations in
+  exit-only polls. Repairs and a newly reproduced pre-exec workload admission
+  race are under validation; no native acceptance claimed.
+- Artifact `38797303343` retains the ARM64 library but rejects its declared
+  minOS13 against requested14. Pinned upstream overrides the requested version
+  on Darwin. Revised exact effective-library13/consumer14 policy and retained
+  artifact reuse are under review; no application engine switch.
+
 - Browser type/select/scroll now have bounded admitted actions and DOM behavior
   checks, including value versus text-content beforeinput ordering. Parent
   combined fullcheck passes280 Rust tests, strict checks and C ABI; independent
