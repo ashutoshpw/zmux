@@ -33,9 +33,10 @@ SESSION_TEST_NAMES = {
     "blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued_input",
     "engine_constructor_failure_precedes_child_launch_and_releases_resource_on_worker",
 }
-# The pinned darwin-libproc-sys0.2.0 build script links proc. Linker dead stripping
-# may omit an unused dylib; no other extra dependency is justified by this fixture.
-SESSION_OPTIONAL_DYLIBS = ("/usr/lib/libproc.dylib",)
+# Cargo.lock pins darwin-libproc-sys 0.2.0 (build.rs links proc) and libc 0.2.190
+# (src/unix/bsd/apple/mod.rs links iconv outside rustc-dep-of-std). The linker may
+# omit unused dylibs; only these exact system paths are justified for Session.
+SESSION_OPTIONAL_DYLIBS = ("/usr/lib/libproc.dylib", "/usr/lib/libiconv.2.dylib")
 
 
 def check_inputs():
@@ -274,12 +275,14 @@ def main():
             retained.mkdir()
             for source, name, is_executable in ((owner / "zmux-vt.o", "zmux-vt.o", False), (executable, "staged-engine", True)):
                 data = read_bounded(source, 64 * 1024 * 1024)
+                destination = retained / name
+                shutil.copy2(source, destination)
+                record = {"sha256": digest(data), "bytes": len(data)}
+                result.setdefault("outputs", {})[name] = record
                 inventory = inspect_macho(data, architecture, executable=is_executable)
                 if is_executable:
                     inventory["dynamic_libraries"] = dynamic_libraries(data)
-                destination = retained / name
-                shutil.copy2(source, destination)
-                result.setdefault("outputs", {})[name] = {"sha256": digest(data), "bytes": len(data), **inventory}
+                record.update(inventory)
             if architecture == "arm64":
                 stdout = run([str(retained / "staged-engine"), "--test-threads=1", "--nocapture"], "execute-arm64", timeout=30)
                 if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in ADAPTER_TEST_NAMES):
@@ -288,7 +291,9 @@ def main():
             if args.session_runtime:
                 session = {"execution": "not_executed", "dynamic_library_policy": {
                     "required": ["/usr/lib/libSystem.B.dylib"], "allowed_optional": list(SESSION_OPTIONAL_DYLIBS),
-                    "source": "Cargo.lock pinned darwin-libproc-sys0.2.0 build.rs links dylib=proc"}}
+                    "sources": {
+                        "/usr/lib/libproc.dylib": "Cargo.lock pinned darwin-libproc-sys 0.2.0 build.rs links dylib=proc",
+                        "/usr/lib/libiconv.2.dylib": "Cargo.lock pinned libc 0.2.190 src/unix/bsd/apple/mod.rs links iconv outside rustc-dep-of-std"}}}
                 result["session_runtime"] = session
                 log = run(["cargo", "test", "--locked", "-p", "zmux-session-runtime", "--features", "ghostty",
                            "--test", "engine", "--target", target, "--no-run", "--message-format=json"],
@@ -299,10 +304,13 @@ def main():
                 if session["owner_object"]["sha256"] != result["outputs"]["zmux-vt.o"]["sha256"]:
                     raise Rejected("Session linked a different host shim object")
                 data = read_bounded(executable, 64 * 1024 * 1024)
+                # Preserve candidate bytes/hash even if native inspection refuses.
+                # Retention is diagnostic and does not authorize execution.
+                shutil.copy2(executable, retained / "session-engine")
+                session["executable"] = {"sha256": digest(data), "bytes": len(data)}
                 inventory = inspect_macho(data, architecture, executable=True)
                 inventory["dynamic_libraries"] = dynamic_libraries(data, SESSION_OPTIONAL_DYLIBS)
-                shutil.copy2(executable, retained / "session-engine")
-                session["executable"] = {"sha256": digest(data), "bytes": len(data), **inventory}
+                session["executable"].update(inventory)
                 if architecture == "arm64":
                     stdout = run([str(retained / "session-engine"), "--test-threads=1", "--nocapture"], "execute-session-arm64", timeout=60)
                     if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in SESSION_TEST_NAMES):
