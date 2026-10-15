@@ -140,7 +140,7 @@ def main():
         for path in sorted(owner_path.parent.iterdir()):
             if path.is_file() and path.suffix in (".log", ".json"):
                 shutil.copy2(path, provenance / ("owner-" + path.name))
-        inputs = ["produce-patched.py", "run-patched-owner.py", "package-patched.py", "package_build.py", "package_notices.py", "package_sources.py", "package_platform.py", "notice-policy.json", "patched-producer-lock.json", "stdin-eintr.rs", "validate-wasm.rs", "owner_contract.py", "patches/0001-retry-interrupted-stdin.patch"]
+        inputs = ["produce-patched.py", "run-patched-owner.py", "package-patched.py", "package_build.py", "package_notices.py", "package_sources.py", "package_platform.py", "notice-policy.json", "patched-producer-lock.json", "stdin-eintr.rs", "validate-wasm.rs", "capture-stdout.py", "owner_contract.py", "patches/0001-retry-interrupted-stdin.patch"]
         inputs += [str(path.relative_to(HERE)) for path in sorted((HERE / "licenses/components").iterdir()) if path.is_file()]
         for name in inputs:
             target = provenance / "inputs" / name

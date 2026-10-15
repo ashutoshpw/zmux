@@ -215,3 +215,42 @@ The original unfiltered archive is omitted from both package payload and workflo
 evidence upload paths. Defaults/acquisition/native selection remain unchanged.
 Independent implementation/policy review and both-host hosted execution still remain;
 no executable publication, staging, commit, push or dispatch was performed here.
+
+
+## Hosted metadata capture failure and reviewed repair
+
+Hosted package run `38819411938`, source SHA
+`65471decedaf8e607da66f8499334015e76f7c53`, completed both Linux x86_64 and
+Darwin arm64 producer/actual-owner steps successfully. Both then failed the
+package admission gate because fresh Cargo metadata downloads wrote progress to
+stderr, which the existing combined diagnostic capture placed before JSON.
+Neither host uploaded a successful package. Logs are retained under
+`target/agent-validation/r03-package-hosted-38819411938/`.
+
+The package-local `capture-stdout.py` repair writes Cargo stdout to a fresh,
+exclusive, bounded sink while keeping stderr in the existing bounded parent log.
+It remains inside the unchanged retained process-group owner and preserves
+nonzero command failures. The producer parses the metadata before passing; the
+actual-owner and package provenance bind the helper hash. This changes no notice
+policy, shared process owner, default acquisition or native selection.
+
+- Actual fresh-download red/green: `target/agent-validation/r03-cargo-metadata-fresh-v2-20261015/receipt.json`; the same Cargo/source/lock command with an absent private-cache crate reproduces the legacy JSONDecodeError, then captures a valid 529-package graph with real download diagnostics retained separately. Global caches and Cargo.lock were not modified.
+- Seven stream/lifecycle/overwrite/failure tests passed; eleven unchanged shared-owner cases also passed. Evidence and the six-file freeze are in `target/agent-validation/r03-package-hosted-38819411938/`. Freeze SHA256: `c52b4d7bc4c410a0ed3d824cd359d829d7c196c6908601e995f0557f8e51b35c`.
+- Independent capture review approved with no blockers: `/tmp/zmux-r03-package-capture-independent-review-20261015.json`, SHA256 `a4db848b0d18a942d2a38e481c757245ac9b61ccfdbda839ea3f7123ecdb3db6`.
+- Fresh complete producer: `target/agent-validation/zellij-package-producer-v3-20261015/receipt.json`; ten rebuilt plugins, Wasmtime validation, actual EINTR red/green, non-EINTR controls and valid metadata passed.
+- Fresh actual owner: `target/agent-validation/zellij-package-owner-capture-v1-20261015/receipt.json`; current source executes 29 checks in suites `[2, 15, 3, 4, 3, 2]`, binding 145 source inputs and the full actual owner journey. The count increased with concurrent owner work; the semantic contract remains the admission gate.
+- Fresh adversarial controls: `target/agent-validation/zellij-package-negative-capture-v1-20261015/receipt.json`; all thirteen intended rejections passed.
+- Fresh prepare-only package: `target/agent-validation/zellij-package-review-capture-v1-20261015/receipt.json`; `promotion_ready=false`, binary SHA256 `472558df21510d4a29d47cc651d01ae1418f71812b616216542e6036c5406803`, archive SHA256 `0b0476476519f383d1707467524ac71a2de9aec8652559af47cb4abe1c6d788b`.
+- Its independent `verified-archive.json` checked all 1,241 outer members against the manifest, capture source provenance and all 395 nested source containers (25,745 members) for compiled payloads. No packaged executable was executed during this independent scan.
+- Shared-owner SHA256 remains `8c2f70b650b72c58764081ac764bd5fea04a5a015ffc2407db73a2b29433ea2f`; independently reviewed notice-policy SHA256 remains `1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79`.
+
+A committed current-source replacement run on both hosts and independent downloaded
+package verification remain. Parent subsequently authorized this task owner to
+run required `scripts/check`, then stage only the six frozen repair files plus
+this owned audit note, commit, push and dispatch the unchanged-policy replacement
+workflow. The required check runs from a private source snapshot of `HEAD` plus
+only this repair, reusing the existing owned Cargo cache; its receipt is
+`target/agent-validation/r03-package-hosted-38819411938/capture-repair-check-receipt.json`.
+Concurrent runtime edits and parent-owned task records are excluded from this
+source snapshot and commit. Hosted run and final artifact receipts are retained
+separately after dispatch.
