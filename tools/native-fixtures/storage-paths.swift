@@ -48,7 +48,13 @@ struct StoragePathsProbe {
             return (result, result < 0 ? errno : 0)
         }
         FileHandle.standardError.write(Data("Raw storage target mkdir: returned=\(created) errno=\(creationCode)\n".utf8))
-        try require(created == 0, "Cannot create raw-byte storage target (errno \(creationCode))")
+        if created != 0 {
+            // Darwin run 38812458734 rejected this name with EILSEQ (92).
+            // No invalid-byte target can be resolved on this fixture filesystem.
+            try require(creationCode == EILSEQ, "Cannot create raw-byte storage target (errno \(creationCode))")
+            FileHandle.standardError.write(Data("Raw storage target: filesystem refused illegal byte sequence; resolved-path UTF8 validation remains required.\n".utf8))
+            return
+        }
         do {
             let alias = root + "/non-utf8-link"
             let created = target.withUnsafeBufferPointer { target in

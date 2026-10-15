@@ -110,3 +110,17 @@ the old existing-path ENOTDIR. It runs before Rust compilation so path regressio
 fail early. Shell syntax, workflow YAML/order and whitespace checks pass on Linux;
 no local Swift compiler or Darwin SDK is available. Focused native execution and a
 green packaged reopen remain hosted gates, including split ratio and fresh input.
+
+The first repaired run `38811810709` passed strict Swift typechecking on both
+Apple targets, then passed the focused main path/alias and invalid/file/loop
+assertions before failing to create the optional raw-UTF8-negative target. A
+diagnostic-only rerun `38812458734` at `a2e3d09bfbee326076dffe926ff472b5244d0aa3`
+captured the actual `mkdir` result: `-1`, errno92. The public XNU `bsd/sys/errno.h`
+defines92 as EILSEQ, illegal byte sequence. The fixture filesystem refuses that
+invalid filename before the resolver can observe it; no filesystem-format cause
+is inferred. That one case now records only this specific refusal as its platform
+outcome. Other creation errors still fail. If a filesystem permits the raw name,
+the original production-owner invalid-UTF8 refusal assertion still runs, including
+the usable replacement-character directory. All main path assertions and the
+production lossless decoding guard are unchanged. Native focused and packaged
+reopen acceptance remain pending after this fixture-only correction.

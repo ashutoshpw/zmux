@@ -5,6 +5,35 @@
 
 ## Active implementation
 
+- Native38812458734 measured raw invalid-name mkdir errno92/EILSEQ. The focused
+  fixture records only that filesystem capability refusal; all main physical-path,
+  existing/missing/alias and invalid-parent checks remain mandatory. Production
+  validatingCString and strict Rust path policies are unchanged. Root source review
+  passes; next native run must establish focused acceptance and actual reopen.
+- Patched Zellij38811822523 Darwin producer and all27 actual owner checks pass with
+  independently verified source/workflow/log receipts. GUI integration, distributable
+  dependency packaging and acquisition pins remain separate gates.
+
+- Published `a2e3d09`: native physical-storage repair `0ffc110`, Session backpressure
+  fixture `a865c62`, bounded diagnostics and shorter Zellij prefix-shadow fixture.
+  Parent combined `scripts/check` passes286 tests, strict Clippy, notices and C ABI.
+  Default terminal engine and Zellij acquisition pins remain unchanged.
+- Native38809101107 at `11671a4` passed universal build, then reopening failed with
+  ENOTDIR in the strict state-directory walk; saved session/generation bytes stayed
+  unchanged and close owners joined. Foundation can strip `/private` from an existing
+  path. NativeBridge now passes a POSIX realpath physical spelling; source review passed.
+  Native38811810709 passed both Swift typechecks and the focused main filesystem cases,
+  then failed to create an invalid-UTF8 fixture directory. Exact errno diagnostic is
+  running in38812458734; packaged reopen and browser keyboard remain unverified.
+- Optional Session38811818507 proved Darwin accepts1022bytes of the first4096byte
+  input chunk before EAGAIN. The old fixture incorrectly required one complete chunk.
+  Repaired fixture retains exact child byte ordering and positive partial-write proof;
+  local linked4 pass and independent review passes. Native rerun38812468146 pending.
+- Patched Zellij producer passed both hosts in38809114500; Linux actual27 owner checks
+  passed. Darwin passed suspend/resume/input/detach, then the test's104byte prefix-shadow
+  socket exceeded its OS limit. The98byte fixture keeps the same real rejection check;
+  both-host rerun38811822523 pending. No native GUI integration/distribution claim.
+
 - Native38808070074 at `c8bf104` passes both strict Swift typechecks but stops in
   the download physical-credit fixture before app execution. The fixture now advances
   admission time to expire logical tickets without draining worker completions, then
