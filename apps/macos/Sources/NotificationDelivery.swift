@@ -56,12 +56,96 @@ struct PermissionObservations: Sendable {
     }
 }
 
+private struct NotificationWireKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { nil }
+}
+
+private func requireNotificationKeys(_ decoder: any Decoder, allowed: Set<String>) throws {
+    let container = try decoder.container(keyedBy: NotificationWireKey.self)
+    guard container.allKeys.allSatisfy({ allowed.contains($0.stringValue) }) else {
+        throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unexpected notification destination fields"))
+    }
+}
+
+enum NotificationDestination: Codable, Sendable, Equatable {
+    case workspace(workspaceId: UInt64)
+    case surface(surfaceId: UInt64, sessionId: UInt64?)
+
+    private enum CodingKeys: String, CodingKey { case kind, workspaceId, surfaceId, sessionId }
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        switch try c.decode(String.self, forKey: .kind) {
+        case "workspace":
+            try requireNotificationKeys(decoder, allowed: ["kind", "workspaceId"])
+            let id = try c.decode(UInt64.self, forKey: .workspaceId)
+            guard id > 0 else { throw DecodingError.dataCorruptedError(forKey: .workspaceId, in: c, debugDescription: "Workspace identity must be positive") }
+            self = .workspace(workspaceId: id)
+        case "surface":
+            try requireNotificationKeys(decoder, allowed: ["kind", "surfaceId", "sessionId"])
+            let id = try c.decode(UInt64.self, forKey: .surfaceId)
+            guard id > 0, c.contains(.sessionId) else { throw DecodingError.dataCorruptedError(forKey: .surfaceId, in: c, debugDescription: "Surface identity and explicit session ownership are required") }
+            let session = try c.decodeIfPresent(UInt64.self, forKey: .sessionId)
+            guard session != 0 else { throw DecodingError.dataCorruptedError(forKey: .sessionId, in: c, debugDescription: "Session identity must be positive or null") }
+            self = .surface(surfaceId: id, sessionId: session)
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unsupported notification destination")
+        }
+    }
+    func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .workspace(let id):
+            try c.encode("workspace", forKey: .kind); try c.encode(id, forKey: .workspaceId)
+        case .surface(let id, let session):
+            try c.encode("surface", forKey: .kind); try c.encode(id, forKey: .surfaceId)
+            if let session { try c.encode(session, forKey: .sessionId) }
+            else { try c.encodeNil(forKey: .sessionId) }
+        }
+    }
+
+    var openLabel: String {
+        switch self { case .workspace: "Open workspace"; case .surface: "Open tab" }
+    }
+    var unavailableLabel: String {
+        switch self { case .workspace: "Workspace closed"; case .surface: "Tab closed" }
+    }
+}
+
 struct NotificationTarget: Codable, Sendable, Equatable {
     let epoch: UUID
     let identityNamespace: UUID
     let notificationId: UInt64
-    let surfaceId: UInt64
-    let sessionId: UInt64?
+    let destination: NotificationDestination
+
+    private enum CodingKeys: String, CodingKey { case epoch, identityNamespace, notificationId, destination }
+    init(from decoder: any Decoder) throws {
+        try requireNotificationKeys(decoder, allowed: ["epoch", "identityNamespace", "notificationId", "destination"])
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        epoch = try c.decode(UUID.self, forKey: .epoch)
+        identityNamespace = try c.decode(UUID.self, forKey: .identityNamespace)
+        notificationId = try c.decode(UInt64.self, forKey: .notificationId)
+        destination = try c.decode(NotificationDestination.self, forKey: .destination)
+        guard notificationId > 0 else { throw DecodingError.dataCorruptedError(forKey: .notificationId, in: c, debugDescription: "Notification identity must be positive") }
+    }
+
+    func isAvailable(in snapshot: DesktopSnapshot) -> Bool {
+        guard epoch == snapshot.nativeNotifications.epoch, identityNamespace == snapshot.model.identityNamespace else { return false }
+        switch destination {
+        case .workspace(let id): return snapshot.model.workspaces.contains { $0.id == id }
+        case .surface(let id, let session):
+            return snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.contains { $0.id == id && $0.sessionId == session }
+        }
+    }
+
+    func matches(_ receipt: NativeNotificationExecution) -> Bool {
+        switch destination {
+        case .workspace(let id): receipt.focusedWorkspaceId == id
+        case .surface(let id, _): receipt.focusedSurfaceId == id
+        }
+    }
 }
 
 struct NativeNotificationRequest: Codable, Sendable, Equatable {
@@ -82,6 +166,7 @@ struct NativeNotificationSnapshot: Codable, Sendable {
 
 struct NativeNotificationExecution: Decodable, Sendable {
     let revision: UInt64
+    let focusedWorkspaceId: UInt64?
     let focusedSurfaceId: UInt64?
 }
 
@@ -264,7 +349,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             do {
                 let receipt = try await self.performAction(.openInbox(target: target))
                 guard !self.stopped, self.epoch == target.epoch,
-                      receipt.focusedSurfaceId == target.surfaceId else { return }
+                      target.matches(receipt) else { return }
                 self.activate()
             } catch { self.reportError("Notification target is unavailable: " + error.localizedDescription) }
         }
@@ -403,7 +488,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             } else {
                 let receipt = try await performAction(.open(target: request.target))
                 // Rust's exact token/session validation precedes every explicit activation.
-                if !stopped, epoch == request.target.epoch, receipt.focusedSurfaceId == request.target.surfaceId { activate() }
+                if !stopped, epoch == request.target.epoch, request.target.matches(receipt) { activate() }
             }
             remove([identifier])
         } catch { reportError("Notification target is unavailable: " + error.localizedDescription) }

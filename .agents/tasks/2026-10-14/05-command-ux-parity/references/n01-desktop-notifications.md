@@ -64,3 +64,47 @@ remain separate N01 gates. N01 and V01 stay open.
 - Workspace-level notification destinations, UUID notification selectors and reliable
   replies remain N01c/followup gates; a workspace selector alone still targets its
   focused surface. No full N01/V01 claim is made.
+
+## N01c workspace destinations
+
+Notification tokens gain a discriminated destination: workspace ID, or surface ID plus
+captured session ID. Common epoch/namespace/notification ID remain immutable. Workspace
+rows expose null surface_id; surface rows retain numeric IDs for compatibility. Surface
+tokens follow their live session across moves; workspace tokens never borrow a focused
+terminal. Native receipts identify the selected workspace as well as the selected surface.
+
+Notification-only resolution preserves explicit scope separately from caller evidence.
+A same-workspace live caller surface is accepted; a foreign caller cannot escape an
+explicit workspace. External calls without surface evidence target a workspace. Opening
+a workspace notification retains its selected pane/tab; closed owners and stale epochs
+remain unavailable. Shared bulk scope includes both destinations for workspace operations
+and excludes workspace-only rows for surface operations.
+
+Runtime regressions failed at the real owner before implementation (borrowed numeric
+surface instead of null). The public CLI regression independently failed because explicit
+workspace parsing discarded a hidden caller surface (returned selected9 instead of8).
+Parent full checks pass: 169 Rust tests, formatting, strict Clippy, notices and C ABI.
+Fresh production review accepted ownership, scope and activation behavior. Native smoke
+external-caller environment isolation is being repaired; hosted execution remains pending.
+
+## N01d next slice: handles and unread navigation
+
+Frozen cmux observable contracts accept bare notification UUID and notification:UUID
+for open/read/dismiss, and navigate to the newest openable unread notification. Evidence:
+CLI/cmux.swift:23020 and :24420; NotificationNavigationCoordinatorTests.swift:124 in
+Packages/macOS/CmuxNotifications/Tests/CmuxNotificationsTests. Independent implementation
+will capture UUID at admission from epoch plus a versioned notification identity name,
+retain numeric compatibility, and resolve handles only within bounded attention history.
+One shared executor action will skip unavailable rows, preserve unread on failed open,
+and return opened:false without changing focus when no candidate can open. CLI, native
+menu/inbox/shortcut must share it; window activation follows only an explicit confirmed
+request. Epoch changes and coalescing must not reuse old handles.
+
+Reply remains a later slice: queue admission is not PTY delivery. Exact opt-in terminal
+replies require bounded text, once-only worker receipts, no replay after partial writes,
+and read acknowledgement only after delivery. Workspace/browser targets cannot borrow
+a focused terminal. Frozen behavior evidence: NotificationDeliveryCoordinatorTests.swift:565.
+Last-prompt navigation requires an agent UserPromptSubmit source, not shell prompt or
+keystroke recency (Sources/AppDelegate+JumpToLastPrompt.swift:5 and
+cmuxTests/JumpToLastPromptTests.swift:20). Rich manual/restored unread state and badge
+settings also remain open. No implementation for these followup items is claimed.

@@ -189,6 +189,66 @@ fn notify_defaults_and_content_options_reach_real_attention_owner() {
 }
 
 #[test]
+fn explicit_workspace_keeps_same_workspace_terminal_caller_provenance() {
+    let app = App::new();
+    let (workspace, pane, original) = create(&app, "caller owner");
+    let selected = id(&app.run(&["new-surface", &pane]), "focused_surface");
+    assert_ne!(original, selected);
+    app.call(
+        &[
+            "notify",
+            "--workspace",
+            &workspace,
+            "--title",
+            "hidden caller",
+        ],
+        Some((&workspace, &original)),
+    );
+    let list = app.run(&["list-notifications"]);
+    let row = list["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["title"] == "hidden caller")
+        .unwrap();
+    assert_eq!(row["surface_id"].as_u64().unwrap().to_string(), original);
+
+    let (foreign_workspace, _, foreign_surface) = create(&app, "other caller");
+    app.call(
+        &[
+            "notify",
+            "--workspace",
+            &workspace,
+            "--title",
+            "explicit workspace",
+        ],
+        Some((&foreign_workspace, &foreign_surface)),
+    );
+    app.run(&["notify", "--title", "external caller"]);
+    let list = app.run(&["list-notifications"]);
+    for (title, expected_workspace) in [
+        ("explicit workspace", &workspace),
+        ("external caller", &foreign_workspace),
+    ] {
+        let row = list["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["title"] == title)
+            .unwrap();
+        assert!(
+            row["surface_id"].is_null(),
+            "{title} borrowed a selected terminal"
+        );
+        assert_eq!(
+            row["workspace_id"].as_u64().unwrap().to_string(),
+            *expected_workspace
+        );
+        assert_eq!(row["target"]["destination"]["kind"], "workspace");
+    }
+}
+
+#[test]
 fn scoped_read_dismiss_and_clear_keep_other_workspaces_intact() {
     let app = App::new();
     let (workspace, pane, a) = create(&app, "A");

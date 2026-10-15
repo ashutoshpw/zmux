@@ -596,8 +596,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 let panes = workspace.root.panes.count
                 subtitle = workspace.root.panes.flatMap { $0.surfaces }.compactMap { $0.remote?.destination }.first.map { "SSH · \($0)" } ?? (panes == 1 ? "Local shell" : "\(panes) local terminals")
             }
-            let surfaces = Set(workspace.root.panes.flatMap { $0.surfaces }.map { $0.id })
-            let unread = snapshot.notifications.filter { !$0.read && surfaces.contains($0.surfaceId) }.count
+            let unread = snapshot.notifications.filter { !$0.read && $0.identityNamespace == snapshot.model.identityNamespace && $0.workspaceId == workspace.id }.count
             row.update(title: workspace.name, subtitle: subtitle, isSelected: isSelected, isRunning: isRunning, unread: unread)
         }
     }
@@ -1012,18 +1011,15 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard key != notificationKey else { return }
         notificationKey = key
         list.arrangedSubviews.forEach { list.removeArrangedSubview($0); $0.removeFromSuperview() }
-        let live = snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
         if snapshot.notifications.isEmpty {
             let label = NSTextField(wrappingLabelWithString: "No notifications. Terminal bells and explicit notifications appear here.")
             label.textColor = ZmuxPalette.subdued; list.addArrangedSubview(label)
             label.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
         }
         for item in snapshot.notifications.reversed() {
-            let available = item.target.map { target in
-                target.epoch == snapshot.nativeNotifications.epoch && target.identityNamespace == snapshot.model.identityNamespace &&
-                    live.contains { $0.id == target.surfaceId && $0.sessionId == target.sessionId }
-            } ?? false
-            let row = NotificationRowView(item: item, available: available, owner: self)
+            let available = item.target?.isAvailable(in: snapshot) ?? false
+            let workspaceName = snapshot.model.workspaces.first { $0.id == item.workspaceId }?.name
+            let row = NotificationRowView(item: item, workspaceName: workspaceName, available: available, owner: self)
             list.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: list.widthAnchor, constant: -24).isActive = true
         }
@@ -1256,6 +1252,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         newWorkspace()
         try await waitUntil { $0.model.workspaces.count == 2 && $0.frames.count == 1 && $0.frames.first?.snapshot?.state == "running" }
         guard let secondWorkspace = snapshot?.workspace?.id else { throw BridgeFailure(message: "Missing second workspace") }
+        try await smokeWorkspaceNotification(workspaceID: first.id, foregroundWorkspace: secondWorkspace)
         try performShortcut("[", modifiers: [.command, .control])
         try await waitUntil { $0.model.focusedWorkspace == first.id && $0.frames.count == 2 }
         try performShortcut("]", modifiers: [.command, .control])
@@ -1345,6 +1342,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "success": true,
             "notification_permission_ordering": true,
             "notification_cli_metadata": true,
+            "notification_workspace_target": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
@@ -1397,12 +1395,19 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
 
-    private func nativeCLI(_ arguments: [String], expectFailure: Bool = false, timeout: Int = 5000) async throws -> Data {
+    private func nativeCLI(_ arguments: [String], expectFailure: Bool = false, timeout: Int = 5000, externalCaller: Bool = false) async throws -> Data {
         let executable = Bundle.main.resourceURL!.appendingPathComponent("bin/zmux")
         return try await Task.detached {
             let process = Process()
             process.executableURL = executable
             process.arguments = ["--timeout", String(timeout)] + arguments
+            if externalCaller {
+                var environment = ProcessInfo.processInfo.environment
+                for key in ["ZMUX_WORKSPACE_ID", "ZMUX_SURFACE_ID", "ZMUX_TAB_ID"] {
+                    environment.removeValue(forKey: key)
+                }
+                process.environment = environment
+            }
             let output = Pipe()
             process.standardOutput = output
             process.standardError = output
@@ -1422,6 +1427,46 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             throw BridgeFailure(message: "Browser CLI did not return a typed completion")
         }
         return value
+    }
+    private func smokeWorkspaceNotification(workspaceID: UInt64, foregroundWorkspace: UInt64) async throws {
+        guard let retained = snapshot?.model.workspaces.first(where: { $0.id == workspaceID }),
+              snapshot?.model.focusedWorkspace == foregroundWorkspace else {
+            throw BridgeFailure(message: "Workspace notification fixture lacks a background workspace")
+        }
+        let selectedTabs = Dictionary(uniqueKeysWithValues: retained.root.panes.map { ($0.id, $0.selectedSurface) })
+        let title = "CLI workspace review"
+        _ = try await nativeCLI(["notify", "--workspace", String(workspaceID), "--title", title, "--body", "Open the workspace without changing its selected tab", "--desktop", "false"], externalCaller: true)
+        try await waitUntil { $0.notifications.contains { $0.title == title && $0.surfaceId == nil && !$0.read } }
+        guard let item = snapshot?.notifications.last(where: { $0.title == title }),
+              let target = item.target, case .workspace(let destination) = target.destination,
+              destination == workspaceID, item.workspaceId == workspaceID,
+              let current = snapshot, target.isAvailable(in: current),
+              current.model.focusedWorkspace == foregroundWorkspace,
+              !current.nativeNotifications.desired.contains(where: { $0.target.notificationId == item.id }) else {
+            throw BridgeFailure(message: "CLI workspace notification borrowed a surface or changed focus")
+        }
+        showNotifications()
+        guard notificationList?.arrangedSubviews.contains(where: { row in
+            let children = row.subviews.compactMap { $0 as? NSStackView }.flatMap { $0.arrangedSubviews }
+            let fields = children.compactMap { $0 as? NSTextField }
+            return fields.contains { $0.stringValue.hasSuffix(title) }
+                && fields.contains { $0.stringValue.hasPrefix("Workspace · \(retained.name) · ") }
+                && children.compactMap { $0 as? NSButton }.contains { $0.toolTip == "Open workspace" && $0.isEnabled }
+        }) == true else {
+            throw BridgeFailure(message: "Workspace notification inbox label or open action is unavailable")
+        }
+        openNotification(item.id)
+        try await waitUntil { value in
+            guard let workspace = value.workspace, workspace.id == workspaceID,
+                  workspace.focusedPane == retained.focusedPane,
+                  value.notifications.first(where: { $0.id == item.id })?.read == true else { return false }
+            return Dictionary(uniqueKeysWithValues: workspace.root.panes.map { ($0.id, $0.selectedSurface) }) == selectedTabs
+        }
+        selectWorkspace(foregroundWorkspace)
+        try await waitUntil { $0.model.focusedWorkspace == foregroundWorkspace }
+        sidebarModes?.selectedSegment = 0
+        clearNotificationsButton.isHidden = true
+        setSidebarDocument(workspaceList)
     }
     private func smokeBrowserAutomation(report: URL, surface: UInt64, pane: Pane, terminalSession: UInt64) async throws {
         let data = try Data(contentsOf: report.deletingLastPathComponent().appendingPathComponent("native-browser-fixture.json"))

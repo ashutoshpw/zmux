@@ -31,14 +31,64 @@ pub struct NotificationContent {
     #[serde(default)]
     pub desktop: Option<bool>,
 }
+/// Creation and selection intent, before session ownership is captured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationAddress {
+    Workspace(WorkspaceId),
+    Surface(SurfaceId),
+}
+impl From<SurfaceId> for NotificationAddress {
+    fn from(surface_id: SurfaceId) -> Self {
+        Self::Surface(surface_id)
+    }
+}
+/// Workspace notifications never borrow a pane. Surface tokens retain their
+/// captured process generation while their live workspace may change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NotificationDestination {
+    Workspace {
+        workspace_id: WorkspaceId,
+    },
+    Surface {
+        surface_id: SurfaceId,
+        #[serde(deserialize_with = "deserialize_session_id")]
+        session_id: Option<SessionId>,
+    },
+}
+fn deserialize_session_id<'de, D>(deserializer: D) -> Result<Option<SessionId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(deserializer)
+}
+impl NotificationDestination {
+    pub fn address(self) -> NotificationAddress {
+        match self {
+            Self::Workspace { workspace_id } => NotificationAddress::Workspace(workspace_id),
+            Self::Surface { surface_id, .. } => NotificationAddress::Surface(surface_id),
+        }
+    }
+    pub fn surface_id(self) -> Option<SurfaceId> {
+        match self {
+            Self::Surface { surface_id, .. } => Some(surface_id),
+            Self::Workspace { .. } => None,
+        }
+    }
+    pub fn session_id(self) -> Option<SessionId> {
+        match self {
+            Self::Surface { session_id, .. } => session_id,
+            Self::Workspace { .. } => None,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationTarget {
     pub epoch: Uuid,
     pub identity_namespace: Uuid,
     pub notification_id: u64,
-    pub surface_id: SurfaceId,
-    pub session_id: Option<SessionId>,
+    pub destination: NotificationDestination,
 }
 impl NotificationTarget {
     pub fn identifier(&self) -> String {
@@ -107,7 +157,7 @@ impl DesktopDelivery {
 #[derive(Clone, Debug, Serialize)]
 pub struct Notification {
     pub id: u64,
-    pub surface_id: SurfaceId,
+    pub surface_id: Option<SurfaceId>,
     pub identity_namespace: Uuid,
     /// Last workspace owning this exact live session; retained after close.
     pub workspace_id: WorkspaceId,
@@ -170,7 +220,9 @@ pub enum NativeAttentionAction {
 pub enum AttentionError {
     #[error("notification title must not be empty")]
     EmptyTitle,
-    #[error("notification target is not a live surface in an initialized identity namespace")]
+    #[error(
+        "notification target is not a live workspace or surface in an initialized identity namespace"
+    )]
     InvalidOwner,
     #[error("notification identity space exhausted")]
     Exhausted,
@@ -297,7 +349,10 @@ impl NotificationFilter {
             Self::Surface {
                 identity_namespace,
                 surface_id,
-            } => item.identity_namespace == *identity_namespace && item.surface_id == *surface_id,
+            } => {
+                item.identity_namespace == *identity_namespace
+                    && item.surface_id == Some(*surface_id)
+            }
         }
     }
 }
@@ -394,40 +449,62 @@ impl Attention {
     pub fn notify_owned(
         &mut self,
         model: &Snapshot,
-        surface_id: SurfaceId,
+        address: impl Into<NotificationAddress>,
         source: &str,
         content: &NotificationContent,
         read: bool,
     ) -> Result<u64, AttentionError> {
-        let (workspace_id, surface) = model
-            .workspaces
-            .iter()
-            .find_map(|workspace| {
-                workspace
-                    .root
-                    .panes()
-                    .into_iter()
-                    .flat_map(|pane| &pane.surfaces)
-                    .find(|surface| surface.id == surface_id)
-                    .map(|surface| (workspace.id, surface))
-            })
-            .ok_or(AttentionError::InvalidOwner)?;
         if model.identity_namespace.is_nil() {
             return Err(AttentionError::InvalidOwner);
         }
+        let (workspace_id, destination) = match address.into() {
+            NotificationAddress::Workspace(workspace_id) => {
+                if !model
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.id == workspace_id)
+                {
+                    return Err(AttentionError::InvalidOwner);
+                }
+                (
+                    workspace_id,
+                    NotificationDestination::Workspace { workspace_id },
+                )
+            }
+            NotificationAddress::Surface(surface_id) => {
+                let (workspace_id, surface) = model
+                    .workspaces
+                    .iter()
+                    .find_map(|workspace| {
+                        workspace
+                            .root
+                            .panes()
+                            .into_iter()
+                            .flat_map(|pane| &pane.surfaces)
+                            .find(|surface| surface.id == surface_id)
+                            .map(|surface| (workspace.id, surface))
+                    })
+                    .ok_or(AttentionError::InvalidOwner)?;
+                (
+                    workspace_id,
+                    NotificationDestination::Surface {
+                        surface_id,
+                        session_id: surface.session_id,
+                    },
+                )
+            }
+        };
         let target = NotificationTarget {
             epoch: self.epoch,
             identity_namespace: model.identity_namespace,
             notification_id: 0,
-            surface_id,
-            session_id: surface.session_id,
+            destination,
         };
-        self.insert(workspace_id, surface_id, source, content, read, target)
+        self.insert(workspace_id, source, content, read, target)
     }
     fn insert(
         &mut self,
         workspace_id: WorkspaceId,
-        surface_id: SurfaceId,
         source: &str,
         content: &NotificationContent,
         read: bool,
@@ -453,7 +530,6 @@ impl Attention {
         if self.items.last().is_some_and(|last| {
             !last.read
                 && !read
-                && last.surface_id == surface_id
                 && last.source == source
                 && last.title == title
                 && last.subtitle == subtitle
@@ -485,7 +561,7 @@ impl Attention {
         }
         self.items.push(Notification {
             id,
-            surface_id,
+            surface_id: target.destination.surface_id(),
             identity_namespace: target.identity_namespace,
             workspace_id,
             title,
@@ -519,16 +595,7 @@ impl Attention {
         let mut changed = false;
         for item in &mut self.items {
             if let Some(target) = &item.target
-                && current_owner(model, self.epoch, target)
-                && let Some(workspace_id) = model.workspaces.iter().find_map(|workspace| {
-                    workspace
-                        .root
-                        .panes()
-                        .into_iter()
-                        .flat_map(|pane| &pane.surfaces)
-                        .any(|surface| surface.id == item.surface_id)
-                        .then_some(workspace.id)
-                })
+                && let Some(workspace_id) = current_workspace(model, self.epoch, target)
                 && item.workspace_id != workspace_id
             {
                 item.workspace_id = workspace_id;
@@ -588,7 +655,11 @@ impl Attention {
     }
     /// An open is validated before the executor selects the target. Only after
     /// selection succeeds may it mark this generation read and activate its window.
-    pub fn open_target(&self, model: &Snapshot, id: u64) -> Result<SurfaceId, AttentionError> {
+    pub fn open_target(
+        &self,
+        model: &Snapshot,
+        id: u64,
+    ) -> Result<NotificationAddress, AttentionError> {
         let item = self.find(id).map_err(|_| AttentionError::StaleTarget)?;
         let target = item.target.as_ref().ok_or(AttentionError::StaleTarget)?;
         self.native_inbox_target(model, target)
@@ -598,19 +669,19 @@ impl Attention {
         &self,
         model: &Snapshot,
         target: &NotificationTarget,
-    ) -> Result<SurfaceId, AttentionError> {
+    ) -> Result<NotificationAddress, AttentionError> {
         self.native_item(target)?;
         if !current_owner(model, self.epoch, target) {
             return Err(AttentionError::StaleTarget);
         }
-        Ok(target.surface_id)
+        Ok(target.destination.address())
     }
     /// Native banners additionally require a still-unread, eligible delivery.
     pub fn native_open_target(
         &self,
         model: &Snapshot,
         target: &NotificationTarget,
-    ) -> Result<SurfaceId, AttentionError> {
+    ) -> Result<NotificationAddress, AttentionError> {
         let item = self.native_item(target)?;
         if item.read || !item.delivery.active() || !current_owner(model, self.epoch, target) {
             return Err(AttentionError::StaleTarget);
@@ -620,7 +691,7 @@ impl Attention {
         {
             return Err(AttentionError::StaleAuthorization);
         }
-        Ok(target.surface_id)
+        Ok(target.destination.address())
     }
     /// Acknowledge the exact row after the executor validates its live owner.
     /// Repeating an acknowledgement is harmless; this never selects a surface
@@ -726,23 +797,41 @@ fn same_origin(first: Option<&NotificationTarget>, second: Option<&NotificationT
         (Some(first), Some(second)) => {
             first.epoch == second.epoch
                 && first.identity_namespace == second.identity_namespace
-                && first.surface_id == second.surface_id
-                && first.session_id == second.session_id
+                && first.destination == second.destination
         }
         _ => false,
     }
 }
 fn current_owner(model: &Snapshot, epoch: Uuid, target: &NotificationTarget) -> bool {
-    target.epoch == epoch
-        && model.identity_namespace == target.identity_namespace
-        && model
+    current_workspace(model, epoch, target).is_some()
+}
+fn current_workspace(
+    model: &Snapshot,
+    epoch: Uuid,
+    target: &NotificationTarget,
+) -> Option<WorkspaceId> {
+    if target.epoch != epoch || model.identity_namespace != target.identity_namespace {
+        return None;
+    }
+    match target.destination {
+        NotificationDestination::Workspace { workspace_id } => model
             .workspaces
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| &p.surfaces)
-            .any(|surface| {
-                surface.id == target.surface_id && surface.session_id == target.session_id
-            })
+            .find(|workspace| workspace.id == workspace_id)
+            .map(|workspace| workspace.id),
+        NotificationDestination::Surface {
+            surface_id,
+            session_id,
+        } => model.workspaces.iter().find_map(|workspace| {
+            workspace
+                .root
+                .panes()
+                .into_iter()
+                .flat_map(|pane| &pane.surfaces)
+                .any(|surface| surface.id == surface_id && surface.session_id == session_id)
+                .then_some(workspace.id)
+        }),
+    }
 }
 fn apply_authorization(
     delivery: &mut DesktopDelivery,

@@ -491,7 +491,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
 final class NotificationRowView: BackgroundView {
     private let item: AttentionNotification
     private weak var owner: AppController?
-    init(item: AttentionNotification, available: Bool, owner: AppController) {
+    init(item: AttentionNotification, workspaceName: String?, available: Bool, owner: AppController) {
         self.item = item; self.owner = owner
         super.init(color: NSColor.white.withAlphaComponent(item.read ? 0.025 : 0.065))
         layer?.cornerRadius = 7
@@ -501,7 +501,10 @@ final class NotificationRowView: BackgroundView {
         let body = NSTextField(wrappingLabelWithString: item.body)
         body.font = .systemFont(ofSize: 11); body.textColor = ZmuxPalette.subdued
         let date = Date(timeIntervalSince1970: Double(item.timestampMs) / 1000)
-        let detail = NSTextField(labelWithString: "\(item.source) · \(date.formatted(date: .omitted, time: .shortened))" + (available ? "" : " · Terminal closed"))
+        let destinationLabel: String
+        if case .workspace? = item.target?.destination { destinationLabel = "Workspace · \(workspaceName ?? "Unavailable") · " }
+        else { destinationLabel = "" }
+        let detail = NSTextField(labelWithString: destinationLabel + "\(item.source) · \(date.formatted(date: .omitted, time: .shortened))" + (available ? "" : " · \(item.target?.destination.unavailableLabel ?? "Target unavailable")"))
         detail.font = .systemFont(ofSize: 10); detail.textColor = ZmuxPalette.subdued
         let labels = NSStackView(views: [title])
         if !item.subtitle.isEmpty {
@@ -513,7 +516,7 @@ final class NotificationRowView: BackgroundView {
         if !item.body.isEmpty { labels.addArrangedSubview(body) }
         labels.addArrangedSubview(detail)
         labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 4
-        let open = IconButton(symbol: "arrow.up.forward", label: "Open terminal", target: self, action: #selector(openTarget))
+        let open = IconButton(symbol: "arrow.up.forward", label: item.target?.destination.openLabel ?? "Open notification target", target: self, action: #selector(openTarget))
         open.isEnabled = available
         let read = IconButton(symbol: "checkmark", label: "Mark read", target: self, action: #selector(markRead))
         read.isEnabled = !item.read

@@ -51,6 +51,133 @@ fn create(
 }
 
 #[test]
+fn notification_token_wire_requires_one_destination_and_explicit_nullable_session() {
+    let (store, surface) = fixture();
+    let mut attention = Attention::default();
+    let target = create(&mut attention, &store, surface, "Wire ownership");
+    let canonical = serde_json::to_value(&target).unwrap();
+    assert_eq!(canonical["destination"]["kind"], "surface");
+    assert_eq!(canonical["destination"]["surface_id"], surface.0);
+    assert!(canonical["destination"]["session_id"].is_number());
+    for field in ["workspace_id", "surface_id", "session_id"] {
+        let mut flat = canonical.clone();
+        flat[field] = serde_json::json!(1);
+        assert!(
+            serde_json::from_value::<NotificationTarget>(flat).is_err(),
+            "flat {field}"
+        );
+    }
+    let mut missing = canonical.clone();
+    missing["destination"]
+        .as_object_mut()
+        .unwrap()
+        .remove("session_id");
+    assert!(serde_json::from_value::<NotificationTarget>(missing).is_err());
+    let mut mixed = canonical.clone();
+    mixed["destination"]["workspace_id"] = serde_json::json!(store.snapshot().workspaces[0].id.0);
+    assert!(serde_json::from_value::<NotificationTarget>(mixed).is_err());
+    let mut unknown = canonical.clone();
+    unknown["destination"]["kind"] = serde_json::json!("unknown");
+    assert!(serde_json::from_value::<NotificationTarget>(unknown).is_err());
+    let mut browser = canonical;
+    browser["destination"]["session_id"] = serde_json::Value::Null;
+    assert!(matches!(
+        serde_json::from_value::<NotificationTarget>(browser)
+            .unwrap()
+            .destination,
+        NotificationDestination::Surface {
+            session_id: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn workspace_native_tokens_require_the_exact_live_workspace_namespace_and_epoch() {
+    let (mut store, _) = fixture();
+    let workspace = store.snapshot().workspaces[0].id;
+    let mut attention = Attention::default();
+    authorize(
+        &mut attention,
+        &store,
+        1,
+        NotificationAuthorization::Authorized,
+    );
+    let id = attention
+        .notify_owned(
+            &store.snapshot(),
+            NotificationAddress::Workspace(workspace),
+            "cli",
+            &content("Workspace owner"),
+            false,
+        )
+        .unwrap();
+    let target = attention.find(id).unwrap().target.clone().unwrap();
+    assert_eq!(
+        attention
+            .native_open_target(&store.snapshot(), &target)
+            .unwrap(),
+        NotificationAddress::Workspace(workspace)
+    );
+    let mut foreign = store.snapshot();
+    foreign.identity_namespace = Uuid::new_v4();
+    assert!(matches!(
+        attention.native_inbox_target(&foreign, &target),
+        Err(AttentionError::StaleTarget)
+    ));
+    let mut forged = target.clone();
+    forged.destination = NotificationDestination::Surface {
+        surface_id: store.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        session_id: store.snapshot().workspaces[0].root.panes()[0]
+            .selected()
+            .session_id,
+    };
+    assert!(matches!(
+        attention.native_inbox_target(&store.snapshot(), &forged),
+        Err(AttentionError::StaleTarget)
+    ));
+    store
+        .apply(Action::CloseWorkspace {
+            workspace_id: workspace,
+        })
+        .unwrap();
+    attention.reconcile(&store.snapshot());
+    assert!(
+        attention
+            .native_snapshot(&store.snapshot())
+            .desired
+            .is_empty()
+    );
+    assert!(!attention.find(id).unwrap().read);
+    assert!(matches!(
+        attention.native_inbox_target(&store.snapshot(), &target),
+        Err(AttentionError::StaleTarget)
+    ));
+    let (new_store, _) = fixture();
+    let new_workspace = new_store.snapshot().workspaces[0].id;
+    let current_id = attention
+        .notify_owned(
+            &new_store.snapshot(),
+            NotificationAddress::Workspace(new_workspace),
+            "cli",
+            &content("Current live workspace"),
+            false,
+        )
+        .unwrap();
+    let current_target = attention.find(current_id).unwrap().target.clone().unwrap();
+    assert!(
+        attention
+            .native_inbox_target(&new_store.snapshot(), &current_target)
+            .is_ok()
+    );
+    attention.reset_native("new runtime epoch");
+    assert!(matches!(
+        attention.native_inbox_target(&new_store.snapshot(), &current_target),
+        Err(AttentionError::StaleTarget)
+    ));
+}
+
+#[test]
 fn native_scheduling_requires_authorization_and_read_removes_the_scheduled_desire() {
     let (store, surface) = fixture();
     let mut attention = Attention::default();
@@ -156,7 +283,7 @@ fn revocation_cancels_old_attempts_without_replaying_them_after_permission_retur
         attention
             .native_inbox_target(&store.snapshot(), &old)
             .unwrap(),
-        surface
+        NotificationAddress::Surface(surface)
     );
     assert!(matches!(
         attention.native_open_target(&store.snapshot(), &old),
@@ -201,7 +328,7 @@ fn revocation_cancels_old_attempts_without_replaying_them_after_permission_retur
         attention
             .native_inbox_target(&store.snapshot(), &old)
             .unwrap(),
-        surface
+        NotificationAddress::Surface(surface)
     );
     assert!(matches!(
         attention.native_open_target(&store.snapshot(), &old),
@@ -260,7 +387,7 @@ fn restored_surface_with_a_fresh_session_cannot_receive_an_old_notification_acti
         attention
             .open_target(&store.snapshot(), target.notification_id)
             .unwrap(),
-        surface
+        NotificationAddress::Surface(surface)
     );
     let document = store
         .session_document()
@@ -328,7 +455,7 @@ fn restore_epoch_fences_same_namespace_browser_targets_and_old_permission_callba
         NotificationAuthorization::Authorized,
     );
     let old = create(&mut attention, &store, surface, "Old browser");
-    assert!(old.session_id.is_none());
+    assert!(old.destination.session_id().is_none());
     attention.reset_native("session restore");
     assert_ne!(attention.epoch(), old.epoch);
     assert!(
@@ -466,7 +593,7 @@ fn native_failures_focus_and_desktop_override_never_drop_the_in_app_notification
     );
     assert_eq!(
         attention.open_target(&store.snapshot(), disabled).unwrap(),
-        surface,
+        NotificationAddress::Surface(surface),
         "desktop opt-out must not disable in-app open"
     );
     attention.native_dismiss(&failed).unwrap();
@@ -548,7 +675,7 @@ fn initial_denial_and_daemon_unavailability_preserve_unread_in_app_records() {
             attention
                 .native_inbox_target(&store.snapshot(), &target)
                 .unwrap(),
-            surface
+            NotificationAddress::Surface(surface)
         );
     }
 }

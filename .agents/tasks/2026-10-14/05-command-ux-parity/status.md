@@ -210,3 +210,24 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   while reply bytes remain buffered. A nonblocking, readiness-polled transport repair
   passes parent full Linux checks; hosted validation remains pending. No macOS notification acceptance is claimed yet.
 - N01c typed workspace notification destinations are next. Full V01 remains open.
+
+## Darwin repair and N01c
+
+- `619a3eb` completes nonblocking/poll dependencies and peer-close regressions. Parent
+  full Linux check and fresh review pass; Foundation38735209799 passes Linux/macOS.
+  Native38735209748 passed Rust/ABI and is compiling; notification smoke still pending.
+- N01c typed workspace destinations, CLI provenance and native inbox routing are in
+  progress, with owner and public CLI regressions observed red before repair.
+- Local Docker health/readiness rechecked HTTP200 at http://127.0.0.1:3530.
+
+## N01c local verification and native crash diagnostics
+
+- Typed workspace destinations and shared native routing pass 169 Rust tests, strict
+  Clippy, notices and C ABI. Fresh production review accepted; external-caller smoke
+  environment isolation repair is included before publication.
+- `619a3eb` passed universal native compilation but packaged execution exited SIGTRAP
+  before evidence. Empty stdout/stderr and absent immediate crash reports do not identify
+  a cause. The workflow now captures a bounded LLDB crash backtrace; this diagnostic
+  cannot satisfy the native smoke gate. Source-only actor-isolation guesses are unproven.
+- N01d UUID handles and shared newest-openable-unread navigation are designed next.
+  Replies, agent last-prompt events, richer unread state and full V01 remain open.

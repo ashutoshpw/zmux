@@ -15,7 +15,8 @@ use std::{
 use zmux_desktop_runtime::{
     Command, Desktop, Request, Shell, Snapshot,
     attention::{
-        AttentionCommand, NativeAttentionAction, NativeNotificationEvent, NotificationAuthorization,
+        AttentionCommand, NativeAttentionAction, NativeNotificationEvent,
+        NotificationAuthorization, NotificationDestination,
     },
     control::{CONTROL_VERSION, ControlServer},
     control_policy::{ControlAccess, ControlPolicy},
@@ -302,7 +303,12 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
 
     // The wrapper must validate the captured token before selecting or acknowledging.
     let mut wrong_session = target.clone();
-    wrong_session.session_id = second_surface.session_id;
+    match &mut wrong_session.destination {
+        NotificationDestination::Surface { session_id, .. } => {
+            *session_id = second_surface.session_id;
+        }
+        NotificationDestination::Workspace { .. } => panic!("surface notification expected"),
+    }
     assert!(
         desktop
             .native_notification_action(NativeAttentionAction::Open {

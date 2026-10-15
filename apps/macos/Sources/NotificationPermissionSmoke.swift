@@ -44,6 +44,7 @@ enum NotificationPermissionSmoke {
 
         let nonce = UUID().uuidString.lowercased()
         let beforeDenial = try await notify(bridge, session: session, title: "Permission-before-denial-\(nonce)")
+        try validateTargetCodec(beforeDenial.target)
         guard beforeDenial.authorizationGeneration == 1 else {
             throw failure("the first PTY notification was not bound to the initial permission observation")
         }
@@ -120,6 +121,39 @@ enum NotificationPermissionSmoke {
         return observation
     }
 
+    private static func validateTargetCodec(_ target: NotificationTarget) throws {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let bytes = try encoder.encode(target)
+        guard try decoder.decode(NotificationTarget.self, from: bytes) == target,
+              let valid = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let destination = valid["destination"] as? [String: Any] else {
+            throw failure("the real Rust target did not round trip through the native codec")
+        }
+        var mixed = destination
+        mixed["workspace_id"] = 1
+        var missingSession = destination
+        missingSession.removeValue(forKey: "session_id")
+        var unknown = destination
+        unknown["kind"] = "unsupported"
+        for malformed in [mixed, missingSession, unknown] {
+            var payload = valid
+            payload["destination"] = malformed
+            let bytes = try JSONSerialization.data(withJSONObject: payload)
+            guard (try? decoder.decode(NotificationTarget.self, from: bytes)) == nil else {
+                throw failure("native notification decoding accepted ambiguous or incomplete destination ownership")
+            }
+        }
+        var oldSurfaceToken = valid
+        oldSurfaceToken["surface_id"] = 1
+        let oldBytes = try JSONSerialization.data(withJSONObject: oldSurfaceToken)
+        guard (try? decoder.decode(NotificationTarget.self, from: oldBytes)) == nil else {
+            throw failure("native notification decoding accepted mixed token versions")
+        }
+    }
+
     private static func authorization(_ bridge: NativeBridge, generation: UInt64,
                                       state: NotificationAuthorization) async throws -> DesktopSnapshot {
         try await wait(bridge, context: "observe Rust authorization \(state.rawValue) generation \(generation)") { snapshot in
@@ -130,11 +164,15 @@ enum NotificationPermissionSmoke {
 
     private static func notify(_ bridge: NativeBridge, session: UInt64,
                                title: String) async throws -> NativeNotificationRequest {
+        let matches: @Sendable (NativeNotificationRequest) -> Bool = { request in
+            guard request.title == title, case .surface(_, let ownerSession) = request.target.destination else { return false }
+            return ownerSession == session
+        }
         try await bridge.input(session: session, text: "printf '\\033]777;notify;\(title);Permission ordering fixture\\007'\r")
         let snapshot = try await wait(bridge, context: "receive the real PTY notification \(title)") { snapshot in
-            snapshot.nativeNotifications.desired.contains { $0.title == title && $0.target.sessionId == session }
+            snapshot.nativeNotifications.desired.contains(where: matches)
         }
-        guard let request = snapshot.nativeNotifications.desired.first(where: { $0.title == title && $0.target.sessionId == session }),
+        guard let request = snapshot.nativeNotifications.desired.first(where: matches),
               snapshot.notifications.contains(where: { $0.id == request.target.notificationId && !$0.read }) else {
             throw failure("PTY notification was not unread in the authoritative inbox")
         }

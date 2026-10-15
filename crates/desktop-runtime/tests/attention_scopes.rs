@@ -103,6 +103,294 @@ fn workspace(id: u64) -> TargetScope {
 }
 
 #[test]
+fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_surfaces() {
+    let mut app = App::new();
+    let initial = app.desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let caller_surface = first.root.panes()[0].selected_surface;
+    app.action(Action::CreateSurface {
+        pane_id: first.focused_pane,
+    });
+    let added = app.action(Action::CreateWorkspace {
+        name: "Other destination".into(),
+    });
+    let other = added.model.workspaces.last().unwrap().clone();
+    let other_surface = other.root.panes()[0].selected_surface;
+    let caller = |workspace_id: u64, surface_id: Option<u64>| CallerContext {
+        workspace: Some(format!("workspace:{workspace_id}").parse().unwrap()),
+        surface: surface_id.map(|id| format!("surface:{id}").parse().unwrap()),
+    };
+    for (name, scope, context, expected_workspace, expected_surface) in [
+        (
+            "Explicit workspace",
+            workspace(first.id.0),
+            CallerContext::default(),
+            first.id,
+            None,
+        ),
+        (
+            "Same workspace caller",
+            workspace(first.id.0),
+            caller(first.id.0, Some(caller_surface.0)),
+            first.id,
+            Some(caller_surface.0),
+        ),
+        (
+            "Foreign caller cannot override workspace",
+            workspace(first.id.0),
+            caller(other.id.0, Some(other_surface.0)),
+            first.id,
+            None,
+        ),
+        (
+            "External caller",
+            TargetScope::default(),
+            CallerContext::default(),
+            other.id,
+            None,
+        ),
+        (
+            "Workspace caller",
+            TargetScope::default(),
+            caller(first.id.0, None),
+            first.id,
+            None,
+        ),
+        (
+            "Stable surface wins stale workspace",
+            TargetScope::default(),
+            caller(999_999, Some(caller_surface.0)),
+            first.id,
+            Some(caller_surface.0),
+        ),
+        (
+            "Stale surface retains proven workspace",
+            TargetScope::default(),
+            caller(first.id.0, Some(999_999)),
+            first.id,
+            None,
+        ),
+    ] {
+        let snapshot = app.send(Command::Targeted {
+            request: TargetRequest {
+                scope,
+                caller: context,
+                expected_model_revision: None,
+                operation: TargetOperation::Notify {
+                    title: name.into(),
+                    subtitle: String::new(),
+                    body: String::new(),
+                    desktop: Some(false),
+                },
+            },
+        });
+        assert!(
+            snapshot.last_error.is_none(),
+            "{name}: {:?}",
+            snapshot.last_error
+        );
+        let row = snapshot.notifications.last().unwrap();
+        assert_eq!(row.workspace_id, expected_workspace, "{name}");
+        let wire = serde_json::to_value(row).unwrap();
+        assert_eq!(
+            wire["surface_id"].as_u64(),
+            expected_surface,
+            "{name} must not borrow the selected surface"
+        );
+        assert_eq!(
+            snapshot.model.focused_workspace,
+            Some(other.id),
+            "creation changed focus"
+        );
+    }
+    let count = app.desktop.snapshot().unwrap().notifications.len();
+    for (name, scope, context) in [
+        (
+            "Invalid explicit workspace",
+            workspace(999_999),
+            caller(first.id.0, Some(caller_surface.0)),
+        ),
+        (
+            "Stale caller cannot guess focus",
+            TargetScope::default(),
+            caller(999_999, Some(999_999)),
+        ),
+        (
+            "Explicit surface cannot cross workspace",
+            TargetScope {
+                surface: Some(format!("surface:{}", other_surface.0).parse().unwrap()),
+                ..workspace(first.id.0)
+            },
+            CallerContext::default(),
+        ),
+    ] {
+        let snapshot = app.send(Command::Targeted {
+            request: TargetRequest {
+                scope,
+                caller: context,
+                expected_model_revision: None,
+                operation: TargetOperation::Notify {
+                    title: name.into(),
+                    subtitle: String::new(),
+                    body: String::new(),
+                    desktop: None,
+                },
+            },
+        });
+        assert!(snapshot.last_error.is_some(), "{name}");
+        assert_eq!(snapshot.notifications.len(), count, "{name}");
+        assert_eq!(snapshot.model.focused_workspace, Some(other.id), "{name}");
+    }
+    app.close();
+}
+
+#[test]
+fn active_workspace_acknowledges_workspace_rows_without_reading_hidden_surface_rows() {
+    let mut app = App::new();
+    let initial = app.desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let hidden = first.root.panes()[0].selected_surface;
+    app.action(Action::CreateSurface {
+        pane_id: first.focused_pane,
+    });
+    app.notify(hidden, "Hidden surface");
+    let created = app.send(Command::Targeted {
+        request: TargetRequest {
+            scope: workspace(first.id.0),
+            caller: CallerContext::default(),
+            expected_model_revision: None,
+            operation: TargetOperation::Notify {
+                title: "Workspace unread".into(),
+                subtitle: String::new(),
+                body: String::new(),
+                desktop: None,
+            },
+        },
+    });
+    let workspace_row = created.notifications.last().unwrap().id;
+    assert!(created.notifications.iter().all(|row| !row.read));
+    let active = app.send(Command::Attention {
+        action: AttentionCommand::AppActive { active: true },
+    });
+    assert!(
+        active
+            .notifications
+            .iter()
+            .find(|row| row.id == workspace_row)
+            .unwrap()
+            .read
+    );
+    assert!(
+        !active
+            .notifications
+            .iter()
+            .find(|row| row.surface_id == Some(hidden))
+            .unwrap()
+            .read
+    );
+    let current = app.send(Command::Targeted {
+        request: TargetRequest {
+            scope: workspace(first.id.0),
+            caller: CallerContext::default(),
+            expected_model_revision: None,
+            operation: TargetOperation::Notify {
+                title: "Workspace already visible".into(),
+                subtitle: String::new(),
+                body: String::new(),
+                desktop: None,
+            },
+        },
+    });
+    assert!(current.notifications.last().unwrap().read);
+    let cleared = app.scoped(
+        TargetScope {
+            surface: Some(format!("surface:{}", hidden.0).parse().unwrap()),
+            ..workspace(first.id.0)
+        },
+        CallerContext::default(),
+        NotificationAction::Clear {
+            scope: NotificationScope::Surface,
+            through_id: None,
+            expected_epoch: None,
+        },
+    );
+    assert!(cleared.last_error.is_none());
+    assert_eq!(
+        cleared.notifications.len(),
+        2,
+        "surface clear must preserve workspace rows"
+    );
+    assert!(
+        cleared
+            .notifications
+            .iter()
+            .all(|row| row.surface_id.is_none())
+    );
+    app.close();
+}
+
+#[test]
+fn workspace_notification_open_survives_selected_surface_close_and_preserves_workspace_tab() {
+    let mut app = App::new();
+    let initial = app.desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let original = first.root.panes()[0].selected_surface;
+    let extra = app.action(Action::CreateSurface {
+        pane_id: first.focused_pane,
+    });
+    let selected_at_creation = extra.model.workspaces[0].root.panes()[0].selected_surface;
+    let added = app.action(Action::CreateWorkspace {
+        name: "Keep focus".into(),
+    });
+    let other = added.model.workspaces.last().unwrap().id;
+    let created = app.send(Command::Targeted {
+        request: TargetRequest {
+            scope: workspace(first.id.0),
+            caller: CallerContext::default(),
+            expected_model_revision: None,
+            operation: TargetOperation::Notify {
+                title: "Workspace task".into(),
+                subtitle: String::new(),
+                body: String::new(),
+                desktop: Some(false),
+            },
+        },
+    });
+    let row = created.notifications.last().unwrap();
+    assert!(
+        serde_json::to_value(row).unwrap()["surface_id"].is_null(),
+        "workspace intent requires a null surface, not a mutable selected tab"
+    );
+    let target = row.target.clone().unwrap();
+    let id = row.id;
+    app.action(Action::CloseSurface {
+        surface_id: selected_at_creation,
+    });
+    let opened = app
+        .desktop
+        .native_notification_action(NativeAttentionAction::OpenInbox { target })
+        .unwrap();
+    let receipt = serde_json::to_value(opened).unwrap();
+    assert_eq!(receipt["focused_workspace_id"], first.id.0);
+    let state = app.desktop.snapshot().unwrap();
+    assert_ne!(state.model.focused_workspace, Some(other));
+    assert_eq!(state.model.focused_workspace, Some(first.id));
+    assert_eq!(
+        state.model.workspaces[0].root.panes()[0].selected_surface,
+        original
+    );
+    assert!(
+        state
+            .notifications
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .read
+    );
+    app.close();
+}
+
+#[test]
 fn moved_then_closed_surface_notifications_remain_scoped_to_the_last_live_workspace() {
     let mut app = App::new();
     let initial = app.desktop.snapshot().unwrap();
