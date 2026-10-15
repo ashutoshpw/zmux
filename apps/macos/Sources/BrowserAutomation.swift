@@ -107,10 +107,11 @@ enum BrowserHostEvent: Encodable, Sendable {
     case attach(owner: BrowserOwner)
     case detach(owner: BrowserOwner)
     case documentChanged(owner: BrowserOwner, documentGeneration: UInt64, modelNavigation: UInt64, causedBy: UInt64?)
+    case observed(owner: BrowserOwner, url: String, title: String)
     case complete(operationId: UInt64, owner: BrowserOwner, result: BrowserJSON)
     case fail(operationId: UInt64, owner: BrowserOwner, error: BrowserAutomationFailure)
 
-    private enum CodingKeys: String, CodingKey { case event, owner, epoch, surfaceId, hostId, documentGeneration, modelNavigation, causedBy, operationId, result, error }
+    private enum CodingKeys: String, CodingKey { case event, owner, epoch, surfaceId, hostId, documentGeneration, modelNavigation, causedBy, operationId, result, error, url, title }
     func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
@@ -123,6 +124,9 @@ enum BrowserHostEvent: Encodable, Sendable {
             try c.encode("document_changed", forKey: .event); try c.encode(owner, forKey: .owner)
             try c.encode(generation, forKey: .documentGeneration); try c.encode(navigation, forKey: .modelNavigation)
             try c.encodeIfPresent(cause, forKey: .causedBy)
+        case .observed(let owner, let url, let title):
+            try c.encode("observed", forKey: .event); try c.encode(owner, forKey: .owner)
+            try c.encode(url, forKey: .url); try c.encode(title, forKey: .title)
         case .complete(let id, let owner, let result):
             try c.encode("complete", forKey: .event); try c.encode(id, forKey: .operationId)
             try c.encode(owner, forKey: .owner); try c.encode(result, forKey: .result)

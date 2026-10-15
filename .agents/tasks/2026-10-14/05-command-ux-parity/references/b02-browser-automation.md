@@ -111,3 +111,20 @@ therefore have no owner update. The exact late-title ordering of the CSP load is
 instrumented and remains unproven. Repair should observe title changes with bounded,
 lifecycle-fenced native publication and verify model/header/tab against final WK title;
 an arbitrary capture sleep would not repair the missing observation owner. No fix yet.
+
+## Live title and observation repair
+
+A real executor regression reproduced stale unfenced `ObserveBrowser` updates
+overwriting a newer CLI navigation. Native observations now carry exact epoch,
+identity namespace, host, document generation and model navigation; validation
+and shared model application occur on the workspace executor. Generic action
+ingress cannot bypass this owner. Raw title/URL bounds remain 4096/8192 bytes.
+The focused regression is green and parent full checks pass (181 Rust tests,
+formatting, strict Clippy, notices and C ABI).
+
+The native regression changes a live page title and waits for the Rust model,
+window header and tab to agree. The initial repair routes load-completion
+observations through the trusted channel; its missing live-title observation
+is deliberately retained for the hosted regression. A subsequent bounded KVO
+consumer will publish current WebKit state without one Task per page mutation.
+Native compilation and this title regression are pending hosted execution.

@@ -1032,10 +1032,15 @@ impl Worker {
                 )?);
                 Ok(())
             }
-            Command::BrowserHost { event } => self
-                .browser
-                .host_event(&self.model.snapshot(), event, Instant::now())
-                .map_err(Into::into),
+            Command::BrowserHost { event } => {
+                if let Some(action) =
+                    self.browser
+                        .host_event(&self.model.snapshot(), event, Instant::now())?
+                {
+                    self.action(action)?;
+                }
+                Ok(())
+            }
             Command::BrowserDrain => {
                 self.browser_dispatch = Some(
                     self.browser
@@ -1058,6 +1063,12 @@ impl Worker {
             Command::Transfer { action } => self.transfer(action),
             Command::Targeted { request } => self.targeted(request),
             Command::Attention { action } => self.attention_action(action),
+            Command::Action {
+                action: Action::ObserveBrowser { .. },
+            } => Err(browser::BrowserError::Invalid(
+                "browser observations require a trusted native document owner",
+            )
+            .into()),
             Command::Action { action } => {
                 let result = self.action(action);
                 if result.is_ok() {
