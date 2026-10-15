@@ -5,6 +5,24 @@
 
 ## Active implementation
 
+- `52440da` adds explicit optional Session engine ownership, staged publication after
+  physical PTY reply writes, and cancellation guards before publication/user writes.
+  Exact combined browser/fixture/Session source passes `scripts/check` (286 tests,
+  strict Clippy, notices, C ABI); linked Session4 and independent review also pass.
+  Default engine remains unchanged; Darwin Session runtime acceptance is next.
+
+- Browser keyboard delivery is committed at `7765206`: real events target the owned
+  WebKit surface, with held-key lifecycle and deadline/ownership checks immediately
+  before delivery. Parent combined `scripts/check` passes286 Rust tests, formatting,
+  strict Clippy, notices and C ABI. Production native keyboard execution remains pending.
+  `068b56c` makes two asynchronous test fixtures observe actual receipt/completion;
+  original operation deadlines and no-replay checks remain intact.
+- Retained-engine linkage run38806117440 at `be52324` passed: both Apple targets
+  compile/link, ARM executes4 adapter tests, Intel is compile-only. This does not
+  establish Session/native default-engine or terminal fidelity acceptance.
+- Local readiness rechecked: identity/devices/organizations ready on127.0.0.1:3530;
+  VM/relay/email unavailable. Public tunnel setup remains the user's separate step.
+
 - `313da45` adds the typed Swift fixture repair, bounded process failure receipts,
   and both-architecture early Swift typechecking. Exact combined isolated
   validation passes286 Rust tests, formatting, strict Clippy, notices and C ABI.
