@@ -120,8 +120,22 @@ struct WorkspaceMetadata: Decodable, Sendable, Equatable {
     }
     var isEmpty: Bool { statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
 }
-struct BrowserProfile: Decodable, Sendable { let id: UUID; let name: String }
-struct BrowserProfileState: Decodable, Sendable { let enabled: Bool; let loading: Bool; let profiles: [BrowserProfile]; let error: String? }
+struct BrowserProfile: Decodable, Sendable, Equatable { let id: UUID; let name: String }
+struct BrowserProfileReceipt: Decodable, Sendable {
+    let epoch: UUID
+    let operationId: UInt64
+    let state: String
+    let profile: BrowserProfile?
+    let error: String?
+}
+struct BrowserProfileState: Decodable, Sendable {
+    let epoch: UUID
+    let enabled: Bool
+    let loading: Bool
+    let profiles: [BrowserProfile]
+    let operations: [BrowserProfileReceipt]
+    let error: String?
+}
 struct DesktopSnapshot: Decodable, Sendable {
     let browserProfiles: BrowserProfileState
     let nativeNotifications: NativeNotificationSnapshot

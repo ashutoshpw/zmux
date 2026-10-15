@@ -260,6 +260,72 @@ static void persistent_desktop_uses_requested_directory(void) {
         nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
     }
     assert(ready);
+    /* The profile adapter must return attributable admission, not queue success.
+       Foreign byte validation and output capacity must precede mutation. */
+    const uint8_t profile_name[] = "Native ABI Profile";
+    assert(zmux_desktop_profile_add(desktop.value, NULL, 1).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_profile_add(desktop.value, profile_name, 129).status == ZMUX_INVALID_ARGUMENT);
+    const uint8_t bad_name[] = {0xff};
+    assert(zmux_desktop_profile_add(desktop.value, bad_name, sizeof bad_name).status == ZMUX_INVALID_ARGUMENT);
+    uint64_t held[16];
+    for (size_t index = 0; index < 16; index++) {
+        ZmuxResult buffer = zmux_core_create();
+        assert(buffer.status == ZMUX_OK);
+        ZmuxResult response = dispatch(buffer.value, snapshot);
+        assert(response.status == ZMUX_OK);
+        held[index] = response.value;
+        assert(zmux_core_destroy(buffer.value) == ZMUX_OK);
+    }
+    assert(zmux_desktop_profile_add(desktop.value, profile_name, sizeof profile_name - 1).status == ZMUX_CAPACITY);
+    for (size_t index = 0; index < 16; index++) { assert(zmux_buffer_release(held[index]) == ZMUX_OK); }
+    char *before = desktop_snapshot(desktop.value);
+    assert(strstr(before, "Native ABI Profile") == NULL);
+    free(before);
+    ZmuxResult admission = zmux_desktop_profile_add(desktop.value, profile_name, sizeof profile_name - 1);
+    assert(admission.status == ZMUX_OK);
+    char *receipt = consume(admission.value);
+    assert(strstr(receipt, "\"ok\":true") != NULL);
+    char *operation = strstr(receipt, "\"operation_id\":");
+    char *epoch = strstr(receipt, "\"epoch\":\"");
+    assert(operation != NULL && epoch != NULL);
+    unsigned long long operation_id = strtoull(operation + strlen("\"operation_id\":"), NULL, 10);
+    assert(operation_id != 0);
+    char epoch_value[37];
+    assert(strlen(epoch + strlen("\"epoch\":\"")) >= 37);
+    memcpy(epoch_value, epoch + strlen("\"epoch\":\""), 36);
+    epoch_value[36] = '\0';
+    free(receipt);
+    int completed = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        char expected_id[64];
+        snprintf(expected_id, sizeof expected_id, "\"operation_id\":%llu", operation_id);
+        completed = strstr(text, epoch_value) != NULL && strstr(text, expected_id) != NULL &&
+                    strstr(text, "\"state\":\"completed\"") != NULL && strstr(text, "Native ABI Profile") != NULL;
+        free(text);
+        if (completed) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(completed);
+    ZmuxResult duplicate = zmux_desktop_profile_add(desktop.value, profile_name, sizeof profile_name - 1);
+    assert(duplicate.status == ZMUX_OK);
+    free(consume(duplicate.value));
+    int rejected = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        rejected = strstr(text, "browser profile name already exists") != NULL;
+        free(text);
+        if (rejected) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(rejected);
+    const uint8_t invalid_name[] = " leading space";
+    ZmuxResult invalid_profile = zmux_desktop_profile_add(desktop.value, invalid_name, sizeof invalid_name - 1);
+    assert(invalid_profile.status == ZMUX_OK);
+    char *invalid_receipt = consume(invalid_profile.value);
+    assert(strstr(invalid_receipt, "\"ok\":false") != NULL);
+    assert(strstr(invalid_receipt, "\"outcome_unknown\":false") != NULL);
+    free(invalid_receipt);
     assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
     char path[4096];
     snprintf(path, sizeof path, "%s/session.json", directory);

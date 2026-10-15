@@ -257,6 +257,12 @@ pub struct TransferExecutionError {
     pub outcome_unknown: bool,
 }
 
+#[derive(Debug)]
+pub struct ProfileAdmissionError {
+    pub error: DesktopError,
+    pub outcome_unknown: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct NativeNotificationExecution {
     pub revision: u64,
@@ -490,6 +496,40 @@ impl Desktop {
             revision: execution.snapshot.revision,
             upload_id: execution.created_uploads.into_iter().next(),
         })
+    }
+
+    /// Admit one durable profile creation and return that exact executor receipt.
+    /// Call off the UI thread; an acknowledgement timeout must never be replayed.
+    pub fn native_profile_add(
+        &self,
+        name: String,
+    ) -> Result<profiles::ProfileReceipt, ProfileAdmissionError> {
+        let execution = self
+            .execute_native(
+                Command::Profiles {
+                    action: profiles::ProfileCommand::Add { name },
+                },
+                NATIVE_COMMAND_TIMEOUT,
+            )
+            .map_err(|error| ProfileAdmissionError {
+                outcome_unknown: matches!(error, DesktopError::Timeout | DesktopError::Closed),
+                error,
+            })?;
+        execution.result.map_err(|error| ProfileAdmissionError {
+            error,
+            outcome_unknown: false,
+        })?;
+        execution
+            .snapshot
+            .browser_profiles
+            .operations
+            .iter()
+            .find(|receipt| Some(receipt.operation_id) == execution.profile_operation_id)
+            .cloned()
+            .ok_or_else(|| ProfileAdmissionError {
+                error: DesktopError::Failure("profile admission receipt is missing".into()),
+                outcome_unknown: true,
+            })
     }
 
     /// Trusted native bridge only; execute off the UI thread. Draining is once-only:

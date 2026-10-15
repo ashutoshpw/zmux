@@ -44,6 +44,11 @@ ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_
    waits at most two seconds for that envelope's worker acknowledgement and MUST run off
    the native UI thread. A nonzero C status or outcome_unknown=true must not be retried. */
 ZmuxResult zmux_desktop_transfer_files(uint64_t desktop, const uint8_t *request, size_t length);
+/* Admit one durable browser-profile Add using a UTF-8 name (1..128 bytes).
+   Reserves output capacity before admission, waits at most two seconds off the UI
+   thread, and returns an exact epoch/operation receipt. Receipt completion is in
+   snapshots. Never replay automatically after any failure or uncertain outcome. */
+ZmuxResult zmux_desktop_profile_add(uint64_t desktop, const uint8_t *name, size_t length);
 /* Trusted host-only browser channel. Drain reserves an owned buffer before removing
    work, may wait up to one second, and MUST run off the UI thread. Never replay a
    failed drain automatically. Events wait up to two seconds and MUST also run off the UI thread.

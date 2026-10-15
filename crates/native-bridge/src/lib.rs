@@ -480,6 +480,38 @@ pub unsafe extern "C" fn zmux_desktop_transfer_files(
         reservation.publish(response)
     })
 }
+/// Admit exactly one profile Add using the shared catalog owner, not a native store.
+///
+/// # Safety
+/// Name storage must remain readable for length bytes throughout the call. This
+/// call waits for executor acknowledgement and must run off the native UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_profile_add(
+    id: u64,
+    name: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if name.is_null() || length == 0 || length > 128 {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: caller guarantees the checked, bounded storage remains readable.
+        let bytes = unsafe { std::slice::from_raw_parts(name, length) };
+        let name = std::str::from_utf8(bytes).map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        let reply = match desktop.native_profile_add(name.into()) {
+            Ok(receipt) => json!({"ok": true, "receipt": receipt}),
+            Err(error) => json!({
+                "ok": false,
+                "error": {"message": error.error.to_string()},
+                "outcome_unknown": error.outcome_unknown,
+            }),
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
 /// Drain trusted native browser work. May wait for executor acknowledgement; call off UI.
 /// A failed call must not be replayed automatically: delivery may have occurred.
 #[unsafe(no_mangle)]
