@@ -38,7 +38,7 @@ def main():
         binary, receipt["download"] = fixture.download_binary(pins["assets"][key], output)
         environment = dict(os.environ, ZMUX_TEST_ZELLIJ_BIN=str(binary))
         checks = [
-            ["cargo", "test", "--locked", "-p", "zmux-session-runtime", "--test", "child", "--test", "lifecycle", "--", "--nocapture"],
+            ["cargo", "test", "--locked", "-p", "zmux-session-runtime", "--test", "child", "--test", "lifecycle", "--test", "shutdown", "--", "--nocapture"],
             ["cargo", "test", "--locked", "-p", "zmux-remote-runtime", "--lib", "local_zellij", "--", "--nocapture"],
             ["cargo", "test", "--locked", "-p", "zmux", "--features", "local-zellij-conformance", "--test", "local_zellij", "--test", "local_zellij_owner", "--", "--nocapture"],
         ]

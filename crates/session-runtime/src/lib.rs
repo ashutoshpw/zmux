@@ -66,11 +66,24 @@ pub struct Launch {
     pub size: Size,
 }
 
+/// How a physically owned PTY process is asked to stop. Graceful mode is for
+/// supervisors that must retire their own children before the PTY is released.
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ShutdownPolicy {
+    #[default]
+    Kill,
+    Graceful {
+        timeout: Duration,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Running,
     Exited,
+    /// The cancellation loop ended; physical cleanup requires a completed join
+    /// or is_finished. Exit can be nonzero; this is not a semantic detach receipt.
     Closed,
     Failed,
 }
@@ -239,6 +252,7 @@ pub struct Session {
     shared: Arc<Shared>,
     worker: Option<JoinHandle<()>>,
     process_id: u32,
+    shutdown_policy: ShutdownPolicy,
 }
 
 // Borrows a live PTY only long enough for FileDescriptor to duplicate its descriptor.
@@ -270,12 +284,17 @@ impl ProcessGuard {
         if self.signaled || self.poll_exit()? {
             return Ok(());
         }
+        self.send_signal(Signal::SIGKILL)?;
+        self.signaled = true;
+        Ok(())
+    }
+    fn send_signal(&mut self, signal: Signal) -> Result<(), SessionError> {
+        if self.poll_exit()? {
+            return Ok(());
+        }
         // The leader remains unreaped, so its PID cannot be reused. Signal the group once.
-        match killpg(Pid::from_raw(self.pid as i32), Signal::SIGKILL) {
-            Ok(()) | Err(Errno::ESRCH) => {
-                self.signaled = true;
-                Ok(())
-            }
+        match killpg(Pid::from_raw(self.pid as i32), signal) {
+            Ok(()) | Err(Errno::ESRCH) => Ok(()),
             Err(Errno::EPERM) if self.poll_exit()? => Ok(()),
             Err(error) => Err(SessionError::Failure(format!(
                 "terminate PTY process group: {error}"
@@ -338,6 +357,25 @@ impl Session {
         removals: &[std::ffi::OsString],
         resource: impl Send + 'static,
     ) -> Result<Self, SessionError> {
+        Self::spawn_with_shutdown_policy(
+            launch,
+            environment,
+            removals,
+            ShutdownPolicy::Kill,
+            resource,
+        )
+    }
+
+    /// An owning launch coordinator must retain this Session until is_finished
+    /// even if its own join deadline expires. Never call shutdown on a UI/core
+    /// thread or treat a timed-out join as completed physical cleanup.
+    pub fn spawn_with_shutdown_policy(
+        launch: Launch,
+        environment: &[(String, String)],
+        removals: &[std::ffi::OsString],
+        shutdown_policy: ShutdownPolicy,
+        resource: impl Send + 'static,
+    ) -> Result<Self, SessionError> {
         // Launch configuration crosses the thread boundary; the terminal never does.
         let environment = environment.to_vec();
         let removals = removals.to_vec();
@@ -348,7 +386,7 @@ impl Session {
             .spawn(move || {
                 let _resource = resource;
                 let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    Worker::start(launch, environment, removals, input_rx)
+                    Worker::start(launch, environment, removals, shutdown_policy, input_rx)
                 }));
                 match started {
                     Ok(Ok((worker, ready))) => {
@@ -375,6 +413,7 @@ impl Session {
                 shared: ready.shared,
                 worker: Some(worker),
                 process_id: ready.process_id,
+                shutdown_policy,
             }),
             result => {
                 // A startup failure is not a running Session. Join its ended worker
@@ -530,6 +569,18 @@ impl Session {
                 .join()
                 .map_err(|_| SessionError::Failure("session worker panicked".into()))?;
         }
+        if matches!(self.shutdown_policy, ShutdownPolicy::Graceful { .. })
+            && let Some(failure) = &self
+                .shared
+                .snapshot
+                .lock()
+                .map_err(|_| {
+                    SessionError::Failure("session snapshot poisoned after shutdown".into())
+                })?
+                .failure
+        {
+            return Err(SessionError::Failure(failure.clone()));
+        }
         Ok(())
     }
 
@@ -593,6 +644,8 @@ struct Worker {
     written: usize,
     pending_completion: Option<WriteCompletion>,
     pending_deadline: Option<Instant>,
+    shutdown_policy: ShutdownPolicy,
+    close_deadline: Option<Instant>,
 }
 
 impl Worker {
@@ -600,8 +653,16 @@ impl Worker {
         launch: Launch,
         environment: Vec<(String, String)>,
         removals: Vec<std::ffi::OsString>,
+        shutdown_policy: ShutdownPolicy,
         input_rx: Receiver<Input>,
     ) -> Result<(Self, StartupReady), SessionError> {
+        if let ShutdownPolicy::Graceful { timeout } = shutdown_policy
+            && (timeout.is_zero() || timeout > Duration::from_secs(30))
+        {
+            return Err(SessionError::Failure(
+                "graceful shutdown timeout must be positive and at most 30s".into(),
+            ));
+        }
         // portable-pty may fall back to a home directory on a failed chdir. Restore
         // must fail visibly rather than launching a shell in an unexpected location.
         if let Some(cwd) = &launch.cwd {
@@ -702,6 +763,8 @@ impl Worker {
             written: 0,
             pending_completion: None,
             pending_deadline: None,
+            shutdown_policy,
+            close_deadline: None,
         };
         Ok((
             worker,
@@ -787,10 +850,29 @@ impl Worker {
         let mut dirty = false;
         loop {
             if self.shared.stop.load(Ordering::Acquire) {
-                // Darwin can keep an output-blocked child in exit until its PTY master closes.
-                // Signal now; Worker fields drop master/io before ProcessGuard reaps the child.
-                self.process.signal()?;
-                return Ok(State::Closed);
+                match self.shutdown_policy {
+                    ShutdownPolicy::Kill => {
+                        // Darwin can keep an output-blocked child in exit until
+                        // PTY master close. Existing immediate cleanup is unchanged.
+                        self.process.signal()?;
+                        return Ok(State::Closed);
+                    }
+                    ShutdownPolicy::Graceful { timeout } => {
+                        if self.close_deadline.is_none() {
+                            self.finish_inputs(InputWriteFailure::SessionClosed);
+                            self.process.send_signal(Signal::SIGTERM)?;
+                            self.close_deadline = Some(Instant::now() + timeout);
+                        }
+                        if self
+                            .close_deadline
+                            .is_some_and(|deadline| Instant::now() >= deadline)
+                            && !self.process.poll_exit()?
+                        {
+                            self.process.signal()?;
+                            return Err(SessionError::Failure("graceful shutdown deadline; forced retained child cleanup, supervisor outcome is unknown".into()));
+                        }
+                    }
+                }
             }
             let size = self
                 .shared
@@ -798,7 +880,7 @@ impl Worker {
                 .lock()
                 .map_err(|_| SessionError::Failure("resize lock poisoned".into()))?
                 .take();
-            if let Some(size) = size {
+            if let Some(size) = size.filter(|_| self.close_deadline.is_none()) {
                 self.master
                     .as_ref()
                     .expect("active PTY master")
@@ -809,7 +891,9 @@ impl Worker {
                     .map_err(|e| SessionError::Failure(e.to_string()))?;
                 dirty = true;
             }
-            dirty |= self.load_input();
+            if self.close_deadline.is_none() {
+                dirty |= self.load_input();
+            }
             if self
                 .pending_deadline
                 .is_some_and(|deadline| Instant::now() >= deadline)
@@ -859,10 +943,12 @@ impl Worker {
                         }
                         Ok(count) => {
                             self.bytes_read += count as u64;
-                            self.terminal
-                                .process(&buffer[..count])
-                                .map_err(|e| SessionError::Failure(e.to_string()))?;
-                            dirty = true;
+                            if self.close_deadline.is_none() {
+                                self.terminal
+                                    .process(&buffer[..count])
+                                    .map_err(|e| SessionError::Failure(e.to_string()))?;
+                                dirty = true;
+                            }
                         }
                         Err(e) if retryable(&e) => break,
                         // A native Unix PTY reports EIO after its slave closes.
@@ -892,7 +978,11 @@ impl Worker {
                 self.exit_seen = Some(Instant::now());
             }
             if self.exit_seen.is_some() && self.eof {
-                return Ok(State::Exited);
+                return Ok(if self.close_deadline.is_some() {
+                    State::Closed
+                } else {
+                    State::Exited
+                });
             }
             if self.exit_seen.is_some_and(|t| t.elapsed() >= DRAIN_TIMEOUT) {
                 return Err(SessionError::Failure(
@@ -905,7 +995,9 @@ impl Worker {
                 dirty = false;
                 published = Instant::now();
             }
-            dirty |= self.load_input();
+            if self.close_deadline.is_none() {
+                dirty |= self.load_input();
+            }
             let mut fds = [
                 pollfd {
                     fd: if self.eof {
@@ -934,6 +1026,12 @@ impl Worker {
             let timeout = self.pending_deadline.map_or(timeout, |deadline| {
                 timeout.min(deadline.saturating_duration_since(Instant::now()))
             });
+            let timeout = self
+                .close_deadline
+                .filter(|_| self.exit_seen.is_none())
+                .map_or(timeout, |deadline| {
+                    timeout.min(deadline.saturating_duration_since(Instant::now()))
+                });
             match poll(&mut fds, Some(timeout)) {
                 Ok(_) => {}
                 Err(filedescriptor::Error::Poll(e)) if e.kind() == io::ErrorKind::Interrupted => {
