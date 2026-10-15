@@ -117,3 +117,83 @@ fn attention_signals_are_bounded_sequenced_and_distinct_from_plain_output() {
     assert_eq!(notices.last().unwrap().sequence, 67);
     assert!(!terminal.viewport().contents.contains("Needs input"));
 }
+
+#[test]
+fn history_is_bounded_anchored_during_output_and_separate_from_alternate_screen() {
+    let mut terminal = Terminal::new(Size { rows: 3, cols: 30 }).unwrap();
+    for index in 0..10 {
+        terminal
+            .process(format!("ROW_{index:04}\r\n").as_bytes())
+            .unwrap();
+    }
+    terminal.scroll(5);
+    assert_eq!(terminal.viewport().scrollback_offset, 5);
+    let anchored = terminal.viewport().contents;
+    terminal.process(b"LATER\r\n").unwrap();
+    assert_eq!(terminal.viewport().contents, anchored);
+    assert_eq!(terminal.viewport().scrollback_offset, 6);
+    terminal.resize(Size { rows: 4, cols: 25 }).unwrap();
+    assert!(terminal.viewport().contents.contains("ROW_0005"));
+    terminal.process(b"\x1b[?1049hALT").unwrap();
+    assert!(terminal.viewport().alternate_screen);
+    terminal.scroll(1000);
+    assert_eq!(terminal.viewport().scrollback_offset, 0);
+    assert_eq!(terminal.viewport().scrollback_lines, 0);
+    assert!(!terminal.viewport().contents.contains("ROW_"));
+    terminal.process(b"\x1b[?1049l").unwrap();
+    assert!(!terminal.viewport().alternate_screen);
+    terminal.scroll(0);
+    for index in 0..1200 {
+        terminal
+            .process(format!("CAP_{index:04}\r\n").as_bytes())
+            .unwrap();
+    }
+    terminal.scroll(i32::MAX);
+    let oldest = terminal.viewport();
+    assert_eq!(oldest.scrollback_offset, 1000);
+    assert_eq!(oldest.scrollback_lines, 1000);
+    assert!(!oldest.contents.contains("ROW_"));
+    terminal.scroll(i32::MIN);
+    assert_eq!(terminal.viewport().scrollback_offset, 0);
+    assert!(terminal.viewport().contents.contains("CAP_1199"));
+}
+
+#[test]
+fn wheel_respects_negotiated_mouse_bytes_history_override_and_alternate_screen() {
+    use zmux_terminal_adapter::Wheel;
+    let mut terminal = Terminal::new(Size { rows: 3, cols: 240 }).unwrap();
+    terminal
+        .process(b"one\r\ntwo\r\nthree\r\nfour\r\n")
+        .unwrap();
+    let mut wheel = Wheel {
+        lines: 1,
+        row: u16::MAX,
+        col: u16::MAX,
+        modifiers: 0,
+        history: false,
+    };
+    terminal.process(b"\x1b[?1000h").unwrap();
+    // Legacy X10 includes non-UTF8 coordinate bytes. Sending text would corrupt x=223.
+    assert_eq!(terminal.wheel(wheel), vec![27, b'[', b'M', 96, 255, 35]);
+    terminal.process(b"\x1b[?1006h").unwrap();
+    assert_eq!(terminal.wheel(wheel), b"\x1b[<64;240;3M");
+    wheel.lines = -1;
+    wheel.modifiers = 16;
+    assert_eq!(terminal.wheel(wheel), b"\x1b[<81;240;3M");
+    terminal.process(b"\x1b[?1006l\x1b[?1005h").unwrap();
+    wheel.lines = 1;
+    wheel.modifiers = 0;
+    assert_eq!(terminal.wheel(wheel), "\x1b[M`\u{110}#".as_bytes());
+    wheel.history = true;
+    assert!(terminal.wheel(wheel).is_empty());
+    assert_eq!(terminal.viewport().scrollback_offset, 1);
+    terminal
+        .process(b"\x1b[?1000l\x1b[?1005l\x1b[?1049h\x1b[?1h")
+        .unwrap();
+    wheel.history = false;
+    wheel.lines = 3;
+    assert_eq!(terminal.wheel(wheel), b"\x1bOA\x1bOA\x1bOA");
+    assert_eq!(terminal.viewport().scrollback_offset, 0);
+    wheel.lines = i32::MIN;
+    assert_eq!(terminal.wheel(wheel), b"\x1bOB".repeat(32));
+}

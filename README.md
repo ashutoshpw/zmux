@@ -34,6 +34,21 @@ as JSON. It does not open a native window, retain the full output transcript, or
 remotely. It times out after 10 seconds; set `--timeout SECONDS` before `--` when needed.
 See [prototype limits](docs/terminal-prototype.md).
 
+## Terminal history and attention
+
+Scroll with the mouse wheel or trackpad. Shift-PageUp/PageDown moves a page;
+Command-Home/End jumps to the oldest retained output or back to the live screen.
+Typing or pasting returns to live output. History retains up to 1000 lines and remains
+available after a process exits. Mouse-aware full-screen applications receive wheel input;
+hold Shift to request history navigation instead.
+
+BEL, OSC 9, OSC 777 and `zmux notify` feed the Notifications inbox and unread badges,
+including the Dock badge. Selecting a surface or reactivating its window acknowledges
+that focused surface's existing attention. Opening an inbox entry acknowledges that exact
+notification. Ordinary terminal output alone does not generate attention. OS notification
+banners, agent completion hooks and full command parity remain in development.
+See the [CLI parity repair plan](.agents/tasks/2026-10-14/05-command-ux-parity/references/scroll-attention-repair.md).
+
 ## Cloud
 
 The intended origin is `https://zmux.w3dev.app`. Deployment runs through GitHub Actions

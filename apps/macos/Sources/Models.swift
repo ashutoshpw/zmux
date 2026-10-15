@@ -25,6 +25,7 @@ struct Viewport: Decodable, Sendable {
     let size: GridSize; let contents: String; let cursorRow: Int; let cursorCol: Int
     let lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
     let title: String?; let workingDirectory: String?
+    let scrollbackOffset: Int; let scrollbackLines: Int; let alternateScreen: Bool
 }
 struct TerminalSnapshot: Decodable, Sendable {
     let state: String; let viewport: Viewport; let bytesRead: UInt64

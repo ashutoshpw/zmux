@@ -1,9 +1,14 @@
 # Status
 
 - **State:** in-progress
-- **Updated:** 2026-10-14
+- **Updated:** 2026-10-15
 
 ## Delivered slices
+
+- Corrective slice: terminal wheel/history navigation, typed-input return to live screen,
+  worker-owned mouse protocol routing and exited-process history; focus/activation attention
+  acknowledgement and Dock unread count. Local regression and workspace checks pass;
+  fresh native Actions build pending. CLI repair backlog recorded in scroll-attention-repair.md.
 
 - P1: independent terminal tabs; ⌘T/⌘W/⇧⌘T and Recently Closed; move/reorder, grouped closes,
   fresh-shell restoration and retryable launch failures. Hidden sessions remain alive.

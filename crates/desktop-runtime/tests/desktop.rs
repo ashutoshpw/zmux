@@ -702,3 +702,159 @@ fn browser_metadata_never_allocates_a_terminal_and_has_independent_capacity() {
     assert_eq!(rejected.model, before.model);
     desktop.shutdown(Duration::from_secs(5)).unwrap();
 }
+
+#[test]
+fn selecting_and_reactivating_acknowledges_only_the_focused_surface() {
+    use zmux_desktop_runtime::attention::AttentionCommand as Attention;
+    let desktop = desktop();
+    let initial = wait(&desktop, ready);
+    let pane = initial.model.workspaces[0].focused_pane;
+    let first = initial.model.workspaces[0].root.panes()[0].selected_surface;
+    send(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CreateSurface { pane_id: pane },
+        },
+    );
+    let created = wait(&desktop, |s| s.last_request_id == 1 && ready(s));
+    let second = created.model.workspaces[0].root.panes()[0].selected_surface;
+    for (id, surface_id) in [(2, first), (3, second)] {
+        send(
+            &desktop,
+            id,
+            Command::Attention {
+                action: Attention::Notify {
+                    surface_id,
+                    title: format!("Attention {id}"),
+                    body: String::new(),
+                },
+            },
+        );
+    }
+    wait(&desktop, |s| s.last_request_id == 3);
+    send(
+        &desktop,
+        4,
+        Command::Attention {
+            action: Attention::AppActive { active: true },
+        },
+    );
+    let active = wait(&desktop, |s| s.last_request_id == 4);
+    assert!(!active.notifications[0].read);
+    assert!(
+        active.notifications[1].read,
+        "activation must acknowledge the focused surface"
+    );
+    send(
+        &desktop,
+        5,
+        Command::Action {
+            action: Action::SelectSurface { surface_id: first },
+        },
+    );
+    let selected = wait(&desktop, |s| s.last_request_id == 5);
+    assert!(selected.notifications.iter().all(|n| n.read));
+    send(
+        &desktop,
+        6,
+        Command::Attention {
+            action: Attention::AppActive { active: false },
+        },
+    );
+    send(
+        &desktop,
+        7,
+        Command::Attention {
+            action: Attention::Notify {
+                surface_id: first,
+                title: "Later generation".into(),
+                body: String::new(),
+            },
+        },
+    );
+    let later = wait(&desktop, |s| s.last_request_id == 7);
+    assert!(!later.notifications.last().unwrap().read);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn scroll_history_updates_idle_snapshots_and_input_returns_to_live_output() {
+    let desktop = desktop();
+    let initial = wait(&desktop, ready);
+    let session = initial.frames[0].session_id;
+    send(
+        &desktop,
+        1,
+        Command::Resize {
+            session_id: session,
+            rows: 4,
+            cols: 40,
+        },
+    );
+    wait(&desktop, |s| {
+        s.frames[0].snapshot.as_ref().unwrap().viewport.size.rows == 4
+    });
+    send(&desktop, 2, Command::Input { session_id: session,
+        text: "printf '\\033[2J\\033[H'; i=0; while [ $i -lt 20 ]; do printf 'HISTORY_%02d\\n' $i; i=$((i+1)); done\r".into() });
+    let output = wait(&desktop, |s| {
+        s.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("HISTORY_19")
+    });
+    assert!(
+        !output.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("HISTORY_00")
+    );
+    let scroll: Command = serde_json::from_value(serde_json::json!({
+        "command":"scroll", "session_id":session, "lines":1000
+    }))
+    .expect("native runtime must accept scroll navigation");
+    send(&desktop, 3, scroll);
+    let history = wait(&desktop, |s| {
+        s.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("HISTORY_00")
+    });
+    assert!(
+        !history.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("HISTORY_19")
+    );
+    send(
+        &desktop,
+        4,
+        Command::Input {
+            session_id: session,
+            text: "printf '\\nLIVE_AGAIN\\n'\r".into(),
+        },
+    );
+    wait(&desktop, |s| {
+        s.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .lines()
+            .any(|l| l == "LIVE_AGAIN")
+    });
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
