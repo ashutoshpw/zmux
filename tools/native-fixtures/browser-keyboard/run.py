@@ -36,6 +36,40 @@ def inputs():
     return {str(path.relative_to(ROOT)): digest(path) for path in names}
 
 
+def retain_owned_crash(output, executable, identifier, source_sha):
+    """Read only named probe reports; retain only exact executable, bundle and PID."""
+    native_path = output / 'native.json'
+    if not native_path.exists() or native_path.stat().st_size > 1_048_576:
+        return []
+    native = json.loads(native_path.read_text())
+    if native.get('sourceSHA') != source_sha or type(native.get('processID')) is not int:
+        return []
+    retained = []
+    for directory in [Path.home() / 'Library/Logs/DiagnosticReports',
+                      Path('/Library/Logs/DiagnosticReports')]:
+        candidates = sorted(directory.glob('browser-keyboard-probe*.ips'))[-10:]
+        for path in candidates:
+            if path.stat().st_size > 2_097_152:
+                continue
+            content = path.read_text()
+            try:
+                # macOS IPS files contain a one-line metadata JSON object,
+                # followed by a separate multiline crash JSON object.
+                _, body = content.split('\n', 1)
+                report = json.loads(body)
+            except (ValueError, json.JSONDecodeError):
+                continue
+            if (report.get('pid') != native['processID']
+                    or report.get('procPath') != str(executable)
+                    or report.get('bundleInfo', {}).get('CFBundleIdentifier') != identifier):
+                continue
+            target = output / ('owned-crash-' + str(len(retained)) + '.ips')
+            target.write_text(content)
+            retained.append({'name': target.name, 'sha256': digest(target),
+                             'process_id': native['processID']})
+    return retained
+
+
 def validate_report(report, source_sha):
     """Validate actual receipt shape; never supplies observed native success."""
     if report.get('schemaVersion') != 1 or report.get('sourceSHA') != source_sha:
@@ -82,6 +116,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--debug-native', action='store_true',
+                        help='Run this exact probe under bounded LLDB and retain on-crash stacks')
     args = parser.parse_args()
     source_inputs = inputs()
     if args.check:
@@ -97,6 +133,8 @@ def main():
     source_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     receipt = {'schema_version': 1, 'source_sha': source_sha, 'source_sha256': source_inputs,
                'state': 'building', 'native_executed': False, 'production_accepted': False,
+               'native_invocation_started': False, 'native_receipt_validated': False,
+               'native_debugger': args.debug_native,
                'phases': [], 'architecture': platform.machine(),
                'scope': 'One new isolated probe app; no global input/TCC/production-app operations.'}
 
@@ -153,7 +191,13 @@ def main():
         os.environ['ZMUX_KEYBOARD_SOURCE_SHA'] = source_sha
         os.environ['ZMUX_KEYBOARD_ARCH'] = architecture
         try:
-            run('native', [str(executable), '--output', str(output / 'native.json')], timeout=60)
+            command = [str(executable), '--output', str(output / 'native.json')]
+            if args.debug_native:
+                command = ['/usr/bin/lldb', '--batch', '-o', 'run',
+                           '-k', 'thread backtrace all', '-k', 'process status',
+                           '-k', 'process kill', '--'] + command
+            receipt['native_invocation_started'] = True
+            run('native-debugger' if args.debug_native else 'native', command, timeout=60)
         finally:
             for key, previous in [('ZMUX_KEYBOARD_SOURCE_SHA', previous_sha),
                                   ('ZMUX_KEYBOARD_ARCH', previous_arch)]:
@@ -165,8 +209,9 @@ def main():
         if native_file.stat().st_size > 1_048_576:
             raise RuntimeError('Native receipt exceeds 1 MiB')
         native = json.loads(native_file.read_text())
-        rows = validate_report(native, source_sha)
         receipt['native_executed'] = True
+        rows = validate_report(native, source_sha)
+        receipt['native_receipt_validated'] = True
         receipt['native_receipt_sha256'] = digest(native_file)
         receipt['visible_defaults_verified'] = native['visibleDefaultsVerified']
         receipt['detached_defaults_verified'] = native['detachedDefaultsVerified']
@@ -183,6 +228,24 @@ def main():
         receipt['state'] = 'probe_failed'
         receipt['error'] = str(error)
     finally:
+        # A crash still executed native code; it did not validate/completely
+        # observe the contract. Preserve that distinction and its last phase.
+        native_file = output / 'native.json'
+        if native_file.exists() and native_file.stat().st_size <= 1_048_576:
+            try:
+                partial = json.loads(native_file.read_text())
+                if partial.get('sourceSHA') == source_sha and type(partial.get('processID')) is int:
+                    receipt['native_executed'] = True
+                    receipt['native_last_phase'] = partial.get('phase')
+                    receipt['native_report_state'] = partial.get('state')
+                    receipt['native_receipt_sha256'] = digest(native_file)
+            except (OSError, ValueError) as error:
+                receipt['native_receipt_read_error'] = str(error)
+        if receipt['native_invocation_started']:
+            try:
+                receipt['owned_crash_reports'] = retain_owned_crash(output, executable, identifier, source_sha)
+            except (OSError, ValueError) as error:
+                receipt['owned_crash_report_error'] = str(error)
         save()
     print(json.dumps(receipt, indent=2))
     return 0 if receipt['state'] == 'observed_contracts_passed' else 1

@@ -7,12 +7,21 @@ WebKit APIs, or provide a production keyboard implementation.
 ```sh
 python3 -B tools/native-fixtures/browser-keyboard/run.py --check
 python3 -B tools/native-fixtures/browser-keyboard/run.py --output /absolute/new/output
+python3 -B tools/native-fixtures/browser-keyboard/run.py --debug-native --output /absolute/new/debug-output
 ```
 
 The manual `Browser keyboard feasibility` workflow compiles with Swift 6 strict
 concurrency/warnings and executes on macOS 15. Parent maintainers dispatch it only
 after reviewing/pushing the exact source. Linux `--check` checks input availability
 and hashes; it does not establish Swift compilation or native behavior.
+The optional manual `debug_native` input runs the same compiled source under
+LLDB with the same 60-second native bound, retaining all-thread stacks and process
+status on a crash before killing that exact debuggee. It is a diagnostic, and
+does not establish ordinary non-debugger behavior. Without that input, direct
+process-group ownership is unchanged. A crash retains its last native phase and
+distinguishes invocation from completed receipt validation. Only probe-named IPS
+reports matching the exact executable path, unique bundle ID and recorded native
+PID are read into retained crash evidence; no other application's reports qualify.
 
 The app compares a visible selected WebKit host with a never-attached container
 holding a real `WKWebView`, matching current production hidden hosting. The latter
