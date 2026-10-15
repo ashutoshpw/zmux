@@ -1,0 +1,25 @@
+--- a/zellij-client/src/os_input_output.rs
++++ b/zellij-client/src/os_input_output.rs
+@@ -183,10 +183,18 @@
+             None => {
+                 let stdin = std::io::stdin();
+                 let mut stdin = stdin.lock();
+-                let buffer = stdin.fill_buf().unwrap();
+-                let length = buffer.len();
+-                let read_bytes = Vec::from(buffer);
+-                stdin.consume(length);
++                let read_bytes = loop {
++                    match stdin.fill_buf() {
++                        Ok(buffer) => {
++                            let length = buffer.len();
++                            let bytes = Vec::from(buffer);
++                            stdin.consume(length);
++                            break bytes;
++                        },
++                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
++                        Err(error) => panic!("failed to read terminal stdin: {}", error),
++                    }
++                };
+ 
+                 let session_name_after_reading_from_stdin =
+                     { self.session_name.lock().unwrap().clone() };
