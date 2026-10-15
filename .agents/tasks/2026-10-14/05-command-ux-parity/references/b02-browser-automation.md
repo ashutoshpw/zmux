@@ -128,3 +128,15 @@ observations through the trusted channel; its missing live-title observation
 is deliberately retained for the hosted regression. A subsequent bounded KVO
 consumer will publish current WebKit state without one Task per page mutation.
 Native compilation and this title regression are pending hosted execution.
+
+Hosted red established at `3a9ab8e`: macOS38745262578 compiled universally and
+failed precisely with “Browser document title did not reach the Rust surface:
+Changed title fixture”. The corrected notification-reply journey completed before
+this failure. Foundation38745262234 passed.
+
+The live-title repair registers KVO with a Sendable callback that yields only a
+void signal into one newest-value slot. One MainActor consumer reads current
+WebKit title/URL and current owner; an old signal carries no stale page data.
+Navigation, close and process termination invalidate observation; transport recovery
+reannounces the latest current page. Fresh source review found no blocker.
+Hosted green on the repaired source remains pending.

@@ -173,6 +173,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         titleObservation?.invalidate(); titleObservation = nil
         lastObservation = nil
         guard !closed, documentReady, automationOwner != nil else { return }
+        let continuation = titleEvents.continuation
+        titleObservation = webView.observe(\.title, options: [.new]) { @Sendable [continuation] _, _ in
+            _ = continuation.yield(())
+        }
         publishPageObservation()
     }
     private func invalidateTitleObservation() {

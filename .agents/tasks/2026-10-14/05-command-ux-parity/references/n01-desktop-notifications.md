@@ -210,3 +210,7 @@ native frames for a deliberately background terminal. The repair reads that exac
 surface through the existing public `read-screen` command, validates surface/session
 identity and output, and retains the read/no-focus assertions. No renderer exposure
 or selection change is introduced. Native reply acceptance awaits this rerun.
+
+At3a9ab8e, the corrected reply journey completes in macOS38745262578 before the
+intentional later browser-title regression fails. This is executed reply evidence,
+not an overall green build or visible OS banner/text-action acceptance.
