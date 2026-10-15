@@ -389,8 +389,8 @@ fn concurrent_instances_reserve_disjoint_ids_or_report_a_retryable_lock_conflict
     let directory = Directory::new();
     let source = directory.0.join("source.json");
     write_private(&source, &serde_json::to_vec(&document()).unwrap());
-    let first = directory.worker();
-    let second = directory.worker();
+    let mut first = directory.worker();
+    let mut second = directory.worker();
     let first_id = first.submit_load(source.clone()).unwrap();
     let second_id = second.submit_load(source.clone()).unwrap();
     let first_result = wait(&first, first_id).result;
@@ -399,18 +399,78 @@ fn concurrent_instances_reserve_disjoint_ids_or_report_a_retryable_lock_conflict
         worker: &PersistenceWorker,
         source: &Path,
         result: Result<PersistenceOutcome, PersistenceError>,
-    ) -> LoadedSession {
+    ) -> Result<LoadedSession, String> {
+        let result = if matches!(result, Err(PersistenceError::LedgerBusy)) {
+            match worker.submit_load(source.to_owned()) {
+                Ok(id) => wait(worker, id).result,
+                Err(error) => return Err(format!("retry admission: {error:?}")),
+            }
+        } else {
+            result
+        };
         match result {
-            Ok(PersistenceOutcome::Loaded(value)) => value,
-            Err(PersistenceError::LedgerBusy) => loaded(worker, source),
-            other => panic!("unexpected concurrent restore outcome: {other:?}"),
+            Ok(PersistenceOutcome::Loaded(value)) => Ok(value),
+            other => Err(format!("{other:?}")),
         }
     }
     let first_value = finish(&first, &source, first_result);
     let second_value = finish(&second, &source, second_result);
+    // Consume both operation completions and join both filesystem workers before
+    // an outcome assertion can unwind and remove their private directory.
+    let first_closed = first.join_until(Instant::now() + Duration::from_secs(2));
+    let second_closed = second.join_until(Instant::now() + Duration::from_secs(2));
+    let context = || {
+        let metadata = |path: &Path| match fs::symlink_metadata(path) {
+            Ok(value) => format!(
+                "dir={},symlink={},inode={},mode={:o}",
+                value.is_dir(),
+                value.file_type().is_symlink(),
+                value.ino(),
+                value.mode()
+            ),
+            Err(error) => format!("{error:?}"),
+        };
+        let state = directory.0.join("state");
+        let entries = match fs::symlink_metadata(&state) {
+            Ok(value) if value.is_dir() && !value.file_type().is_symlink() => {
+                match fs::read_dir(&state) {
+                    Ok(entries) => format!(
+                        "{:?}",
+                        entries
+                            .take(16)
+                            .map(|entry| entry.map(|value| value.file_name()))
+                            .collect::<Vec<_>>()
+                    ),
+                    Err(error) => format!("{error:?}"),
+                }
+            }
+            _ => "not-listed".into(),
+        };
+        format!(
+            "fixture={:?}; root={}; state={}; state_entries={entries}",
+            directory.0,
+            metadata(&directory.0),
+            metadata(&state)
+        )
+    };
+    assert!(
+        first_closed.is_ok() && second_closed.is_ok(),
+        "filesystem workers did not finish: {first_closed:?}, {second_closed:?}; {}",
+        context()
+    );
+    let first_value = first_value.unwrap_or_else(|error| {
+        panic!(
+            "unexpected first concurrent restore outcome: {error}; {}",
+            context()
+        )
+    });
+    let second_value = second_value.unwrap_or_else(|error| {
+        panic!(
+            "unexpected second concurrent restore outcome: {error}; {}",
+            context()
+        )
+    });
     assert_ne!(first_value.session_ids, second_value.session_ids);
-    close(first);
-    close(second);
 }
 
 #[test]
