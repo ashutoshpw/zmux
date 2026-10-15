@@ -440,3 +440,20 @@ python3 -B tools/terminal-feasibility/run.py --resource-experiment \
 Omit `--dependency-cache` for fresh dependency availability testing. No hosted or Mac
 resource-patch run is included in this local receipt; the earlier green hosted
 exporter workflow must not be substituted for that gate.
+
+
+### Hosted allocator/exact-history receipt at the resource commit
+
+Workflow [38766300795](https://github.com/ashutoshpw/zmux/actions/runs/38766300795)
+passes Linux x86_64 and macOS arm64 at resource commit `f468782`. Parent verified
+both downloaded receipt source SHAs and all 14 harness input hashes against that
+commit. Receipt SHA-256: Linux
+`a4f5010044a44d6ae347c69e52a67405ce2c3f7cd1003b606a2053b15c76eaac`, Mac
+`6e7a66d6682d2cfde251e979519769601a4dcedb573311d909b695b13f7be06b`.
+Both hosts pass the 15 observed constructor denial positions, all six operation
+failure paths and exact-history/reflow/lifecycle assertions. Mac arm64 records
+3,686,400 peak reserved engine mapping bytes and a 139,464-byte fixed host owner
+upper bound. Mac Intel is compiled only for the original raw library/fixture;
+there is no Intel resource execution claim. These are reserved-mapping quota
+receipts, not total RSS, physical footprint, runtime latency or production migration
+acceptance. The later callback-effects experiment has its own inputs and gates.
