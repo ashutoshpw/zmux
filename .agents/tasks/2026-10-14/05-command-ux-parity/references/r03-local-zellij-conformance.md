@@ -395,3 +395,129 @@ before traffic; proofs remain denied, original live backend preserved, errors/lo
 retained and workers joined. The full run confirms original server/shell/wrapper exit
 and scratch removal. Prior independent proof-bypass controls remain applicable because
 the classifier was not changed. Exact-source Darwin execution remains required.
+
+
+### Terminal exit drain and exact failure diagnostics
+
+Hosted `38784160950` at `16cf61a` passed the corrected real raw rejection controls
+and reached Zellij. Its first explicit TERM attachment failed the strict clean-child
+check. Retained Quit then proved original server/shell/wrapper exit and the scoped
+59-byte undeliverable-input outcome; overall run still failed. The prior receipt did
+not retain the failed TERM child's actual waitid status or TERM-to-KILL escalation,
+so its macOS root cause remains unconfirmed and no exit status was broadened.
+
+A separate real PTY child independently reproduced an owner cleanup defect on
+Linux: its TERM handler writes262144 fixed bytes before exit0, but the old owner
+waited without reading the PTY, reached its three-second deadline and killed it
+(exit-9, only19 readiness bytes retained). Draining PTY output while waiting at the
+same TERM/KILL deadlines allows exit0 and keeps retained logs at65536 bytes. Receipts:
+`/tmp/zmux-zellij-pty-drain-red-20261015.json` and
+`/tmp/zmux-zellij-pty-drain-green-20261015.json`. This demonstrates the lifecycle bug;
+it does not retroactively establish the unrecorded Darwin status.
+
+The shared harness now contains that actual PTY-only regression, without any fake
+Zellij server/protocol or extra production export. It drains during terminal exit
+waits, preserves the strict child0 condition and records requested signals, actual
+unreaped waitid PID/code/status, reaped outcome and byte counts. Every constructed
+real client retains its bounded PTY log and broker lifecycle/counters even when
+close fails before the ordinary success receipt. No sensitive environment is dumped.
+
+
+The final complete Linux fixture passes at
+`/tmp/zmux-zellij-pty-exit-drain-final-20261015/receipt.json` (SHA256
+`5a873d717a1168764efe59aca84c31abf0579983f60267ee7ce515f50808bd4b`), with all seven harness hashes matching the
+freeze. The real PTY regression exits0 after TERM only, drains258008 bytes while
+retaining65536, and joins all workers. Both real Zellij TERM clients report actual
+unreaped exit0 and reap0 without escalation; full original server/shell/wrapper exit
+and scratch removal are confirmed. Restoring the old no-drain wait in a private
+copy fails the new actual PTY regression before Zellij startup: TERM deadline,
+SIGKILL escalation, waitid killed/status9 and reap-9 with19 bytes retained. Receipt:
+`/tmp/zmux-zellij-no-exit-drain-20261015/receipt.json` (SHA256
+`de25fc3b18d81c3a82da080f7b3bf75fa02e73d9bdc2dca24d588d2560e42459`). Python syntax/scoped whitespace checks pass.
+The new diagnostics and drain require exact-source Darwin validation; no successful
+exit status, preservation check or input-loss classification was loosened.
+
+
+### Read-only exit drain
+
+Parent source review found that the exit drain still called the ordinary terminal
+query responder. Its blocking master write could stall if a terminating child emitted
+query-like bytes after it stopped reading stdin. Exit waits and the post-Quit drain
+now call the same bounded pump with responses disabled; ordinary readiness retains
+query handling. The exit path performs no PTY writes, only a select with a30ms bound,
+one bounded read and capped log retention. This removes the blocking-response path
+rather than widening a timeout or accepting a different exit status.
+
+The actual PTY-only regression disables canonical/echo handling, queues ASCII q input
+with bounded nonblocking writes until EAGAIN, restores blocking master mode and sends
+TERM. Its child defers input reads, emits query-like bytes in each output block, then
+independently inspects queued stdin through a bounded500ms quiet observation. Since
+seeded input contains no ESC, any ESC is a query response and exits3; only no response
+allows exit0. This detects the unwanted response even if initial kernel backpressure
+was transient. The receipt retains actual queued input, observed EAGAIN, read/retained
+output counts, exact child outcome and close duration. The existing eight-second
+watchdog also bounds a genuinely blocked responder. No test seam or invented Zellij
+protocol is involved.
+
+The focused actual PTY case passes at
+`/tmp/zmux-zellij-exit-readonly-observer-focused-20261015.json`:11776 queued input
+bytes, exit0 after TERM only,262162 output bytes drained,65536 retained and joined
+workers. A private copy restoring query answers only during exit fails the same real
+case with child exit3, independently detecting a reply:
+`/tmp/zmux-zellij-exit-query-observer-control-20261015.json`. Initial controls relying
+only on EAGAIN did not distinguish the old responder and are not accepted evidence.
+A separate broad private control hit an unrelated preexisting credential-child send
+race and is likewise excluded. Its observed failure is reported separately; no
+credential fixture behavior was changed in that initial slice; the subsequently
+authorized repair is recorded below.
+
+Python syntax and scoped whitespace checks pass. The earlier full Linux run of the
+initial read-only drain is predecessor evidence only; parent independent full Linux
+and exact-source Darwin validation remain required for this final observer revision.
+
+
+### Credential rejection before payload
+
+Parent independent final Linux validation reproduced the earlier credential race:
+the unrelated real child connected, the parent independently verified its peer PID,
+UID and executable, rejected its different PID and closed before its send. The child
+then exited on BrokenPipe even though the authorization boundary behaved correctly.
+This is rejection-before-payload, not evidence that an owned peer may fail silently.
+
+The child now reports a bounded typed send/receive outcome. Only the unrelated role
+may report send EPIPE/ECONNRESET and it must still observe EOF; owned send errors and
+all other send failures propagate. The parent validates that outcome only against its
+own exact kernel-verified child PID/UID, expected independently owned PID and explicit
+wrong-PID rejection record. An owned child still requires successful send and ACK.
+Child exit0 or socket close alone is insufficient. Reports read at most4096 bytes and
+contain no environment or secret state.
+
+A private100ms delay before the unrelated send forces the real early-close ordering.
+Pre-repair code fails with actual BrokenPipe and a correctly rejected parent record;
+post-repair code passes with sendEPIPE/receiveEOF and the matching parent proof. A
+separate private control keeps the actual reject/close but falsely marks its parent
+record accepted; it fails `Closed peer lacks the matching independent authorization
+rejection`. The ordinary focused current-source credential case also passes. No
+production scheduling delay, injected socket error or authorization weakening was
+added. Receipts and SHA256:
+
+`/tmp/zmux-zellij-early-reject-red-20261015.json`
+`3305d5919d0846a356c2f9e7e36904f33536dbe08fe53e4cf29c2fa55437511d`.
+
+`/tmp/zmux-zellij-peer-outcomes-focused-20261015.json`
+`92352f2d673b3107cd3e4f3c0ae2e1c6fc2a35621646a623965ad2b84bbc9a8c`.
+
+`/tmp/zmux-zellij-early-reject-green-20261015.json`
+`f9d23c5ca8f9aaf6d7a4543eb491a5a78170f3722dbb94b0efcad8a720d59420`.
+
+`/tmp/zmux-zellij-early-reject-false-proof-20261015.json`
+`e65113b369bd9a3ec70763922c5e0684aa00f93f2ca8601f64aeca924426bf1f`.
+
+Python syntax and scoped whitespace checks pass. Final parent full Linux and
+exact-source Darwin validation remain required for the combined frozen fixture.
+
+Independent parent full Linux run passed the combined read-only exit drain and
+credential-close repair: `/tmp/zmux-zellij-credential-close-parent-20261015/receipt.json`
+(log `/tmp/zmux-zellij-credential-close-parent.log`). Source review verified the
+unrelated child's close is accepted only alongside the parent's exact authenticated
+rejection; owned peers still require ACK. Exact-source Darwin execution remains open.

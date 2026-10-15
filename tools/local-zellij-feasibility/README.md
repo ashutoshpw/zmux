@@ -59,6 +59,13 @@ The actual boundary checks are:
   bounded wait before cleanup can succeed. No global PID-only kill fallback exists
   on Darwin.
 
+The credential fixture records both sides of authorization. An unrelated child's
+send may fail with EPIPE/ECONNRESET when the parent has already rejected and closed
+its socket; the child still must observe EOF. The parent accepts that outcome only
+with its independent kernel-verified exact PID/UID and wrong-owned-PID rejection
+record. The owned child still must send successfully and receive ACK. Other send
+errors, unexplained closes and contradictory rejection records fail.
+
 Peer credentials and live process inspection are separate APIs. On Darwin,
 `LOCAL_PEERPID` becomes unavailable after the peer disconnects, even while its child
 PID remains unreaped. The short-lived real `kill-session` helper can exit before
@@ -70,6 +77,17 @@ client, which terminates the pinned server; this establishes that long-lived shu
 path only. A production short-lived administrative command requires a separately
 supported owner transport. The non-child durable backend always requires its
 reserved full process identity.
+
+A separate real PTY-only child defers stdin reads while queued master input reaches
+observed backpressure. After TERM it emits256 KiB with terminal-query-like bytes,
+then independently checks its queued input for query replies during a bounded quiet
+window. Exit0 requires no reply; any ESC response exits3. The owner drains output
+without answering queries during its existing bounded TERM/KILL waits, retaining
+only64 KiB of logs. Readiness still answers queries. Exit waiting and the post-Quit
+drain are read-only so response writes cannot stall them. The regression implements
+no Zellij protocol. Requested signals, unreaped waitid PID/code/status, reaped exit
+code and bounded PTY output remain visible even on failure. No environment dump is
+collected, and failed/nonzero children remain failures.
 
 The C PTY launcher acquires a controlling terminal before exec. Python uses no
 pre-exec callback or fork from the broker's threads. The headless owner's future
