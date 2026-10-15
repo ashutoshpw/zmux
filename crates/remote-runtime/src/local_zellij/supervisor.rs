@@ -45,6 +45,9 @@ pub(super) fn environment(command: &mut Command, root: &Path) {
         .env("XDG_CACHE_HOME", root.join("cache"));
 }
 fn configure(stream: &UnixStream) -> io::Result<()> {
+    // Darwin accept inherits O_NONBLOCK from its listener. Framed bootstrap I/O
+    // uses socket timeouts and must wait for the authenticated peer's next field.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))
 }
@@ -242,7 +245,6 @@ pub fn run_supervisor(path: &Path) -> io::Result<i32> {
     }
     let mut connection =
         super::broker::connect(&spec.socket, Instant::now() + Duration::from_secs(3))?;
-    connection.set_nonblocking(false)?;
     configure(&connection)?;
     if super::broker::peer(&connection)? != spec.starter {
         return Err(fail("bootstrap starter identity changed"));
@@ -292,5 +294,44 @@ pub fn run_supervisor(path: &Path) -> io::Result<i32> {
             });
         }
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn configured_bootstrap_waits_for_fragmented_frames_on_an_initially_nonblocking_socket() {
+        let (mut reader, mut peer) = UnixStream::pair().unwrap();
+        // Darwin accept inherits a nonblocking listener's flag. Force that
+        // actual socket mode here so the same bootstrap contract runs on Linux.
+        reader.set_nonblocking(true).unwrap();
+        configure(&reader).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            result_tx.send(receive::<String>(&mut reader)).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            matches!(
+                result_rx.recv_timeout(Duration::from_millis(20)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "bootstrap returned before the connected peer sent a frame"
+        );
+        // Independently encoded JSON string and length, fragmented in both fields.
+        for fragment in [b"\x07".as_slice(), b"\0\0\0\"n", b"once\""] {
+            peer.write_all(fragment).unwrap();
+        }
+        assert_eq!(
+            result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            "nonce"
+        );
+        worker.join().unwrap();
     }
 }

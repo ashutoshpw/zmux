@@ -624,7 +624,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         setAccessibilityLabel(surface.title)
         setAccessibilitySelected(selected)
         let menu = NSMenu()
-        for (label, action) in [("Rename Tab…", #selector(renameTab)), ("Move Left", #selector(moveLeft)), ("Move Right", #selector(moveRight)), ("Close Tab", #selector(closeTab)), ("Close Other Tabs…", #selector(closeOthers))] {
+        for (label, action) in [("Rename Tab…", #selector(renameTab)), ("Move Left", #selector(moveTabLeft)), ("Move Right", #selector(moveTabRight)), ("Close Tab", #selector(closeTab)), ("Close Other Tabs…", #selector(closeOthers))] {
             let item = menu.addItem(withTitle: label, action: action, keyEquivalent: ""); item.target = self
         }
         self.menu = menu
@@ -666,8 +666,8 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         titleLabel.textColor = unread > 0 ? .systemOrange : .labelColor
         setAccessibilityLabel(surface.title + (unread > 0 ? ", \(unread) unread" : ""))
     }
-    @objc private func moveLeft() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: -1) }
-    @objc private func moveRight() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: 1) }
+    @objc private func moveTabLeft() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: -1) }
+    @objc private func moveTabRight() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: 1) }
     @objc private func closeTab() { owner?.closeTerminalTab(surface.id) }
     @objc private func renameTab() { owner?.renameTerminalTab(surface.id) }
     @objc private func closeOthers() { owner?.closeOtherTabs(surface.id) }
