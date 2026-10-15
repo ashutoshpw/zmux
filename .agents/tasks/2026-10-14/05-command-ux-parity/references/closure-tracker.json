@@ -326,7 +326,7 @@
     {
       "id": "A01",
       "title": "Events, metadata, inspection and tmux compatibility",
-      "status": "planned",
+      "status": "implementing",
       "owner": "desktop-runtime events/control and shared action owners",
       "depends_on": [
         "F01",
@@ -337,7 +337,19 @@
         "Add offline/live shared rule matcher, rule logs and hook/signal/buffer/pipe/capture/respawn semantics",
         "Complete current/tree/top/memory/health/diagnostics/RPC with process ownership and authorization"
       ],
-      "exit_gate": "Slow consumers cannot stall UI; event gaps are explicit; metadata is target-scoped; exact-byte/exit/focus contracts verified; source-baseline unsupported tmux placeholders return honest failures, not fake success."
+      "exit_gate": "Slow consumers cannot stall UI; event gaps are explicit; metadata is target-scoped; exact-byte/exit/focus contracts verified; source-baseline unsupported tmux placeholders return honest failures, not fake success.",
+      "implemented_slices": [
+        "A01a bounded workspace status/progress/log CLI and native activity inspector (035a285); native execution pending"
+      ],
+      "verification_receipts": [
+        "a01-workspace-metadata.md"
+      ],
+      "remaining_gates": [
+        "Native metadata rendering and packaged CLI acceptance",
+        "Events/cursors/replay, PR/todo metadata and rule/hook contracts",
+        "tmux compatibility, inspection and process diagnostics",
+        "Full baseline option and output compatibility"
+      ]
     },
     {
       "id": "A02",
