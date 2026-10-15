@@ -404,6 +404,11 @@ fn exited_process_history_remains_navigable_without_accepting_new_input() {
     let mut session =
         launch("i=0; while [ $i -lt 30 ]; do printf 'DONE_%02d\\n' $i; i=$((i+1)); done; exit 7");
     let done = wait_for(&session, |s| s.state == State::Exited);
+    let observation = zmux_session_runtime::child::observe_child(session.process_id(), false);
+    assert!(
+        matches!(observation, Err(ref error) if error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32)),
+        "completed history retained an unreaped child: {observation:?}"
+    );
     let bytes = done.bytes_read;
     assert!(!done.viewport.contents.contains("DONE_00"));
     session.scroll(1000).unwrap();
