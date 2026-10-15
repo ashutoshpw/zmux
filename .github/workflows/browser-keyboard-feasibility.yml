@@ -2,6 +2,11 @@ name: Browser keyboard feasibility
 
 on:
   workflow_dispatch:
+    inputs:
+      debug_native:
+        description: Capture the exact probe under bounded LLDB on-crash diagnostics
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,7 +29,12 @@ jobs:
       - name: Inspect isolated probe inputs
         run: python3 -B tools/native-fixtures/browser-keyboard/run.py --check
       - name: Compile and observe real public WebKit keyboard behavior
-        run: python3 -B tools/native-fixtures/browser-keyboard/run.py --output "$RUNNER_TEMP/browser-keyboard"
+        env:
+          PROBE_DEBUG_NATIVE: ${{ inputs.debug_native }}
+        run: |
+          probe_debug_args=()
+          if [ "$PROBE_DEBUG_NATIVE" = true ]; then probe_debug_args+=(--debug-native); fi
+          python3 -B tools/native-fixtures/browser-keyboard/run.py --output "$RUNNER_TEMP/browser-keyboard" "${probe_debug_args[@]}"
       - name: Retain native observations, binary and bounded compiler/runtime logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
