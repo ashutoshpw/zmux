@@ -1,4 +1,4 @@
-"""Real subprocess lifecycle and output bounds for the feasibility orchestrator."""
+"""Real subprocess lifecycle and output bounds for offline verification runners."""
 import importlib.util
 import json
 import os
@@ -15,8 +15,17 @@ spec = importlib.util.spec_from_file_location("terminal_feasibility", Path(__fil
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
+browser_spec = importlib.util.spec_from_file_location(
+    "browser_process", Path(__file__).resolve().parents[2] / "scripts/browser_process.py")
+browser = importlib.util.module_from_spec(browser_spec)
+sys.modules[browser_spec.name] = browser
+browser_spec.loader.exec_module(browser)
+
 
 class RunnerLifecycle(unittest.TestCase):
+    def run_process(self, command, name, directory, phases, *, timeout):
+        return runner.run(command, name, directory, phases, timeout=timeout)
+
     def assert_not_running(self, pid):
         # An orphan may remain a zombie until the OS reaps it. Test that no
         # live task survives, without mistaking kill(pid, 0) for a liveness check.
@@ -41,9 +50,9 @@ class RunnerLifecycle(unittest.TestCase):
                 command = [sys.executable, "-c", script, str(identity)]
                 if expires:
                     with self.assertRaises(RuntimeError):
-                        runner.run(command, "owned", directory, phases, timeout=timeout)
+                        self.run_process(command, "owned", directory, phases, timeout=timeout)
                 else:
-                    runner.run(command, "owned", directory, phases, timeout=timeout)
+                    self.run_process(command, "owned", directory, phases, timeout=timeout)
                 self.assertEqual(phases[0]["timed_out"], expires, phases)
                 self.assertLess(time.monotonic() - began, timeout + 2, phases)
                 owned = json.loads(identity.read_text())
@@ -91,10 +100,41 @@ Path(sys.argv[1]).write_text(json.dumps({'leader': os.getpid(), 'child': child.p
         with tempfile.TemporaryDirectory(prefix="zmux-feasibility-output-") as temporary:
             directory = Path(temporary)
             phases = []
-            runner.run([sys.executable, "-c", "import os; os.write(1, b'x' * 2097152)"],
-                       "output", directory, phases, timeout=3)
+            self.run_process([sys.executable, "-c", "import os; os.write(1, b'x' * 2097152)"],
+                             "output", directory, phases, timeout=3)
             self.assertEqual(phases[0]["log_bytes_seen"], 2097152)
             self.assertEqual((directory / "output.log").stat().st_size, 1048576)
+
+
+class BrowserLifecycle(RunnerLifecycle):
+    def run_process(self, command, name, directory, phases, *, timeout):
+        # Only translate the production helper's result for the shared fixture.
+        # The helper owns spawning, capture, deadlines and process-group cleanup.
+        result = browser.run_browser(command, timeout)
+        (directory / f"{name}.log").write_text(result.stdout)
+        phases.append({"timed_out": result.timed_out,
+                       "log_bytes_seen": result.stdout_bytes_seen})
+        if result.timed_out or result.returncode:
+            raise RuntimeError(f"Browser subprocess failed: {result}")
+        return result.stdout
+
+    def test_both_streams_drain_independently_with_bounded_prefix_and_tail(self):
+        result = browser.run_browser([sys.executable, "-c", """
+import os, threading
+def write_stdout():
+    os.write(1, b'x' * 2097152)
+worker = threading.Thread(target=write_stdout)
+worker.start()
+os.write(2, b'y' * 2097152 + b'END')
+worker.join()
+"""], timeout=3)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.stdout_bytes_seen, 2097152)
+        self.assertEqual(result.stderr_bytes_seen, 2097155)
+        self.assertEqual(result.stdout, 'x' * 1048576)
+        self.assertEqual(result.stderr, 'y' * 65533 + 'END')
+        self.assertTrue(result.output_truncated)
 
 
 if __name__ == "__main__":
