@@ -523,6 +523,60 @@ pub unsafe extern "C" fn zmux_desktop_browser_event(
     .status
 }
 
+/// Trusted native notification lifecycle channel. Waits off the UI thread.
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_notification_event(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> i32 {
+    guard(|| {
+        if request.is_null() || length == 0 || length > 16_384 {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: caller provides bounded readable storage for the duration of this call.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let event: zmux_desktop_runtime::attention::NativeNotificationEvent =
+            serde_json::from_slice(bytes).map_err(|_| INVALID_ARGUMENT)?;
+        desktop(id)?
+            .native_notification_event(event)
+            .map_err(|error| match error {
+                DesktopError::QueueFull | DesktopError::Busy => BUSY,
+                _ => INTERNAL,
+            })?;
+        Ok(0)
+    })
+    .status
+}
+
+/// Confirm a generation-bound notification action before native focus changes.
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_notification_action(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if request.is_null() || length == 0 || length > 16_384 {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: caller provides bounded readable storage for the duration of this call.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let action: zmux_desktop_runtime::attention::NativeAttentionAction =
+            serde_json::from_slice(bytes).map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        let result = desktop
+            .native_notification_action(action)
+            .map_err(|_| INTERNAL)?;
+        reservation.publish(serde_json::to_vec(&result).map_err(|_| INTERNAL)?)
+    })
+}
+
 /// OK/value=0 means no change since revision; otherwise value owns a JSON snapshot buffer.
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_desktop_snapshot(id: u64, revision: u64) -> ZmuxResult {

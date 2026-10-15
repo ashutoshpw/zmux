@@ -915,6 +915,7 @@ fn object_receipt(
 
 fn desktop_error(error: DesktopError) -> (&'static str, String) {
     let code = match error {
+        DesktopError::Attention(ref error) => error.code(),
         DesktopError::Policy(ref error) => error.code(),
         DesktopError::NotTerminal => "not_terminal",
         DesktopError::TerminalUnavailable => "terminal_not_ready",

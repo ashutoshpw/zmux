@@ -51,6 +51,12 @@ ZmuxResult zmux_desktop_transfer_files(uint64_t desktop, const uint8_t *request,
    the event was not enqueued and may be retried preserving order. */
 ZmuxResult zmux_desktop_browser_drain(uint64_t desktop);
 int32_t zmux_desktop_browser_event(uint64_t desktop, const uint8_t *request, size_t length);
+/* Trusted notification callbacks, bounded JSON <=16384 bytes. Both calls wait for
+   executor acknowledgement and MUST run off the UI thread. Action returns an owned
+   receipt buffer; do not activate a window without its successful open receipt.
+   Never replay an action after an error: execution may already have occurred. */
+int32_t zmux_desktop_notification_event(uint64_t desktop, const uint8_t *request, size_t length);
+ZmuxResult zmux_desktop_notification_action(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_snapshot(uint64_t desktop, uint64_t revision);
 int32_t zmux_desktop_destroy(uint64_t desktop);
 

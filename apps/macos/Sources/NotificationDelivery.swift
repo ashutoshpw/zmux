@@ -1,0 +1,411 @@
+import AppKit
+import Foundation
+import UserNotifications
+
+// Original MIT native adapter. Rust owns inbox identity and delivery eligibility.
+enum NotificationAuthorization: String, Codable, Sendable {
+    case unknown, notDetermined = "not_determined", denied, authorized, provisional, ephemeral, unavailable
+    var permitsDelivery: Bool { self == .authorized || self == .provisional || self == .ephemeral }
+}
+
+/// The serial permission sender may coalesce grants, but never cross an unacknowledged
+/// restriction. A send acknowledgement and a new authoritative desired snapshot are
+/// different boundaries: only the latter makes cached delivery eligibility safe again.
+struct PermissionObservations: Sendable {
+    struct Observation: Sendable, Equatable {
+        let epoch: UUID
+        let generation: UInt64
+        let state: NotificationAuthorization
+        var event: NativeNotificationEvent { .authorization(epoch: epoch, generation: generation, state: state) }
+    }
+    private(set) var epoch: UUID?
+    private(set) var snapshotGeneration: UInt64 = 0
+    private(set) var restrictiveGeneration: UInt64 = 0
+    private var confirmedGeneration: UInt64 = 0
+    private var barrier: Observation?
+    private var latest: Observation?
+
+    init() {}
+
+    var next: Observation? { barrier ?? latest }
+    var blocksDelivery: Bool { barrier != nil || snapshotGeneration < restrictiveGeneration }
+
+    mutating func updateSnapshot(epoch: UUID, generation: UInt64) {
+        if self.epoch != epoch {
+            self = Self()
+            self.epoch = epoch
+        }
+        snapshotGeneration = max(snapshotGeneration, generation)
+        confirm(epoch: epoch, generation: generation)
+    }
+    mutating func observe(epoch: UUID, generation: UInt64, state: NotificationAuthorization) {
+        guard self.epoch == epoch, generation > confirmedGeneration else { return }
+        let observation = Observation(epoch: epoch, generation: generation, state: state)
+        if latest.map({ generation > $0.generation }) ?? true { latest = observation }
+        if !state.permitsDelivery {
+            restrictiveGeneration = max(restrictiveGeneration, generation)
+            if barrier == nil { barrier = observation }
+        }
+    }
+    mutating func confirm(epoch: UUID, generation: UInt64) {
+        guard self.epoch == epoch else { return }
+        confirmedGeneration = max(confirmedGeneration, generation)
+        if let barrier, barrier.generation <= confirmedGeneration { self.barrier = nil }
+        if let latest, latest.generation <= confirmedGeneration { self.latest = nil }
+        if barrier == nil, let latest, !latest.state.permitsDelivery { barrier = latest }
+    }
+}
+
+struct NotificationTarget: Codable, Sendable, Equatable {
+    let epoch: UUID
+    let identityNamespace: UUID
+    let notificationId: UInt64
+    let surfaceId: UInt64
+    let sessionId: UInt64?
+}
+
+struct NativeNotificationRequest: Codable, Sendable, Equatable {
+    let identifier: String
+    let target: NotificationTarget
+    let authorizationGeneration: UInt64
+    let title: String
+    let subtitle: String
+    let body: String
+}
+
+struct NativeNotificationSnapshot: Codable, Sendable {
+    let epoch: UUID
+    let authorization: NotificationAuthorization
+    let authorizationGeneration: UInt64
+    let desired: [NativeNotificationRequest]
+}
+
+struct NativeNotificationExecution: Decodable, Sendable {
+    let revision: UInt64
+    let focusedSurfaceId: UInt64?
+}
+
+enum NativeNotificationEvent: Encodable, Sendable {
+    case authorization(epoch: UUID, generation: UInt64, state: NotificationAuthorization)
+    case scheduled(target: NotificationTarget, authorizationGeneration: UInt64)
+    case failed(target: NotificationTarget, authorizationGeneration: UInt64, message: String)
+
+    private enum CodingKeys: String, CodingKey { case event, epoch, generation, state, target, authorizationGeneration, message }
+    func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .authorization(let epoch, let generation, let state):
+            try c.encode("authorization", forKey: .event)
+            try c.encode(epoch, forKey: .epoch); try c.encode(generation, forKey: .generation); try c.encode(state, forKey: .state)
+        case .scheduled(let target, let generation):
+            try c.encode("scheduled", forKey: .event)
+            try c.encode(target, forKey: .target); try c.encode(generation, forKey: .authorizationGeneration)
+        case .failed(let target, let generation, let message):
+            try c.encode("failed", forKey: .event)
+            try c.encode(target, forKey: .target); try c.encode(generation, forKey: .authorizationGeneration)
+            try c.encode(message, forKey: .message)
+        }
+    }
+}
+
+enum NativeAttentionAction: Encodable, Sendable {
+    case open(target: NotificationTarget)
+    case openInbox(target: NotificationTarget)
+    case dismiss(target: NotificationTarget)
+    private enum CodingKeys: String, CodingKey { case action, target }
+    func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .open(let target): try c.encode("open", forKey: .action); try c.encode(target, forKey: .target)
+        case .openInbox(let target): try c.encode("open_inbox", forKey: .action); try c.encode(target, forKey: .target)
+        case .dismiss(let target): try c.encode("dismiss", forKey: .action); try c.encode(target, forKey: .target)
+        }
+    }
+}
+
+@MainActor
+final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
+    private struct Pending {
+        let request: NativeNotificationRequest
+        var expired = false
+        var timer: Task<Void, Never>?
+    }
+    private let center = UNUserNotificationCenter.current()
+    private let sendEvent: @MainActor (NativeNotificationEvent) async throws -> Void
+    private let performAction: @MainActor (NativeAttentionAction) async throws -> NativeNotificationExecution
+    private let activate: @MainActor () -> Void
+    private let reportError: @MainActor (String) -> Void
+    private var epoch: UUID?
+    private var authorizationGeneration: UInt64 = 0
+    private var permissionObservations = PermissionObservations()
+    private var observedAuthorization = NotificationAuthorization.unknown
+    private var snapshotAuthorization = NotificationAuthorization.unknown
+    private var desired: [String: NativeNotificationRequest] = [:]
+    private var attempted: [String: UInt64] = [:]
+    // An expired UN callback still owns its slot until the OS actually calls it.
+    private var pending: [String: Pending] = [:]
+    private var events: [NativeNotificationEvent] = []
+    private var eventTask: Task<Void, Never>?
+    private var settingsInFlight = false
+    private var refreshRequested = false
+    private var authorizationInFlight = false
+    private var actionsInFlight = 0
+    private var stopped = false
+
+    init(sendEvent: @escaping @MainActor (NativeNotificationEvent) async throws -> Void,
+         performAction: @escaping @MainActor (NativeAttentionAction) async throws -> NativeNotificationExecution,
+         activate: @escaping @MainActor () -> Void,
+         reportError: @escaping @MainActor (String) -> Void) {
+        self.sendEvent = sendEvent; self.performAction = performAction
+        self.activate = activate; self.reportError = reportError
+        super.init()
+        center.delegate = self
+        center.setNotificationCategories([UNNotificationCategory(identifier: "zmux.inbox", actions: [], intentIdentifiers: [], options: [.customDismissAction])])
+        // A previous process's tokens must never target this process's inbox.
+        center.removeAllPendingNotificationRequests()
+        center.removeAllDeliveredNotifications()
+    }
+
+    func update(_ snapshot: NativeNotificationSnapshot) {
+        guard !stopped else { return }
+        if epoch != snapshot.epoch {
+            remove(Array(desired.keys))
+            desired.removeAll(); attempted.removeAll()
+            epoch = snapshot.epoch
+            observedAuthorization = .unknown
+        }
+        authorizationGeneration = max(authorizationGeneration, snapshot.authorizationGeneration)
+        permissionObservations.updateSnapshot(epoch: snapshot.epoch, generation: snapshot.authorizationGeneration)
+        snapshotAuthorization = snapshot.authorization
+        guard snapshot.desired.count <= 128 else {
+            reportError("Native notification snapshot exceeded its limit; delivery is paused")
+            remove(Array(desired.keys)); desired.removeAll()
+            return
+        }
+        var next: [String: NativeNotificationRequest] = [:]
+        for request in snapshot.desired {
+            guard request.target.epoch == snapshot.epoch,
+                  request.identifier == Self.identifier(request.target),
+                  next.updateValue(request, forKey: request.identifier) == nil else {
+                reportError("Invalid native notification snapshot; delivery is paused")
+                remove(Array(desired.keys)); desired.removeAll()
+                return
+            }
+        }
+        let obsolete = desired.keys.filter { next[$0] != desired[$0] }
+        remove(Array(obsolete))
+        for identifier in obsolete { attempted.removeValue(forKey: identifier) }
+        desired = next
+        if !snapshot.authorization.permitsDelivery { remove(Array(desired.keys)) }
+        pump()
+        if observedAuthorization == .unknown { refreshPermission() }
+    }
+
+    /// Activation refresh never prompts. Only enable() may request OS permission.
+    func refreshPermission() {
+        guard !stopped else { return }
+        if settingsInFlight || authorizationInFlight { refreshRequested = true; return }
+        guard let epoch,
+              authorizationGeneration < UInt64.max else { return }
+        refreshRequested = false
+        authorizationGeneration += 1
+        let generation = authorizationGeneration
+        settingsInFlight = true
+        center.getNotificationSettings { [weak self] settings in
+            let state: NotificationAuthorization
+            switch settings.authorizationStatus {
+            case .notDetermined: state = .notDetermined
+            case .denied: state = .denied
+            case .authorized: state = .authorized
+            case .provisional: state = .provisional
+            @unknown default: state = .unavailable
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.settingsInFlight = false
+                guard !self.stopped, self.epoch == epoch, self.authorizationGeneration == generation else {
+                    if !self.stopped { self.refreshPermission() }
+                    return
+                }
+                self.observedAuthorization = state
+                if !state.permitsDelivery { self.remove(Array(self.desired.keys)) }
+                self.emit(.authorization(epoch: epoch, generation: generation, state: state))
+                self.pump()
+                if self.refreshRequested { self.refreshPermission() }
+            }
+        }
+    }
+
+    func enable() {
+        guard !stopped, !authorizationInFlight else { return }
+        guard NSApp.isActive else { reportError("Activate zmux before enabling system notifications"); return }
+        authorizationInFlight = true
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] _, error in
+            let message = error.map { String($0.localizedDescription.prefix(512)) }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.authorizationInFlight = false
+                guard !self.stopped else { return }
+                if let message { self.reportError("Notification permission: " + message) }
+                self.refreshPermission()
+            }
+        }
+    }
+
+    func openInbox(_ target: NotificationTarget) {
+        guard !stopped, epoch == target.epoch, actionsInFlight < 8 else {
+            reportError("Notification actions are unavailable or busy")
+            return
+        }
+        actionsInFlight += 1
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.actionsInFlight -= 1 }
+            do {
+                let receipt = try await self.performAction(.openInbox(target: target))
+                guard !self.stopped, self.epoch == target.epoch,
+                      receipt.focusedSurfaceId == target.surfaceId else { return }
+                self.activate()
+            } catch { self.reportError("Notification target is unavailable: " + error.localizedDescription) }
+        }
+    }
+
+    func stop() {
+        guard !stopped else { return }
+        stopped = true
+        remove(Array(Set(desired.keys).union(pending.keys)))
+        desired.removeAll(); attempted.removeAll(); events.removeAll()
+        for identifier in pending.keys { pending[identifier]?.timer?.cancel() }
+        eventTask?.cancel(); eventTask = nil
+        center.delegate = nil
+    }
+
+    private static func identifier(_ target: NotificationTarget) -> String {
+        "zmux.notification.\(target.epoch.uuidString.lowercased()).\(target.notificationId)"
+    }
+    private func remove(_ identifiers: [String]) {
+        guard !identifiers.isEmpty else { return }
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+    private func current(_ request: NativeNotificationRequest) -> Bool {
+        !stopped && observedAuthorization.permitsDelivery && snapshotAuthorization.permitsDelivery
+            && !permissionObservations.blocksDelivery
+            && request.authorizationGeneration > 0 && desired[request.identifier] == request
+    }
+    private func pump() {
+        guard !stopped, !permissionObservations.blocksDelivery,
+              observedAuthorization.permitsDelivery, snapshotAuthorization.permitsDelivery else { return }
+        for request in desired.values.sorted(by: { $0.target.notificationId < $1.target.notificationId }) {
+            guard pending.count < 8 else { break }
+            guard current(request), pending[request.identifier] == nil,
+                  attempted[request.identifier] != request.authorizationGeneration else { continue }
+            attempted[request.identifier] = request.authorizationGeneration
+            let content = UNMutableNotificationContent()
+            content.title = String(request.title.prefix(128)); content.subtitle = String(request.subtitle.prefix(128))
+            content.body = String(request.body.prefix(2048)); content.sound = .default; content.categoryIdentifier = "zmux.inbox"
+            pending[request.identifier] = Pending(request: request)
+            pending[request.identifier]?.timer = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                guard let self, var pending = self.pending[request.identifier] else { return }
+                pending.expired = true; self.pending[request.identifier] = pending
+                self.remove([request.identifier])
+                if self.current(request) { self.emit(.failed(target: request.target, authorizationGeneration: request.authorizationGeneration, message: "System notification scheduling timed out; it will not be replayed")) }
+            }
+            center.add(UNNotificationRequest(identifier: request.identifier, content: content, trigger: nil)) { [weak self] error in
+                let message = error.map { String($0.localizedDescription.prefix(512)) }
+                Task { @MainActor [weak self] in self?.scheduled(request.identifier, error: message) }
+            }
+        }
+    }
+    private func scheduled(_ identifier: String, error: String?) {
+        guard let callback = pending.removeValue(forKey: identifier) else { return }
+        callback.timer?.cancel()
+        if callback.expired || !current(callback.request) { remove([identifier]) }
+        else if let error {
+            remove([identifier])
+            emit(.failed(target: callback.request.target, authorizationGeneration: callback.request.authorizationGeneration, message: error))
+        } else {
+            emit(.scheduled(target: callback.request.target, authorizationGeneration: callback.request.authorizationGeneration))
+        }
+        pump()
+    }
+    private func emit(_ event: NativeNotificationEvent) {
+        guard !stopped else { return }
+        if case .authorization(let epoch, let generation, let state) = event {
+            permissionObservations.observe(epoch: epoch, generation: generation, state: state)
+        } else {
+            if events.count < 256 { events.append(event) }
+            else { reportError("Native notification receipt queue is full") }
+        }
+        guard eventTask == nil else { return }
+        eventTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !self.stopped {
+                let event: NativeNotificationEvent
+                if let observation = self.permissionObservations.next {
+                    event = observation.event
+                } else if !self.events.isEmpty { event = self.events.removeFirst() }
+                else { break }
+                guard self.eventIsCurrent(event) else { continue }
+                do {
+                    try await self.sendEvent(event)
+                    if case .authorization(let epoch, let generation, _) = event {
+                        self.permissionObservations.confirm(epoch: epoch, generation: generation)
+                    }
+                }
+                catch {
+                    self.reportError("Notification synchronization: " + error.localizedDescription)
+                    switch event {
+                    case .authorization: break // Keep the exact barrier; a snapshot can acknowledge a lost reply.
+                    case .scheduled, .failed:
+                        if self.eventIsCurrent(event), self.events.count < 256 { self.events.insert(event, at: 0) }
+                    }
+                    // Retry exact permission observations and receipts, never OS adds or actions.
+                    do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
+                }
+            }
+            self.eventTask = nil
+        }
+    }
+    private func eventIsCurrent(_ event: NativeNotificationEvent) -> Bool {
+        switch event {
+        case .authorization(let epoch, let generation, _):
+            return self.epoch == epoch && permissionObservations.next?.generation == generation
+        case .scheduled(let target, let generation), .failed(let target, let generation, _):
+            return desired.values.contains { $0.target == target && $0.authorizationGeneration == generation && current($0) }
+        }
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        let identifier = notification.request.identifier
+        return await presentation(identifier)
+    }
+    private func presentation(_ identifier: String) -> UNNotificationPresentationOptions {
+        guard let request = desired[identifier], current(request), pending[identifier]?.expired != true else {
+            remove([identifier]); return []
+        }
+        return [.banner, .list, .sound]
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        let identifier = response.notification.request.identifier
+        let action = response.actionIdentifier
+        await receive(identifier, action: action)
+    }
+    private func receive(_ identifier: String, action: String) async {
+        guard !stopped, actionsInFlight < 8, let request = desired[identifier], current(request) else { remove([identifier]); return }
+        guard action == UNNotificationDefaultActionIdentifier || action == UNNotificationDismissActionIdentifier else { return }
+        actionsInFlight += 1
+        defer { actionsInFlight -= 1 }
+        do {
+            if action == UNNotificationDismissActionIdentifier {
+                _ = try await performAction(.dismiss(target: request.target))
+            } else {
+                let receipt = try await performAction(.open(target: request.target))
+                // Rust's exact token/session validation precedes every explicit activation.
+                if !stopped, epoch == request.target.epoch, receipt.focusedSurfaceId == request.target.surfaceId { activate() }
+            }
+            remove([identifier])
+        } catch { reportError("Notification target is unavailable: " + error.localizedDescription) }
+    }
+}
