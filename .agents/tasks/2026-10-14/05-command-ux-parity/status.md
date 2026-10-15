@@ -13,12 +13,20 @@
 - Downloaded5f5005e ZIP checksum/integrity/source verified; AppKit and WebKit images
   inspected. Full-window compositor capture remains unavailable on hosted runner.
 - B02b document locators/readiness committed/pushed6af571f. Parent full193 Rust tests,
-  strict Clippy/notices/ABI plus35 real Chromium DOM cases pass. Native38754684779
-  and Foundation38754685035 are running; no native B02b result claimed yet.
-- F04 upstream engine feasibility passes an isolated Linux development-API fixture;
-  reproducible harness review is repairing process cleanup and build-job limits before
-  publication. No production engine replacement, Mac candidate execution or budget claim.
-- R02 local tmux lifecycle and B01 explicit persistent profile binding are in progress.
+  strict Clippy/notices/ABI plus35 real Chromium DOM cases pass. Foundation38754685035
+  passed. Native38754684779 passed browser journeys but failed the later key fixture.
+  Diagnostic38757351964 captured mangled Python input/SyntaxError with the intended
+  terminal focused; input-path investigation is in progress, not a browser focus repair.
+- F04 isolated engine feasibility passed Linux x86_64 and Mac arm64 execution plus
+  both Mac architecture compile/lipo checks in38756429963. No production engine
+  replacement or resource-budget claim. Native page allocation/history policy remains
+  unresolved; an isolated compatibility exporter is in progress.
+- R02 headless local tmux committed57c9df4; app-bound attachment/reopen/restore is in
+  progress. B01 persistent browser profile binding is being validated independently.
+- CI fixture isolation repair2435687 uses a process-local sequence as well as time/PID.
+  Native38758505493 exposed a separate startup snapshot Busy race in the session test;
+  the test now retries only Busy within its original deadline. Isolated scripts/check
+  passes, including the real CLI session lifecycle, strict Clippy and C ABI.
 - Local Docker cloud healthy at3530, confirmed with path-to-port after health checks.
   Public tunnel unverified; VM/relay/email unavailable. Hosted deployment remains deferred.
 
