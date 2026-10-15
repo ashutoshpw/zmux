@@ -67,13 +67,14 @@ actor NativeBridge {
         case .applicationSupport, .persistentDirectory:
             let directory: URL
             switch storage {
-            case .persistentDirectory(let explicit): directory = explicit.resolvingSymlinksInPath()
+            case .persistentDirectory(let explicit): directory = explicit
             default:
                 // Directory lookup remains off MainActor for ordinary startup.
-                let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).resolvingSymlinksInPath()
+                let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 directory = support.appendingPathComponent("app.w3dev.zmux.dev", isDirectory: true)
             }
-            let path = Data(directory.path.utf8)
+            guard directory.isFileURL else { throw NativeStoragePathFailure.invalidPath }
+            let path = Data(try NativeStoragePath.resolve(directory.path).utf8)
             result = path.withUnsafeBytes { storage in
                 zmux_desktop_create_persistent(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
             }

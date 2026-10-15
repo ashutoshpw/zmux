@@ -70,3 +70,43 @@ attempts; its downloaded receipt is in
 `/tmp/zmux-persistence-concurrency-postfix-38773735612`. Both pre-fix and
 post-fix diagnostics passed, so these receipts do not establish the OS root cause.
 Native build validation remains pending.
+
+## Native physical storage path repair (2026-10-15)
+
+Run `38809101107` at `11671a48ddb484f8730ddf4df43e6a5394d7e886`
+passed Rust/core/ABI checks, both native architectures and the close-phase journey.
+The final private session document was saved, and shared shutdown joined every
+physical owner. Reopen published revision6/model0 with no windows. Its public
+session/profile diagnostics both report `open private persistence state directory:
+Not a directory (os error 20)`; session/profile loading had ended, and saved session
+and generation documents were unchanged. The diagnostic artifact is `12008352484`,
+ZIP SHA256 `9a18d5a751104ba0159634fd428e69e3dcc4cdc1f83708de16751cc912bdaa2a`.
+
+The native bridge passed the profile through Foundation's symlink resolver.
+[Apple documents](https://developer.apple.com/documentation/foundation/nsurl/resolvingsymlinksinpath)
+that this API strips `/private` when the shorter path exists. The fixture's
+physical `/private/tmp/.../profile` is absent on first launch but exists on reopen;
+the shortened `/tmp` component is a symlink and the Rust nofollow walk refuses it.
+The same failure affects both users of that state directory before restore starts.
+
+The bridge now uses POSIX `realpath` on the nearest existing directory and appends
+only validated missing names. It ascends only on ENOENT; permission, non-directory
+and symlink-loop errors remain errors. Existing regular-file ancestors are refused.
+Relative, dot, dotdot and NUL paths and non-UTF8 resolved target bytes are refused.
+Both explicit and Application Support
+storage use this owner, off AppKit's main actor. The physical string is passed
+directly to Rust without subsequent Foundation normalization. Rust's component
+nofollow walk, private directory checks, reservations and restore logic are unchanged.
+Canonicalization does not authorize a later symlink replacement: Rust still reopens
+each component with its strict flags.
+
+The existing packaged close/save/reopen journey is the pre-fix behavioral red.
+An early focused native check also exercises the production path owner with real
+missing/existing directories under `/private/tmp`, the OS `/tmp` alias, strict
+nofollow opens, and invalid/file/loop/raw-byte refusals. The raw-byte case includes
+a different existing replacement-character directory, so lossy decoding cannot
+silently select it. Its Foundation control must reproduce
+the old existing-path ENOTDIR. It runs before Rust compilation so path regressions
+fail early. Shell syntax, workflow YAML/order and whitespace checks pass on Linux;
+no local Swift compiler or Darwin SDK is available. Focused native execution and a
+green packaged reopen remain hosted gates, including split ratio and fresh input.
