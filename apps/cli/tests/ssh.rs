@@ -4,7 +4,7 @@ use std::{
     fs,
     io::Read,
     net::{TcpListener, TcpStream},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     sync::Arc,
@@ -300,6 +300,92 @@ fn ssh_cli_opens_an_actual_remote_session_and_reopen_never_replays_its_command()
     let source = fixture.root.join("image ' $(touch injected)-画像.png");
     let contents: Vec<u8> = (0..=255).cycle().take(100_003).collect();
     fs::write(&source, &contents).unwrap();
+    // The frozen source delegates nonrecursive uploads to SCP: directory inputs fail,
+    // while a selected symlink to a regular file uploads its bytes under the alias name.
+    // A bad selection after a valid file must fail preparation before any remote operation.
+    let directory = fixture.root.join("folder with spaces");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("private.txt"), b"must not upload").unwrap();
+    let directory_link = fixture.root.join("folder alias");
+    symlink(&directory, &directory_link).unwrap();
+    let dangling = fixture.root.join("missing alias");
+    symlink(fixture.root.join("does not exist"), &dangling).unwrap();
+    let fifo = fixture.root.join("named pipe");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let oversized = fixture.root.join("oversized.bin");
+    fs::File::create(&oversized)
+        .unwrap()
+        .set_len(zmux_remote_runtime::upload::MAX_UPLOAD_FILE_BYTES + 1)
+        .unwrap();
+    let oversized_link = fixture.root.join("large alias");
+    symlink(&oversized, &oversized_link).unwrap();
+    for (rejected, reason) in [
+        (&directory, "directories and special files"),
+        (&directory_link, "directories and special files"),
+        (&dangling, "open upload source"),
+        (&fifo, "directories and special files"),
+        (&oversized_link, "64 MiB upload limit"),
+    ] {
+        let started = json(
+            &socket,
+            &[
+                "paste-files",
+                "--surface",
+                restored_surface,
+                "--",
+                source.to_str().unwrap(),
+                rejected.to_str().unwrap(),
+            ],
+        );
+        let id = started["created_uploads"][0].as_u64().unwrap();
+        let failed = upload(&socket, id, |u| u["source_released"] == true);
+        assert_eq!(failed["state"], "failed", "{failed}");
+        assert_eq!(failed["delivery"], "failed", "{failed}");
+        assert!(
+            failed["error"].as_str().unwrap().contains(reason),
+            "{failed}"
+        );
+        assert_eq!(failed["bytes_sent"], 0);
+        assert_eq!(failed["remote_result_uncertain"], false);
+        assert!(failed["remote_paths"].as_array().unwrap().is_empty());
+        assert_eq!(
+            fs::read_dir(fixture.root.join("uploads")).unwrap().count(),
+            0
+        );
+    }
+    let alias = fixture.root.join("linked ' 画像.png");
+    symlink(&source, &alias).unwrap();
+    let linked = json(
+        &socket,
+        &[
+            "paste-files",
+            "--surface",
+            restored_surface,
+            "--",
+            alias.to_str().unwrap(),
+        ],
+    );
+    let id = linked["created_uploads"][0].as_u64().unwrap();
+    let linked = upload(&socket, id, |u| u["source_released"] == true);
+    assert_eq!(linked["state"], "completed", "{linked}");
+    assert_eq!(linked["delivery"], "inserted", "{linked}");
+    assert_eq!(linked["bytes_sent"], contents.len());
+    let linked_path = Path::new(linked["remote_paths"][0].as_str().unwrap());
+    assert_eq!(linked_path.file_name(), alias.file_name());
+    assert_eq!(fs::read(linked_path).unwrap(), contents);
+    fs::remove_file(linked_path).unwrap();
+    fs::remove_dir(linked_path.parent().unwrap()).unwrap();
+    // Remove the inserted path from the still-idle interactive shell before its next command.
+    json(
+        &socket,
+        &["send-text", "--surface", restored_surface, "\u{15}"],
+    );
     let restored_surface_id = SurfaceId(restored["focused_surface"].as_u64().unwrap());
     let before = desktop.snapshot().unwrap();
     let restored_session_id = before

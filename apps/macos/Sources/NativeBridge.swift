@@ -56,7 +56,7 @@ actor NativeBridge {
         revision = snapshot.revision
         return snapshot
     }
-    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil) async throws {
+    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil) async throws {
         var action: [String: Any] = ["action": name]
         if let pane { action["pane_id"] = pane }
         if let axis { action["axis"] = axis }
@@ -65,6 +65,8 @@ actor NativeBridge {
         if let surface { action["surface_id"] = surface }
         if let index { action["index"] = index }
         if let closed { action["closed_id"] = closed }
+        if let direction { action["direction"] = direction }
+        if let focus { action["focus"] = focus }
         try await send(["command": "action", "action": action])
     }
     func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?) async throws {

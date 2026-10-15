@@ -770,6 +770,26 @@ fn mutate(
     let selected_surface: Option<SurfaceId> = workspace
         .and_then(|w| w.root.panes().into_iter().find(|p| p.id == w.focused_pane))
         .map(|p| p.selected_surface);
+    let model = &execution.snapshot.model;
+    let mut created_panes = Vec::new();
+    let mut created_surfaces = Vec::new();
+    for workspace in &model.workspaces {
+        for pane in workspace.root.panes() {
+            if execution.created_panes.contains(&pane.id) {
+                created_panes.push(object_receipt(
+                    model,
+                    workspace.id,
+                    pane.id,
+                    pane.selected_surface,
+                ));
+            }
+            for surface in &pane.surfaces {
+                if execution.created_surfaces.contains(&surface.id) {
+                    created_surfaces.push(object_receipt(model, workspace.id, pane.id, surface.id));
+                }
+            }
+        }
+    }
     Ok(json!({
         "created_uploads": execution.created_uploads,
         "uploads": execution.snapshot.uploads,
@@ -779,6 +799,8 @@ fn mutate(
                 "pane_id": pane.id, "pane_uuid": execution.snapshot.model.object_uuid(TargetKind::Pane, pane.id.0),
                 "surface_id": pane.selected_surface, "surface_uuid": execution.snapshot.model.object_uuid(TargetKind::Surface, pane.selected_surface.0)})
         }).collect::<Vec<_>>(),
+        "created_panes": created_panes,
+        "created_surfaces": created_surfaces,
         "focused_surface": selected_surface,
         "focused_surface_uuid": selected_surface.map(|id| execution.snapshot.model.object_uuid(TargetKind::Surface, id.0)),
         "focused_workspace_uuid": workspace.map(|w| execution.snapshot.model.object_uuid(TargetKind::Workspace, w.id.0)),
@@ -789,6 +811,19 @@ fn mutate(
         "focused_workspace": workspace.map(|item| item.id),
         "focused_pane": workspace.map(|item| item.focused_pane),
     }))
+}
+
+fn object_receipt(
+    model: &zmux_workspace_core::Snapshot,
+    workspace: WorkspaceId,
+    pane: PaneId,
+    surface: SurfaceId,
+) -> Value {
+    json!({
+        "workspace_id": workspace, "workspace_uuid": model.object_uuid(TargetKind::Workspace, workspace.0),
+        "pane_id": pane, "pane_uuid": model.object_uuid(TargetKind::Pane, pane.0),
+        "surface_id": surface, "surface_uuid": model.object_uuid(TargetKind::Surface, surface.0)
+    })
 }
 
 fn desktop_error(error: DesktopError) -> (&'static str, String) {

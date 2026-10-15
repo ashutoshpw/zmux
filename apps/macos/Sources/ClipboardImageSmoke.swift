@@ -83,7 +83,7 @@ enum ClipboardImageSmoke {
         }
     }
 
-    private static func makeFixturePNG() throws -> Data {
+    static func makeFixturePNG() throws -> Data {
         var pixels = [UInt8](repeating: 0, count: fixtureWidth * fixtureHeight * 4)
         return try pixels.withUnsafeMutableBytes { buffer in
             guard let baseAddress = buffer.baseAddress,

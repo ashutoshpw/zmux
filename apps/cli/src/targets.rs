@@ -2,12 +2,16 @@
 use super::*;
 use zmux_desktop_runtime::targets::{TargetOperation, TargetRequest};
 use zmux_workspace_core::targets::{CallerContext, TargetAction, TargetRef, TargetScope};
+use zmux_workspace_core::{Direction, Navigation};
 
 pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError> {
     if help_requested(tail) {
         return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
     }
     let mut args = utf8_args(tail)?;
+    if navigation_command(command) {
+        return parse_navigation(command, &args);
+    }
     let browser_verb = if command == "browser" {
         if args.as_slice() == ["help"] {
             return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
@@ -40,7 +44,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         let slot = match flag.as_str() {
             "--workspace" => Some(&mut scope.workspace),
             "--pane" => Some(&mut scope.pane),
-            "--surface" => Some(&mut scope.surface),
+            "--surface" | "--tab" => Some(&mut scope.surface),
             "--expect-revision" => {
                 if expected_model_revision.is_some() {
                     return Err(CliError("repeated --expect-revision".into()));
@@ -324,5 +328,199 @@ fn target_and_value(
         _ => Err(CliError(format!(
             "expected {label}; use leading selector options or the legacy positional target"
         ))),
+    }
+}
+
+fn navigation_command(command: &str) -> bool {
+    matches!(
+        command,
+        "new-split"
+            | "select-workspace"
+            | "next-workspace"
+            | "previous-workspace"
+            | "last-workspace"
+            | "next-tab"
+            | "previous-tab"
+            | "last-tab"
+            | "next-pane"
+            | "previous-pane"
+            | "last-pane"
+            | "focus-direction"
+            | "tab-action"
+    )
+}
+
+/// These navigation commands allow options on either side of their positional verb.
+/// Existing text-bearing commands retain their delimiter/leading-selector grammar.
+fn parse_navigation(command: &str, args: &[String]) -> Result<Parsed, CliError> {
+    let mut scope = TargetScope::default();
+    let mut revision = None;
+    let mut focus = None;
+    let mut action_name = None;
+    let mut title = None;
+    let mut values = Vec::new();
+    let mut cursor = 0;
+    while cursor < args.len() {
+        let flag = args[cursor].as_str();
+        if flag == "--" {
+            values.extend_from_slice(&args[cursor + 1..]);
+            break;
+        }
+        let workspace_only = matches!(
+            command,
+            "select-workspace" | "next-workspace" | "previous-workspace" | "last-workspace"
+        );
+        let slot = match flag {
+            "--workspace" => Some(&mut scope.workspace),
+            "--pane" if !workspace_only => Some(&mut scope.pane),
+            "--surface" | "--tab" if !workspace_only => Some(&mut scope.surface),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            if slot.is_some() {
+                return Err(CliError(format!("repeated {flag} selector")));
+            }
+            *slot = Some(target(option_value(args, cursor, flag)?)?);
+            cursor += 2;
+            continue;
+        }
+        match flag {
+            "--expect-revision" => {
+                if revision.is_some() {
+                    return Err(CliError("repeated --expect-revision".into()));
+                }
+                revision = Some(option_value(args, cursor, flag)?.parse::<u64>().map_err(
+                    |_| CliError("model revision must be a nonnegative integer".into()),
+                )?);
+                cursor += 2;
+            }
+            "--focus" if command == "new-split" => {
+                if focus.is_some() {
+                    return Err(CliError("repeated or conflicting focus option".into()));
+                }
+                focus = Some(match option_value(args, cursor, flag)? {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(CliError("--focus requires true or false".into())),
+                });
+                cursor += 2;
+            }
+            "--no-focus" if command == "new-split" => {
+                if focus.replace(false).is_some() {
+                    return Err(CliError("repeated or conflicting focus option".into()));
+                }
+                cursor += 1;
+            }
+            "--action" if command == "tab-action" => {
+                if action_name.is_some() {
+                    return Err(CliError("repeated --action".into()));
+                }
+                action_name = Some(option_value(args, cursor, flag)?.to_owned());
+                cursor += 2;
+            }
+            "--title" if command == "tab-action" => {
+                if title.is_some() {
+                    return Err(CliError("repeated --title".into()));
+                }
+                title = Some(option_value(args, cursor, flag)?.to_owned());
+                cursor += 2;
+            }
+            other if other.starts_with('-') => {
+                return Err(CliError(format!("unknown {command} option {other}")));
+            }
+            _ => {
+                values.push(args[cursor].clone());
+                cursor += 1;
+            }
+        }
+    }
+    let action = match command {
+        "new-split" => TargetAction::SplitPaneDirectional {
+            direction: parse_direction(&values)?,
+            focus: focus.unwrap_or(false),
+        },
+        "focus-direction" => TargetAction::FocusPaneDirection {
+            direction: parse_direction(&values)?,
+        },
+        "select-workspace" => {
+            optional_target(&values, &mut scope.workspace)?;
+            TargetAction::SelectWorkspace
+        }
+        "tab-action" => {
+            let name = match action_name {
+                Some(name) => name,
+                None if !values.is_empty() => values.remove(0),
+                None => return Err(CliError("tab-action requires an action".into())),
+            }
+            .to_lowercase()
+            .replace('_', "-");
+            match name.as_str() {
+                "rename" => {
+                    let name = match (title, values.is_empty()) {
+                        (Some(title), true) => title,
+                        (None, false) => values.join(" "),
+                        _ => return Err(CliError(
+                            "tab-action rename requires --title or trailing title words, not both"
+                                .into(),
+                        )),
+                    };
+                    TargetAction::RenameSurface { name }
+                }
+                "close-others" if title.is_none() && values.is_empty() => {
+                    TargetAction::CloseOtherSurfaces
+                }
+                "close-others" => {
+                    return Err(CliError(
+                        "tab-action close-others accepts no title or trailing arguments".into(),
+                    ));
+                }
+                _ => {
+                    return Err(CliError(format!(
+                        "unsupported tab-action {name}; supported actions: rename, close-others"
+                    )));
+                }
+            }
+        }
+        _ => {
+            if !values.is_empty() {
+                return Err(CliError(format!("{command} accepts target options only")));
+            }
+            let direction = if command.starts_with("next-") {
+                Navigation::Next
+            } else if command.starts_with("previous-") {
+                Navigation::Previous
+            } else {
+                Navigation::Last
+            };
+            if command.ends_with("workspace") {
+                TargetAction::NavigateWorkspace { direction }
+            } else if command.ends_with("tab") {
+                TargetAction::NavigateSurface { direction }
+            } else {
+                TargetAction::NavigatePane { direction }
+            }
+        }
+    };
+    request(scope, revision, TargetOperation::Action { action })
+}
+
+fn option_value<'a>(args: &'a [String], cursor: usize, flag: &str) -> Result<&'a str, CliError> {
+    args.get(cursor + 1)
+        .map(String::as_str)
+        .ok_or_else(|| CliError(format!("{flag} requires a value")))
+}
+
+fn parse_direction(values: &[String]) -> Result<Direction, CliError> {
+    match values {
+        [value] => match value.as_str() {
+            "left" => Ok(Direction::Left),
+            "right" => Ok(Direction::Right),
+            "up" => Ok(Direction::Up),
+            "down" => Ok(Direction::Down),
+            _ => Err(CliError("direction must be left, right, up or down".into())),
+        },
+        _ => Err(CliError(
+            "expected one direction: left, right, up or down".into(),
+        )),
     }
 }
