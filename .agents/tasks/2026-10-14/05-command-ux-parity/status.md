@@ -5,6 +5,16 @@
 
 ## Active implementation
 
+- `c01c3bc` Foundation passes Linux and macOS (`38786746911`). Native
+  `38786746932` failed strict Swift compilation at the zoom fixture's CGFloat
+  string conversion; explicit Double conversion is repaired and isolated
+  `scripts/check` passes again. The earlier window-lifecycle timeout remains
+  unresolved; its new traces have not yet executed.
+- PTY `38786746778` identifies Darwin cleanup deadline with master still open;
+  master-before-wait repair passes independent focused Linux acceptance. Zellij
+  `38787432280` confirms authentication repair but exposes short-read drain
+  throttling in its TERM-output fixture; bounded waiter repair is in progress.
+
 - Integrated workspace moves, corrected browser zoom and bounded native lifecycle
   diagnostics pass fresh `scripts/check`: 255 tests plus strict Clippy and C ABI.
   CLI moves default to no focus; native geometry follows workspace UUIDs.
