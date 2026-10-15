@@ -5,6 +5,18 @@
 
 ## Active implementation
 
+- `01b28e7` Foundation passes both hosts; universal native build passes, packaged
+  startup again stops at initial makeKeyAndOrderFront. The bounded sample shows
+  an idle AppKit run loop, not a blocking Rust/PTY stack. Retaining one menu tree
+  per native window repairs repeated submenu reparenting on key callbacks; causal
+  confirmation requires the next native run. Parent isolated full check passes.
+- Browser click committed `8b66276`: 261 portable tests, strict checks, 57 registry
+  probes and independent 62-case DOM check pass; native execution remains pending.
+- PTY `38791084172` at `1abc98d` passes Linux and Darwin, including actual partial
+  writes, cleanup and the two intentional failure controls. Production terminal
+  engine selection is unchanged. Numbered workspace selection and remembered
+  browser focus are under implementation/review; R03 foreground ownership is active.
+
 - Workspace ordering committed `b4fcf6e`: parent full isolated `scripts/check`
   passes after repairing a prompt-sensitive cwd fixture with exact framed actual
   pwd output. Independent ordering and fixture amendment reviews pass. Native
