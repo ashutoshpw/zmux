@@ -257,7 +257,7 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
     assert_eq!(frozen["behavioral_parity_verified"], false);
     let entries = frozen["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 428);
-    for spelling in ["new-window", "browser click"] {
+    for spelling in ["new-window", "browser dblclick"] {
         let row = entries
             .iter()
             .find(|row| row["reference_command"] == spelling)
@@ -266,6 +266,20 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
         assert!(row["local_contract"].is_null());
         assert!(!contracts.iter().any(|leaf| leaf["name"] == spelling));
     }
+    let click = entries
+        .iter()
+        .find(|row| row["inventory_id"] == "CMD-244")
+        .unwrap();
+    assert_eq!(
+        click["status"],
+        "local_counterpart_compatibility_unverified"
+    );
+    assert_eq!(click["local_contract"], "browser click");
+    assert!(
+        contracts
+            .iter()
+            .any(|leaf| leaf["name"] == "browser click" && leaf["contract_status"] == "partial")
+    );
     let checked = Command::new(env!("CARGO_BIN_EXE_zmux"))
         .args([
             "--socket",

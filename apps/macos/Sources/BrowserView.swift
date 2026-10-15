@@ -416,7 +416,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             world = operation.isolatedEval ? BrowserAutomationScript.isolatedWorld : .page
             operations[id]?.mutationStarted = true
         } else { world = BrowserAutomationScript.isolatedWorld }
-        if case .fill = action { operations[id]?.mutationStarted = true }
+        switch action {
+        case .fill, .click: operations[id]?.mutationStarted = true
+        default: break
+        }
         javaScriptInFlight.insert(id)
         webView.callAsyncJavaScript(BrowserAutomationScript.source, arguments: ["payload": payload], in: nil, in: world) { [weak self] result in
             guard let self else { return }

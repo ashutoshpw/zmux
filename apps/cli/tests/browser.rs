@@ -177,12 +177,26 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
         vec!["browser", "back", "--help"],
         vec!["browser", "zoom", "--help"],
         vec!["browser", "fill", "--help"],
+        vec!["browser", "click", "--help"],
     ] {
         let output = invoke(socket, &fixture.0, &args);
         assert!(output.status.success(), "offline help failed: {args:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("--snapshot-after"));
     }
     for (args, reason) in [
+        (vec!["browser", "click"], "requires a selector"),
+        (
+            vec!["browser", "click", "#send", "#other"],
+            "exactly one selector",
+        ),
+        (
+            vec!["browser", "click", "--selector", "#send", "#other"],
+            "exactly one selector",
+        ),
+        (
+            vec!["browser", "click", "#send", "--text", "x"],
+            "unknown browser click option",
+        ),
         (vec!["browser", "fill"], "requires a selector"),
         (
             vec!["browser", "fill", "#entry", "--text"],
@@ -522,6 +536,8 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
         (vec!["fill", "--selector", "#entry", "--text", "quoted \" \\ \n雪", "--snapshot-after"], json!({"action":"fill","selector":"#entry","text":"quoted \" \\ \n雪","snapshot_after":true})),
         (vec!["fill", "#entry"], json!({"action":"fill","selector":"#entry","text":"","snapshot_after":false})),
         (vec!["fill", "#entry", "--text", ""], json!({"action":"fill","selector":"#entry","text":"","snapshot_after":false})),
+        (vec!["click", "#send"], json!({"action":"click","selector":"#send","snapshot_after":false})),
+        (vec!["click", "--selector", "@zmux:host:1:7", "--snapshot-after"], json!({"action":"click","selector":"@zmux:host:1:7","snapshot_after":true})),
         (vec!["find", "role", "button", "--name", "Continue", "--exact"], json!({"action":"find","locator":{"kind":"role","query":"button","name":"Continue","exact":true,"selector":null,"index":null}})),
         (vec!["find", "text", "--", "--literal"], json!({"action":"find","locator":{"kind":"text","query":"--literal","name":null,"exact":false,"selector":null,"index":null}})),
         (vec!["find", "nth", "--selector", "button", "--index", "2"], json!({"action":"find","locator":{"kind":"nth","query":null,"name":null,"exact":false,"selector":"button","index":2}})),
@@ -584,6 +600,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         ],
         vec!["browser", "snapshot", "--surface", surface],
         vec!["browser", "zoom", "1.25", "--surface", surface],
+        vec!["browser", "click", "#send", "--surface", surface],
         vec![
             "browser",
             "fill",
@@ -618,6 +635,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         vec!["browser", "forward", "--surface", surface],
         vec!["browser", "reload", "--surface", surface],
         vec!["browser", "zoom", "in", "--surface", surface],
+        vec!["browser", "click", "#send", "--surface", surface],
         vec!["browser", "fill", "#entry", "--surface", surface],
     ] {
         let output = invoke(&socket, &fixture.0, &args);
