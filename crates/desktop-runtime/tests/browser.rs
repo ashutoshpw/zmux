@@ -89,6 +89,226 @@ fn attach(
     owner
 }
 
+fn wait_desktop(
+    desktop: &zmux_desktop_runtime::Desktop,
+    predicate: &dyn Fn(&zmux_desktop_runtime::Snapshot) -> bool,
+) -> std::sync::Arc<zmux_desktop_runtime::Snapshot> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(snapshot) = desktop.snapshot()
+            && predicate(&snapshot)
+        {
+            return snapshot;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "desktop browser state did not settle"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation() {
+    use zmux_desktop_runtime::{
+        Command, Desktop, Request, Shell,
+        targets::{TargetOperation, TargetRequest},
+    };
+    use zmux_workspace_core::targets::TargetAction;
+    let desktop = Desktop::new(Shell {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        cwd: None,
+    })
+    .unwrap();
+    let initial = wait_desktop(&desktop, &|snapshot| !snapshot.model.workspaces.is_empty());
+    let send = |id, payload| {
+        desktop
+            .submit(Request {
+                version: 1,
+                request_id: id,
+                payload,
+            })
+            .unwrap();
+        wait_desktop(&desktop, &|snapshot| snapshot.last_request_id == id)
+    };
+    let created = send(
+        1,
+        Command::Action {
+            action: Action::CreateBrowser {
+                focus: true,
+                pane_id: initial.model.workspaces[0].focused_pane,
+                url: "https://example.org/old".into(),
+            },
+        },
+    );
+    let browser = created.model.workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    let original = BrowserOwner {
+        epoch: created.browser_epoch,
+        identity_namespace: created.model.identity_namespace,
+        surface_id: browser.id,
+        host_id: Uuid::new_v4(),
+        document_generation: 1,
+        model_navigation: browser.navigation,
+    };
+    desktop
+        .browser_host_event(BrowserHostEvent::Attach {
+            epoch: original.epoch,
+            surface_id: browser.id,
+            host_id: original.host_id,
+            document_generation: 1,
+            model_navigation: original.model_navigation,
+        })
+        .unwrap();
+    let background = send(
+        2,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Keep focus".into(),
+            },
+        },
+    );
+    let foreground = background.model.focused_workspace;
+    let navigated = send(
+        3,
+        Command::Targeted {
+            request: TargetRequest {
+                scope: TargetScope {
+                    surface: Some(format!("surface:{}", browser.id.0).parse().unwrap()),
+                    ..Default::default()
+                },
+                caller: CallerContext::default(),
+                expected_model_revision: None,
+                operation: TargetOperation::Action {
+                    action: TargetAction::NavigateBrowser {
+                        url: "https://example.org/new".into(),
+                    },
+                },
+            },
+        },
+    );
+    assert!(navigated.last_error.is_none());
+    let unowned = send(
+        4,
+        Command::Action {
+            action: Action::ObserveBrowser {
+                surface_id: browser.id,
+                url: "https://example.org/old".into(),
+                title: "Stale title".into(),
+            },
+        },
+    );
+    assert!(
+        unowned.last_error.is_some(),
+        "generic observation bypassed native document ownership after a CLI navigation"
+    );
+    assert_eq!(unowned.model, navigated.model);
+    let observed = |owner: &BrowserOwner, url: &str, title: &str| {
+        serde_json::from_value(json!({
+            "event":"observed", "owner":owner, "url":url, "title":title,
+        }))
+        .unwrap()
+    };
+    assert!(
+        desktop
+            .browser_host_event(observed(
+                &original,
+                "https://example.org/old",
+                "Late old document"
+            ))
+            .is_err()
+    );
+    assert_eq!(desktop.snapshot().unwrap().model, navigated.model);
+    let mut current = original.clone();
+    current.document_generation += 1;
+    current.model_navigation += 1;
+    desktop
+        .browser_host_event(BrowserHostEvent::DocumentChanged {
+            owner: original.clone(),
+            document_generation: current.document_generation,
+            model_navigation: current.model_navigation,
+            caused_by: None,
+        })
+        .unwrap();
+    let title = "\u{0007}界".repeat(130);
+    desktop
+        .browser_host_event(observed(&current, "https://example.org/redirected", &title))
+        .unwrap();
+    let accepted = desktop.snapshot().unwrap();
+    let actual = accepted.model.workspaces[0].root.panes()[0]
+        .surfaces
+        .iter()
+        .find(|surface| surface.id == browser.id)
+        .unwrap();
+    assert_eq!(actual.title, "界".repeat(128));
+    assert_eq!(
+        actual.url.as_deref(),
+        Some("https://example.org/redirected")
+    );
+    assert_eq!(
+        actual.navigation, current.model_navigation,
+        "observations must not cause another load"
+    );
+    assert_eq!(accepted.model.focused_workspace, foreground);
+    for owner in [
+        original,
+        BrowserOwner {
+            host_id: Uuid::new_v4(),
+            ..current.clone()
+        },
+        BrowserOwner {
+            identity_namespace: Uuid::new_v4(),
+            ..current.clone()
+        },
+        BrowserOwner {
+            epoch: Uuid::new_v4(),
+            ..current.clone()
+        },
+    ] {
+        assert!(
+            desktop
+                .browser_host_event(observed(&owner, "https://example.org/stale", "Stale title"))
+                .is_err()
+        );
+    }
+    assert!(
+        desktop
+            .browser_host_event(observed(
+                &current,
+                "https://example.org/",
+                &"x".repeat(4097)
+            ))
+            .is_err()
+    );
+    assert!(
+        desktop
+            .browser_host_event(observed(
+                &current,
+                &format!("https://example.org/{}", "x".repeat(4096)),
+                "oversized URL"
+            ))
+            .is_err()
+    );
+    assert_eq!(desktop.snapshot().unwrap().model, accepted.model);
+    let closed = send(
+        5,
+        Command::Action {
+            action: Action::CloseSurface {
+                surface_id: browser.id,
+            },
+        },
+    );
+    assert!(
+        desktop
+            .browser_host_event(observed(&current, "https://example.org/closed", "Closed"))
+            .is_err()
+    );
+    assert_eq!(desktop.snapshot().unwrap().model, closed.model);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
 #[test]
 fn executor_resolves_uuid_once_and_native_dispatch_is_once_only() {
     let (mut model, surface) = fixture();
