@@ -5,6 +5,11 @@
 
 ## Active implementation
 
+- Browser type/select/scroll now have bounded admitted actions and DOM behavior
+  checks, including value versus text-content beforeinput ordering. Parent
+  combined fullcheck passes280 Rust tests, strict checks and C ABI; independent
+  DOM140 and source review pass. Native WebKit execution remains pending.
+
 - R03 foreground local-zellij start/attach/list/status now uses kernel-verified
   ownership, a retained workload supervisor and shared child lifetime management.
   Independent Linux24 checks include real detach/reattach, input/resize and signal

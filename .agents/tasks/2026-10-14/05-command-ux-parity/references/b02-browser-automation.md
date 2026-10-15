@@ -1,5 +1,80 @@
 # B02a browser automation bridge
 
+## B02g type, select and pixel scroll (2026-10-15)
+
+CMD-251/256/257 now have bounded local counterparts: `browser type`, `select`
+and `scroll`. Type follows Fill's selector/text grammar, but text must be nonblank;
+Select accepts one selector plus `--value VALUE` or one value operand. Both retain
+raw CLI bytes until Rust admission, which bounds text to 8192 UTF-8 bytes, rejects
+NUL/blank input, then trims whitespace/newlines. This follows the pinned server's
+`v2String` semantics; Select's CLI can syntactically carry empty text but admission
+rejects it. Fill still preserves literal whitespace and empty clearing. Its
+CMD-252 discovery row is now reconciled as an existing local counterpart, backed
+by its executable wire/policy/DOM checks; no compatibility status is promoted.
+
+Behavioral references are cmux `3ba653b9e5afb11d0bc578031142950d6136697e`,
+`CLI/cmux.swift:19593–19736`, `Sources/TerminalController.swift:8938–8973`,
+`:9182–9265` and `Sources/TerminalControllerV2ParamParsingSupport.swift:5–9`.
+No implementation, tests or assets were imported or translated. Type appends the
+entire admitted chunk to the complete value/textContent, ignoring caret selection.
+It uses ordinary DOM focus and cancelable `beforeinput` with insertText/data,
+then the inherited native value setter plus input/change; non-value content gets
+textContent plus input only. Cancellation fails input_rejected without forced
+mutation. Value-bearing append captures its replacement before beforeinput, while
+non-value textContent append observes page changes made by beforeinput. A real
+DOM regression first failed the latter ordering and passed after the shared owner
+was narrowed; the value-ordering counterpart passes throughout. No disabled/readOnly guard, per-character keyboard events, native
+keyboard defaults, IME or trusted typing are implied.
+
+Select requires any `value` property rather than a SELECT tag. It uses the inherited
+setter, then input/change even when unchanged. It does not focus, dispatch click/
+beforeinput, enforce disabled state or verify that an option matched; an unknown
+option can leave the native value empty while setter dispatch succeeds.
+
+Scroll accepts optional `--selector`, signed integer `--dx`/`--dy` and at most one
+positional vertical delta (conflicting with --dy). Deltas default to zero and are
+bounded to exact JavaScript-safe integers, magnitude at most 9007199254740991;
+fractional/nonfinite/out-of-range values reject before admission. Omitted selector
+uses instant window.scrollBy; explicit CSS first-match/exact ref uses element
+scrollBy or scrollLeft/Top fallback. Actual geometry may clamp. No wheel events or
+synthetic focus are added. All three share mutation-policy read-only denial,
+submit-once transport, host/document/deadline fencing and optional bounded snapshot.
+Successful values contain dispatched/ref, with null ref for window scroll.
+
+Test authoring boundaries: CLI wire/grammar tests and actual socket policy protect
+parsing, scope and honest native-unavailable failure; runtime tests independently
+protect pre-dispatch normalization, byte/NUL/numeric bounds, once-only dispatch,
+expiry uncertainty and document invalidation. Real DOM observers protect delivered
+events, native setter/default behavior and actual offset/value changes. No test-only
+production seam was added. The CLI regression failed unknown subcommand type; a
+baseline-production control with a valid existing target returns unsupported_action
+at the new append assertion. The production script passes 140 Chromium DOM cases,
+including all prior 106 and 34 edit/scroll cases. Targeted browser suites pass
+9 CLI and 16 runtime tests; the catalog suite passes 13 tests.
+
+`BrowserEditScrollSmoke` is authored through the bundled CLI on a never-selected
+real HTTP WebKit host. It verifies trimmed whole-value append despite a selected
+range, first-match/ref reuse, cancelable edit without replay, beforeinput page
+changes with distinct value/textContent ordering, selection events and
+unmatched-option behavior, signed element/window offsets and optional snapshots.
+It checks exact receipt host/document identity and canonical/native focus retention.
+Failures carry actual observed values/events/document focus/ready state. The App
+requires browser_edit_scroll. Exact-source strict Swift and actual packaged WebKit
+execution remain pending; local DOM or portable Rust checks do not establish them.
+Native press/keydown/keyup remain a separate unimplemented keyboard group.
+
+Final isolated verification archived committed baseline `6e63dbe` and overlaid
+only 15 owned browser files/blocks, excluding R03 WIP. Full scripts/check passes
+272 Rust tests across 50 suite outputs, formatting, strict all-target workspace
+Clippy, dependency notices and C ABI. The exact frozen source passes 140 real
+Chromium cases and 69 catalog probes for 428 frozen rows, compatibility false.
+The non-value beforeinput ordering regression has recorded red and green results;
+its value-bearing counterpart protects the distinct pre-event capture behavior.
+Source/log/receipt artifacts are retained at
+`/tmp/zmux-b02g-edit-scroll-isolated-20261015/`. No staging, commit or push was
+performed by this author. Parent owns independent review, integration and native
+execution; local Rust/Chromium evidence does not close those gates.
+
 ## B02f browser interaction family (2026-10-15)
 
 CMD-245–250 now have bounded local counterparts: `browser dblclick`, `hover`,

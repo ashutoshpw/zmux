@@ -20,6 +20,8 @@ use zmux_workspace_core::{
 
 pub const MAX_SCRIPT_BYTES: usize = 8192;
 pub const MAX_INPUT_TEXT_BYTES: usize = 8192;
+/// Largest integer delta represented exactly by the JavaScript bridge.
+pub const MAX_SCROLL_DELTA: i64 = 9_007_199_254_740_991;
 pub const MAX_SELECTOR_BYTES: usize = 2048;
 pub const MAX_ATTRIBUTE_BYTES: usize = 128;
 pub const MAX_SNAPSHOT_DEPTH: u32 = 32;
@@ -86,6 +88,28 @@ pub enum BrowserAction {
     },
     Click {
         selector: String,
+        #[serde(default)]
+        snapshot_after: bool,
+    },
+    Type {
+        selector: String,
+        text: String,
+        #[serde(default)]
+        snapshot_after: bool,
+    },
+    Select {
+        selector: String,
+        value: String,
+        #[serde(default)]
+        snapshot_after: bool,
+    },
+    Scroll {
+        #[serde(default)]
+        selector: Option<String>,
+        #[serde(default)]
+        dx: i64,
+        #[serde(default)]
+        dy: i64,
         #[serde(default)]
         snapshot_after: bool,
     },
@@ -282,6 +306,41 @@ impl BrowserAction {
             | Self::Interact {
                 selector: value, ..
             } => selector(Some(value))?,
+            Self::Type {
+                selector: value,
+                text,
+                ..
+            }
+            | Self::Select {
+                selector: value,
+                value: text,
+                ..
+            } => {
+                selector(Some(value))?;
+                if text.trim().is_empty()
+                    || text.len() > MAX_INPUT_TEXT_BYTES
+                    || text.contains('\0')
+                {
+                    return Err(BrowserError::Invalid(
+                        "browser type/select text must be nonblank, contain no NUL and fit 8192 UTF-8 bytes",
+                    ));
+                }
+            }
+            Self::Scroll {
+                selector: value,
+                dx,
+                dy,
+                ..
+            } => {
+                selector(value.as_deref())?;
+                if !(-MAX_SCROLL_DELTA..=MAX_SCROLL_DELTA).contains(dx)
+                    || !(-MAX_SCROLL_DELTA..=MAX_SCROLL_DELTA).contains(dy)
+                {
+                    return Err(BrowserError::Invalid(
+                        "browser scroll deltas must be exact signed integers within 9007199254740991 pixels",
+                    ));
+                }
+            }
             Self::Fill {
                 selector: value,
                 text,
@@ -623,7 +682,27 @@ impl BrowserRuntime {
                 result: None,
                 error: None,
             },
-            action: request.action,
+            action: match request.action {
+                BrowserAction::Type {
+                    selector,
+                    text,
+                    snapshot_after,
+                } => BrowserAction::Type {
+                    selector,
+                    text: text.trim().to_owned(),
+                    snapshot_after,
+                },
+                BrowserAction::Select {
+                    selector,
+                    value,
+                    snapshot_after,
+                } => BrowserAction::Select {
+                    selector,
+                    value: value.trim().to_owned(),
+                    snapshot_after,
+                },
+                action => action,
+            },
             deadline: now + Duration::from_millis(request.timeout_ms),
             dispatched: false,
             result_bytes: 0,

@@ -163,6 +163,8 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  code(await call({action:'click',selector:'['}), 'invalid_selector');
  clickTarget.remove();
  code(await call({action:'click',selector:clicked.value.ref}), 'stale_reference');
+ const appended = await call({action:'type',selector:'#fill-notes',text:'added'});
+ assert(appended.value?.dispatched && document.getElementById('fill-notes').value === multiline + 'added', 'type appends text through the production edit owner', () => ({returned:appended}));
  // The interaction family observes actual event delivery and native defaults.
  const interact = (operation,selector,after=false) => call({action:'interact',operation,selector,snapshot_after:after});
  const controls = document.createElement('section');
@@ -243,6 +245,81 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  }
  double.remove();
  for (const operation of ['dblclick','hover','focus','check','uncheck','scroll_into_view']) code(await interact(operation,doubled.value.ref), 'stale_reference');
+ {
+ // Appending, value selection and pixel scrolling have distinct DOM contracts.
+ const editing = document.createElement('section');
+ editing.innerHTML = '<input id="type-one" class="type-many" value="seed"><input class="type-many" value="other"><textarea id="type-notes">old</textarea><div id="type-edit" contenteditable="true"><b>seed</b></div><input id="type-disabled" disabled value="old"><input id="type-readonly" readonly value="old"><select id="select-value"><option value="a">A</option><option value="b">B</option></select><select id="select-disabled" disabled><option value="a">A</option><option value="b">B</option></select><div id="not-value">No value</div><div class="scroll-many" id="scroll-one" style="width:150px;height:100px;overflow:scroll"><div style="width:1000px;height:1500px">Scroll content</div></div><div class="scroll-many" id="scroll-other" style="width:150px;height:100px;overflow:scroll"><div style="width:1000px;height:1500px">Other</div></div>';
+ document.body.append(editing);
+ const typedInput = document.getElementById('type-one'), typedEvents = [], keyboardEvents = [];
+ const nativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
+ let valueIntercepted = 0;
+ Object.defineProperty(typedInput,'value',{configurable:true,get(){return nativeValue.get.call(this)},set(){valueIntercepted++}});
+ for (const kind of ['beforeinput','input','change']) typedInput.addEventListener(kind,event=>typedEvents.push({kind:event.type,type:event.inputType,data:event.data,value:typedInput.value,trusted:event.isTrusted}));
+ for (const kind of ['keydown','keypress','keyup']) typedInput.addEventListener(kind,event=>keyboardEvents.push(event.type));
+ typedInput.focus(); typedInput.setSelectionRange(0,2);
+ const typed = await call({action:'type',selector:'.type-many',text:'雪',snapshot_after:true});
+ assert(typed.value?.dispatched && typedInput.value === 'seed雪' && document.querySelectorAll('.type-many')[1].value === 'other', 'type appends whole text to first match rather than caret replacement');
+ assert(typedEvents.map(e=>e.kind).join(',') === 'beforeinput,input,change' && typedEvents[0].value === 'seed' && typedEvents[1].value === 'seed雪' && typedEvents.slice(0,2).every(e=>e.type==='insertText' && e.data==='雪'), 'type emits one cancelable append transaction with independent value observers');
+ assert(valueIntercepted === 0 && keyboardEvents.length === 0 && typedEvents.every(e=>!e.trusted) && typed.snapshot?.nodes?.length>0, 'type native setter bypasses instance tracker without keyboard/trusted events or snapshot replay');
+ await call({action:'type',selector:typed.value.ref,text:'!'});
+ assert(typedInput.value === 'seed雪!' && typedEvents.length === 6, 'type exact ref appends once');
+ typedInput.addEventListener('beforeinput',event=>event.preventDefault(),{once:true});
+ code(await call({action:'type',selector:'#type-one',text:'denied',snapshot_after:true}), 'input_rejected');
+ assert(typedInput.value === 'seed雪!' && typedEvents.length === 7, 'canceled append leaves value and subsequent events untouched');
+ typedInput.addEventListener('beforeinput',()=>nativeValue.set.call(typedInput,'page-change'),{once:true});
+ await call({action:'type',selector:'#type-one',text:'tail'});
+ assert(typedInput.value==='seed雪!tail', 'value append captures its replacement before page beforeinput handlers');
+ await call({action:'type',selector:'#type-notes',text:'\n雪'});
+ assert(document.getElementById('type-notes').value === 'old\n雪', 'type textarea preserves the admitted multiline chunk');
+ const editNode = document.getElementById('type-edit'), editKinds=[];
+ for (const kind of ['beforeinput','input','change']) editNode.addEventListener(kind,event=>editKinds.push(event.type));
+ await call({action:'type',selector:'#type-edit',text:'!'});
+ assert(editNode.textContent === 'seed!' && editNode.children.length===0 && editKinds.join(',')==='beforeinput,input', 'non-value append updates textContent with no change event');
+ editNode.addEventListener('beforeinput',()=>{editNode.textContent='page-change'},{once:true});
+ await call({action:'type',selector:'#type-edit',text:'tail'});
+ assert(editNode.textContent==='page-changetail', 'textContent append observes page changes made by beforeinput handlers');
+ for (const id of ['type-disabled','type-readonly']) {
+   await call({action:'type',selector:'#'+id,text:'!'});
+   assert(document.getElementById(id).value === 'old!', 'append does not add a disabled/readonly guard for '+id);
+ }
+ const select = document.getElementById('select-value'), selectedEvents=[];
+ for (const kind of ['beforeinput','click','input','change']) select.addEventListener(kind,event=>selectedEvents.push(event.type));
+ const focusBeforeSelect=document.activeElement;
+ const selected = await call({action:'select',selector:'#select-value',value:'b',snapshot_after:true});
+ assert(select.value==='b' && selectedEvents.join(',')==='input,change' && document.activeElement===focusBeforeSelect && selected.snapshot?.nodes?.length>0, 'select sets native value and emits input/change without focus or activation');
+ await call({action:'select',selector:selected.value.ref,value:'b'});
+ assert(selectedEvents.join(',')==='input,change,input,change', 'unchanged selection still emits input/change');
+ const unknownChoice=await call({action:'select',selector:'#select-value',value:'missing'});
+ assert(unknownChoice.value?.dispatched && select.value==='', 'select reports setter dispatch without final option-match validation');
+ await call({action:'select',selector:'#select-disabled',value:'b'});
+ assert(document.getElementById('select-disabled').value==='b', 'select does not add a disabled guard');
+ const beforeInputSelect=typedEvents.length;
+ await call({action:'select',selector:'#type-one',value:'replacement'});
+ assert(typedInput.value==='replacement' && valueIntercepted===0 && typedEvents.length===beforeInputSelect+2 && typedEvents.slice(-2).map(e=>e.kind).join(',')==='input,change', 'select accepts other value-bearing elements and uses inherited setter without beforeinput');
+ code(await call({action:'select',selector:'#not-value',value:'x'}), 'not_select');
+ const scrollNode=document.getElementById('scroll-one'), scrollFocus=document.activeElement;
+ const scrolled=await call({action:'scroll',selector:'.scroll-many',dx:120,dy:240,snapshot_after:true});
+ assert(scrollNode.scrollLeft===120 && scrollNode.scrollTop===240 && document.getElementById('scroll-other').scrollTop===0, 'scroll targets first CSS match with exact pixel deltas');
+ assert(scrolled.value?.ref && scrolled.snapshot?.nodes?.length>0 && document.activeElement===scrollFocus, 'element scroll snapshot observes one mutation without changing DOM focus');
+ await call({action:'scroll',selector:scrolled.value.ref,dx:-20,dy:-40});
+ assert(scrollNode.scrollLeft===100 && scrollNode.scrollTop===200, 'negative scroll deltas and exact refs are retained');
+ Object.defineProperty(scrollNode,'scrollBy',{configurable:true,value:null});
+ await call({action:'scroll',selector:'#scroll-one',dx:10,dy:20});
+ assert(scrollNode.scrollLeft===110 && scrollNode.scrollTop===220, 'element scroll fallback updates actual native scroll offsets');
+ window.scrollTo({left:0,top:0,behavior:'instant'});
+ const windowScrolled=await call({action:'scroll',selector:null,dx:120,dy:240,snapshot_after:true});
+ assert(scrollX===120 && scrollY===240 && windowScrolled.value?.ref===null && windowScrolled.snapshot?.nodes?.length>0, 'omitted selector scrolls the window with no fabricated element ref');
+ await call({action:'scroll',dx:-120,dy:-240});
+ assert(scrollX===0 && scrollY===0 && document.activeElement===scrollFocus, 'window scroll retains DOM focus and negative deltas');
+ for (const action of [
+   {action:'type',selector:'#missing-edit',text:'x'}, {action:'select',selector:'#missing-edit',value:'x'}, {action:'scroll',selector:'#missing-edit',dx:0,dy:1},
+   {action:'type',selector:'[',text:'x'}, {action:'select',selector:'[',value:'x'}, {action:'scroll',selector:'[',dx:0,dy:1}
+ ]) code(await call(action),action.selector==='['?'invalid_selector':'element_not_found');
+ typedInput.remove(); scrollNode.remove();
+ for (const action of [
+   {action:'type',selector:typed.value.ref,text:'x'}, {action:'select',selector:typed.value.ref,value:'x'}, {action:'scroll',selector:scrolled.value.ref,dx:0,dy:1}
+ ]) code(await call(action),'stale_reference');
+ }
  document.querySelector('#send').remove();
  code(await wait(button.value.ref, 'detached'), 'stale_reference');
  generation = '2';

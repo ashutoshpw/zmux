@@ -75,6 +75,9 @@ enum BrowserAction: Codable, Sendable {
     case reload(snapshotAfter: Bool)
     case zoom(operation: BrowserZoom)
     case fill(selector: String, text: String, snapshotAfter: Bool)
+    case type(selector: String, text: String, snapshotAfter: Bool)
+    case select(selector: String, value: String, snapshotAfter: Bool)
+    case scroll(selector: String?, dx: Int64, dy: Int64, snapshotAfter: Bool)
     case click(selector: String, snapshotAfter: Bool)
     case interact(operation: BrowserInteraction, selector: String, snapshotAfter: Bool)
     case eval(script: String)
@@ -83,7 +86,7 @@ enum BrowserAction: Codable, Sendable {
     case find(locator: BrowserLocator)
     case wait(selector: String, state: String)
 
-    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation, text }
+    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation, text, value, dx, dy }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .action) {
@@ -92,6 +95,9 @@ enum BrowserAction: Codable, Sendable {
         case "reload": self = .reload(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "zoom": self = .zoom(operation: try c.decode(BrowserZoom.self, forKey: .operation))
         case "fill": self = .fill(selector: try c.decode(String.self, forKey: .selector), text: try c.decode(String.self, forKey: .text), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
+        case "type": self = .type(selector: try c.decode(String.self, forKey: .selector), text: try c.decode(String.self, forKey: .text), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
+        case "select": self = .select(selector: try c.decode(String.self, forKey: .selector), value: try c.decode(String.self, forKey: .value), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
+        case "scroll": self = .scroll(selector: try c.decodeIfPresent(String.self, forKey: .selector), dx: try c.decodeIfPresent(Int64.self, forKey: .dx) ?? 0, dy: try c.decodeIfPresent(Int64.self, forKey: .dy) ?? 0, snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "click": self = .click(selector: try c.decode(String.self, forKey: .selector), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "interact": self = .interact(operation: try c.decode(BrowserInteraction.self, forKey: .operation), selector: try c.decode(String.self, forKey: .selector), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "eval": self = .eval(script: try c.decode(String.self, forKey: .script))
@@ -111,9 +117,17 @@ enum BrowserAction: Codable, Sendable {
             try c.encode(name, forKey: .action); try c.encode(after, forKey: .snapshotAfter)
         case .eval(let script): try c.encode("eval", forKey: .action); try c.encode(script, forKey: .script)
         case .zoom(let operation): try c.encode("zoom", forKey: .action); try c.encode(operation, forKey: .operation)
-        case .fill(let selector, let text, let after):
-            try c.encode("fill", forKey: .action); try c.encode(selector, forKey: .selector)
+        case .fill(let selector, let text, let after), .type(let selector, let text, let after):
+            let name: String
+            if case .type = self { name = "type" } else { name = "fill" }
+            try c.encode(name, forKey: .action); try c.encode(selector, forKey: .selector)
             try c.encode(text, forKey: .text); try c.encode(after, forKey: .snapshotAfter)
+        case .select(let selector, let value, let after):
+            try c.encode("select", forKey: .action); try c.encode(selector, forKey: .selector)
+            try c.encode(value, forKey: .value); try c.encode(after, forKey: .snapshotAfter)
+        case .scroll(let selector, let dx, let dy, let after):
+            try c.encode("scroll", forKey: .action); try c.encodeIfPresent(selector, forKey: .selector)
+            try c.encode(dx, forKey: .dx); try c.encode(dy, forKey: .dy); try c.encode(after, forKey: .snapshotAfter)
         case .click(let selector, let after):
             try c.encode("click", forKey: .action); try c.encode(selector, forKey: .selector)
             try c.encode(after, forKey: .snapshotAfter)
@@ -131,7 +145,7 @@ enum BrowserAction: Codable, Sendable {
     }
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
-    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .click, .interact: true; default: false } }
+    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill, .type, .select, .scroll, .click, .interact: true; default: false } }
     var isWait: Bool { if case .wait = self { return true }; return false }
 }
 
@@ -470,18 +484,40 @@ enum BrowserAutomationScript {
       }
       return dispatched(node);
     };
-    const fill = () => {
-      const node = resolve(req.selector);
-      if (!node) fault('element_not_found', 'Fill selector did not match an element');
-      if (typeof node.focus === 'function') node.focus({preventScroll:true});
+    const editText = append => {
+      const node = inputTarget();
+      if (typeof node.focus === 'function') {
+        if (append) node.focus();
+        else node.focus({preventScroll:true});
+      }
       const hasValue = 'value' in node;
-      const edit = {bubbles:true, cancelable:true, inputType:'insertReplacementText', data:req.text};
-      if (!node.dispatchEvent(new InputEvent('beforeinput', edit))) fault('input_rejected', 'The page rejected the replacement text');
-      if (hasValue) setNativeProperty(node, 'value', req.text);
-      else node.textContent = req.text;
-      node.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertReplacementText', data:req.text}));
+      const inputType = append ? 'insertText' : 'insertReplacementText';
+      // Value edits capture the replacement before the page's beforeinput.
+      // Non-value editors append to textContent as it stands after that event.
+      const replacement = append && hasValue ? String(node.value || '') + req.text : req.text;
+      if (!node.dispatchEvent(new InputEvent('beforeinput', {bubbles:true, cancelable:true, inputType, data:req.text}))) {
+        fault('input_rejected', 'The page rejected the text edit');
+      }
+      if (hasValue) setNativeProperty(node, 'value', replacement);
+      else node.textContent = append ? String(node.textContent || '') + req.text : replacement;
+      node.dispatchEvent(new InputEvent('input', {bubbles:true, inputType, data:req.text}));
       if (hasValue) node.dispatchEvent(new Event('change', {bubbles:true}));
-      return {filled:true, ref:reference(node)};
+      return append ? dispatched(node) : {filled:true, ref:reference(node)};
+    };
+    const selectValue = () => {
+      const node = inputTarget();
+      if (!('value' in node)) fault('not_select', 'Selection target has no value property');
+      setNativeProperty(node, 'value', req.value);
+      node.dispatchEvent(new Event('input', {bubbles:true}));
+      node.dispatchEvent(new Event('change', {bubbles:true}));
+      return dispatched(node);
+    };
+    const scroll = () => {
+      const node = req.selector == null ? null : inputTarget();
+      if (!node) window.scrollBy({left:req.dx, top:req.dy, behavior:'instant'});
+      else if (typeof node.scrollBy === 'function') node.scrollBy({left:req.dx, top:req.dy, behavior:'instant'});
+      else { node.scrollLeft += req.dx; node.scrollTop += req.dy; }
+      return {dispatched:true, ref:node ? reference(node) : null};
     };
     const snapshot = options => {
       const root = resolve(options.selector);
@@ -580,11 +616,14 @@ enum BrowserAutomationScript {
       else if (req.action === 'get') value = get();
       else if (req.action === 'find') value = find(req.locator);
       else if (req.action === 'wait') value = wait();
-      else if (req.action === 'fill') value = fill();
+      else if (req.action === 'fill') value = editText(false);
+      else if (req.action === 'type') value = editText(true);
+      else if (req.action === 'select') value = selectValue();
+      else if (req.action === 'scroll') value = scroll();
       else if (req.action === 'click') value = click();
       else if (req.action === 'interact') value = interact();
       else fault('unsupported_action', 'Unsupported browser action');
-      const result = JSON.stringify({value, ...(['fill','click','interact'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
+      const result = JSON.stringify({value, ...(['fill','type','select','scroll','click','interact'].includes(req.action) && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
       if (new TextEncoder().encode(result).length > 58000) fault('result_too_large', 'Browser result exceeds the byte limit; narrow the selector');
       return result;
     } catch (error) {

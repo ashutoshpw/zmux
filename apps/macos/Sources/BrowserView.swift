@@ -464,7 +464,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             operations[id]?.mutationStarted = true
         } else { world = BrowserAutomationScript.isolatedWorld }
         switch action {
-        case .fill, .click, .interact: operations[id]?.mutationStarted = true
+        case .fill, .type, .select, .scroll, .click, .interact: operations[id]?.mutationStarted = true
         default: break
         }
         javaScriptInFlight.insert(id)

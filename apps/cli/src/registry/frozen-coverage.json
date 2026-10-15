@@ -1764,15 +1764,15 @@
       "inventory_id": "CMD-251",
       "reference_command": "browser type",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser type"
     },
     {
       "inventory_id": "CMD-252",
       "reference_command": "browser fill",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser fill"
     },
     {
       "inventory_id": "CMD-253",
@@ -1799,15 +1799,15 @@
       "inventory_id": "CMD-256",
       "reference_command": "browser select",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser select"
     },
     {
       "inventory_id": "CMD-257",
       "reference_command": "browser scroll",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser scroll"
     },
     {
       "inventory_id": "CMD-258",
