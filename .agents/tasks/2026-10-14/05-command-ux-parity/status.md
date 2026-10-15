@@ -5,6 +5,32 @@
 
 ## Active implementation
 
+- `824bb9f` repairs production Zellij Unix socket path limits using checked
+  canonical `/tmp` and unchanged private namespace ownership. Kernel/public CLI
+  long-TMPDIR regressions fail before the fix and pass afterward; isolated
+  fullcheck280 passes. `f14ceee` adds exact-self activation to the keyboard probe;
+  repaired native execution remains pending. These slices do not close V01.
+
+- Published `629bb2b` includes the validated Darwin child/process repair,
+  exact upstream-library macOS13 / consumer macOS14 inspection policy with
+  hash-pinned retained ARM64 reuse, and an isolated public WebKit keyboard probe.
+  Each source freeze passed fullcheck280; native outcomes remain separate.
+  Current runs: native38799167366, foundation38799167465,
+  Zellij38799176839, engine38799180282, keyboard38799183833.
+  Native/foundation fail on a Darwin Unix socket path exceeding SUN_LEN;
+  the owner lane independently reproduces the production temporary-root issue.
+  The keyboard probe compiles in strict Swift6 and executes all16 cases, but
+  lacks a key-window precondition, so no keyboard behavior is accepted.
+  Engine verification fails in its native linker fixture before artifact work;
+  the standard-runtime linkage repair is published as `41f1645` and retry
+  `38799601657` passes all hosted steps, including retained ARM reuse,
+  both Apple consumer links and ARM execution; independent artifact inventory
+  review remains pending. Intel execution and application linkage remain open.
+  No full-parity artifact is accepted or shared.
+- Local control-plane `/ready` freshly returns HTTP200 with identity/devices/
+  organizations ready. VM, relay and email remain unavailable; public tunnel
+  and authentication callbacks remain unverified.
+
 - Darwin process repairs filter nonterminal observations from exit-only child
   polling and use the correct safe peer-credential API. Workload admission now
   waits boundedly for the selected canonical shell before registry binding,
