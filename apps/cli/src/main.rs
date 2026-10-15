@@ -683,6 +683,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn closed_peer_reply_bytes_are_read_before_eof() {
+        let (mut client, mut peer) = UnixStream::pair().unwrap();
+        client.set_nonblocking(true).unwrap();
+        peer.write_all(b"headerbody").unwrap();
+        drop(peer);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        // The peer is already closed before either phase starts. Darwin must
+        // not be asked to reset a socket option between these buffered reads.
+        let mut header = [0; 6];
+        read_before(&mut client, &mut header, deadline).unwrap();
+        assert_eq!(&header, b"header");
+        let mut body = [0; 4];
+        read_before(&mut client, &mut body, deadline).unwrap();
+        assert_eq!(&body, b"body");
+        assert_eq!(
+            read_before(&mut client, &mut body, deadline)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+
+    #[test]
     fn decoded_response_acceptance_requires_a_remaining_deadline() {
         let bytes = br#"{"version":2,"request_id":42,"ok":true,"result":{"answer":7}}"#;
         let valid = decode_response(bytes, 42, Instant::now() + Duration::from_secs(5)).unwrap();

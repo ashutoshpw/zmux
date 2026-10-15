@@ -511,6 +511,74 @@ fn a_large_valid_response_with_an_ample_deadline_is_rendered_completely() {
 }
 
 #[test]
+fn peer_close_accepts_a_complete_buffered_frame_and_rejects_a_truncated_frame() {
+    for truncate in [false, true] {
+        let socket = socket_path();
+        fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let peer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).unwrap();
+            let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+            stream.read_exact(&mut bytes).unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            let response = serde_json::to_vec(&serde_json::json!({
+                "version":2,"request_id":request["request_id"],"ok":true,
+                "result":{"reply":"buffered before peer close"}
+            }))
+            .unwrap();
+            let mut frame = (response.len() as u32).to_be_bytes().to_vec();
+            frame.extend_from_slice(&response);
+            if truncate {
+                frame.pop();
+            }
+            stream.write_all(&frame).unwrap();
+            stream.shutdown(std::net::Shutdown::Both).unwrap();
+            drop(stream);
+            listener
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+            .arg("--socket")
+            .arg(&socket)
+            .args(["--timeout", "2000", "new-workspace", "One admission"])
+            .output()
+            .unwrap();
+        let listener = peer.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "CLI replayed a mutation after peer close"
+        );
+        if truncate {
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains("incomplete zmux response") && error.contains("not retried"),
+                "{error}"
+            );
+        } else {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output.stdout).unwrap()["reply"],
+                "buffered before peer close"
+            );
+        }
+        fs::remove_file(&socket).unwrap();
+        fs::remove_dir(socket.parent().unwrap()).unwrap();
+    }
+}
+
+#[test]
 fn local_socket_credentials_and_live_access_changes_protect_real_mutations() {
     use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy, SocketPassword};
     let socket = socket_path();

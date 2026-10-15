@@ -205,7 +205,7 @@
     {
       "id": "N01",
       "title": "Attention, notifications and sidebar UX",
-      "status": "planned",
+      "status": "implementing",
       "owner": "desktop-runtime attention, AppKit notifications/sidebar",
       "depends_on": [
         "F02"
@@ -215,13 +215,22 @@
         "Add OS notification permission/delivery/reply/actions and exact window/surface routing",
         "Finish collapsed-sidebar access, resizable sidebar, keyboard/AX behavior and notification visual states"
       ],
-      "exit_gate": "Hidden-terminal attention remains visible; normal output does not flood inbox; stale acknowledgements cannot clear new arrivals; denied OS permission preserves in-app operation; hook-produced attention verified again with A02."
+      "exit_gate": "Hidden-terminal attention remains visible; normal output does not flood inbox; stale acknowledgements cannot clear new arrivals; denied OS permission preserves in-app operation; hook-produced attention verified again with A02.",
+      "implemented_slices": [
+        "N01a session-bound native delivery, ordered permission observations and confirmed actions (hosted native verification pending)",
+        "N01b notification metadata and atomic scoped read/dismiss/clear receipts (portable verification passed)"
+      ],
+      "verification_receipts": [
+        "n01-desktop-notifications.md"
+      ]
     },
     {
       "id": "S01",
       "title": "Session persistence, launch and quit recovery",
       "status": "in_progress",
-      "evidence": ["s01-session-persistence.md"],
+      "evidence": [
+        "s01-session-persistence.md"
+      ],
       "owner": "new Rust persistence owner, native startup/termination",
       "depends_on": [
         "F02",
@@ -272,7 +281,9 @@
       "id": "B02",
       "title": "Full browser automation and developer workflows",
       "status": "in_progress",
-      "evidence": ["b02-browser-automation.md"],
+      "evidence": [
+        "b02-browser-automation.md"
+      ],
       "owner": "versioned browser action bridge, CLI registry, WebKit execution",
       "depends_on": [
         "F01",

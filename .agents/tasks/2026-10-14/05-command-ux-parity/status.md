@@ -200,3 +200,13 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   action tasks. Native permission smoke runs its isolated runtime before the main app
   context, avoiding two owners of the same socket. OS banners remain a separate gate.
 - Broader N01 CLI metadata, scoped operations and reply are not yet closed.
+
+## N01b and transport verification
+
+- N01b committed locally at `2619b56`: subtitle/defaults/desktop preference and scoped
+  notification operations. Parent full check passes 161 tests plus Clippy/notices/ABI;
+  fresh review accepted. Native UI and permission smoke await a green hosted run.
+- `3ab1355` macOS runs exposed Darwin rejecting socket option updates after peer close
+  while reply bytes remain buffered. A nonblocking, readiness-polled transport repair
+  passes parent full Linux checks; hosted validation remains pending. No macOS notification acceptance is claimed yet.
+- N01c typed workspace notification destinations are next. Full V01 remains open.

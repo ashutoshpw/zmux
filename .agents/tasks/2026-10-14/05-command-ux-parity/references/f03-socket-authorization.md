@@ -88,3 +88,17 @@ Parent isolated full verification and fresh review precede the repair commit. Ho
 Darwin verification remains required. Browser receipt fixtures retain an exact runtime
 error check, with a 4-second positive budget and unchanged 2-second stalled-receipt
 negative control; both old-reserve red/current-reserve green runs were reproduced.
+
+## Darwin peer-close repair
+
+Hosted runs at `3ab1355` exposed EINVAL while updating a response socket timeout
+after its peer closed. XNU `sosetoptlock` rejects option changes on fully disconnected
+sockets, even when response bytes remain buffered. The client now sets nonblocking
+once and uses safe nix poll with the original absolute deadline for readiness. Reads
+drain buffered bytes before EOF; partial transfers and EINTR recompute the same budget.
+No retry or mutation replay is introduced. The existing pinned nix version supplies poll.
+
+Parent `scripts/check` passed on Linux, including closed-peer complete/truncated frame
+and slow-response regressions, strict Clippy, notices and C ABI. Darwin execution and
+native notification smoke remain hosted gates. Production transport code was included
+in `2619b56`; the following repair commit completes its dependency and regression coverage.
