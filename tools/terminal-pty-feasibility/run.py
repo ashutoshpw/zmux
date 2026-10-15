@@ -136,6 +136,7 @@ def main():
             for name, arguments, expected in [
                 ("cleanup-exited", [], "exited_child_cleanup=true no_signal_attempt=true owned_fds_closed=true"),
                 ("cleanup-wait-error", ["reaped-error"], "wait_error_diagnostic=true operation=waitpid errno=ECHILD no_signal_attempt=true"),
+                ("cleanup-master-first", ["master-first", str(HERE / "child.py")], "master_before_reap=true live_child_reaped=true owned_fds_closed=true"),
             ]:
                 stdout = base.run([sys.executable, str(BASE / "run.py"), "--execute-fixture", str(cleanup),
                                    sys.executable, *arguments], name, output, phases, timeout=4)

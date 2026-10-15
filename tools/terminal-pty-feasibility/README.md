@@ -39,6 +39,9 @@ Direct-child cleanup cases observe real exited/unreaped state at the signal
 boundary and require reaping without signalling; a separate actual ECHILD case
 checks precise operation/errno diagnostics and refuses stale-PID signals. Linux
 coverage of unnecessary signalling does not reproduce Darwin's errno behavior.
+Cleanup closes the owned master before bounded reaping waits and retains report
+capture. A stalled real child guards physical close-before-wait ordering; Linux
+does not reproduce Darwin's output-blocked exit behavior merely by passing it.
 
 The coordinator seals a validated frame/metadata result and defers exact commit
 until its replies have entered the kernel. Kernel acceptance differs from child
