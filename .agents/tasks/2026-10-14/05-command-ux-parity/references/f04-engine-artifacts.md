@@ -135,11 +135,15 @@ The next manual prerequisite is implemented in
 `tools/terminal-engine-artifacts/DARWIN_ARTIFACTS.md`. One macos-15 arm64 job builds
 exactly two thin libraries using Xcode 16.4/SDK 15.5, Zig 0.16.0, Rust 1.95.0,
 ReleaseSafe, two jobs, SIMD false and the same explicit VT feature list. Both
-architectures target macOS 14.0, matching the existing native app minimum.
+architectures request macOS 14.0. Upstream's native Darwin generic-target override
+emits library declarations of 13.0; C shims and linked consumers remain at 14.0,
+matching the existing native app minimum. This split is explicit in the separate
+deployment policy and preserves the unchanged actual compiler recipe.
 No Linux rebuild, feature matrix or universal assembly is added.
 
 The shared bounded archive reader feeds actual Mach-O CPU-subtype and macOS
-load-command checks. Generic arm64/x86_64, declared minOS 14.0 and SDK 15.5 or an
+load-command checks. Generic arm64/x86_64, exact library minOS 13.0, consumer minOS
+14.0 and SDK 15.5 or an
 explicit unspecified object SDK are required. The actual SDK/toolchain is checked
 separately and recorded; an unspecified object SDK is never promoted into proof.
 Both C/extension and Rust metadata consumers compile/link for each architecture;
@@ -170,3 +174,18 @@ remain required. The current candidate manifest still accepts only its reviewed
 Linux archive. No bit-identical second build, macOS 14 execution, Intel execution,
 production AppKit/Cargo linkage, Viewport/input integration, named-Mac workload or
 default-engine decision follows from recipe validation.
+
+The first actual run `38797303343` at `adf51320a80e10db85bd8c9b2c01e1e42d268dbd`
+compiled arm64 in 93.8 seconds, retained it, then correctly rejected the original
+exact-14 assertion. Both actual Mach-O objects declare 13.0/SDK unspecified.
+Unmodified failed receipt SHA `75bd83078d904c5d91582b0d65f6e213bee48f9c528cf4670d170239f64d2354`;
+arm64 library SHA `df2aa776d0637f13e6641ac443695c9ea4cd592416b9b1a35bf2e73be9c7e658`.
+Pinned Config source SHA `e15abd51f767a70c92faac2bc8bf86fbb096db6680bca3de7388b9a4568fd739`
+proves the native Darwin query replacement and fixed 13.0 upstream minimum. The
+approved repair requires exact 13.0 archive declarations below the consumer 14.0
+ceiling, checks linked consumer executables too, and preserves the compiler recipe
+for strict reuse. Manual workflow input downloads immutable artifact `12002284112`
+from that exact run and checks its receipt/library hashes before reuse. Only the
+missing x86_64 slice should build; no receipt is rewritten and no fresh arm64 build
+is authorized by missing/expired reuse data. Hosted consumer links/native arm64
+fixtures and final Darwin symbol/notice review remain pending.

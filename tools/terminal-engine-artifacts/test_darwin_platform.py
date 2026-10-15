@@ -1,6 +1,7 @@
 """Use real Clang-produced Mach-O objects; no engine or macOS SDK build is needed."""
 
 from pathlib import Path
+import platform
 import shutil
 import struct
 import subprocess
@@ -44,11 +45,45 @@ class DarwinPlatformChecks(unittest.TestCase):
 
     def test_actual_archive_reuses_bounded_parser_and_rejects_mixed_slices(self):
         archive = self.root / "arm64.a"
-        subprocess.run(["ar", "rcs", str(archive), str(self.objects["arm64"])], check=True, timeout=15)
+        arm = self.compile_object("archive-arm", "arm64-apple-macos13.0")
+        intel = self.compile_object("archive-intel", "x86_64-apple-macos13.0")
+        subprocess.run(["ar", "rcs", str(archive), str(arm)], check=True, timeout=15)
         self.assertEqual(len(inspect_darwin_archive(archive, "arm64")["members"]), 1)
-        subprocess.run(["ar", "r", str(archive), str(self.objects["x86_64"])], check=True, timeout=15)
+        subprocess.run(["ar", "r", str(archive), str(intel)], check=True, timeout=15)
         with self.assertRaisesRegex(Rejected, "architecture mismatch"):
             inspect_darwin_archive(archive, "arm64")
+
+    def test_upstream_library_is_exactly_13_while_consumers_remain_14(self):
+        for arch in ("arm64", "x86_64"):
+            obj = self.compile_object("library-" + arch, arch + "-apple-macos13.0")
+            archive = self.root / ("library-" + arch + ".a")
+            subprocess.run(["ar", "rcs", str(archive), str(obj)], check=True, timeout=15)
+            self.assertEqual(inspect_darwin_archive(archive, arch)["minimum_macos"], [13, 0, 0])
+            with self.assertRaisesRegex(Rejected, "minimum mismatch"):
+                inspect_macho(obj.read_bytes(), arch)
+            self.assertEqual(inspect_macho(self.objects[arch].read_bytes(), arch)["minimum_macos"], [14, 0, 0])
+
+    def test_library_rejects_unexpected_minima_including_above_consumer_ceiling(self):
+        for version in (12, 14, 15):
+            obj = self.compile_object("unexpected-" + str(version), f"arm64-apple-macos{version}.0")
+            archive = self.root / ("unexpected-" + str(version) + ".a")
+            subprocess.run(["ar", "rcs", str(archive), str(obj)], check=True, timeout=15)
+            with self.subTest(minimum=version), self.assertRaisesRegex(Rejected, "minimum mismatch|ceiling"):
+                inspect_darwin_archive(archive, "arm64")
+
+    def test_real_object_cannot_substitute_for_linked_consumer(self):
+        with self.assertRaisesRegex(Rejected, "executable type"):
+            inspect_macho(self.objects["arm64"].read_bytes(), "arm64", executable=True)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "actual Apple linker is required")
+    def test_actual_linked_consumers_keep_deployment_14(self):
+        for arch in ("arm64", "x86_64"):
+            binary = self.root / ("consumer-" + arch)
+            subprocess.run([self.clang, "-target", arch + "-apple-macos14.0", "-nostdlib",
+                            "-Wl,-e,_zmux_macho_probe", str(self.source), "-o", str(binary)],
+                           check=True, capture_output=True, timeout=15)
+            result = inspect_macho(binary.read_bytes(), arch, executable=True)
+            self.assertEqual(result["minimum_macos"], [14, 0, 0])
 
     def test_actual_lower_minimum_and_wrong_sdk_are_rejected(self):
         older = self.compile_object("older", "arm64-apple-macos13.0")

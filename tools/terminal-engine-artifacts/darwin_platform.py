@@ -5,14 +5,25 @@ import struct
 from verify import MAX_ARCHIVE_BYTES, Rejected, archive_objects, digest, object_target, read_bounded
 
 MAX_LOAD_COMMANDS = 4096
+LIBRARY_MINIMUM = (13, 0, 0)
+CONSUMER_MINIMUM = (14, 0, 0)
 
 
 def version_tuple(value):
     return value >> 16, (value >> 8) & 255, value & 255
 
 
-def inspect_macho(data, architecture, minimum=(14, 0, 0), sdk=(15, 5, 0)):
-    actual = object_target(data)
+def inspect_macho(data, architecture, minimum=CONSUMER_MINIMUM, sdk=(15, 5, 0), ceiling=None,
+                  executable=False):
+    if executable:
+        if len(data) < 32 or data[:4] != b"\xcf\xfa\xed\xfe":
+            raise Rejected("expected a thin Mach-O64 executable")
+        cpu, _, kind = struct.unpack_from("<III", data, 4)
+        if kind != 2 or cpu not in (0x01000007, 0x0100000C):
+            raise Rejected("unsupported Mach-O executable type or architecture")
+        actual = ("Mach-O", {0x01000007: "x86_64", 0x0100000C: "arm64"}[cpu])
+    else:
+        actual = object_target(data)
     if actual != ("Mach-O", architecture):
         raise Rejected(f"Mach-O architecture mismatch: {actual}, requested {architecture}")
     subtype = struct.unpack_from("<I", data, 8)[0]
@@ -46,6 +57,8 @@ def inspect_macho(data, architecture, minimum=(14, 0, 0), sdk=(15, 5, 0)):
     if offset != 32 + size or len(versions) != 1:
         raise Rejected("missing, duplicate or inconsistent macOS deployment command")
     minos, actual_sdk = versions[0]
+    if ceiling is not None and minos > ceiling:
+        raise Rejected(f"macOS library minimum exceeds consumer deployment ceiling: {minos} > {ceiling}")
     if minos != minimum:
         raise Rejected(f"macOS minimum mismatch: {minos}, expected {minimum}")
     # Relocatable objects can leave SDK unspecified. The driver separately pins
@@ -53,6 +66,7 @@ def inspect_macho(data, architecture, minimum=(14, 0, 0), sdk=(15, 5, 0)):
     if actual_sdk not in ((0, 0, 0), sdk):
         raise Rejected(f"Mach-O SDK mismatch: {actual_sdk}, expected {sdk} or unspecified")
     return {"format": actual[0], "architecture": architecture, "cpu_subtype": subtype,
+            "file_type": "executable" if executable else "relocatable_object",
             "minimum_macos": list(minos), "object_sdk": list(actual_sdk),
             "sdk_unspecified_in_object": actual_sdk == (0, 0, 0)}
 
@@ -61,10 +75,11 @@ def inspect_darwin_archive(path, architecture):
     data = read_bounded(path, MAX_ARCHIVE_BYTES)
     members = []
     for name, body in archive_objects(data):
-        checked = inspect_macho(body, architecture)
+        checked = inspect_macho(body, architecture, minimum=LIBRARY_MINIMUM, ceiling=CONSUMER_MINIMUM)
         members.append({"name": name, "bytes": len(body), "sha256": digest(body), **checked})
     if not members:
         raise Rejected("archive contains no supported Mach-O objects")
     return {"sha256": digest(data), "bytes": len(data), "target": "macos-" + architecture,
-            "members": members, "minimum_macos": [14, 0, 0],
+            "members": members, "minimum_macos": list(LIBRARY_MINIMUM),
+            "consumer_deployment_ceiling": list(CONSUMER_MINIMUM),
             "scope": "Mach-O object architecture and declared deployment only; no app or runtime claim"}
