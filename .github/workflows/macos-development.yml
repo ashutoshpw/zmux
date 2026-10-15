@@ -33,6 +33,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Type-check native sources before compiling Rust
         run: scripts/check-macos-sources
+      - name: Verify native persistence directory paths
+        run: scripts/check-native-storage-paths
       - name: Check Swift fixture cleanup boundary
         run: scripts/check-swift-fixture-cleanup
       - name: Verify native browser download file ownership

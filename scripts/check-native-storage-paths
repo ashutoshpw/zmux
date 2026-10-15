@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+if [ "$(uname -s)" != Darwin ]; then
+    echo 'Native storage path acceptance requires macOS.' >&2
+    exit 1
+fi
+scratch=$(mktemp -d /tmp/zmux-storage-paths.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT HUP INT TERM
+xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
+    apps/macos/Sources/NativeStoragePath.swift tools/native-fixtures/storage-paths.swift \
+    -o "$scratch/storage-paths"
+"$scratch/storage-paths"
