@@ -189,3 +189,52 @@ from that exact run and checks its receipt/library hashes before reuse. Only the
 missing x86_64 slice should build; no receipt is rewritten and no fresh arm64 build
 is authorized by missing/expired reuse data. Hosted consumer links/native arm64
 fixtures and final Darwin symbol/notice review remain pending.
+
+## Actual thin Darwin artifact review
+
+Run [38799601657](https://github.com/ashutoshpw/zmux/actions/runs/38799601657)
+at `41f1645372daca1282d0387aeb338315e2acab60` passes on ARM64 macOS 15.7.9 with
+Xcode 16.4 build 16F6/SDK 15.5/Rust 1.95.0. It reused the exact retained arm64
+library and built only the missing x86_64 library (89.5 seconds). The original
+failed producer receipt remains unchanged and the complete library-recipe,
+toolchain, patch and header identities compare exactly before reuse.
+
+- Producer receipt SHA `a40d6c048636432a4be4b1ffd2db39e611ecf955d1ab495ec029f1dc77a89891`.
+- arm64 library SHA `df2aa776d0637f13e6641ac443695c9ea4cd592416b9b1a35bf2e73be9c7e658`.
+- x86_64 library SHA `3933947add88a2bbb4bc3ccec7ead6615127396536385d99069fbf46c789f941`.
+
+Independent retained-byte review verifies both two-member generic Mach-O archives
+declare library minOS 13.0; all ten C objects and four linked C/Rust executables
+declare consumer minOS 14.0/SDK 15.5. Actual arm64 C ABI and Rust/C metadata owner
+fixtures execute with their success markers. Intel is compile/link only. The
+binary dynamic load closure is `/usr/lib/libSystem.B.dylib` only.
+
+The 80 verbatim notices and patched headers pass integrity. The host matched all
+37 runtime source hashes. Independent Mach-O symbol-table reads match the retained
+`nm` logs: 563 arm64/566 Intel defined symbols. The only added symbol against the
+629-symbol Linux baseline is `__isPlatformVersionAtLeast`, from already-reviewed
+Zig `lib/compiler_rt/os_version_check.zig` (SHA
+`8b17b5b97ce5330b68c8dcbe073686f1f4dcf633079b1caabd70fb9403b1d78a`),
+whose LLVM 13 compiler-rt notice is retained. No additional runtime component or
+notice gap was found in these observed symbol deltas.
+
+**Supplementary provenance is required.** The original upload contains 137 of its
+138 source-manifest files because upload-artifact excluded the hidden
+`sources/repository/.github/workflows/terminal-engine-artifacts.yml`. Its exact
+committed `41f1645` bytes were recovered separately and match the original expected
+SHA `6fab06dc9e9709c7be6b36f78b7776c88eb3fa4e745394fe6a5ca8186eb264b7`.
+The original bundle is not complete on its own; neither it nor either producer
+receipt was rewritten. Future scoped uploads include hidden files. A future
+no-build repack can combine immutable original inputs and this exact supplement
+with a distinct repack receipt; no engine rebuild is needed for that operation.
+
+Original upload, separate committed-source supplement and independent review are
+retained outside `/tmp` in ignored
+`target/terminal-engine-artifacts/darwin-38799601657/`. Review receipt
+`independent-review.json` SHA
+`82db21047e67fdbc370354db48343afe73b6b66b71145fa82b75a4adb1662b21`.
+This clears the bounded artifact/ABI-link/native-arm64 prerequisite with the stated
+supplement. It does not clear Intel/macOS 13/14 execution, production Viewport/input
+conversion and publication, AppKit linkage, default-engine selection, total process
+memory/time bounds or named-Mac performance gates. The original candidate verifier
+continues to accept only its exact reviewed Linux candidate.
