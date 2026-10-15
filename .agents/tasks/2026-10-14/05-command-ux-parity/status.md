@@ -11,7 +11,9 @@
   manual-only Darwin workflow awaits dispatch. Neither closes its full package.
 - Persistence repair `610e897` passes Foundation `38773695057` and 128 fresh
   fixtures in diagnostic `38773735612`. Pre-fix also passed 128 attempts, so root
-  cause remains unproven. Native `38773694848` has passed Rust checks and is building.
+  cause remains unproven. Native `38773694848` passed universal compilation and packaged smoke; downloaded
+  archive integrity/source/flags verified. Downloads run `38775130649` and Zellij
+  public-peer run `38775157527` are active at pushed `d629406`.
 - Next active slices: shared native coordinator extraction, opt-in bounded terminal
   metadata capture, and executable CLI compatibility contracts. Local Docker
   `/health` and `/ready` on port 3530 remain healthy; VM/relay/email remain unavailable.

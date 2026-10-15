@@ -77,3 +77,20 @@ service is healthy at `http://127.0.0.1:3530`, with public tunnel setup delegate
 the user; VM, relay and email remain unavailable. This supersedes the old hosting
 selection notes above. Full V01 remains open; this archive is diagnostic evidence,
 not the requested full-parity artifact.
+
+## Singleton model and persistence repair acceptance
+
+macOS run `38773694848` at `610e897bcbefffe10141622b33d56be26496a8eb`
+passed universal compilation and packaged native smoke. Foundation `38773695057`
+also passed. Parent downloaded `/tmp/zmux-native-archive-38773694848`, verified ZIP
+integrity and SHA256 `44f06d8763687a13cd5bc04ed7ee76688bb43daad6570cfe4ed9f277d8dd8a98`,
+checked exact source SHA in build/smoke receipts and inspected the native shell image.
+All recorded behavioral flags passed, including profile management, tmux reopen,
+terminal keys/scrolling, notification routing and remote clipboard transfer.
+This runs the singleton model6/sessionv4 bridge; it does not establish multiwindow.
+
+Runtime host was macOS15.7.9 arm64; x86_64 is compiled only. Signing is ad-hoc,
+not notarized. WindowServer capture status remains1; native view render is captured
+separately from WebContent. Cloud callback is an offline fixture. New download
+implementation is absent from this SHA and awaits run `38775130649`. This is
+diagnostic evidence, not the requested full-parity artifact; V01 remains open.
