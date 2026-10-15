@@ -18,6 +18,7 @@ fn fixture() -> (WorkspaceStore, SurfaceId) {
     let pane = model.snapshot().workspaces[0].focused_pane;
     model
         .apply(Action::CreateBrowser {
+            focus: true,
             pane_id: pane,
             url: "https://example.org".into(),
         })
@@ -571,6 +572,7 @@ fn desktop_shutdown_fails_queued_reads_and_marks_dispatched_evaluation_uncertain
             request_id: 1,
             payload: Command::Action {
                 action: Action::CreateBrowser {
+                    focus: true,
                     pane_id: initial.model.workspaces[0].focused_pane,
                     url: "https://example.org/".into(),
                 },

@@ -6,12 +6,17 @@ use std::{
     os::unix::{fs::PermissionsExt, net::UnixListener},
     path::{Path, PathBuf},
     process::{Command, Output},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
 use zmux_desktop_runtime::{Desktop, Shell, control::ControlServer};
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -20,10 +25,35 @@ impl Fixture {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = PathBuf::from("/tmp").join(format!("zb{}-{nonce:x}", std::process::id()));
+        // Parallel tests may observe the same wall-clock tick on macOS.
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let path =
+            PathBuf::from("/tmp").join(format!("zb{}-{nonce:x}-{sequence:x}", std::process::id()));
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         Self(path.canonicalize().unwrap())
+    }
+    fn desktop(&self) -> (PathBuf, Arc<Desktop>, ControlServer) {
+        let socket = self.0.join("control.sock");
+        let desktop = Arc::new(
+            Desktop::new(Shell {
+                program: "/bin/sh".into(),
+                args: vec!["-i".into()],
+                cwd: Some(self.0.clone()),
+            })
+            .unwrap(),
+        );
+        let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = desktop.snapshot().unwrap();
+            if !snapshot.model.workspaces.is_empty() && snapshot.pending_launches == 0 {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        (socket, desktop, server)
     }
 }
 impl Drop for Fixture {
@@ -76,6 +106,33 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("--snapshot-after"));
     }
     for (args, reason) in [
+        (
+            vec!["browser", "open", "--focus"],
+            "--focus requires true or false",
+        ),
+        (
+            vec!["browser", "open", "--focus", "yes", "about:blank"],
+            "--focus requires true or false",
+        ),
+        (
+            vec![
+                "browser",
+                "open",
+                "--no-focus",
+                "about:blank",
+                "--focus",
+                "true",
+            ],
+            "conflicting browser focus",
+        ),
+        (
+            vec!["browser", "open", "--no-focus", "--no-focus", "about:blank"],
+            "conflicting browser focus",
+        ),
+        (
+            vec!["browser", "open", "about:blank", "--bogus"],
+            "unknown browser open option",
+        ),
         (vec!["browser", "get"], "requires a kind"),
         (
             vec!["browser", "get", "unknown"],
@@ -322,25 +379,7 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
 #[test]
 fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only() {
     let fixture = Fixture::new();
-    let socket = fixture.0.join("control.sock");
-    let desktop = Arc::new(
-        Desktop::new(Shell {
-            program: "/bin/sh".into(),
-            args: vec!["-i".into()],
-            cwd: Some(fixture.0.clone()),
-        })
-        .unwrap(),
-    );
-    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let snapshot = desktop.snapshot().unwrap();
-        if !snapshot.model.workspaces.is_empty() && snapshot.pending_launches == 0 {
-            break;
-        }
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(10));
-    }
+    let (socket, desktop, server) = fixture.desktop();
     let browser = value(&socket, &fixture.0, &["browser", "open", "about:blank"]);
     let surface = browser["focused_surface_uuid"].as_str().unwrap();
     for args in [
@@ -472,6 +511,107 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
             .requests
             .is_empty(),
         "expired evaluation remained executable"
+    );
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn browser_open_returns_unselected_creation_receipts_and_defaults_to_focus() {
+    let fixture = Fixture::new();
+    let (socket, desktop, server) = fixture.desktop();
+    let first = value(&socket, &fixture.0, &["list-workspaces"]);
+    let first_workspace = first["focused_workspace"].as_u64().unwrap().to_string();
+    let first_pane = first["workspaces"][0]["focused_pane"]
+        .as_u64()
+        .unwrap()
+        .to_string();
+    let first_surface = first["workspaces"][0]["root"]["pane"]["selected_surface"].clone();
+    let other = value(&socket, &fixture.0, &["new-workspace", "Hidden target"]);
+    let other_workspace = other["focused_workspace"].clone();
+    let other_pane = other["focused_pane_uuid"].as_str().unwrap();
+    let other_surface = other["focused_surface"].clone();
+    value(&socket, &fixture.0, &["select-workspace", &first_workspace]);
+    for args in [
+        vec![
+            "browser",
+            "open",
+            "--pane",
+            other_pane,
+            "--focus",
+            "false",
+            "about:blank",
+        ],
+        vec![
+            "browser",
+            "open",
+            "--pane",
+            other_pane,
+            "about:blank",
+            "--no-focus",
+        ],
+    ] {
+        let opened = value(&socket, &fixture.0, &args);
+        assert_eq!(opened["focused_workspace"], first["focused_workspace"]);
+        assert_eq!(
+            opened["focused_pane"].as_u64().unwrap().to_string(),
+            first_pane
+        );
+        assert_eq!(opened["focused_surface"], first_surface);
+        assert!(opened["created_workspaces"].as_array().unwrap().is_empty());
+        assert!(opened["created_panes"].as_array().unwrap().is_empty());
+        let created = opened["created_surfaces"].as_array().unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0]["workspace_id"], other_workspace);
+        assert_ne!(created[0]["surface_id"], opened["focused_surface"]);
+        let pane = value(
+            &socket,
+            &fixture.0,
+            &["list-pane-surfaces", "--pane", other_pane],
+        );
+        let selected = pane["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["selected"] == true)
+            .unwrap();
+        assert_eq!(selected["surface_id"], other_surface);
+        let created_surface = pane["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["surface_uuid"] == created[0]["surface_uuid"])
+            .unwrap();
+        assert_eq!(created_surface["kind"], "browser");
+        assert!(created_surface["session_id"].is_null());
+    }
+    let focused = value(
+        &socket,
+        &fixture.0,
+        &[
+            "browser",
+            "open",
+            "--pane",
+            other_pane,
+            "--focus",
+            "true",
+            "about:blank",
+        ],
+    );
+    assert_eq!(focused["focused_workspace"], other_workspace);
+    assert_eq!(
+        focused["focused_surface"],
+        focused["created_surfaces"][0]["surface_id"]
+    );
+    let legacy = value(
+        &socket,
+        &fixture.0,
+        &["browser", "open", &first_pane, "about:blank"],
+    );
+    assert_eq!(legacy["focused_workspace"], first["focused_workspace"]);
+    assert_eq!(
+        legacy["focused_surface"],
+        legacy["created_surfaces"][0]["surface_id"]
     );
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();

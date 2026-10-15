@@ -64,6 +64,7 @@ fn fixture() -> WorkspaceStore {
     let pane = store.snapshot().workspaces[0].focused_pane;
     store
         .apply(Action::CreateBrowser {
+            focus: true,
             pane_id: pane,
             url: "https://example.org/path?token=private#fragment".into(),
         })
@@ -548,6 +549,7 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
     let terminal = original.workspaces[0].root.panes()[0].selected_surface;
     store
         .apply(Action::CreateBrowser {
+            focus: true,
             pane_id: pane,
             url: "https://example.org/".into(),
         })
@@ -579,6 +581,7 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
         for _ in 0..batch {
             for action in [
                 TargetAction::CreateBrowser {
+                    focus: true,
                     url: "https://example.org/temporary".into(),
                 },
                 TargetAction::CloseSurface,
@@ -636,6 +639,7 @@ fn browser_only_runtime_refills_durable_allocation_blocks_before_crossing_their_
         1,
         Command::Action {
             action: Action::CreateBrowser {
+                focus: true,
                 pane_id: pane,
                 url: "https://example.org/new".into(),
             },

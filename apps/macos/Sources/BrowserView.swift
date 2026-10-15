@@ -24,6 +24,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         var owner: BrowserOwner
         var navigation: WKNavigation?
         var timer: Task<Void, Never>?
+        var isolatedEval = false
+        var userScriptStarted = false
     }
     private var operations: [UInt64: PendingAutomation] = [:]
     // A timed-out page promise cannot be cancelled by WebKit. Keep its actual
@@ -158,7 +160,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         let id = request.operationId
         let timer = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(Int64(request.timeoutMs))) } catch { return }
-            self?.failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: request.action.outcomeMayBeUnknown)
+            guard let self, let pending = self.operations[id] else { return }
+            self.failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: pending.request.action.isNavigation || pending.userScriptStarted)
         }
         operations[id]?.timer = timer
         if request.action.isNavigation {
@@ -167,6 +170,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             failOperation(id, code: "web_process_terminated", message: "Web content process stopped; reload to recover", outcomeUnknown: false)
         } else if webView.isLoading {
             failOperation(id, code: "document_loading", message: "Document is loading; wait for navigation completion", outcomeUnknown: false)
+        } else if case .eval = request.action {
+            preflightEval(id)
         } else {
             runJavaScript(id, action: request.action)
         }
@@ -232,7 +237,12 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         fields["surface_id"] = .unsigned(surfaceID)
         fields["host_id"] = .string(hostID.uuidString.lowercased())
         fields["document_generation"] = .unsigned(documentGeneration)
-        if case .eval = operation.request.action { fields["content_world"] = .string("page") }
+        if case .eval = operation.request.action {
+            fields["content_world"] = .string(operation.isolatedEval ? "isolated" : "page")
+            if operation.isolatedEval {
+                fields["content_world_note"] = .string("Page CSP blocked dynamic evaluation. The script ran once in an isolated content world, which shares the DOM but cannot access page JavaScript globals.")
+            }
+        }
         else { fields["content_world"] = .string("isolated") }
         let result = BrowserJSON.object(fields)
         do {
@@ -243,6 +253,42 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         } catch { failOperation(id, code: "invalid_result", message: error.localizedDescription, outcomeUnknown: operation.request.action.outcomeMayBeUnknown); return }
         operations.removeValue(forKey: id)?.timer?.cancel()
         emitAutomation?(.complete(operationId: id, owner: operation.owner, result: result))
+    }
+    private func preflightEval(_ id: UInt64) {
+        guard let operation = operations[id] else { return }
+        guard javaScriptInFlight.count < 8 else {
+            failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: false)
+            return
+        }
+        let expectedOwner = operation.owner
+        javaScriptInFlight.insert(id)
+        webView.callAsyncJavaScript(BrowserAutomationScript.evalPreflight, arguments: [:], in: nil, in: .page) { [weak self] result in
+            guard let self else { return }
+            self.javaScriptInFlight.remove(id)
+            guard let pending = self.operations[id] else { return }
+            guard !self.closed, self.automationOwner == expectedOwner, pending.owner == expectedOwner else {
+                self.failOperation(id, code: "document_changed", message: "Browser document changed before user evaluation started", outcomeUnknown: false)
+                return
+            }
+            let isolated: Bool
+            switch result {
+            case .success(let value):
+                if let state = value as? String, state == "allowed" { isolated = false }
+                else if let state = value as? String, state == "csp_blocked" { isolated = true }
+                else {
+                    self.failOperation(id, code: "javascript_preflight_failed", message: "Page dynamic evaluation capability could not be established; user script was not executed", outcomeUnknown: false)
+                    return
+                }
+            case .failure(let error):
+                guard BrowserAutomationScript.isNativeCSPDenial(error) else {
+                    self.failOperation(id, code: "javascript_preflight_failed", message: "User script was not executed: " + error.localizedDescription, outcomeUnknown: false)
+                    return
+                }
+                isolated = true
+            }
+            self.operations[id]?.isolatedEval = isolated
+            self.runJavaScript(id, action: pending.request.action)
+        }
     }
     private func runJavaScript(_ id: UInt64, action: BrowserAction) {
         guard let operation = operations[id] else { return }
@@ -257,7 +303,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             payload = String(decoding: try encoder.encode(Input(action: action, hostId: hostID.uuidString.lowercased(), documentGeneration: String(operation.owner.documentGeneration))), as: UTF8.self)
         } catch { failOperation(id, code: "invalid_argument", message: error.localizedDescription, outcomeUnknown: false); return }
         let world: WKContentWorld
-        if case .eval = action { world = .page } else { world = BrowserAutomationScript.isolatedWorld }
+        if case .eval = action {
+            world = operation.isolatedEval ? BrowserAutomationScript.isolatedWorld : .page
+            operations[id]?.userScriptStarted = true
+        } else { world = BrowserAutomationScript.isolatedWorld }
         javaScriptInFlight.insert(id)
         webView.callAsyncJavaScript(BrowserAutomationScript.source, arguments: ["payload": payload], in: nil, in: world) { [weak self] result in
             guard let self else { return }

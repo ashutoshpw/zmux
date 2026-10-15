@@ -1300,6 +1300,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let evidence: [String: Any] = [
             "success": true,
             "browser_cli_automation": true,
+            "browser_never_selected_viewport": true,
+            "browser_csp_eval_once": true,
             "native_input": true,
             "ansi_color": true,
             "split_panes": true,
@@ -1381,6 +1383,25 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             throw BridgeFailure(message: "Missing browser HTTP fixture")
         }
         let target = ["--surface", String(surface)]
+        let originalWorkspace = snapshot?.model.focusedWorkspace
+        let hiddenData = try await nativeCLI(["browser", "open", "--no-focus", origin + "/first"])
+        guard let created = try JSONSerialization.jsonObject(with: hiddenData) as? [String: Any],
+              let surfaces = created["created_surfaces"] as? [[String: Any]],
+              let hiddenID = (surfaces.first?["surface_id"] as? NSNumber)?.uint64Value else {
+            throw BridgeFailure(message: "No-focus browser creation omitted its target receipt")
+        }
+        try await waitUntil { [weak self] _ in self?.browsers[hiddenID]?.webView.title == "First fixture" && self?.browsers[hiddenID]?.webView.isLoading == false }
+        guard browsers[hiddenID]?.superview == nil,
+              snapshot?.model.focusedWorkspace == originalWorkspace,
+              focusedPane?.selectedSurface == surface,
+              let box = try await browserCLIValue(["browser", "get", "box", "#entry", "--surface", String(hiddenID)]) as? [String: Any],
+              let width = box["width"] as? Double, width > 0,
+              let hiddenTree = try await browserCLIValue(["browser", "snapshot", "--interactive", "--surface", String(hiddenID)]) as? [String: Any],
+              let hiddenNodes = hiddenTree["nodes"] as? [[String: Any]],
+              hiddenNodes.contains(where: { $0["role"] as? String == "button" }) else {
+            throw BridgeFailure(message: "Never-selected browser lacks a viewport or stole focus")
+        }
+        _ = try await nativeCLI(["close-surface", "--surface", String(hiddenID)])
         _ = try await nativeCLI(["browser", "goto"] + target + [origin + "/first"])
         try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "First fixture" && self?.browsers[surface]?.webView.isLoading == false }
         guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "First fixture",
@@ -1393,6 +1414,11 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         }
         let scriptFailure = try await nativeCLI(["browser", "eval", "throw new Error('expected native fixture failure')"] + target, expectFailure: true)
         guard String(decoding: scriptFailure, as: UTF8.self).contains("javascript_failed") else { throw BridgeFailure(message: "Script failure had an unrelated cause") }
+        let fakePolicyFailure = try await nativeCLI(["browser", "eval", "document.body.dataset.zmuxEvalCount = String(Number(document.body.dataset.zmuxEvalCount || 0) + 1); throw new EvalError('unsafe-eval Content Security Policy refused')"] + target, expectFailure: true)
+        guard String(decoding: fakePolicyFailure, as: UTF8.self).contains("javascript_failed"),
+              try await browserCLIValue(["browser", "get", "attr", "body", "data-zmux-eval-count"] + target) as? String == "1" else {
+            throw BridgeFailure(message: "Page script was replayed after a CSP-shaped user exception")
+        }
         guard let tree = try await browserCLIValue(["browser", "snapshot", "--interactive", "--compact", "--selector", "main", "--max-depth", "3"] + target) as? [String: Any],
               let nodes = tree["nodes"] as? [[String: Any]],
               let reference = nodes.first(where: { $0["role"] as? String == "button" })?["ref"] as? String,
@@ -1421,14 +1447,34 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "Second fixture" else {
             throw BridgeFailure(message: "Browser history/reload lost the current page")
         }
-        async let pending = nativeCLI(["browser", "eval", "new Promise(() => {document.title = 'Pending fixture';})"] + target, expectFailure: true, timeout: 1000)
+        var pendingFinished = false
+        let pending = Task { @MainActor in
+            defer { pendingFinished = true }
+            return try await nativeCLI(["browser", "eval", "globalThis.zmuxPendingFixture = new Promise(() => {document.title = 'Pending fixture';})"] + target, expectFailure: true, timeout: 3000)
+        }
+        defer { pending.cancel() }
         try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "Pending fixture" }
         enqueue(.input(terminalSession, "printf '\\nZMUX_BROWSER_PENDING_INPUT\\n'\r"))
         try await waitUntil { $0.frames.contains { $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("ZMUX_BROWSER_PENDING_INPUT") == true } }
-        let timeoutFailure = try await pending
-        guard String(decoding: timeoutFailure, as: UTF8.self).contains("browser_timeout") else { throw BridgeFailure(message: "Pending evaluation failed for an unrelated reason") }
+        guard !pendingFinished else { throw BridgeFailure(message: "Evaluation ended before terminal responsiveness was observed") }
+        let timeoutFailure = try await pending.value
+        guard String(decoding: timeoutFailure, as: UTF8.self).contains("browser_timeout") else { throw BridgeFailure(message: "Pending evaluation failed for an unrelated reason: \(String(decoding: timeoutFailure.prefix(2048), as: UTF8.self))") }
         guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "Pending fixture" else {
             throw BridgeFailure(message: "Browser did not recover after an evaluation timeout")
+        }
+        _ = try await nativeCLI(["browser", "goto"] + target + [origin + "/csp"])
+        try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "CSP fixture" && self?.browsers[surface]?.webView.isLoading == false }
+        let cspData = try await nativeCLI(["browser", "eval", "({title:document.title, value:42})"] + target)
+        guard let cspResult = try JSONSerialization.jsonObject(with: cspData) as? [String: Any],
+              cspResult["content_world"] as? String == "isolated",
+              let cspValue = cspResult["value"] as? [String: Any], cspValue["value"] as? Int == 42,
+              cspValue["title"] as? String == "CSP fixture" else {
+            throw BridgeFailure(message: "CSP evaluation did not report the isolated execution world")
+        }
+        let noReplay = try await nativeCLI(["browser", "eval", "globalThis.zmuxCspCount = (globalThis.zmuxCspCount || 0) + 1; throw new EvalError('unsafe-eval Content Security Policy')"] + target, expectFailure: true)
+        guard String(decoding: noReplay, as: UTF8.self).contains("javascript_failed"),
+              try await browserCLIValue(["browser", "eval", "globalThis.zmuxCspCount"] + target) as? Int == 1 else {
+            throw BridgeFailure(message: "User script was replayed after a CSP-shaped exception")
         }
     }
 

@@ -194,6 +194,8 @@ pub enum Action {
     CreateBrowser {
         pane_id: PaneId,
         url: String,
+        #[serde(default = "default_focus")]
+        focus: bool,
     },
     NavigateBrowser {
         surface_id: SurfaceId,

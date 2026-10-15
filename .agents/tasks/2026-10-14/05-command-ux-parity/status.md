@@ -177,3 +177,15 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   shutdown cancellation, viewport and lost-event recovery repairs. Public native smoke
   authored; hosted Swift/WebKit execution pending. B01/B02 and V01 remain incomplete.
 - Persistence Foundation/macOS checks at5f26fbe passed; no partial artifact handed off.
+
+## Browser followup and N01a in progress
+
+- `8ee0ee3` compiled universally on macOS; packaged browser smoke failed and Foundation
+  exposed a temporary-directory collision. Neither run establishes full acceptance.
+- No-focus browser creation and fixed-source CSP preflight are implemented; parent
+  portable checks passed. Native followup roots its pending Promise, checks no replay
+  across content worlds, and requires input progress before evaluation finishes.
+- Local cloud health/readiness reverified HTTP 200; path-derived tunnel target remains
+  `http://127.0.0.1:3530`. VM, relay and email remain unavailable.
+- N01a native desktop notification ownership, permissions and exact-token actions are
+  being implemented. In-app inbox behavior already exists; OS banners are not yet proven.

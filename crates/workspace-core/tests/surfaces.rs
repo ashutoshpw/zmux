@@ -330,11 +330,81 @@ fn close_history_evicts_old_entries_and_single_tab_reorder_is_safe() {
 }
 
 #[test]
+fn browser_creation_can_preserve_every_workspace_and_pane_selection() {
+    let mut store = WorkspaceStore::default();
+    let (first, first_pane, _, _) = workspace(&mut store);
+    store
+        .apply(Action::SplitPane {
+            pane_id: first_pane,
+            axis: Axis::Horizontal,
+        })
+        .unwrap();
+    let split_pane = store.snapshot().workspaces[0].focused_pane;
+    store
+        .apply(Action::FocusPane {
+            pane_id: first_pane,
+        })
+        .unwrap();
+    let (_, other_pane, _, _) = workspace(&mut store);
+    store
+        .apply(Action::SelectWorkspace {
+            workspace_id: first,
+        })
+        .unwrap();
+    for pane in [first_pane, split_pane, other_pane] {
+        let before = store.snapshot();
+        let action: Action = serde_json::from_value(serde_json::json!({
+            "action":"create_browser", "pane_id":pane, "url":"about:blank", "focus":false
+        }))
+        .expect("create_browser accepts explicit focus policy");
+        store.apply(action).unwrap();
+        let after = store.snapshot();
+        assert_eq!(after.focused_workspace, before.focused_workspace);
+        for (after, before) in after.workspaces.iter().zip(&before.workspaces) {
+            assert_eq!(after.focused_pane, before.focused_pane);
+            for (after, before) in after.root.panes().iter().zip(before.root.panes()) {
+                assert_eq!(after.selected_surface, before.selected_surface);
+            }
+        }
+        let pane = after
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .find(|p| p.id == pane)
+            .unwrap();
+        assert_eq!(pane.surfaces.last().unwrap().kind, SurfaceKind::Browser);
+        assert_ne!(pane.selected_surface, pane.surfaces.last().unwrap().id);
+    }
+    // Legacy clients omit focus; creation must still select their new browser.
+    let legacy: Action = serde_json::from_value(serde_json::json!({
+        "action":"create_browser", "pane_id":other_pane, "url":"about:blank"
+    }))
+    .unwrap();
+    store.apply(legacy).unwrap();
+    let after = store.snapshot();
+    let target = after
+        .workspaces
+        .iter()
+        .find(|w| w.root.panes().iter().any(|p| p.id == other_pane))
+        .unwrap();
+    let pane = target
+        .root
+        .panes()
+        .into_iter()
+        .find(|p| p.id == other_pane)
+        .unwrap();
+    assert_eq!(after.focused_workspace, Some(target.id));
+    assert_eq!(target.focused_pane, other_pane);
+    assert_eq!(pane.selected_surface, pane.surfaces.last().unwrap().id);
+}
+
+#[test]
 fn browser_tabs_have_no_pty_and_restore_the_observed_url_without_replaying_navigation() {
     let mut store = WorkspaceStore::default();
     let (_, pane, terminal, _) = workspace(&mut store);
     let created = store
         .apply(Action::CreateBrowser {
+            focus: true,
             pane_id: pane,
             url: "https://example.com/initial".into(),
         })

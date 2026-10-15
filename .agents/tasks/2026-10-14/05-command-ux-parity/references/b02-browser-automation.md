@@ -60,7 +60,22 @@ workflows and full audited options remain open until implemented and verified.
 - macOS compilation and WebKit smoke remain pending. Never-selected hidden browser
   viewport behavior needs its own native journey when no-focus creation is added.
 
-Explicit eval gaps: page CSP may block the awaited exact-script wrapper; an isolated
-world fallback is not implemented and scripts are never automatically replayed. The
-undefined compatibility marker retains the observed wire spelling, independently
+## Browser followup (in progress)
+
+- `8ee0ee3` universal native compilation passed, but packaged smoke failed its pending
+  eval error-category assertion. The assertion originally omitted the actual error.
+  WebKit can collect an unreferenced never-settling Promise; the fixture now roots its
+  Promise and includes bounded failure output. The exact hosted cause remains unproven
+  until the next run; production errors are not reclassified to satisfy the check.
+- Foundation macOS exposed a temporary-directory collision between concurrent tests
+  sharing a clock tick. Fixtures now include a process-local atomic sequence.
+- No-focus browser creation preserves the selected workspace, pane and tab and returns
+  the created identity; native acceptance exercises a never-selected host viewport.
+- CSP handling probes a fixed literal before user code. Only a recognized policy denial
+  selects isolated execution; the user script is never replayed on its own exception.
+  Six Chromium cases passed; actual WebKit diagnostics remain a hosted gate.
+- Parent full `scripts/check` passed after these changes. Fresh reviews and hosted
+  execution are pending. B01, B02 and full V01 remain open.
+
+The undefined compatibility marker retains the observed wire spelling, independently
 implemented. DOMRect and Promise results are normalized without copying upstream code.
