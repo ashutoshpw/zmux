@@ -1463,6 +1463,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             return capture.terminationStatus
         }.value
         try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
+        try await smokeTerminalSpecialKeys()
         let evidence: [String: Any] = [
             "success": true,
             "notification_permission_ordering": true,
@@ -1475,6 +1476,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "browser_csp_eval_once": true,
             "browser_title_observation": true,
             "native_input": true,
+            "terminal_special_keys": true,
             "ansi_color": true,
             "split_panes": true,
             "kernel_resize": true,
@@ -1822,6 +1824,129 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard snapshot?.frames.first?.snapshot?.viewport.contents.contains("IMAGE_TEXT_MUST_NOT_BE_PASTED") == false else {
             throw BridgeFailure(message: "Image paste also inserted the text representation")
         }
+    }
+
+    /// Native key dispatch is checked at the PTY byte boundary. The raw child has
+    /// a deadline, restores its tty, and reports bytes rather than echoing key names.
+    private func smokeTerminalSpecialKeys() async throws {
+        guard let previous = focusedPane?.selectedSurface else { throw BridgeFailure(message: "No selected tab for terminal key smoke") }
+        try performShortcut("t", modifiers: [.command])
+        try await waitUntil { value in
+            guard let pane = value.workspace?.root.panes.first(where: { $0.id == value.workspace?.focusedPane }),
+                  pane.selectedSurface != previous, let session = pane.sessionId else { return false }
+            return value.frames.contains { $0.sessionId == session && $0.snapshot?.state == "running" }
+        }
+        guard let pane = focusedPane, let session = pane.sessionId, let terminal = focusedTerminal,
+              window.firstResponder === terminal else { throw BridgeFailure(message: "Terminal key fixture did not own native input") }
+        let surface = pane.selectedSurface
+        typealias Key = (code: UInt16, symbol: UInt32, modifiers: NSEvent.ModifierFlags, bytes: String)
+        let normal: [Key] = [
+            (122, UInt32(NSF1FunctionKey), [], "\u{1b}OP"), (120, UInt32(NSF2FunctionKey), [], "\u{1b}OQ"),
+            (99, UInt32(NSF3FunctionKey), [], "\u{1b}OR"), (118, UInt32(NSF4FunctionKey), [], "\u{1b}OS"),
+            (96, UInt32(NSF5FunctionKey), [], "\u{1b}[15~"), (97, UInt32(NSF6FunctionKey), [], "\u{1b}[17~"),
+            (98, UInt32(NSF7FunctionKey), [], "\u{1b}[18~"), (100, UInt32(NSF8FunctionKey), [], "\u{1b}[19~"),
+            (101, UInt32(NSF9FunctionKey), [], "\u{1b}[20~"), (109, UInt32(NSF10FunctionKey), [], "\u{1b}[21~"),
+            (103, UInt32(NSF11FunctionKey), [], "\u{1b}[23~"), (111, UInt32(NSF12FunctionKey), [], "\u{1b}[24~"),
+            (122, UInt32(NSF1FunctionKey), [.shift], "\u{1b}[1;2P"), (120, UInt32(NSF2FunctionKey), [.option], "\u{1b}[1;3Q"),
+            (99, UInt32(NSF3FunctionKey), [.control], "\u{1b}[1;5R"), (118, UInt32(NSF4FunctionKey), [.shift, .option, .control], "\u{1b}[1;8S"),
+            (96, UInt32(NSF5FunctionKey), [.control], "\u{1b}[15;5~"), (111, UInt32(NSF12FunctionKey), [.shift, .option], "\u{1b}[24;4~"),
+            (115, UInt32(NSHomeFunctionKey), [], "\u{1b}[H"), (119, UInt32(NSEndFunctionKey), [], "\u{1b}[F"),
+            (116, UInt32(NSPageUpFunctionKey), [], "\u{1b}[5~"), (121, UInt32(NSPageDownFunctionKey), [], "\u{1b}[6~"),
+            (117, UInt32(NSDeleteFunctionKey), [], "\u{1b}[3~"),
+            (115, UInt32(NSHomeFunctionKey), [.control], "\u{1b}[1;5H"), (119, UInt32(NSEndFunctionKey), [.option], "\u{1b}[1;3F"),
+            (115, UInt32(NSHomeFunctionKey), [.shift], "\u{1b}[1;2H"), (116, UInt32(NSPageUpFunctionKey), [.control], "\u{1b}[5;5~"),
+            (121, UInt32(NSPageDownFunctionKey), [.option], "\u{1b}[6;3~"), (117, UInt32(NSDeleteFunctionKey), [.shift], "\u{1b}[3;2~"),
+            (117, UInt32(NSDeleteFunctionKey), [.option, .control], "\u{1b}[3;7~"),
+            (123, UInt32(NSLeftArrowFunctionKey), [], "\u{1b}[D"), (126, UInt32(NSUpArrowFunctionKey), [.control], "\u{1b}[1;5A"),
+            // Reserved app/history keys must contribute no PTY bytes, even with modifiers.
+            (111, UInt32(NSF12FunctionKey), [.command], ""),
+            (116, UInt32(NSPageUpFunctionKey), [.shift, .control], ""), (121, UInt32(NSPageDownFunctionKey), [.shift, .option], "")
+        ]
+        let application: [Key] = [
+            (115, UInt32(NSHomeFunctionKey), [], "\u{1b}OH"), (119, UInt32(NSEndFunctionKey), [], "\u{1b}OF"),
+            (123, UInt32(NSLeftArrowFunctionKey), [], "\u{1b}OD"), (126, UInt32(NSUpArrowFunctionKey), [], "\u{1b}OA"),
+            (119, UInt32(NSEndFunctionKey), [.control], "\u{1b}[1;5F"), (124, UInt32(NSRightArrowFunctionKey), [.option], "\u{1b}[1;3C")
+        ]
+        let token = String(UUID().uuidString.prefix(8)).lowercased()
+        let program = #"""
+import os, select, termios, time, tty
+token = "\#(token)"
+def emit(phase):
+    os.write(1, ("\r\nKEY_%s_%s\r\n" % (token, phase)).encode())
+def capture():
+    data = bytearray()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([0], [], [], max(0, deadline - time.monotonic()))
+        if not ready: break
+        chunk = os.read(0, 4096)
+        if not chunk: raise RuntimeError("native key input closed")
+        data.extend(chunk)
+        if len(data) > 4096: raise RuntimeError("key input exceeded its bound")
+        if b"\0" in data:
+            value, tail = data.split(b"\0", 1)
+            if tail: raise RuntimeError("input followed the ordered key sentinel")
+            return value.hex()
+    raise RuntimeError("native key sentinel was not received before the deadline")
+saved = termios.tcgetattr(0)
+records = []
+try:
+    tty.setraw(0)
+    for mode in range(2):
+        os.write(1, b"\x1b[?1h" if mode else b"\x1b[?1l")
+        emit("ready%d" % mode)
+        records.append(capture())
+finally:
+    termios.tcsetattr(0, termios.TCSANOW, saved)
+    os.write(1, b"\x1b[?1l")
+for mode, value in enumerate(records): emit("%d_%s_END" % (mode, value))
+emit("done")
+"""#
+        terminal.insertText("python3 -c '" + program.replacingOccurrences(of: "'", with: "'\\''") + "'\r", replacementRange: NSRange(location: NSNotFound, length: 0))
+        for (mode, keys) in [normal, application].enumerated() {
+            try await waitUntil { value in
+                value.frames.contains { frame in
+                    frame.sessionId == session && frame.snapshot?.viewport.applicationCursor == (mode == 1)
+                        && frame.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_ready\(mode)") == true
+                }
+            }
+            for key in keys {
+                let characters = String(UnicodeScalar(key.symbol)!)
+                guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: key.modifiers.union(.function),
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: key.code) else {
+                    throw BridgeFailure(message: "Could not construct a native special-key event")
+                }
+                window.sendEvent(event)
+                // Exercise encoding rather than saturating the bounded input queue.
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            // Control-Space emits NUL after all preceding key events on the same
+            // input route. The child uses it as an ordering fence, without timing guesses.
+            guard let sentinel = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49) else {
+                throw BridgeFailure(message: "Could not construct the native key ordering sentinel")
+            }
+            window.sendEvent(sentinel)
+        }
+        try await waitUntil { value in
+            value.frames.contains { $0.sessionId == session && $0.snapshot?.viewport.applicationCursor == false
+                && $0.snapshot?.viewport.contents.replacingOccurrences(of: "\n", with: "").contains("KEY_\(token)_done") == true }
+        }
+        let data = try await nativeCLI(["read-screen", "--surface", String(surface)], timeout: 1000)
+        guard let screen = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (screen["session_id"] as? NSNumber)?.uint64Value == session,
+              let contents = screen["contents"] as? String else { throw BridgeFailure(message: "Key fixture screen was unavailable") }
+        let compact = contents.replacingOccurrences(of: "\n", with: "")
+        for (mode, keys) in [normal, application].enumerated() {
+            let expected = keys.map { $0.bytes }.joined().utf8.map { String(format: "%02x", $0) }.joined()
+            guard compact.contains("KEY_\(token)_\(mode)_\(expected)_END") else {
+                throw BridgeFailure(message: "Native special keys differed from xterm PTY bytes in mode \(mode): " + String(compact.suffix(2048)))
+            }
+        }
+        closeTerminalTab(surface)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == previous }
     }
 
     private func smokeHistoryNavigation() async throws {

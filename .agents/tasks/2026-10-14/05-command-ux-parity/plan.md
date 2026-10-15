@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [T01 terminal input](references/t01-terminal-input.md) — legacy special-key encoding and real PTY acceptance.
 - [N01 sidebar resizing](references/n01-sidebar-resizing.md) — persistent width, native drag/keyboard/accessibility controls and acceptance.
 - [N01a desktop notifications](references/n01-desktop-notifications.md) — native delivery ownership, exact actions and permission acceptance gates.
 - [B02a browser automation](references/b02-browser-automation.md) — asynchronous shared WebKit bridge, lifecycle fencing, owner assignments and acceptance.
