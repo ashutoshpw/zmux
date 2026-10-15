@@ -21,7 +21,9 @@ enum AppStartup {
         }
         let inheritedPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         setenv("PATH", cliDirectory.path + ":" + inheritedPath, 1)
-        if ProcessInfo.processInfo.environment["ZMUX_SOCKET"] == nil {
+        if let path = ProcessInfo.processInfo.environment["ZMUX_SOCKET_PATH"] {
+            setenv("ZMUX_SOCKET", path, 1)
+        } else if ProcessInfo.processInfo.environment["ZMUX_SOCKET"] == nil {
             let path = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/zmux/control.sock").path
             setenv("ZMUX_SOCKET", path, 1)
         }

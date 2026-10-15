@@ -1,5 +1,8 @@
 //! Versioned, same-user local control for a running desktop.
 
+use crate::control_policy::{
+    ControlAdmission, ControlGate, ControlOrigin, ControlPolicy, SocketPassword,
+};
 use crate::targets::{TargetOperation, TargetRequest};
 use crate::{Command, Desktop, DesktopError, Request, Snapshot};
 use nix::unistd::{Uid, geteuid};
@@ -25,7 +28,7 @@ use zmux_session_runtime::State;
 use zmux_workspace_core::targets::TargetKind;
 use zmux_workspace_core::{Action, Axis, PaneId, SessionId, SurfaceId, WorkspaceId};
 
-pub const CONTROL_VERSION: u32 = 1;
+pub const CONTROL_VERSION: u32 = 2;
 pub const MAX_CONTROL_REQUEST_BYTES: usize = 16_384;
 pub const MAX_CONTROL_RESPONSE_BYTES: usize = 1_048_576;
 const CLIENT_IO_TIMEOUT: Duration = Duration::from_millis(500);
@@ -38,6 +41,8 @@ const ACCEPT_POLL: Duration = Duration::from_millis(10);
 pub struct ControlRequest {
     pub version: u32,
     pub request_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<SocketPassword>,
     pub command: ControlCommand,
 }
 
@@ -166,17 +171,34 @@ pub enum ControlServerError {
 pub struct ControlServer {
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    gate: ControlGate,
 }
 
 impl ControlServer {
     pub fn start(path: &Path, desktop: Arc<Desktop>) -> Result<Self, ControlServerError> {
-        Self::start_for_uid(path, desktop, geteuid())
+        Self::start_with_policy(path, desktop, ControlPolicy::default())
+    }
+
+    pub fn start_with_policy(
+        path: &Path,
+        desktop: Arc<Desktop>,
+        policy: ControlPolicy,
+    ) -> Result<Self, ControlServerError> {
+        Self::start_for_uid(path, desktop, geteuid(), policy)
+    }
+
+    pub fn set_policy(
+        &self,
+        policy: ControlPolicy,
+    ) -> Result<(), crate::control_policy::PolicyError> {
+        self.gate.replace(policy)
     }
 
     fn start_for_uid(
         path: &Path,
         desktop: Arc<Desktop>,
         allowed_uid: Uid,
+        policy: ControlPolicy,
     ) -> Result<Self, ControlServerError> {
         if !path.is_absolute() {
             return Err(ControlServerError::RelativePath(path.to_owned()));
@@ -210,12 +232,16 @@ impl ControlServer {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let worker_path = path.to_owned();
+        let gate = ControlGate::new(policy);
+        let worker_gate = gate.clone();
         let worker = thread::Builder::new()
             .name("zmux-local-control".into())
             .spawn(move || {
                 while !worker_stop.load(Ordering::Acquire) {
                     match listener.accept() {
-                        Ok((stream, _)) => serve_connection(stream, &desktop, allowed_uid),
+                        Ok((stream, _)) => {
+                            serve_connection(stream, &desktop, allowed_uid, &worker_gate)
+                        }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                             thread::sleep(ACCEPT_POLL);
                         }
@@ -235,6 +261,7 @@ impl ControlServer {
         Ok(Self {
             stop,
             worker: Mutex::new(Some(worker)),
+            gate,
         })
     }
 
@@ -358,12 +385,25 @@ fn remove_owned_socket(path: &Path, identity: (u64, u64)) {
     }
 }
 
-fn serve_connection(mut stream: UnixStream, desktop: &Desktop, allowed_uid: Uid) {
-    let _ = stream.set_read_timeout(Some(CLIENT_IO_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(CLIENT_IO_TIMEOUT));
+fn serve_connection(
+    mut stream: UnixStream,
+    desktop: &Desktop,
+    allowed_uid: Uid,
+    gate: &ControlGate,
+) {
+    // Accepted sockets inherit O_NONBLOCK on BSD/macOS. Frame I/O uses bounded blocking
+    // reads on this dedicated listener worker, independent of the nonblocking accept loop.
+    if let Err(error) = stream
+        .set_nonblocking(false)
+        .and_then(|()| stream.set_read_timeout(Some(CLIENT_IO_TIMEOUT)))
+        .and_then(|()| stream.set_write_timeout(Some(CLIENT_IO_TIMEOUT)))
+    {
+        eprintln!("zmux local control connection setup failed: {error}");
+        return;
+    }
     let response = match peer_uid(&stream) {
         Ok(uid) if uid == allowed_uid => match read_request(&mut stream) {
-            Ok(request) => handle_request(desktop, request),
+            Ok(request) => handle_request(desktop, request, gate),
             Err(ReadRequestError::Oversized) => ControlResponse::failure(
                 0,
                 "request_too_large",
@@ -419,8 +459,27 @@ fn write_response(stream: &mut UnixStream, response: &ControlResponse) -> io::Re
     stream.write_all(&bytes)
 }
 
-fn handle_request(desktop: &Desktop, request: ControlRequest) -> ControlResponse {
-    if request.version != CONTROL_VERSION {
+fn handle_request(
+    desktop: &Desktop,
+    request: ControlRequest,
+    gate: &ControlGate,
+) -> ControlResponse {
+    let version = request.version;
+    let mut response = handle_versioned_request(desktop, request, gate);
+    // The new server accepts the original v1 request shape and responds in that version.
+    // Password-capable clients require v2; the native C ABI has its own version contract.
+    if version == 1 || version == CONTROL_VERSION {
+        response.version = version;
+    }
+    response
+}
+
+fn handle_versioned_request(
+    desktop: &Desktop,
+    request: ControlRequest,
+    gate: &ControlGate,
+) -> ControlResponse {
+    if request.version != 1 && request.version != CONTROL_VERSION {
         return ControlResponse::failure(
             request.request_id,
             "unsupported_version",
@@ -431,13 +490,37 @@ fn handle_request(desktop: &Desktop, request: ControlRequest) -> ControlResponse
         return ControlResponse::failure(0, "invalid_request_id", "request_id must be nonzero");
     }
     let request_id = request.request_id;
-    match dispatch(desktop, request) {
-        Ok(result) => ControlResponse::success(request_id, result),
+    let admission = match gate.admit(
+        ControlOrigin::LocalOwner,
+        &request.command,
+        request.password.as_ref(),
+    ) {
+        Ok(admission) => admission,
+        Err(error) => return ControlResponse::failure(request_id, error.code(), error.to_string()),
+    };
+    let read = crate::control_policy::is_read(&request.command);
+    let capabilities = matches!(request.command, ControlCommand::Capabilities);
+    match dispatch(desktop, request, &admission) {
+        Ok(result) if !read => ControlResponse::success(request_id, result),
+        Ok(mut result) => match admission.check() {
+            Err(error) => ControlResponse::failure(request_id, error.code(), error.to_string()),
+            Ok(guard) => {
+                if capabilities {
+                    result["authorization"] = json!(guard.policy().authentication());
+                    result["access"] = json!(guard.policy().access());
+                }
+                ControlResponse::success(request_id, result)
+            }
+        },
         Err((code, message)) => ControlResponse::failure(request_id, code, message),
     }
 }
 
-fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'static str, String)> {
+fn dispatch(
+    desktop: &Desktop,
+    request: ControlRequest,
+    admission: &ControlAdmission,
+) -> Result<Value, (&'static str, String)> {
     match request.command {
         ControlCommand::Targeted {
             request: target_request,
@@ -470,18 +553,25 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
             }
             _ => mutate(
                 desktop,
+                admission,
                 request.request_id,
                 Command::Targeted {
                     request: target_request,
                 },
             ),
         },
-        ControlCommand::Action { action } => {
-            mutate(desktop, request.request_id, Command::Action { action })
-        }
-        ControlCommand::Attention { action } => {
-            mutate(desktop, request.request_id, Command::Attention { action })
-        }
+        ControlCommand::Action { action } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Action { action },
+        ),
+        ControlCommand::Attention { action } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Attention { action },
+        ),
         ControlCommand::ListNotifications => {
             let snapshot = current_snapshot(desktop)?;
             Ok(
@@ -499,6 +589,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
         }
         ControlCommand::Capabilities => Ok(json!({
             "protocol": "zmux-local-control", "version": CONTROL_VERSION,
+            "accepted_request_versions": [1, CONTROL_VERSION],
             "model_version": zmux_workspace_core::MODEL_VERSION,
             "authorization": "same_uid", "remote_relay": false,
             "target_kinds": ["workspace", "pane", "surface"],
@@ -534,6 +625,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
         }
         ControlCommand::NewWorkspace { name } => mutate(
             desktop,
+            admission,
             request.request_id,
             Command::Action {
                 action: Action::CreateWorkspace { name },
@@ -541,6 +633,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
         ),
         ControlCommand::RenameWorkspace { workspace_id, name } => mutate(
             desktop,
+            admission,
             request.request_id,
             Command::Action {
                 action: Action::RenameWorkspace { workspace_id, name },
@@ -548,6 +641,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
         ),
         ControlCommand::FocusPane { pane_id } => mutate(
             desktop,
+            admission,
             request.request_id,
             Command::Action {
                 action: Action::FocusPane { pane_id },
@@ -555,6 +649,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
         ),
         ControlCommand::SplitPane { pane_id, axis } => mutate(
             desktop,
+            admission,
             request.request_id,
             Command::Action {
                 action: Action::SplitPane { pane_id, axis },
@@ -562,6 +657,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
         ),
         ControlCommand::ClosePane { pane_id } => mutate(
             desktop,
+            admission,
             request.request_id,
             Command::Action {
                 action: Action::ClosePane { pane_id },
@@ -573,6 +669,7 @@ fn dispatch(desktop: &Desktop, request: ControlRequest) -> Result<Value, (&'stat
             )?;
             mutate(
                 desktop,
+                admission,
                 request.request_id,
                 Command::Targeted {
                     request: TargetRequest {
@@ -629,20 +726,23 @@ fn current_snapshot(desktop: &Desktop) -> Result<Arc<Snapshot>, (&'static str, S
 
 fn mutate(
     desktop: &Desktop,
+    admission: &ControlAdmission,
     request_id: u64,
     payload: Command,
 ) -> Result<Value, (&'static str, String)> {
     let execution = desktop
-        .execute(
+        .execute_authorized(
             Request {
                 version: CONTROL_VERSION,
                 request_id,
                 payload,
             },
             COMMAND_TIMEOUT,
+            admission.clone(),
         )
         .map_err(desktop_error)?;
     execution.result.map_err(|error| match error {
+        DesktopError::Policy(error) => (error.code(), error.to_string()),
         DesktopError::Target(error) => (error.code(), error.to_string()),
         DesktopError::NotTerminal => ("not_terminal", error.to_string()),
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
@@ -674,6 +774,7 @@ fn mutate(
 
 fn desktop_error(error: DesktopError) -> (&'static str, String) {
     let code = match error {
+        DesktopError::Policy(ref error) => error.code(),
         DesktopError::NotTerminal => "not_terminal",
         DesktopError::TerminalUnavailable => "terminal_not_ready",
         DesktopError::QueueFull => "overloaded",
@@ -917,6 +1018,78 @@ mod tests {
     }
 
     #[test]
+    fn legacy_v1_mutations_work_but_cannot_bypass_new_password_policy() {
+        use crate::control_policy::{ControlAccess, SocketPassword};
+        let path = test_socket("legacy");
+        let desktop = desktop();
+        let server = ControlServer::start(&path, Arc::clone(&desktop)).unwrap();
+        let body = br#"{"version":1,"request_id":19,"command":{"method":"new_workspace","name":"Legacy client"}}"#;
+        let response = exchange_raw(&path, body.len() as u32, body);
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.version, 1);
+        let before = desktop.snapshot().unwrap().model.clone();
+        assert!(before.workspaces.iter().any(|w| w.name == "Legacy client"));
+        server
+            .set_policy(ControlPolicy::password(
+                ControlAccess::Full,
+                SocketPassword::new("synthetic-test-only".into()).unwrap(),
+            ))
+            .unwrap();
+        let denied = exchange_raw(&path, body.len() as u32, body);
+        assert!(!denied.ok);
+        assert_eq!(denied.version, 1);
+        assert_eq!(denied.error.unwrap().code, "unauthorized");
+        assert_eq!(desktop.snapshot().unwrap().model, before);
+        cleanup(&path, server, desktop);
+    }
+
+    #[test]
+    fn accepted_nonblocking_stream_waits_for_a_delayed_request_frame() {
+        let desktop = desktop();
+        let (mut client, server) = UnixStream::pair().unwrap();
+        server.set_nonblocking(true).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(25)))
+            .unwrap();
+        let server_desktop = Arc::clone(&desktop);
+        let handler = thread::spawn(move || {
+            serve_connection(
+                server,
+                &server_desktop,
+                geteuid(),
+                &ControlGate::new(ControlPolicy::default()),
+            )
+        });
+        let mut length = [0; 4];
+        let pending = client.read_exact(&mut length);
+        assert!(
+            pending.is_err(),
+            "server rejected a connection before any frame was sent"
+        );
+        assert!(matches!(
+            pending.unwrap_err().kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+        ));
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let request = br#"{"version":1,"request_id":12,"command":{"method":"status"}}"#;
+        client
+            .write_all(&(request.len() as u32).to_be_bytes())
+            .unwrap();
+        client.write_all(request).unwrap();
+        client.read_exact(&mut length).unwrap();
+        let mut body = vec![0; u32::from_be_bytes(length) as usize];
+        client.read_exact(&mut body).unwrap();
+        let response: ControlResponse = serde_json::from_slice(&body).unwrap();
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.request_id, 12);
+        assert_eq!(response.version, 1, "legacy v1 requests need a v1 response");
+        handler.join().unwrap();
+        desktop.shutdown(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
     fn peer_with_unexpected_uid_is_rejected_before_request_dispatch() {
         let path = test_socket("unauthorized");
         let desktop = desktop();
@@ -927,7 +1100,12 @@ mod tests {
         let (server_stream, _) = listener.accept().unwrap();
         let desktop_for_server = Arc::clone(&desktop);
         let handler = thread::spawn(move || {
-            serve_connection(server_stream, &desktop_for_server, unexpected_uid)
+            serve_connection(
+                server_stream,
+                &desktop_for_server,
+                unexpected_uid,
+                &ControlGate::new(ControlPolicy::default()),
+            )
         });
         let mut client = client;
         // Peer credentials are rejected before reading any request. Sending a body here

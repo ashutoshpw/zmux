@@ -219,6 +219,29 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
     }
 }
 
+fn capture_request(listener: UnixListener, version: u32) -> thread::JoinHandle<Value> {
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let mut body = vec![0; u32::from_be_bytes(length) as usize];
+        stream.read_exact(&mut body).unwrap();
+        let request: Value = serde_json::from_slice(&body).unwrap();
+        let response = serde_json::to_vec(&serde_json::json!({
+            "version": version, "request_id": request["request_id"], "ok": true, "result": {}
+        }))
+        .unwrap();
+        stream
+            .write_all(&(response.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&response).unwrap();
+        request
+    })
+}
+
 #[test]
 fn send_text_delimiter_preserves_literal_stdin_marker_on_the_wire() {
     use std::process::Stdio;
@@ -229,26 +252,7 @@ fn send_text_delimiter_preserves_literal_stdin_marker_on_the_wire() {
         let socket = socket_path();
         fs::create_dir_all(socket.parent().unwrap()).unwrap();
         let listener = UnixListener::bind(&socket).unwrap();
-        let capture = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut length = [0; 4];
-            stream.read_exact(&mut length).unwrap();
-            let mut body = vec![0; u32::from_be_bytes(length) as usize];
-            stream.read_exact(&mut body).unwrap();
-            let request: Value = serde_json::from_slice(&body).unwrap();
-            let response = serde_json::to_vec(&serde_json::json!({
-                "version": 1, "request_id": request["request_id"], "ok": true, "result": {}
-            }))
-            .unwrap();
-            stream
-                .write_all(&(response.len() as u32).to_be_bytes())
-                .unwrap();
-            stream.write_all(&response).unwrap();
-            request
-        });
+        let capture = capture_request(listener, 2);
         let mut child = Command::new(env!("CARGO_BIN_EXE_zmux"))
             .arg("--socket")
             .arg(&socket)
@@ -278,6 +282,178 @@ fn send_text_delimiter_preserves_literal_stdin_marker_on_the_wire() {
         fs::remove_dir(socket.parent().unwrap()).unwrap();
         assert_eq!(request["command"]["request"]["operation"]["text"], expected);
     }
+}
+
+#[test]
+fn incompatible_app_protocol_reports_an_upgrade_without_retrying_the_command() {
+    let socket = socket_path();
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&socket).unwrap();
+    let captured = capture_request(listener, 1);
+    let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .arg("--socket")
+        .arg(&socket)
+        .args([
+            "--password",
+            "synthetic-test-only",
+            "new-workspace",
+            "Protocol skew",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("requires v2"));
+    assert!(error.contains("Restart or update"));
+    assert!(error.contains("not retried"));
+    assert!(!error.contains("synthetic-test-only"));
+    let request = captured.join().unwrap();
+    assert_eq!(request["version"], 2);
+    assert_eq!(request["command"]["method"], "new_workspace");
+    fs::remove_file(&socket).unwrap();
+    fs::remove_dir(socket.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn local_socket_credentials_and_live_access_changes_protect_real_mutations() {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy, SocketPassword};
+    let socket = socket_path();
+    let desktop = Arc::new(
+        Desktop::new(Shell {
+            program: "/bin/sh".into(),
+            args: vec!["-i".into()],
+            cwd: None,
+        })
+        .unwrap(),
+    );
+    let secret = "test-only socket credential";
+    let policy =
+        |access| ControlPolicy::password(access, SocketPassword::new(secret.into()).unwrap());
+    let server = ControlServer::start_with_policy(
+        &socket,
+        Arc::clone(&desktop),
+        policy(ControlAccess::Full),
+    )
+    .unwrap();
+    let private_home = socket.parent().unwrap().join("home");
+    let saved = private_home.join(".config/zmux/socket-password");
+    fs::create_dir_all(saved.parent().unwrap()).unwrap();
+    fs::write(&saved, format!("{secret}\n")).unwrap();
+    fs::set_permissions(&saved, fs::Permissions::from_mode(0o600)).unwrap();
+    let run = |args: &[&str], environment: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zmux"));
+        command
+            .arg("--socket")
+            .arg(&socket)
+            .args(args)
+            .env("HOME", &private_home)
+            .env_remove("ZMUX_SOCKET_PASSWORD_FILE")
+            .env_remove("ZMUX_SOCKET_PASSWORD")
+            .env_remove("ZMUX_WORKSPACE_ID")
+            .env_remove("ZMUX_SURFACE_ID")
+            .env_remove("ZMUX_TAB_ID");
+        if let Some(value) = environment {
+            command.env("ZMUX_SOCKET_PASSWORD", value);
+        }
+        command.output().unwrap()
+    };
+    // A private saved file works without a flag or environment credential.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let initial: Value = loop {
+        let output = run(&["status"], None);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        if status["workspace_count"] == 1 {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "initial workspace not ready");
+        thread::sleep(Duration::from_millis(10));
+    };
+    // Explicit credentials override environment; environment overrides saved state.
+    assert!(
+        run(&["--password", secret, "status"], Some("wrong env"))
+            .status
+            .success()
+    );
+    for output in [
+        run(
+            &["--password", "wrong flag", "new-workspace", "Denied"],
+            Some(secret),
+        ),
+        run(&["new-workspace", "Denied"], Some("wrong env")),
+    ] {
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("unauthorized"));
+        assert!(!error.contains(secret));
+        assert!(!error.contains("wrong"));
+    }
+    let output = run(&["status"], None);
+    let unchanged: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(initial["workspace_count"], unchanged["workspace_count"]);
+    let created = run(&["new-workspace", "Authorized"], Some(secret));
+    assert!(created.status.success());
+
+    server.set_policy(policy(ControlAccess::ReadOnly)).unwrap();
+    let caps = run(&["capabilities"], Some(secret));
+    let caps: Value = serde_json::from_slice(&caps.stdout).unwrap();
+    assert_eq!(caps["authorization"], "same_uid_and_password");
+    assert_eq!(caps["access"], "read_only");
+    let denied = run(&["new-workspace", "ReadOnlyDenied"], Some(secret));
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    let output = run(&["status"], Some(secret));
+    let current: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        current["workspace_count"].as_u64().unwrap(),
+        initial["workspace_count"].as_u64().unwrap() + 1
+    );
+
+    fs::set_permissions(&saved, fs::Permissions::from_mode(0o644)).unwrap();
+    let insecure = run(&["status"], None);
+    assert!(!insecure.status.success());
+    assert!(String::from_utf8_lossy(&insecure.stderr).contains("private"));
+    // A deliberately provided credential still wins over an insecure fallback file.
+    assert!(run(&["status"], Some(secret)).status.success());
+    fs::set_permissions(&saved, fs::Permissions::from_mode(0o600)).unwrap();
+    let target = saved.with_extension("real");
+    fs::rename(&saved, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &saved).unwrap();
+    assert!(!run(&["status"], None).status.success());
+    server
+        .set_policy(ControlPolicy::same_user(ControlAccess::Disabled))
+        .unwrap();
+    let disabled = run(&["status"], Some(secret));
+    assert!(!disabled.status.success());
+    assert!(String::from_utf8_lossy(&disabled.stderr).contains("disabled"));
+
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn standalone_terminals_do_not_inherit_socket_passwords() {
+    let output = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .args([
+            "prototype",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf 'socket-secret=%s' \"${ZMUX_SOCKET_PASSWORD-unset}\"",
+        ])
+        .env("ZMUX_SOCKET_PASSWORD", "test-only-do-not-inherit")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let screen: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let text = screen.to_string();
+    assert!(text.contains("socket-secret=unset"), "{text}");
+    assert!(!text.contains("test-only-do-not-inherit"));
 }
 
 #[test]
@@ -318,7 +494,7 @@ fn public_cli_controls_a_real_desktop_over_its_unix_socket() {
         thread::sleep(Duration::from_millis(10));
     };
     assert_eq!(status["workspace_count"], 1);
-    assert_eq!(status["protocol_version"], 1);
+    assert_eq!(status["protocol_version"], 2);
     let capabilities = invoke_app(&socket, &["capabilities"]);
     assert_eq!(capabilities["protocol"], "zmux-local-control");
     assert_eq!(capabilities["version"], status["protocol_version"]);
