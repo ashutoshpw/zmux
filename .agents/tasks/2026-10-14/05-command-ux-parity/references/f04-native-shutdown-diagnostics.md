@@ -72,7 +72,7 @@ the graceful deadline test and fails only the cleanup fixture, with the same
 `Exited` history snapshot. The earlier intermittent graceful Timeout remains
 unexplained; these passing observations are not a claimed fix.
 
-## Kernel-fault fixture repair, native verification pending
+## Kernel-fault fixture repair
 
 The exact isolated test child now installs and verifies SIGCHLD `SA_NOCLDWAIT`
 after exec. Its small `publish=false` support crate is a dev dependency only;
@@ -97,5 +97,29 @@ exact old `b831fac` production Session source fails on the original false Kill
 shutdown success after actual kernel ECHILD. The negative control's source,
 receipt and log remain under
 `target/agent-validation/session-shutdown-sigaction-negative-control/`.
-Actual Darwin ECHILD and preserved cleanup-error results remain required before
-accepting this portable fixture repair.
+The native result below verifies actual Darwin ECHILD and preserved cleanup errors.
+
+## Exact Darwin kernel-fault result
+
+Run `38818223456` at `74a2287803e35397c5aed40f246985fd45874b01`
+succeeds on Darwin24.6 ARM. Artifact `12012245753` is89481 ZIP bytes, SHA256
+`1479d136a21e42b08d64a10509f6120ff012ffc8b6e4e4fd078e5c50521a97c7`;
+the producer receipt SHA256 is
+`229fac635ffd9e27982e6e76a4ad46a746681ff7e2482505a0681bfd92765468`.
+All48 retained source copies match their receipt and exact Git source. The raw
+probe, all3 parallel cases and all3 serialized cases execute successfully with
+complete logs and no phase timeout. Local retention is under
+`target/agent-validation/session-shutdown-diagnostics-darwin-38818223456/`.
+
+Actual kernel ECHILD is recorded for Kill child12019 and Graceful child12022 in
+the parallel run, and Kill child12027 and Graceful child12028 in the serialized
+run. Each policy retains its original first and repeated shutdown cleanup-error
+assertions. The kernel-fault fixture therefore now exercises its intended error
+on Darwin as well as Linux. This does not claim a production repair for the
+older intermittent graceful Timeout, nor native app/default engine acceptance.
+Independent review verifies the live successful run, exact artifact/receipt and
+all48 Git source hashes, both3-case modes and four actual ECHILD child identities:
+`/tmp/zmux-session-shutdown-darwin-38818223456-independent-review.json`, SHA256
+`41175235a3404a78d06b95a872cdf10886fcdc7b1e2a6397bf52442693ef5049`.
+The fixture repair is accepted within that scope. Older graceful Timeout and
+native app/default-engine gates remain separate.

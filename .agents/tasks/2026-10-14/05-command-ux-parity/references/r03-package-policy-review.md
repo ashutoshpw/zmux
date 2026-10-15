@@ -85,3 +85,20 @@ The current policy additionally excludes compiled files from distributed source 
 The two registry transforms are exact version/archive-checksum scoped in `registry_source_compiled_exclusions`. Their component records retain original archive URL/SHA and separate retained archive SHA, excluded-member inventory and policy basis. They use explicit `-source.tar.gz` names instead of claiming to be original checksum-valid registry `.crate` files. The other 392 registry archives, including both MPL components, remain pristine. Source availability covers complete actual native/plugin code and lock; intentionally omitted compiled fixtures/fallbacks are explicit, not silently labeled source.
 
 Review this source-container policy with the four standard-term supplements before accepting the new exact policy hash. The prior hash is superseded and is not a promotion assertion for these changes.
+
+## Independent candidate acceptance
+
+The exact 41-file candidate manifest `483f36cf891b2893e734dd427b1d1e7a8aa39ba13d05c95f94bad63896d8571a`
+and policy `1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79`
+passed independent implementation/source/notice review. Receipt SHA256:
+`4632076cc0331eb084b6ec5ecf77dc87f7413222b973f6156028638883f1cc0b`.
+It verifies all 31 override VCS mappings, 21 exact texts, 395 source containers,
+1,239 payload files, three exact filters, both pristine MPL components, ten rebuilt
+plugins, 28 owner cases and 13 rejection controls. The four disclosed standard-term
+supplements are accepted only at these exact versions/checksums.
+
+Commit `65471de` was dispatched to both-host opt-in workflow38819411938 after isolated
+`scripts/check` passed. The retained upstream license texts intentionally preserve
+original trailing whitespace rather than rewriting their verified bytes.
+Hosted final-SHA package execution/download review, default acquisition and native
+integration remain separate gates.

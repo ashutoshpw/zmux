@@ -5,6 +5,17 @@
 
 ## Active implementation
 
+- H01 native credential fix `352ba3b` passes the early actual macOS HTTP/Keychain
+  red/green gate in run38818645717. The same fixture rejects the pinned baseline
+  at cancelled-login persistence and accepts the repaired client with external
+  cleanup. Full workflow and independent retained-log review are still pending.
+- R03 package implementation `65471de` passed independent exact source/notice
+  review and isolated `scripts/check`. Opt-in both-host run38819411938 is building
+  rebuilt plugins and source/notice packages; no default acquisition changed.
+- F04 shutdown diagnostics38818223456 at `74a2287` passed actual Darwin ECHILD
+  assertions and three parallel/three serial repetitions, independently reviewed.
+  Earlier intermittent graceful-close timeouts are not declared repaired.
+
 - A01b adds bounded app-wide `current` inspection from one published Desktop
   snapshot: exact identities/revisions, hidden terminal local-child lifecycle,
   metadata/attention counts and explicit unknown activity. Real CLI/control
