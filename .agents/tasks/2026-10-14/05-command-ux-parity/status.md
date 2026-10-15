@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Native38808070074 at `c8bf104` passes both strict Swift typechecks but stops in
+  the download physical-credit fixture before app execution. The fixture now advances
+  admission time to expire logical tickets without draining worker completions, then
+  observes actual credit release for at most5s instead of assuming a100ms worker sleep.
+  Removing the physical-credit guard fails the strengthened pre-drain assertion.
+  Exact isolated `scripts/check` passes286 tests, strict Clippy, notices and C ABI;
+  independent review passes. Browser keyboard/shutdown/reopen runtime gates remain open.
+- Foundation38808070193 at `c8bf104` passed both Linux and macOS jobs.
+
 - `52440da` adds explicit optional Session engine ownership, staged publication after
   physical PTY reply writes, and cancellation guards before publication/user writes.
   Exact combined browser/fixture/Session source passes `scripts/check` (286 tests,

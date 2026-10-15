@@ -542,11 +542,18 @@ fn elapsed_path_tickets_hold_worker_credits_until_real_completion_is_drained() {
     let (model, surface, _, mut runtime) = fixture();
     let path = Some(files.0.join("absent").to_str().unwrap().to_owned());
     let now = Instant::now();
-    for _ in 0..MAX_WAITERS {
+    for index in 0..MAX_WAITERS {
         runtime
-            .wait(&model.snapshot(), surface, path.clone(), Some(1), now)
+            .wait(
+                &model.snapshot(),
+                surface,
+                path.clone(),
+                Some(1),
+                now + Duration::from_millis(index as u64 * 2),
+            )
             .unwrap();
     }
+    // Advancing admission time expires earlier tickets without draining completions.
     // Elapsed deadlines alone never authorize reusing physical worker credits.
     // Even already-enqueued completions remain charged until actually drained.
     let far_future = now + Duration::from_secs(1);
@@ -563,11 +570,23 @@ fn elapsed_path_tickets_hold_worker_credits_until_real_completion_is_drained() {
             .code,
         "download_wait_capacity"
     );
-    std::thread::sleep(Duration::from_millis(100));
-    runtime.poll(&model.snapshot(), far_future);
-    runtime
-        .wait(&model.snapshot(), surface, None, Some(1), Instant::now())
-        .unwrap();
+    // Scheduling the observer is independent of logical ticket expiration. Keep
+    // polling until actual completion releases a credit, with a bounded test wait.
+    let observation_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        runtime.poll(&model.snapshot(), far_future);
+        match runtime.wait(&model.snapshot(), surface, None, Some(1), Instant::now()) {
+            Ok(_) => break,
+            Err(error) => {
+                assert_eq!(error.code, "download_wait_capacity");
+                assert!(
+                    Instant::now() < observation_deadline,
+                    "completed path observations did not release worker credits: {error:?}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
     runtime
         .shutdown(Instant::now() + Duration::from_secs(1))
         .unwrap();
