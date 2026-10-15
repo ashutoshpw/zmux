@@ -31,7 +31,14 @@ static int fence(Integrated *i, uint32_t failure) {
 }
 Integrated *integrated_new(uint16_t cols, uint16_t rows, size_t history, size_t managed,
                            size_t general, size_t pages, size_t deny_at, size_t replies, size_t events) {
-  size_t fixed = integrated_fixed_host_bytes();
+  return integrated_new_factory(cols, rows, history, managed, general, pages, deny_at,
+                                replies, events, 0, NULL, NULL);
+}
+Integrated *integrated_new_factory(uint16_t cols, uint16_t rows, size_t history, size_t managed,
+  size_t general, size_t pages, size_t deny_at, size_t replies, size_t events,
+  size_t extra_fixed, ResourceCreateFn create, void *context) {
+  if (extra_fixed > SIZE_MAX - integrated_fixed_host_bytes()) return NULL;
+  size_t fixed = integrated_fixed_host_bytes() + extra_fixed;
   if (managed < fixed || managed - fixed > 64 * 1024 * 1024
       || general > managed - fixed || pages > managed - fixed
       || replies > ZMUX_EFFECT_REPLY_BYTES || events > ZMUX_EFFECT_EVENTS) return NULL;
@@ -39,10 +46,15 @@ Integrated *integrated_new(uint16_t cols, uint16_t rows, size_t history, size_t 
   if (!i) return NULL;
   i->fixed_host = fixed; i->managed_limit = managed;
   collector_init(&i->collector, replies, events);
-  i->resource = resource_new(cols, rows, history, managed - fixed, general, pages, deny_at, 1);
+  i->resource = resource_new_factory(cols, rows, history, managed - fixed, general, pages, deny_at,
+                                   1, create, context);
   if (!i->resource) { free(i); return NULL; }
   if (!resource_ready(i->resource) || resource_bind_callbacks(i->resource, collector_bind, &i->collector)) fence(i, ZMUX_INTEGRATED_CALL);
   return i; // Keep failed construction observable through stats/close.
+}
+int integrated_append(Integrated *i, ZmuxEffectEvent event) {
+  if (!i || !i->collector.inside_call || i->exported || i->phase == ZMUX_INTEGRATED_CLOSED) return -2;
+  return collector_append(&i->collector, event);
 }
 int integrated_stats(Integrated *i, ZmuxIntegratedStats *out, size_t size) {
   if (!i || !out || size != sizeof(*out)) return -2;

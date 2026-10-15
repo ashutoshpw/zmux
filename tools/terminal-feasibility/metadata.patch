@@ -1,0 +1,531 @@
+diff --git a/include/ghostty/vt/osc.h b/include/ghostty/vt/osc.h
+index b3b68cc..af7db98 100644
+--- a/include/ghostty/vt/osc.h
++++ b/include/ghostty/vt/osc.h
+@@ -155,6 +155,9 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    * instead (see GhosttyTerminalProgramStatus).
+    */
+   GHOSTTY_OSC_COMMAND_PROGRAM_STATUS = 28,
++
++  /** Original opt-in Zmux experiment; see zmux_metadata.h. */
++  GHOSTTY_OSC_COMMAND_ZMUX_METADATA = 29,
+   GHOSTTY_OSC_COMMAND_TYPE_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyOscCommandType;
+ 
+diff --git a/include/ghostty/vt/zmux_metadata.h b/include/ghostty/vt/zmux_metadata.h
+new file mode 100644
+index 0000000..0fa6fe5
+--- /dev/null
++++ b/include/ghostty/vt/zmux_metadata.h
+@@ -0,0 +1,19 @@
++// SPDX-License-Identifier: MIT
++// Original Zmux isolated experiment. Unstable, separately versioned from upstream.
++#ifndef ZMUX_GHOSTTY_METADATA_V1_H
++#define ZMUX_GHOSTTY_METADATA_V1_H
++#include <ghostty/vt.h>
++typedef struct {
++  size_t size;
++  uint32_t source, subcommand, status, terminator;
++  GhosttyString payload;
++} ZmuxGhosttyMetadataV1;
++// Borrowed descriptor/payload last for this call only. No reentry or allocation
++// is required to report status. 0 complete, 1 aborted, 2 malformed, 3 limit, 4 OOM.
++typedef void (*ZmuxGhosttyMetadataCallbackV1)(void *, const ZmuxGhosttyMetadataV1 *);
++// Cap includes OSC number/first delimiter/payload; excludes framing/sentinel.
++// Set policy before any engine byte. Callback context outlives terminal teardown.
++GHOSTTY_API GhosttyResult zmux_ghostty_terminal_new_metadata_bounded_v1(
++  const GhosttyAllocator *, const GhosttyAllocator *, GhosttyTerminal *,
++  uint16_t, uint16_t, size_t, size_t, void *, ZmuxGhosttyMetadataCallbackV1);
++#endif
+diff --git a/src/lib_vt.zig b/src/lib_vt.zig
+index 2a60935..eea4b80 100644
+--- a/src/lib_vt.zig
++++ b/src/lib_vt.zig
+@@ -320,6 +320,7 @@ comptime {
+         }
+         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
+         @export(&c.zmux_terminal_new_bounded, .{ .name = "zmux_ghostty_terminal_new_bounded" });
++        @export(&c.zmux_terminal_new_metadata_bounded_v1, .{ .name = "zmux_ghostty_terminal_new_metadata_bounded_v1" });
+         @export(&c.zmux_terminal_clone_storage, .{ .name = "zmux_ghostty_terminal_clone_storage" });
+         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
+         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
+diff --git a/src/terminal/c/main.zig b/src/terminal/c/main.zig
+index 6c0bda4..6752cfe 100644
+--- a/src/terminal/c/main.zig
++++ b/src/terminal/c/main.zig
+@@ -183,6 +183,7 @@ pub const sys_set = sys.set;
+ 
+ pub const terminal_new = terminal.new;
+ pub const zmux_terminal_new_bounded = terminal.zmux_new_bounded;
++pub const zmux_terminal_new_metadata_bounded_v1 = terminal.zmux_new_metadata_bounded;
+ pub const zmux_terminal_clone_storage = terminal.zmux_clone_storage;
+ pub const terminal_free = terminal.free;
+ pub const terminal_reset = terminal.reset;
+diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+index 893e771..ee2dea8 100644
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -85,6 +85,8 @@ const TerminalWrapper = struct {
+     terminfo_name_buf: [Handler.max_terminfo_name_bytes]u8,
+     stream: Stream,
+     effects: Effects = .{},
++    zmux_metadata_ctx: ?*anyopaque = null,
++    zmux_metadata_callback: ?*const fn (?*anyopaque, *const osc.ZmuxMetadata.C) callconv(lib.calling_conv) void = null,
+     tracked_grid_refs: std.AutoArrayHashMapUnmanaged(*grid_ref_tracked_c.TrackedGridRef, void) = .{},
+     searches: std.AutoArrayHashMapUnmanaged(*search_c.SearchWrapper, void) = .{},
+ 
+@@ -1035,6 +1037,38 @@ pub fn zmux_new_bounded(
+     return .success;
+ }
+ 
++// Original experimental v1 ABI: policy is fixed before the first engine byte.
++pub fn zmux_new_metadata_bounded(
++    alloc_: *const CAllocator,
++    page_alloc: *const CAllocator,
++    result: *Terminal,
++    cols: size.CellCountInt,
++    rows: size.CellCountInt,
++    history: usize,
++    cap: usize,
++    ctx: ?*anyopaque,
++    callback: ?*const fn (?*anyopaque, *const osc.ZmuxMetadata.C) callconv(lib.calling_conv) void,
++) callconv(lib.calling_conv) Result {
++    result.* = null;
++    if (cap < 4 or cap > 16384 or callback == null) return .invalid_value;
++    const status = zmux_new_bounded(alloc_, page_alloc, result, cols, rows, history);
++    if (status != .success) return status;
++    const wrapper = result.*.?;
++    wrapper.zmux_metadata_ctx = ctx;
++    wrapper.zmux_metadata_callback = callback;
++    wrapper.stream.parser.osc_parser.zmux_metadata_limit = cap;
++    wrapper.stream.handler.effects.zmux_metadata = &zmuxMetadataTrampoline;
++    // Only OSC 7 is an accepted migration cwd source. Other upstream PWD
++    // sources remain explicitly ignored and cannot populate clipped getters.
++    return .success;
++}
++fn zmuxMetadataTrampoline(handler: *Handler, value: osc.ZmuxMetadata) void {
++    const wrapper = TerminalWrapper.fromHandler(handler);
++    const callback = wrapper.zmux_metadata_callback orelse return;
++    var event = value.cval();
++    callback(wrapper.zmux_metadata_ctx, &event);
++}
++
+ // Exercise real Screen/PageList clone ownership through the experiment ABI.
+ pub fn zmux_clone_storage(terminal_: Terminal, history: *usize) callconv(lib.calling_conv) Result {
+     const wrapper = terminal_ orelse return .invalid_value;
+@@ -1556,10 +1590,11 @@ fn setTyped(
+             else
+                 null;
+         },
+-        .title_report => wrapper.stream.handler.title_report = if (value) |ptr|
+-            ptr.*
+-        else
+-            false,
++        .title_report => {
++            const enabled = if (value) |ptr| ptr.* else false;
++            if (enabled and wrapper.zmux_metadata_callback != null) return .invalid_value;
++            wrapper.stream.handler.title_report = enabled;
++        },
+         .xt_checksum_report => wrapper.stream.handler.xt_checksum_report = if (value) |ptr|
+             ptr.*
+         else
+diff --git a/src/terminal/osc.zig b/src/terminal/osc.zig
+index c9b807b..b16cb7e 100644
+--- a/src/terminal/osc.zig
++++ b/src/terminal/osc.zig
+@@ -24,6 +24,32 @@ pub const hierarchical_context = parsers.hierarchical_context;
+ 
+ const log = std.log.scoped(.osc);
+ 
++// Original MIT Zmux experiment: provenance is retained before semantic merging.
++pub const ZmuxMetadata = struct {
++    source: u32,
++    subcommand: u32 = 0,
++    status: u32 = 0,
++    terminator: u32 = 0,
++    payload: []const u8 = "",
++    pub const C = extern struct {
++        size: usize,
++        source: u32,
++        subcommand: u32,
++        status: u32,
++        terminator: u32,
++        payload: lib.String,
++    };
++    pub fn cval(self: ZmuxMetadata) C {
++        return .{
++            .size = @sizeOf(C),
++            .source = self.source,
++            .subcommand = self.subcommand,
++            .status = self.status,
++            .terminator = self.terminator,
++            .payload = .init(self.payload),
++        };
++    }
++};
+ pub const Command = union(Key) {
+     /// This generally shouldn't ever be set except as an initial zero value.
+     /// Ignore it.
+@@ -65,6 +91,7 @@ pub const Command = union(Key) {
+         /// The reported pwd value. This is not checked for validity. It should
+         /// be a file URL but it is up to the caller to utilize this value.
+         value: [:0]const u8,
++        source: u32 = 7,
+     },
+ 
+     /// OSC 22. Set the mouse shape. There doesn't seem to be a standard
+@@ -177,6 +204,7 @@ pub const Command = union(Key) {
+     /// doing, such as working or waiting on the user, or asks whether the
+     /// terminal supports the protocol. See `ProgramStatus`.
+     program_status: ProgramStatus,
++    zmux_metadata: ZmuxMetadata,
+ 
+     pub const SemanticPrompt = parsers.semantic_prompt.Command;
+     pub const HierarchicalContext = parsers.hierarchical_context.Command;
+@@ -222,6 +250,7 @@ pub const Command = union(Key) {
+             "kitty_desktop_notification",
+             "unknown",
+             "program_status",
++            "zmux_metadata",
+         },
+     );
+ 
+@@ -403,6 +432,13 @@ pub const Parser = struct {
+     /// Sequences with a number the parser does implement are not affected,
+     /// even when their contents are malformed.
+     unknown_max_bytes: usize,
++    // Zero leaves all upstream parser behavior unchanged. The limit counts the
++    // command digits, first delimiter and payload, excluding ESC ], BEL/ESC and
++    // any sentinel needed only by an existing semantic parser.
++    zmux_metadata_limit: usize = 0,
++    zmux_metadata_source: ?u32 = null,
++    zmux_metadata_status: u32 = 0,
++    zmux_metadata_reported: bool = false,
+ 
+     /// Current state of the parser.
+     state: State,
+@@ -529,6 +565,7 @@ pub const Parser = struct {
+             .color_operation => |*v| color_operation: {
+                 v.requests.deinit(self.alloc orelse break :color_operation);
+             },
++            .zmux_metadata,
+             .change_window_icon,
+             .change_window_title,
+             .clipboard_contents,
+@@ -559,6 +596,9 @@ pub const Parser = struct {
+             => {},
+         }
+ 
++        self.zmux_metadata_source = null;
++        self.zmux_metadata_status = 0;
++        self.zmux_metadata_reported = false;
+         self.state = .start;
+         self.capture = null;
+         self.command = .invalid;
+@@ -583,6 +623,7 @@ pub const Parser = struct {
+         writer: *std.Io.Writer,
+         backing: Backing,
+         max_bytes: usize,
++        failure: u32 = 0, // 3 policy overflow, 4 allocator failure
+ 
+         const Backing = union(enum) {
+             fixed: std.Io.Writer,
+@@ -621,7 +662,10 @@ pub const Parser = struct {
+         /// beyond max_bytes. Allocating.Writer normally grows super-linearly,
+         /// so grow it explicitly to keep the allocation itself bounded too.
+         pub inline fn writeByte(self: *Capture, byte: u8) error{WriteFailed}!void {
+-            if (self.writer.buffered().len >= self.max_bytes) return error.WriteFailed;
++            if (self.writer.buffered().len >= self.max_bytes) {
++                self.failure = 3;
++                return error.WriteFailed;
++            }
+ 
+             switch (self.backing) {
+                 .fixed => {},
+@@ -634,7 +678,10 @@ pub const Parser = struct {
+                         w.writer.buffer = w.allocator.realloc(
+                             w.writer.buffer,
+                             new_capacity,
+-                        ) catch return error.WriteFailed;
++                        ) catch {
++                            self.failure = 4;
++                            return error.WriteFailed;
++                        };
+                     }
+                 },
+             }
+@@ -666,13 +713,19 @@ pub const Parser = struct {
+                         w.writer.buffer = w.allocator.realloc(
+                             w.writer.buffer,
+                             new_capacity,
+-                        ) catch return error.WriteFailed;
++                        ) catch {
++                            self.failure = 4;
++                            return error.WriteFailed;
++                        };
+                     }
+                 },
+             }
+ 
+             try self.writer.writeAll(bytes[0..n]);
+-            if (n < bytes.len) return error.WriteFailed;
++            if (n < bytes.len) {
++                self.failure = 3;
++                return error.WriteFailed;
++            }
+         }
+ 
+         pub fn deinit(self: *Capture) void {
+@@ -701,6 +754,27 @@ pub const Parser = struct {
+         comptime mode: Capture.Mode,
+     ) void {
+         assert(self.capture == null);
++        if (self.zmux_metadata_limit > 0) {
++            const number: ?u32 = switch (self.state) {
++                .@"0" => 0,
++                .@"2" => 2,
++                .@"7" => 7,
++                .@"9" => 9,
++                .@"777" => 777,
++                else => null,
++            };
++            if (number) |source| {
++                self.zmux_metadata_source = source;
++                const prefix: usize = if (source == 777) 4 else 2;
++                Capture.allocating(&self.capture, self.alloc.?, self.zmux_metadata_limit - prefix + 1) catch {
++                    self.zmux_metadata_status = 4;
++                    self.state = .invalid;
++                    return;
++                };
++                self.capture.?.max_bytes -= 1; // reserve a semantic-parser sentinel
++                return;
++            }
++        }
+         switch (mode) {
+             .fixed => Capture.fixed(
+                 &self.capture,
+@@ -784,6 +858,8 @@ pub const Parser = struct {
+     /// This is inline so the supported-OSC overflow path stays a single
+     /// store, as it was before unknown capture existed.
+     inline fn captureFailed(self: *Parser) void {
++        if (self.zmux_metadata_source != null)
++            self.zmux_metadata_status = self.capture.?.failure;
+         switch (self.state) {
+             .unknown => {
+                 // Pin the limit to what was retained so every later write
+@@ -801,6 +877,13 @@ pub const Parser = struct {
+         }
+     }
+ 
++    pub fn zmuxMetadataFailure(self: *Parser) ?ZmuxMetadata {
++        const source = self.zmux_metadata_source orelse return null;
++        if (self.zmux_metadata_status < 3 or self.zmux_metadata_reported) return null;
++        self.zmux_metadata_reported = true;
++        return .{ .source = source, .status = self.zmux_metadata_status };
++    }
++
+     /// Consume a slice of bytes, advancing the parser state. This is
+     /// equivalent to calling `next` for each byte in order, but is much
+     /// faster once a data capture is active because the remaining bytes
+@@ -1090,6 +1173,71 @@ pub const Parser = struct {
+     /// The returned pointer is only valid until the next call to the parser.
+     /// Copy out any data you need to keep.
+     pub fn end(self: *Parser, terminator_ch: ?u8) ?*Command {
++        if (self.zmux_metadata_limit > 0 and self.zmux_metadata_source == null) {
++            const source: ?u32 = switch (self.state) {
++                .@"0" => 0,
++                .@"2" => 2,
++                .@"7" => 7,
++                .@"9" => 9,
++                .@"777" => 777,
++                else => null,
++            };
++            if (source) |number| {
++                self.command = .{ .zmux_metadata = .{ .source = number, .status = if (terminator_ch == 0x18 or terminator_ch == 0x1a) 1 else 2, .terminator = terminator_ch orelse 0 } };
++                return &self.command;
++            }
++        }
++        if (self.zmux_metadata_source) |source| {
++            if (self.zmux_metadata_reported) return null;
++            var event: ZmuxMetadata = .{ .source = source, .terminator = terminator_ch orelse 0, .status = self.zmux_metadata_status };
++            if (event.status == 0) {
++                event.payload = if (self.capture) |*cap| cap.trailing() else "";
++                if (terminator_ch == 0x18 or terminator_ch == 0x1a) {
++                    event.status = 1;
++                } else if (source == 9) {
++                    // Reuse the permissive pinned semantic parser, including its
++                    // ConEmu precedence/fallback rules; no requested effect runs.
++                    const length = event.payload.len;
++                    self.capture.?.max_bytes += 1;
++                    // Reserve the original parser's sentinel through the bounded
++                    // capture writer, preserving allocation/overflow diagnosis.
++                    self.capture.?.writeByte(0) catch {
++                        event.status = self.capture.?.failure;
++                        event.payload = "";
++                        self.command = .{ .zmux_metadata = event };
++                        return &self.command;
++                    };
++                    self.capture.?.writer.end -= 1;
++                    if (parsers.osc9.parse(self, terminator_ch)) |cmd| {
++                        event.subcommand = switch (cmd.*) {
++                            .show_desktop_notification => 0,
++                            .conemu_sleep => 1,
++                            .conemu_show_message_box => 2,
++                            .conemu_change_tab_title => 3,
++                            .conemu_progress_report => 4,
++                            .conemu_wait_input => 5,
++                            .conemu_guimacro => 6,
++                            .conemu_run_process => 7,
++                            .conemu_output_environment_variable => 8,
++                            .report_pwd => 9,
++                            .conemu_xterm_emulation => 10,
++                            .conemu_comment => 11,
++                            .semantic_prompt => 12,
++                            else => unreachable,
++                        };
++                        event.payload = self.capture.?.trailing()[0..length];
++                    } else {
++                        event.status = 2;
++                    }
++                } else if (source == 777) {
++                    if (!std.mem.startsWith(u8, event.payload, "notify;") or
++                        std.mem.indexOfScalarPos(u8, event.payload, 7, ';') == null)
++                        event.status = 2;
++                }
++            }
++            self.command = .{ .zmux_metadata = event };
++            return &self.command;
++        }
+         if (terminator_ch) |ch| switch (ch) {
+             std.ascii.control_code.can,
+             std.ascii.control_code.sub,
+diff --git a/src/terminal/osc/parsers/iterm2.zig b/src/terminal/osc/parsers/iterm2.zig
+index b05dd1b..0498396 100644
+--- a/src/terminal/osc/parsers/iterm2.zig
++++ b/src/terminal/osc/parsers/iterm2.zig
+@@ -148,6 +148,7 @@ pub fn parse(parser: *Parser, _: ?u8) ?*Command {
+             }
+             parser.command = .{
+                 .report_pwd = .{
++                    .source = 1337,
+                     .value = value,
+                 },
+             };
+diff --git a/src/terminal/osc/parsers/osc9.zig b/src/terminal/osc/parsers/osc9.zig
+index 6eed56b..c7ca1a9 100644
+--- a/src/terminal/osc/parsers/osc9.zig
++++ b/src/terminal/osc/parsers/osc9.zig
+@@ -261,6 +261,7 @@ pub fn parse(parser: *Parser, _: ?u8) ?*Command {
+                 data = cap.trailing();
+                 parser.command = .{
+                     .report_pwd = .{
++                        .source = 9,
+                         .value = data[2 .. data.len - 1 :0],
+                     },
+                 };
+diff --git a/src/terminal/stream.zig b/src/terminal/stream.zig
+index 22fe59b..4abfe69 100644
+--- a/src/terminal/stream.zig
++++ b/src/terminal/stream.zig
+@@ -138,6 +138,7 @@ pub const Action = union(Key) {
+     xt_checksum_extension: XtChecksumExtension,
+     program_status: ProgramStatus,
+     soft_reset,
++    zmux_metadata: osc.ZmuxMetadata,
+ 
+     pub const Key = lib.Enum(
+         lib.target,
+@@ -246,6 +247,7 @@ pub const Action = union(Key) {
+             "xt_checksum_extension",
+             "program_status",
+             "soft_reset",
++            "zmux_metadata",
+         },
+     );
+ 
+@@ -405,6 +407,7 @@ pub const Action = union(Key) {
+ 
+     pub const ReportPwd = struct {
+         url: []const u8,
++        source: u32 = 7,
+ 
+         pub const C = lib.String;
+ 
+@@ -1154,6 +1157,8 @@ pub fn Stream(comptime H: type) type {
+             }
+ 
+             if (end > 0) self.parser.osc_parser.nextSlice(input[0..end]);
++            if (self.parser.osc_parser.zmuxMetadataFailure()) |event|
++                self.handler.vt(.zmux_metadata, event);
+             return end;
+         }
+ 
+@@ -1326,6 +1331,8 @@ pub fn Stream(comptime H: type) type {
+             // miscompile or it's just very counter-intuitive comptime stuff,
+             // but regardless, this is the easy solution.
+             const actions = @call(.always_inline, Parser.next, .{ &self.parser, c });
++            if (self.parser.osc_parser.zmuxMetadataFailure()) |event|
++                self.handler.vt(.zmux_metadata, event);
+ 
+             for (actions) |action_opt| {
+                 const action = action_opt orelse continue;
+@@ -2716,6 +2723,7 @@ pub fn Stream(comptime H: type) type {
+             // ref: https://github.com/qwerasd205/asciinema-stats
+ 
+             switch (cmd) {
++                .zmux_metadata => |event| self.handler.vt(.zmux_metadata, event),
+                 .semantic_prompt => |sp| {
+                     @branchHint(.likely);
+                     self.handler.vt(.semantic_prompt, sp);
+@@ -2751,7 +2759,7 @@ pub fn Stream(comptime H: type) type {
+ 
+                 .report_pwd => |v| {
+                     @branchHint(.likely);
+-                    self.handler.vt(.report_pwd, .{ .url = v.value });
++                    self.handler.vt(.report_pwd, .{ .url = v.value, .source = v.source });
+                 },
+ 
+                 .mouse_shape => |v| {
+diff --git a/src/terminal/stream_terminal.zig b/src/terminal/stream_terminal.zig
+index 1261b4a..db27341 100644
+--- a/src/terminal/stream_terminal.zig
++++ b/src/terminal/stream_terminal.zig
+@@ -201,6 +201,7 @@ pub const Handler = struct {
+         /// (e.g. OSC 0/2). The new title can be queried via
+         /// handler.terminal.getTitle().
+         title_changed: ?*const fn (*Handler) void,
++        zmux_metadata: ?*const fn (*Handler, osc.ZmuxMetadata) void = null,
+ 
+         /// Called when the terminal pwd changes via escape sequences
+         /// (e.g. OSC 7). The new pwd can be queried via
+@@ -765,6 +766,7 @@ pub const Handler = struct {
+             // Unrecognized OSC. The OSC parser already dropped aborted
+             // sequences, so everything that reaches here is reported.
+             .osc_unknown => self.unknownSequence(.{ .osc = value }),
++            .zmux_metadata => if (self.effects.zmux_metadata) |func| func(self, value),
+ 
+             // Effect-based handlers
+             .bell => self.bell(),
+@@ -777,7 +779,7 @@ pub const Handler = struct {
+             .request_mode_unknown => self.requestModeUnknown(value.mode, value.ansi),
+             .size_report => self.reportSize(value),
+             .window_title => try self.windowTitle(value.title),
+-            .report_pwd => try self.reportPwd(value.url),
++            .report_pwd => try self.reportPwd(value),
+             .progress_report => self.progressReport(value),
+             .program_status => self.programStatus(value),
+             .resize_window => self.resizeWindow(value),
+@@ -1885,7 +1887,12 @@ pub const Handler = struct {
+         func(self);
+     }
+ 
+-    fn reportPwd(self: *Handler, url_raw: []const u8) !void {
++    fn reportPwd(self: *Handler, value: Action.ReportPwd) !void {
++        const url_raw = value.url;
++        if (self.effects.zmux_metadata) |func| {
++            func(self, .{ .source = value.source, .subcommand = 9, .payload = url_raw });
++            return;
++        }
+         // Prevent DoS attacks by limiting url length. Headroom for
+         // Linux PATH_MAX (4096) plus URI scheme/host and percent-encoding.
+         const max_url_len = 4096;

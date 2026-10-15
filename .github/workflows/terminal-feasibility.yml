@@ -3,6 +3,11 @@ name: Terminal engine feasibility
 on:
   workflow_dispatch:
     inputs:
+      metadata_experiment:
+        description: Run opt-in metadata capture with integrated resource and effect ownership
+        type: boolean
+        required: false
+        default: false
       integrated_experiment:
         description: Run one bounded terminal and callback owner (also enables resource experiment)
         type: boolean
@@ -35,6 +40,7 @@ jobs:
       RESOURCE_EXPERIMENT: ${{ inputs.resource_experiment }}
       EFFECTS_EXPERIMENT: ${{ inputs.effects_experiment }}
       INTEGRATED_EXPERIMENT: ${{ inputs.integrated_experiment }}
+      METADATA_EXPERIMENT: ${{ inputs.metadata_experiment }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -47,8 +53,9 @@ jobs:
       - name: Compile and execute isolated Linux fixtures
         run: |
           args=()
-          if [[ "$RESOURCE_EXPERIMENT" == "true" || "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
-          if [[ "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--integrated-experiment); fi
+          if [[ "$RESOURCE_EXPERIMENT" == "true" || "$INTEGRATED_EXPERIMENT" == "true" || "$METADATA_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
+          if [[ "$INTEGRATED_EXPERIMENT" == "true" || "$METADATA_EXPERIMENT" == "true" ]]; then args+=(--integrated-experiment); fi
+          if [[ "$METADATA_EXPERIMENT" == "true" ]]; then args+=(--metadata-experiment); fi
           if [[ "$EFFECTS_EXPERIMENT" == "true" ]]; then args+=(--effects-experiment); fi
           python3 tools/terminal-feasibility/run.py "${args[@]}" --output "$RUNNER_TEMP/terminal-feasibility-results"
       - name: Upload bounded receipts and logs
@@ -70,6 +77,7 @@ jobs:
       RESOURCE_EXPERIMENT: ${{ inputs.resource_experiment }}
       EFFECTS_EXPERIMENT: ${{ inputs.effects_experiment }}
       INTEGRATED_EXPERIMENT: ${{ inputs.integrated_experiment }}
+      METADATA_EXPERIMENT: ${{ inputs.metadata_experiment }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -82,8 +90,9 @@ jobs:
       - name: Compile both Mac architectures and execute the runner architecture
         run: |
           args=(--macos-universal)
-          if [[ "$RESOURCE_EXPERIMENT" == "true" || "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
-          if [[ "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--integrated-experiment); fi
+          if [[ "$RESOURCE_EXPERIMENT" == "true" || "$INTEGRATED_EXPERIMENT" == "true" || "$METADATA_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
+          if [[ "$INTEGRATED_EXPERIMENT" == "true" || "$METADATA_EXPERIMENT" == "true" ]]; then args+=(--integrated-experiment); fi
+          if [[ "$METADATA_EXPERIMENT" == "true" ]]; then args+=(--metadata-experiment); fi
           if [[ "$EFFECTS_EXPERIMENT" == "true" ]]; then args+=(--effects-experiment); fi
           python3 tools/terminal-feasibility/run.py "${args[@]}" --output "$RUNNER_TEMP/terminal-feasibility-results"
       - name: Upload bounded receipts and logs

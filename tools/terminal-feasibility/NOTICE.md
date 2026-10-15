@@ -45,3 +45,12 @@ changing upstream code. `resource-internal.h` and `integrated.c`/`integrated.h`/
 `integrated.rs` are original MIT owner/publication integration code. They reuse the
 same pinned resource patch and public C handles, add no dependency and distribute
 no compiled engine. Temporary negative controls modify original shim copies only.
+
+`metadata.patch` is a separate original MIT extension against that same pin after
+the unchanged resource patch. It adds an opt-in versioned constructor/header and
+source/status propagation through the existing parser/command/action/handler; it
+does not import or translate cmux implementation. The original `metadata.c`/
+`metadata.h`/`metadata.rs`/`metadata-owner.rs` sidecar reuses Resource and Integrated.
+The pinned permissive OSC 9 semantic parser supplies ConEmu classification rather
+than a copied parser. Default constructors retain upstream metadata behavior.
+Receipts hash both patches separately and retain the upstream license check.

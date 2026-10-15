@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [F04 metadata contract](references/f04-metadata-contract.md) — isolated bounded provenance/normalization and publication; hosted and production gates remain.
 - [R03 local zellij conformance](references/r03-local-zellij-conformance.md) — isolated real peer and transport checks; Darwin and production gates remain.
 - [R03 headless owner design](references/r03-local-zellij-owner-design.md) — proposed peer-fenced ownership and native acceptance gates.
 - [B01 browser downloads](references/b01-browser-downloads.md) — bounded native resource ownership, CLI list/wait and pending hosted acceptance.

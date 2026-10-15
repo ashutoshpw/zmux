@@ -5,6 +5,10 @@ This manual experiment compares the current Zmux parser with a pinned developmen
 control socket or running terminal. Read [provenance](NOTICE.md) and the
 [F04 evaluation](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/f04-engine-evaluation.md).
 
+The opt-in [metadata extension](#opt-in-metadata-extension) adds a separately
+hashed upstream patch after the unchanged resource patch. It remains isolated
+from the application engine.
+
 Requirements: Python 3.12+, Rust 1.95.0, a C compiler and network access to the
 pinned public archives/dependencies. Mac universal compilation also needs Xcode
 command-line tools, a macOS SDK, `lipo`, and both Rust Apple standard libraries.
@@ -303,3 +307,40 @@ Final local integrated receipt:
 All 23 frozen input hashes match. Every ordinary stage passes and five labeled
 controls intentionally exit 101. The integrated fixture completes in 1.078 seconds
 on Linux; independent rerun and hosted integrated execution remain separate gates.
+
+## Opt-in metadata extension
+
+```sh
+python3 tools/terminal-feasibility/run.py --resource-experiment \
+  --effects-experiment --integrated-experiment --metadata-experiment \
+  --output /tmp/zmux-terminal-metadata-results
+```
+
+Read the frozen [metadata contract](METADATA_CONTRACT.md) and its linked design/
+evidence reference. This mode requires resource and integrated experiments and
+applies original `metadata.patch` only to the verified temporary source, after
+the unchanged `resource.patch`; both patch hashes are separate in the receipt.
+Default constructors and application dependencies remain unchanged.
+
+The versioned constructor captures selected OSC metadata inside the existing
+parser with source, ConEmu subcommand, completeness and failure status, before
+upstream clipping/merging. A fixed sidecar adds descriptors/raw bytes to the same
+Integrated ordered callback and publication owner; Resource alone owns the terminal
+and allocators. A generic constructor factory charges sidecar storage once. No
+second parser/terminal, callback allocation or alternative failure owner is added.
+
+Full semicolon titles and notification body remainders, CAN/SUB suppression and
+checked notice sequence exhaustion deliberately repair current-adapter defects.
+Host filtering, cwd rules and RIS metadata retention are explicit migration
+compatibility policy, not established cmux parity. Title reporting remains disabled
+and attempts to enable it on this experimental constructor reject explicitly.
+
+The real boundary fixture covers fragmented source/termination, exact title/cwd/
+notice limits, invalid UTF-8/bidi filtering, source/subcommand ordering with BEL/
+reply/RESET, capture/arena/event/sequence failures, actual allocator/render denial,
+last-good publication, constructor denials, exact history/reflow/alternate/clone
+and 128 zero-mapping teardowns. Two temporary original C mutations must fail named
+source-provenance and arena-publication assertions. Prior resource/effect/integrated
+controls remain required. Metadata execution is host-only; universal slices still
+cover the original raw fixture/library. Hosted Mac, real PTY delivery, app/native
+integration and measured workload budgets remain separate gates.

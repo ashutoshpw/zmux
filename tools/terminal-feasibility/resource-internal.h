@@ -6,7 +6,11 @@
 #include "resource.h"
 typedef struct Resource Resource;
 typedef GhosttyResult (*ResourceBindFn)(GhosttyTerminal, void *);
+typedef GhosttyResult (*ResourceCreateFn)(const GhosttyAllocator *, const GhosttyAllocator *,
+  GhosttyTerminal *, uint16_t, uint16_t, size_t, void *);
 Resource *resource_new(uint16_t, uint16_t, size_t, size_t, size_t, size_t, size_t, uint8_t);
+Resource *resource_new_factory(uint16_t, uint16_t, size_t, size_t, size_t, size_t, size_t,
+                              uint8_t, ResourceCreateFn, void *);
 int resource_ready(Resource *);
 int resource_stats(Resource *, ZmuxResourceStats *, size_t);
 void resource_close(Resource *);

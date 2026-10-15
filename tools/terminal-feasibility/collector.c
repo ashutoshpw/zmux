@@ -22,6 +22,11 @@ static void reply(GhosttyTerminal terminal, void *context, const uint8_t *bytes,
   if (length) memcpy(e->replies + e->replies_length, bytes, length);
   e->replies_length += length;
 }
+int collector_append(EffectCollector *e, ZmuxEffectEvent event) {
+  if (!e || !callback_ready(e)) return -1;
+  e->events[e->events_length++] = event;
+  return 0;
+}
 static void bell(GhosttyTerminal terminal, void *context) {
   (void)terminal;
   EffectCollector *e = context;

@@ -145,6 +145,8 @@ def main():
                         help="Exercise original bounded BEL/reply/RESET callback batches; experiment only")
     parser.add_argument("--integrated-experiment", action="store_true",
                         help="Exercise one quota/callback/publication owner; requires --resource-experiment")
+    parser.add_argument("--metadata-experiment", action="store_true",
+                        help="Apply isolated source-aware metadata extension; requires resource and integrated experiments")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -165,6 +167,9 @@ def main():
         inputs += ["collector.c", "collector.h", "effects.h"]
     if args.integrated_experiment:
         inputs += ["integrated.c", "integrated.h", "integrated.rs"]
+    if args.metadata_experiment:
+        inputs += ["metadata.patch", "metadata.c", "metadata.h", "metadata.rs", "metadata-owner.rs",
+                   "METADATA_CONTRACT.md"]
     inputs = list(dict.fromkeys(inputs))
     document = {"schema_version": 1, "state": "starting", "pins": pins,
                 "host": {"system": system, "architecture": machine,
@@ -190,6 +195,12 @@ def main():
                 "integrated_experiment": {"requested": args.integrated_experiment,
                     "scope": "host_architecture_only", "total_app_memory_bound": False,
                     "real_pty_round_trip": False, "single_bounded_terminal_owner": True},
+                "metadata_experiment": {"requested": args.metadata_experiment,
+                    "scope": "host_architecture_only", "real_pty_round_trip": False,
+                    "total_app_memory_bound": False, "production_engine_changed": False,
+                    "control_string_bytes": 16384, "raw_callback_bytes": 20480,
+                    "patch_sha256": hashlib.sha256((HERE / "metadata.patch").read_bytes()).hexdigest()
+                                    if args.metadata_experiment else None},
                 "claims": {"production_engine_changed": False, "native_app_launched": False,
                            "performance_measured": False, "graphics_tested": False,
                            "cross_architecture_execution": False,
@@ -201,6 +212,8 @@ def main():
             raise RuntimeError("universal compilation requires a macOS host and SDK")
         if args.integrated_experiment and not args.resource_experiment:
             raise RuntimeError("--integrated-experiment requires --resource-experiment")
+        if args.metadata_experiment and not (args.resource_experiment and args.integrated_experiment):
+            raise RuntimeError("--metadata-experiment requires --resource-experiment and --integrated-experiment")
         phases = document["phases"]
         document["source_sha"] = run(["git", "rev-parse", "HEAD"], "source", output, phases,
                                       cwd=REPO).strip()
@@ -225,6 +238,13 @@ def main():
                     phases, cwd=source)
                 run(["git", "apply", patch], "resource-patch-apply", output, phases, cwd=source)
                 document["upstream_patch"]["applied"] = True
+            if args.metadata_experiment:
+                patch = str(HERE / "metadata.patch")
+                run(["git", "apply", "--check", patch], "metadata-patch-check", output, phases, cwd=source)
+                run(["git", "apply", patch], "metadata-patch-apply", output, phases, cwd=source)
+                if (source / "LICENSE").read_bytes() != (HERE / "licenses/Ghostty-LICENSE").read_bytes():
+                    raise RuntimeError("metadata patch changed the retained upstream license")
+                document["metadata_experiment"]["patch_applied"] = True
             zig = zig_root / "zig"
             version = run([str(zig), "version"], "zig-version", output, phases).strip()
             if version != pins["zig"]["version"]:
@@ -470,7 +490,39 @@ def main():
                                            "post-render allocation denial must fence publication", mutated)
                 document["integrated_experiment"].update(execution="passed", architecture=machine,
                     observation_stdout=stdout[:16384], negative_controls=[control])
-            document["state"] = "complete"
+            if args.metadata_experiment:
+                metadata_obj = work / "metadata.o"
+                compile_shim(HERE / "metadata.c", metadata_obj, "metadata-c-shim")
+                binary = work / "metadata-probe"
+                compile_owner(HERE / "metadata.rs", [resource_obj, collector_obj, integrated_obj, metadata_obj],
+                              binary, "metadata-rust-owner")
+                stdout = run([sys.executable, str(HERE / "run.py"), "--execute-fixture", str(binary)],
+                             "metadata-fixture", output, phases, timeout=10)
+                if "metadata_success=true" not in stdout:
+                    raise RuntimeError("metadata fixture returned no completed assertion receipt")
+                controls = []
+                original = (HERE / "metadata.c").read_text()
+                for name, old, new, assertion in [
+                    ("source", "{event->source, event->subcommand,",
+                     "{event->source == 777 ? 9 : event->source, event->subcommand,",
+                     "notification source must remain exact"),
+                    ("arena-fence", "m->failure = 2; integrated_abort(m->integrated); return;", "return;",
+                     "metadata arena overflow must fence publication"),
+                ]:
+                    if original.count(old) != 1:
+                        raise RuntimeError("metadata control target is not unique: " + name)
+                    label = "metadata-control-" + name
+                    mutated = work / (label + ".c")
+                    mutated.write_text(original.replace(old, new))
+                    control_obj = work / (label + ".o")
+                    compile_shim(mutated, control_obj, label + "-c-shim")
+                    control_binary = work / (label + "-probe")
+                    compile_owner(HERE / "metadata.rs", [resource_obj, collector_obj, integrated_obj, control_obj],
+                                  control_binary, label + "-rust-owner")
+                    controls.append(expect_assertion(control_binary, label + "-fixture", assertion, mutated))
+                document["metadata_experiment"].update(execution="passed", architecture=machine,
+                    observation_stdout=stdout[:16384], negative_controls=controls)
+        document["state"] = "complete"
     except Exception as error:
         document.update(state="failed", error=f"{type(error).__name__}: {error}")
     finally:

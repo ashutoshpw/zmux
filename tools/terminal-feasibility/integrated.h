@@ -4,6 +4,7 @@
 #define ZMUX_FEASIBILITY_INTEGRATED_H
 #include "effects.h"
 #include "resource.h"
+#include "resource-internal.h"
 enum { ZMUX_INTEGRATED_IDLE = 0, ZMUX_INTEGRATED_STAGED = 1, ZMUX_INTEGRATED_FAILED = 2, ZMUX_INTEGRATED_CLOSED = 3 };
 enum {
   ZMUX_INTEGRATED_QUOTA = 1, ZMUX_INTEGRATED_INVALID = 2,
@@ -25,6 +26,10 @@ typedef struct {
 typedef struct Integrated Integrated;
 size_t integrated_fixed_host_bytes(void);
 Integrated *integrated_new(uint16_t, uint16_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t);
+// Sidecar storage is charged once; the supplied factory still creates the sole terminal.
+Integrated *integrated_new_factory(uint16_t, uint16_t, size_t, size_t, size_t, size_t,
+  size_t, size_t, size_t, size_t, ResourceCreateFn, void *);
+int integrated_append(Integrated *, ZmuxEffectEvent);
 int integrated_stats(Integrated *, ZmuxIntegratedStats *, size_t);
 // Tightening changes checked scalar caps only; allowed before validated export,
 // never between successful export and commit. History queries require IDLE.
