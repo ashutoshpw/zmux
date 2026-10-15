@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- Foundation `38794349737` at `9a30dec` passes Linux but exposes a macOS
+  notification fixture snapshot `Busy` at line880. The suite now retries only
+  snapshot publication contention through its existing bounded helper, and fails
+  other snapshot errors immediately. Notification assertions and commands remain
+  unchanged. Independent review accepts; integrated `scripts/check` passes
+  (`/tmp/zmux-browser-notifications-integrated-check.log`). Hosted green pending.
+
 - Native `38791991724` at `10b8f1b` passes universal compilation and reaches
   final-window termination. Its stack exposes a nested AppKit termination loop
   retaining the main actor before asynchronous shutdown can run. Termination is
