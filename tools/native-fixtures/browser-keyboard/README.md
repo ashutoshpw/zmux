@@ -20,6 +20,12 @@ must keep `window == nil`; the probe never mounts it in a window or borrows the
 unrelated window's responder. Both use nonpersistent storage and real loaded HTML.
 The probe activates only its own app/windows; the detached cases keep its unrelated
 text editor key with `UNRELATED` text and exact responder identity unchanged.
+The directly owned process asks Launch Services to activate its exact unique
+already-running bundle without creating another instance or allowing substitution.
+The returned PID must equal the probe PID. Actual activation is awaited for at
+most three seconds, and actual visible document focus for at most two seconds;
+refusal retains native/app/frontmost-PID observations and fails case preconditions.
+This does not rely on the deprecated ignoring-other-apps activation option.
 
 Public in-process `CGEvent`-backed `NSEvent`s go directly to the exact web view's
 `NSResponder.keyDown`, `keyUp` and `flagsChanged` boundary. The app does not enqueue

@@ -28,12 +28,15 @@ private struct PageState: Codable, Sendable {
     let events: [EventRecord]
 }
 private struct NativeState: Codable, Sendable {
+    let applicationActive: Bool
+    let frontmostProcessID: Int32?
     let keyWindow: Int?
     let targetWindow: Int?
     let sentinelWindow: Int
     let keyResponder: String?
     let sentinelResponder: String?
     let sentinelText: String
+    let targetResponder: String?
 }
 private struct ResendRecord: Codable, Sendable {
     let route: String
@@ -66,6 +69,10 @@ private struct Report: Encodable, Sendable {
     let processID: Int32
     var phase = "starting"
     var state = "running"
+    var applicationActive = false
+    var frontmostProcessID: Int32?
+    var activationRequestProcessID: Int32?
+    var activationError: String?
     var cases: [CaseRecord] = []
     var resends: [ResendRecord] = []
     var escapedShortcuts = 0
@@ -192,6 +199,8 @@ private final class ProbeRunner {
         sentinel.contentView?.addSubview(sentinelField)
     }
     private func save() throws {
+        report.applicationActive = app.isActive
+        report.frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         report.resends = app.resends
         report.escapedShortcuts = app.escapedShortcuts
         report.resendLogLimitReached = app.resendLogLimitReached
@@ -217,6 +226,38 @@ private final class ProbeRunner {
     private func pause(_ milliseconds: Int = 120) async throws {
         try await Task.sleep(for: .milliseconds(milliseconds))
     }
+    private func activateOwnedApplication() async throws {
+        let current = NSRunningApplication.current
+        let bundle = Bundle.main.bundleURL.standardizedFileURL
+        guard current.processIdentifier == getpid(), current.bundleURL?.standardizedFileURL == bundle,
+              let identifier = current.bundleIdentifier,
+              NSWorkspace.shared.runningApplications.filter({ $0.bundleIdentifier == identifier }).map(\.processIdentifier) == [getpid()] else {
+            throw ProbeFailure(description: "Launch Services did not identify this exact unique running probe")
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        // No --output arguments are supplied: an unexpected new instance cannot
+        // run the fixture or write over the original process's observations.
+        configuration.arguments = []
+        let processID: Int32 = try await withCheckedThrowingContinuation { continuation in
+            NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { running, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let running { continuation.resume(returning: running.processIdentifier) }
+                else { continuation.resume(throwing: ProbeFailure(description: "Launch Services returned no running application")) }
+            }
+        }
+        report.activationRequestProcessID = processID
+        guard processID == getpid() else {
+            throw ProbeFailure(description: "Launch Services activation did not return this exact running probe PID")
+        }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !app.isActive {
+            guard ContinuousClock.now < deadline else { throw ProbeFailure(description: "Exact-self activation was not granted within three seconds") }
+            try await pause(25)
+        }
+    }
     private func observe(_ view: WKWebView) async throws -> PageState {
         let text = try await evaluate("JSON.stringify({value:document.getElementById('entry').value,checked:document.getElementById('box').checked,submits:globalThis.submits,clicks:globalThis.clicks,start:document.getElementById('entry').selectionStart,end:document.getElementById('entry').selectionEnd,active:document.activeElement.id,hasFocus:document.hasFocus(),ready:document.readyState,events:globalThis.events})", on: view)
         return try JSONDecoder().decode(PageState.self, from: Data(text.utf8))
@@ -225,11 +266,14 @@ private final class ProbeRunner {
         (sentinelField.currentEditor() as? NSTextView)?.string ?? sentinelField.stringValue
     }
     private func nativeState(_ view: WKWebView) -> NativeState {
-        NativeState(keyWindow: app.keyWindow?.windowNumber, targetWindow: view.window?.windowNumber,
+        NativeState(applicationActive: app.isActive,
+            frontmostProcessID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            keyWindow: app.keyWindow?.windowNumber, targetWindow: view.window?.windowNumber,
             sentinelWindow: sentinel.windowNumber,
             keyResponder: app.keyWindow?.firstResponder.map { String(describing: ObjectIdentifier($0)) },
             sentinelResponder: sentinel.firstResponder.map { String(describing: ObjectIdentifier($0)) },
-            sentinelText: sentinelText)
+            sentinelText: sentinelText,
+            targetResponder: view.window?.firstResponder.map { String(describing: ObjectIdentifier($0)) })
     }
     private func makeEvent(code: CGKeyCode, down: Bool, characters: String,
                            flags: CGEventFlags = [], modifier: Bool = false) throws -> NSEvent {
@@ -274,6 +318,13 @@ private final class ProbeRunner {
         let literal = String(decoding: try JSONEncoder().encode(focus), as: UTF8.self)
         _ = try await evaluate(script.replacingOccurrences(of: "FOCUS", with: literal), on: view)
         try await pause()
+        if let browserWindow, view.window === browserWindow {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while try await evaluate("JSON.stringify(document.hasFocus())", on: view) != "true" {
+                guard ContinuousClock.now < deadline else { return }
+                try await pause(25)
+            }
+        }
     }
     private func loadedHost(mode: String) async throws -> ProbeWebView {
         let configuration = WKWebViewConfiguration(); configuration.websiteDataStore = .nonPersistent()
@@ -316,6 +367,9 @@ private final class ProbeRunner {
             try await reset(view, focus: name == "space" ? "box" : "entry")
             let keyWindow = app.keyWindow, responder = keyWindow?.firstResponder, sentinelResponder = sentinel.firstResponder
             row.before = try await observe(view); row.nativeBefore = nativeState(view)
+            guard report.activationError == nil, report.activationRequestProcessID == getpid() else {
+                throw ProbeFailure(description: "Exact-self activation was not established: " + (report.activationError ?? "PID mismatch"))
+            }
             if mode == "visible" {
                 guard app.keyWindow === browserWindow, let native = browserWindow?.firstResponder as? NSView,
                       native === view || native.isDescendant(of: view), row.before?.hasFocus == true else {
@@ -389,7 +443,12 @@ private final class ProbeRunner {
             }
             root.submenu = appMenu; app.mainMenu = menu
             sentinel.makeKeyAndOrderFront(nil)
-            app.activate()
+            try phase("requesting-exact-self-activation")
+            do { try await activateOwnedApplication() }
+            catch { report.activationError = String(describing: error) }
+            // Refused activation remains observable through the original case
+            // preconditions. It cannot be promoted into a successful case.
+            try phase("exact-self-activation-observed")
             let names = ["text", "backspace", "left", "space", "enter", "down_up", "modifier_release", "unhandled_command"]
             for mode in ["visible", "detached"] {
                 try phase(mode + "/loading")

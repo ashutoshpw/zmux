@@ -50,6 +50,10 @@ def validate_report(report, source_sha):
         raise RuntimeError('Native probe omitted/duplicated a requested real case')
     if any(type(row.get('passed')) is not bool or type(row.get('focusRetained')) is not bool for row in rows):
         raise RuntimeError('Native case result/focus fields are not Boolean observations')
+    if any(row.get('passed') for row in rows) and (
+            report.get('activationError') is not None
+            or report.get('activationRequestProcessID') != report.get('processID')):
+        raise RuntimeError('Successful native case lacks exact-self Launch Services activation')
     if any(row.get('passed') and not row.get('focusRetained') for row in rows):
         raise RuntimeError('A successful native case omitted unrelated responder retention')
     detached = [row for row in rows if row['mode'] == 'detached']
