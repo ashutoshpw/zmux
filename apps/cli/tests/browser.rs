@@ -176,12 +176,22 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
         vec!["browser", "eval", "--help"],
         vec!["browser", "back", "--help"],
         vec!["browser", "zoom", "--help"],
+        vec!["browser", "fill", "--help"],
     ] {
         let output = invoke(socket, &fixture.0, &args);
         assert!(output.status.success(), "offline help failed: {args:?}");
         assert!(String::from_utf8_lossy(&output.stdout).contains("--snapshot-after"));
     }
     for (args, reason) in [
+        (vec!["browser", "fill"], "requires a selector"),
+        (
+            vec!["browser", "fill", "#entry", "--text"],
+            "--text requires a value",
+        ),
+        (
+            vec!["browser", "fill", "#entry", "--name", "x"],
+            "unknown browser fill option",
+        ),
         (
             vec!["browser", "zoom"],
             "requires in, out, reset or one factor",
@@ -414,6 +424,16 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
     }
     for (args, reason) in [
         (
+            vec![
+                "browser".to_owned(),
+                "fill".into(),
+                "#entry".into(),
+                "--text".into(),
+                "x".repeat(8193),
+            ],
+            "fill text",
+        ),
+        (
             vec!["browser".to_owned(), "eval".into(), "x".repeat(8193)],
             "script",
         ),
@@ -498,6 +518,10 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
         (vec!["zoom", "-1"], json!({"action":"zoom","operation":{"kind":"set","factor":-1.0}})),
         (vec!["zoom", "10"], json!({"action":"zoom","operation":{"kind":"set","factor":10.0}})),
         (vec!["zoom", "IN"], json!({"action":"zoom","operation":{"kind":"in"}})),
+        (vec!["fill", "#entry", " replacement ", "text"], json!({"action":"fill","selector":"#entry","text":" replacement  text","snapshot_after":false})),
+        (vec!["fill", "--selector", "#entry", "--text", "quoted \" \\ \n雪", "--snapshot-after"], json!({"action":"fill","selector":"#entry","text":"quoted \" \\ \n雪","snapshot_after":true})),
+        (vec!["fill", "#entry"], json!({"action":"fill","selector":"#entry","text":"","snapshot_after":false})),
+        (vec!["fill", "#entry", "--text", ""], json!({"action":"fill","selector":"#entry","text":"","snapshot_after":false})),
         (vec!["find", "role", "button", "--name", "Continue", "--exact"], json!({"action":"find","locator":{"kind":"role","query":"button","name":"Continue","exact":true,"selector":null,"index":null}})),
         (vec!["find", "text", "--", "--literal"], json!({"action":"find","locator":{"kind":"text","query":"--literal","name":null,"exact":false,"selector":null,"index":null}})),
         (vec!["find", "nth", "--selector", "button", "--index", "2"], json!({"action":"find","locator":{"kind":"nth","query":null,"name":null,"exact":false,"selector":"button","index":2}})),
@@ -560,6 +584,14 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         ],
         vec!["browser", "snapshot", "--surface", surface],
         vec!["browser", "zoom", "1.25", "--surface", surface],
+        vec![
+            "browser",
+            "fill",
+            "#entry",
+            "replacement",
+            "--surface",
+            surface,
+        ],
     ] {
         let output = invoke(&socket, &fixture.0, &args);
         assert!(!output.status.success());
@@ -586,6 +618,7 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
         vec!["browser", "forward", "--surface", surface],
         vec!["browser", "reload", "--surface", surface],
         vec!["browser", "zoom", "in", "--surface", surface],
+        vec!["browser", "fill", "#entry", "--surface", surface],
     ] {
         let output = invoke(&socket, &fixture.0, &args);
         assert!(!output.status.success());

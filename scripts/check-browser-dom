@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise original browser read scripts in a real DOM, independently of WebKit.
+"""Exercise original browser automation scripts in a real DOM, independently of WebKit.
 
 Requires Chromium (CHROMIUM or --browser). This does not establish native bridge,
 isolated-world or WebKit lifecycle correctness; packaged macOS smoke owns those.
@@ -83,6 +83,35 @@ const code = (result, expected) => assert(result.error?.code === expected, `expe
  ]) assert((await wait(selector,state)).value?.matched === expected, `${selector} ${state}`);
  document.querySelector('#hidden').style.display = 'block';
  assert((await wait('#hidden')).value?.matched === true, 'fresh probe sees visibility transition');
+ // Fill uses independent page observers to check native values and events.
+ const form = document.createElement('section');
+ form.innerHTML = '<input id="fill-entry" data-testid="fill-entry" class="fill-many" value="old"><input class="fill-many" value="untouched"><textarea id="fill-notes"></textarea><div id="fill-edit" contenteditable="true">old editor</div>';
+ document.body.append(form);
+ const entry = document.getElementById('fill-entry'), events = [];
+ const nativeValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+ let instanceAssignments = 0;
+ Object.defineProperty(entry, 'value', {get(){return nativeValue.get.call(this)}, set(value){instanceAssignments++; nativeValue.set.call(this,value)}});
+ for (const kind of ['beforeinput','input','change']) entry.addEventListener(kind, event => events.push({kind:event.type,value:entry.value,data:event.data,inputType:event.inputType,cancelable:event.cancelable,trusted:event.isTrusted}));
+ const filled = await call({action:'fill',selector:'.fill-many',text:' replacement ',snapshot_after:true});
+ assert(filled.value?.filled === true && entry.value === ' replacement ' && document.querySelectorAll('.fill-many')[1].value === 'untouched', 'fill mutates first CSS match only');
+ assert(instanceAssignments === 0 && events.map(event=>event.kind).join(',') === 'beforeinput,input,change', 'native setter and one input/change sequence');
+ assert(events[0].value === 'old' && events[0].data === ' replacement ' && events[0].inputType === 'insertReplacementText' && events[0].cancelable && events.every(event=>!event.trusted), 'cancelable replacement precedes mutation and events are synthetic');
+ assert(filled.snapshot?.nodes?.length > 0 && events[1].value === ' replacement ', 'snapshot-after observes one completed mutation');
+ assert((await find({kind:'testid',query:'fill-entry',exact:true})).value.ref === filled.value.ref, 'fill returns reusable document ref');
+ await call({action:'fill',selector:filled.value.ref,text:''});
+ assert(entry.value === '' && events.length === 6, 'empty fill clears with exactly one event sequence');
+ entry.addEventListener('beforeinput',event=>event.preventDefault(),{once:true});
+ code(await call({action:'fill',selector:'#fill-entry',text:'denied'}), 'input_rejected');
+ assert(entry.value === '' && events.length === 7, 'cancelled beforeinput leaves native value and input/change untouched');
+ const multiline = '  résumé\n雪 🪟 " \\ ';
+ await call({action:'fill',selector:'#fill-notes',text:multiline});
+ assert(document.querySelector('#fill-notes').value === multiline, 'textarea preserves Unicode multiline and whitespace');
+ await call({action:'fill',selector:'#fill-edit',text:'literal <b>text</b>'});
+ assert(document.querySelector('#fill-edit').textContent === 'literal <b>text</b>' && document.querySelector('#fill-edit').children.length === 0, 'contenteditable replacement is text, not HTML');
+ code(await call({action:'fill',selector:'#missing',text:'x'}), 'element_not_found');
+ code(await call({action:'fill',selector:'[',text:'x'}), 'invalid_selector');
+ entry.remove();
+ code(await call({action:'fill',selector:filled.value.ref,text:'x'}), 'stale_reference');
  document.querySelector('#send').remove();
  code(await wait(button.value.ref, 'detached'), 'stale_reference');
  generation = '2';

@@ -1,5 +1,53 @@
 # B02a browser automation bridge
 
+## B02d fill candidate (2026-10-15)
+
+Frozen CMD-252 has a local counterpart: `browser fill [--selector SELECTOR | SELECTOR]
+[--text TEXT | TEXT ...] [TARGET_OPTIONS] [--snapshot-after]`. Explicit text wins
+when positional text is also present; positional words join with spaces. Omitted
+or empty text clears. Text must fit 8192 UTF-8 bytes without NUL; selectors retain
+the existing 2048-byte bound, targeting and document-ref ownership rules.
+
+The behavior audit read the reference CLI fill grammar and selector-action owner:
+CSS selects its first match, while a document ref addresses its exact node. Existing
+find/wait ambiguity rules are unchanged. The fixed isolated-world WebKit script
+focuses the DOM element, dispatches cancelable `beforeinput` with replacement text,
+then uses an inherited value setter (or plain textContent for non-value elements)
+and emits input/change. A canceled beforeinput reports `input_rejected` without
+forcing a replacement or emitting input/change. Value-bearing elements receive
+change; non-value text replacements receive input. Replacement text is never HTML.
+No reference implementation code was imported.
+
+These are synthetic DOM events, not trusted keyboard input. Browser fill is a
+mutation denied to read-only clients. It uses existing once-only admission,
+physical callback credit, target/epoch/host/document fencing and absolute deadlines.
+Any dispatched fill can invoke arbitrary page event handlers; uncertainty never
+causes a replay. The successful value contains `filled` and a reusable document
+ref, without echoing replacement text. Optional snapshot-after reads a bounded
+snapshot after the same mutation; a snapshot error does not replay the edit.
+Frames, shadow traversal, click/type/press and full B02/F01/V01 parity stay open.
+The frozen compatibility rows remain unverified.
+
+The CLI wire test first failed with `unknown browser subcommand fill`, then passed
+with the parser/runtime implementation. Local targeted suites pass 9 CLI and 14
+runtime browser tests, covering empty/exact text transport, bounds/NUL, read policy,
+missing native owner, once-only dispatch and expired mutation uncertainty.
+`scripts/check-browser-dom` passes 48 real Chromium cases (the previous 35 plus
+13 fill cases). The added cases failed against the committed pre-fill script and
+pass against the production-owned script, observing first-match mutation, native
+setter behavior, page event order/cancellation, empty clearing, Unicode/multiline,
+contenteditable/plain text, one-mutation snapshot, missing/invalid/disconnected refs.
+This is real DOM evidence, without WebKit or isolated-world execution claims.
+
+`BrowserFillSmoke` is authored through the bundled CLI and a never-selected native
+WebKit host. It checks actual page values/events, first-match/ref reuse, canceled
+input, empty/Unicode/plain-text replacement, one snapshot, exact receipts and
+native key/responder plus all model selection retention. The focus baseline is
+captured after fixture creation/setup so this gate measures fill itself. The App
+calls it after zoom and before the separately gated download fixture; packaged
+acceptance requires `browser_fill`. Exact-source strict Swift compilation and
+native execution remain required; neither has passed for this candidate.
+
 ## B02c live page zoom candidate (2026-10-15)
 
 Frozen CMD-232–235 now have a local implementation: `browser zoom in|out|reset|FACTOR`

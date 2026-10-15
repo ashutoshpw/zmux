@@ -1492,6 +1492,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "browser_profile_menu": true,
             "browser_profile_management": true,
             "browser_page_zoom": true,
+            "browser_fill": true,
             "browser_downloads_native": true,
             "local_tmux_cli_native_reopen": true,
             "browser_never_selected_viewport": true,
@@ -2049,6 +2050,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await smokePublishedBrowserTitle(surface: surface, title: "CSP fixture")
         try await smokeBrowserProfiles(origin: origin, pane: pane.id, privateSurface: surface)
         try await BrowserZoomSmoke.validate(surface: surface, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
+        try await BrowserFillSmoke.validate(cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
               let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }
