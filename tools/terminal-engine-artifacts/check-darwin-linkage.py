@@ -154,12 +154,15 @@ def dynamic_libraries(data, optional_system_libraries=()):
     return libraries
 
 
-def source_hashes(include_session_runtime=False):
+def source_hashes(include_session_runtime=False, include_native_host=False):
     paths = {REPO / "Cargo.toml", REPO / "Cargo.lock", REPO / "scripts/process_group.py",
              REPO / ".github/workflows/terminal-engine-linkage.yml"}
     directories = [REPO / "crates/ghostty-vt", REPO / "crates/terminal-adapter", HERE]
     if include_session_runtime:
         directories += [REPO / "crates/session-runtime", REPO / "vendor/darwin-libproc"]
+    if include_native_host:
+        directories += [REPO / "crates", REPO / "apps", REPO / "config"]
+        paths.update(REPO / name for name in ("scripts/build-macos-dev", "LICENSE", "THIRD_PARTY_NOTICES.md"))
     for directory in directories:
         paths.update(path for path in directory.rglob("*") if path.is_file() and "__pycache__" not in path.parts)
     paths.update(REPO / name for name in document(HERE / "candidate.json")["repository_inputs_sha256"])
@@ -172,11 +175,16 @@ def main():
     parser.add_argument("--check-inputs", action="store_true")
     parser.add_argument("--session-runtime", action="store_true",
                         help="Also compile both optional Session targets and execute ARM PTY tests")
+    parser.add_argument("--native-host", action="store_true",
+                        help="Also build and exercise an explicit optional ARM native host from the same verified retained root")
     args = parser.parse_args()
+    if args.native_host and not args.session_runtime:
+        parser.error("--native-host requires explicit --session-runtime")
     if args.check_inputs:
         accepted, _ = check_inputs()
         print(json.dumps({"state": "linkage_inputs_verified", "download": accepted["download"],
-                          "sources": len(source_hashes(args.session_runtime)), "session_runtime_requested": args.session_runtime,
+                          "sources": len(source_hashes(args.session_runtime, args.native_host)), "session_runtime_requested": args.session_runtime,
+                          "native_host_requested": args.native_host,
                           "engine_rebuilt": False,
                           "native_linkage_verified": False}, indent=2))
         return 0
@@ -191,7 +199,7 @@ def main():
                           "performance_measured": False}}
     try:
         accepted, recipe = check_inputs()
-        frozen = source_hashes(args.session_runtime)
+        frozen = source_hashes(args.session_runtime, args.native_host)
         receipt["source_sha256"] = frozen
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise Rejected("new linkage execution requires a Darwin ARM64 host")
@@ -225,6 +233,13 @@ def main():
         work.mkdir()
         bundle.mkdir()
         root = bundle / "accepted-inputs"
+        if args.native_host:
+            for name, expected in frozen.items():
+                destination = bundle / "current-source" / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(REPO / name, destination)
+                if digest(read_bounded(destination, 2 * 1024 * 1024)) != expected:
+                    raise Rejected("native source copy differs: " + name)
         original = root / "original-upload"
         original.mkdir(parents=True)
         identity = accepted["download"]
@@ -322,7 +337,17 @@ def main():
                     receipt["claims"]["optional_session_arm64_executed"] = True
                 session["state"] = "compiled_linked_inspected"
             result["state"] = "compiled_linked_inspected"
-        if source_hashes(args.session_runtime) != frozen:
+        if args.native_host:
+            run([sys.executable, str(HERE / "native-host.py"), "--root", str(root),
+                 "--source-sha", receipt["source_sha"], "--output", str(bundle / "native-host")],
+                "native-host-proof", timeout=900, cwd=REPO)
+            native = document(bundle / "native-host/receipt.json")
+            if native.get("state") != "complete" or native.get("source_sha") != receipt["source_sha"]:
+                raise Rejected("optional native host did not retain a complete exact-source receipt")
+            receipt["native_host"] = native
+            receipt["claims"]["appkit_linked"] = True
+            receipt["claims"]["bounded_native_semantic_input_executed"] = True
+        if source_hashes(args.session_runtime, args.native_host) != frozen:
             raise Rejected("linkage source inputs changed during validation")
         for target, architecture in TARGETS:
             checked_file(root / "original-upload/terminal-engine-artifacts/bundle", architecture + "/libghostty-vt.a", accepted["libraries"][target], 64 * 1024 * 1024)
@@ -330,7 +355,9 @@ def main():
         if receipt["bundle_bytes"] > MAX_EXPANDED:
             raise Rejected("retained linkage evidence exceeds upload bound")
         receipt["state"] = "complete"
-        receipt["scope"] = "production shim/adapter and requested optional Session compile/link/inspection for both Apple targets; ARM64 executed, Intel not executed; original engines unchanged; no native app/default/typed-input/performance acceptance"
+        receipt["scope"] = "production shim/adapter and requested optional Session compile/link/inspection for both Apple targets; ARM64 executed, Intel not executed; original engines unchanged; no default/performance/full keyboard or IME acceptance"
+        if args.native_host:
+            receipt["scope"] += "; optional ARM native app direct special-key handlers and one whole clipboard paste verified against the exact retained child; not physical keyboard delivery"
     except Exception as error:
         receipt.update(state="failed", error=f"{type(error).__name__}: {error}")
     finally:

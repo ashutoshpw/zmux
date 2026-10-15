@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+ghostty = ["zmux-session-runtime/ghostty"]
+
 [dependencies]
 uuid = { workspace = true, features = ["v4"] }
 nix = { workspace = true, features = ["socket", "user"] }

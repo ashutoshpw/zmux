@@ -33,9 +33,13 @@ use thiserror::Error;
 #[cfg(feature = "ghostty")]
 pub use zmux_terminal_adapter::GhosttyLimits;
 use zmux_terminal_adapter::{EngineBatch, Size, Viewport, Wheel};
+pub use zmux_terminal_adapter::{Key, KeyAction, KeyEvent, PASTE_BYTES};
 
 pub const INPUT_CHUNK_BYTES: usize = 4_096;
 pub const INPUT_QUEUE_CHUNKS: usize = 16;
+/// Queue payload upper bound: sixteen whole paste events, plus one active event
+/// with at most twelve framing bytes. This is not total process memory accounting.
+pub const MAX_QUEUED_INPUT_PAYLOAD_BYTES: usize = INPUT_QUEUE_CHUNKS * PASTE_BYTES;
 
 pub fn default_size() -> Size {
     Size { rows: 24, cols: 80 }
@@ -54,6 +58,8 @@ pub enum SessionError {
     QueueFull,
     #[error("input must contain 1–{INPUT_CHUNK_BYTES} bytes")]
     InputSize,
+    #[error("text paste must contain 1–{PASTE_BYTES} UTF-8 bytes")]
+    PasteSize,
     #[error("session is closed")]
     Closed,
     #[error("session state is being published; retry without blocking")]
@@ -259,6 +265,8 @@ enum Input {
         completion: Option<WriteCompletion>,
         deadline: Option<Instant>,
     },
+    Key(KeyEvent),
+    Paste(String),
     Scroll(i32),
     Wheel(Wheel),
 }
@@ -549,12 +557,39 @@ impl Session {
         self.process_id
     }
 
+    /// Explicit raw byte injection; semantic key/paste APIs encode on the worker.
     pub fn send_input(&self, bytes: &[u8]) -> Result<(), SessionError> {
         if bytes.is_empty() || bytes.len() > INPUT_CHUNK_BYTES {
             return Err(SessionError::InputSize);
         }
         self.ensure_running()?;
         self.enqueue_bytes(bytes, None, None)
+    }
+
+    /// Enqueue once; the sole worker encodes only after earlier causal stages
+    /// commit. Queue acceptance is not physical delivery and never permits replay.
+    pub fn send_key(&self, event: KeyEvent) -> Result<(), SessionError> {
+        if !event.valid() {
+            return Err(SessionError::Failure(
+                "invalid semantic key modifiers".into(),
+            ));
+        }
+        self.ensure_running()?;
+        self.enqueue_event(Input::Key(event))
+    }
+    /// One bounded clipboard paste stays one queue event and bracketed unit.
+    /// Mode selection and optional candidate sanitization happen on the worker.
+    pub fn send_paste(&self, text: &str) -> Result<(), SessionError> {
+        if text.is_empty() || text.len() > PASTE_BYTES {
+            return Err(SessionError::PasteSize);
+        }
+        self.ensure_running()?;
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(text.len())
+            .map_err(|_| SessionError::Failure("cannot reserve bounded paste storage".into()))?;
+        owned.push_str(text);
+        self.enqueue_event(Input::Paste(owned))
     }
 
     /// Enqueue once in the ordinary input queue and report actual PTY write
@@ -620,15 +655,15 @@ impl Session {
     /// History navigation shares the bounded input queue so typing and scrolling
     /// preserve order. Only the session worker mutates the terminal parser.
     pub fn scroll(&self, lines: i32) -> Result<(), SessionError> {
-        self.enqueue_navigation(Input::Scroll(lines.clamp(-1000, 1000)))
+        self.enqueue_event(Input::Scroll(lines.clamp(-1000, 1000)))
     }
     pub fn wheel(&self, event: Wheel) -> Result<(), SessionError> {
         if !event.history && !self.application_wheel_supported {
             return Err(SessionError::Failure("Ghostty application wheel encoding is not yet supported; explicit history navigation is available".into()));
         }
-        self.enqueue_navigation(Input::Wheel(event))
+        self.enqueue_event(Input::Wheel(event))
     }
-    fn enqueue_navigation(&self, event: Input) -> Result<(), SessionError> {
+    fn enqueue_event(&self, event: Input) -> Result<(), SessionError> {
         self.ensure_available()?;
         self.input.try_send(event).map_err(|e| match e {
             TrySendError::Full(_) => SessionError::QueueFull,
@@ -1299,6 +1334,7 @@ impl Worker {
                             completion.finish(Some(InputWriteFailure::SessionExited), false);
                         }
                     }
+                    Input::Key(_) | Input::Paste(_) => {}
                 }
             }
             if dirty {
@@ -1362,6 +1398,18 @@ impl Worker {
                 }
                 Input::Scroll(lines) => {
                     let batch = self.terminal.scroll(lines)?;
+                    self.accept_batch(batch)?;
+                }
+                Input::Key(event) => {
+                    self.pending = self.terminal.encode_key(event)?;
+                    self.written = 0;
+                    let batch = self.terminal.scroll(0)?;
+                    self.accept_batch(batch)?;
+                }
+                Input::Paste(text) => {
+                    self.pending = self.terminal.encode_paste(&text)?;
+                    self.written = 0;
+                    let batch = self.terminal.scroll(0)?;
                     self.accept_batch(batch)?;
                 }
                 Input::Wheel(event) => {

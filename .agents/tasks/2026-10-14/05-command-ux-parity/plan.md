@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [F04 native opt-in](references/f04-native-opt-in.md) — explicit engine selection and worker-owned semantic input, with native execution gates pending.
 - [H01 MFA](references/h01-mfa.md) — authenticator enrollment, login challenge and one-use recovery acceptance.
 - [H01 native credentials](references/h01-native-cloud-credentials.md) — shared credential ownership, cancellation fences and accepted focused Keychain checks.
 - [F04 native shutdown diagnostics](references/f04-native-shutdown-diagnostics.md) — raw Darwin child investigation and exact failing production shutdown evidence.

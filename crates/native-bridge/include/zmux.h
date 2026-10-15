@@ -39,6 +39,14 @@ ZmuxResult zmux_desktop_create(void);
    The directory is created/validated by the persistence worker; startup snapshots expose
    loading and recovery errors. Existing create() remains nonpersistent and isolated. */
 ZmuxResult zmux_desktop_create_persistent(const uint8_t *path, size_t length);
+/* Explicit JSON host configuration (1..8192 bytes), denying unknown fields:
+   {state_directory?:absolute-path,terminal_engine?:{engine:"vt100"|"ghostty",...}}.
+   Ghostty requires explicit limits/reply lifetime and a matching optional build;
+   unavailable/invalid selection fails before launch, with no backend fallback. */
+ZmuxResult zmux_desktop_create_configured(const uint8_t *request, size_t length);
+/* Ordinary envelopes <=16384 bytes. Only strict paste envelopes may exceed that
+   up to99328 bytes, with parsed text <=16384 UTF-8 bytes, admitted once as one unit.
+   Queue acceptance never authorizes automatic retry after partial/unknown delivery. */
 ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_t length);
 /* Executes only ABI-v1 transfer/paste_files requests with expected_session_id. The call
    waits at most two seconds for that envelope's worker acknowledgement and MUST run off

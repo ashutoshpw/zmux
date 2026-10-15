@@ -17,6 +17,9 @@ use zmux_workspace_core::{Action, WorkspaceStore};
 
 pub const ABI_VERSION: u32 = 1;
 pub const MAX_REQUEST_BYTES: usize = 16_384;
+// A whole16KiB paste may require six JSON bytes per UTF-8 byte. Only the strict
+// Paste command may exceed the ordinary envelope cap; parsed text stays bounded.
+const MAX_PASTE_REQUEST_BYTES: usize = 6 * 16_384 + 1_024;
 const MAX_RESPONSE_BYTES: usize = 8_388_608;
 const MAX_CORES: usize = 32;
 const MAX_BUFFERS: usize = 16;
@@ -347,6 +350,51 @@ pub unsafe extern "C" fn zmux_desktop_create_persistent(
 }
 
 fn create_desktop(state_directory: Option<PathBuf>) -> Result<u64, i32> {
+    create_configured_desktop(zmux_desktop_runtime::DesktopOptions {
+        state_directory,
+        ..Default::default()
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DesktopConfiguration {
+    state_directory: Option<PathBuf>,
+    #[serde(default)]
+    terminal_engine: zmux_desktop_runtime::terminal_engine::TerminalEngineConfig,
+}
+
+/// Explicit host configuration; ordinary constructors keep their default engine.
+/// # Safety
+/// Request storage must remain readable for length bytes throughout this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_create_configured(
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if request.is_null() || length == 0 || length > 8192 {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: bounded nonnull caller-owned storage is readable for this call.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let configuration: DesktopConfiguration =
+            serde_json::from_slice(bytes).map_err(|_| INVALID_ARGUMENT)?;
+        if let Some(path) = &configuration.state_directory {
+            let text = path.to_str().ok_or(INVALID_ARGUMENT)?;
+            if text.is_empty() || text.len() > 4096 || text.contains('\0') || !path.is_absolute() {
+                return Err(INVALID_ARGUMENT);
+            }
+        }
+        create_configured_desktop(zmux_desktop_runtime::DesktopOptions {
+            state_directory: configuration.state_directory,
+            terminal_engine: configuration.terminal_engine,
+            ..Default::default()
+        })
+    })
+}
+
+fn create_configured_desktop(options: zmux_desktop_runtime::DesktopOptions) -> Result<u64, i32> {
     let mut registry = registry().try_lock().map_err(lock_status)?;
     if registry
         .entries
@@ -358,11 +406,7 @@ fn create_desktop(state_directory: Option<PathBuf>) -> Result<u64, i32> {
         return Err(CAPACITY);
     }
     let runtime = Arc::new(
-        match state_directory {
-            Some(path) => Desktop::with_persistence(Shell::default(), path),
-            None => Desktop::new(Shell::default()),
-        }
-        .map_err(|error| {
+        Desktop::with_options(Shell::default(), options).map_err(|error| {
             eprintln!("zmux desktop startup failed: {error}");
             INTERNAL
         })?,
@@ -398,7 +442,7 @@ pub unsafe extern "C" fn zmux_desktop_dispatch(
     length: usize,
 ) -> ZmuxResult {
     guard(|| {
-        if length > MAX_REQUEST_BYTES || (request.is_null() && length != 0) {
+        if length > MAX_PASTE_REQUEST_BYTES || (request.is_null() && length != 0) {
             return Err(INVALID_ARGUMENT);
         }
         let desktop = desktop(id)?;
@@ -413,6 +457,12 @@ pub unsafe extern "C" fn zmux_desktop_dispatch(
             Err(error) => error_reply("invalid_request", error.to_string()),
             Ok(request) if request.version != ABI_VERSION => {
                 error_reply("unsupported_version", "expected protocol version 1".into())
+            }
+            Ok(request)
+                if length > MAX_REQUEST_BYTES
+                    && !matches!(request.payload, DesktopCommand::Paste { .. }) =>
+            {
+                return Err(INVALID_ARGUMENT);
             }
             Ok(request) => match desktop.submit(request) {
                 Ok(()) => json!({"version": ABI_VERSION, "ok": true}),

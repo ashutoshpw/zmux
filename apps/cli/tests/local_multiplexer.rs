@@ -341,6 +341,7 @@ impl Gui {
                 DesktopOptions {
                     state_directory: Some(f.root.join("state")),
                     local_tmux_profile: Profile::Explicit(profile),
+                    ..Default::default()
                 },
             )
             .unwrap(),

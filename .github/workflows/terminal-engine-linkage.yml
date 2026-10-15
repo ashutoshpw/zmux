@@ -7,6 +7,10 @@ on:
         description: Also compile both optional Session targets and execute ARM PTY tests
         type: boolean
         default: true
+      include_native_host:
+        description: Also build and exercise the explicit optional ARM native host (requires Session)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,16 +39,16 @@ jobs:
         run: |
           python3 -B -m unittest discover -s tools/terminal-engine-artifacts -p 'test_*.py' -v
           python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --check-inputs
-      - name: Link retained libraries and optional Session fixtures; execute ARM only
+      - name: Link retained libraries and optional Session/native host fixtures; execute ARM only
         env:
           GH_TOKEN: ${{ github.token }}
           INCLUDE_SESSION_RUNTIME: ${{ inputs.include_session_runtime }}
+          INCLUDE_NATIVE_HOST: ${{ inputs.include_native_host }}
         run: |
-          if [ "$INCLUDE_SESSION_RUNTIME" = "true" ]; then
-            python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --session-runtime --output "$RUNNER_TEMP/terminal-engine-linkage"
-          else
-            python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --output "$RUNNER_TEMP/terminal-engine-linkage"
-          fi
+          flags=()
+          if [ "$INCLUDE_SESSION_RUNTIME" = "true" ]; then flags+=(--session-runtime); fi
+          if [ "$INCLUDE_NATIVE_HOST" = "true" ]; then flags+=(--native-host); fi
+          python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py "${flags[@]}" --output "$RUNNER_TEMP/terminal-engine-linkage"
       - name: Retain original provenance and new linkage evidence even after failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

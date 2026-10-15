@@ -60,8 +60,9 @@ enum Backend {
 /// Worker-bound terminal owner with explicit staged publication. While staged,
 /// callers must not read more PTY output, mutate terminal/PTY geometry, or dequeue
 /// new input. On cancellation or write failure, abort; do not replay or fall back.
-/// Raw input encoding, typed key/paste/wheel support and PTY polling live at the
-/// worker integration and are not implemented by this backend-selection seam.
+/// The worker owns input admission, PTY polling and physical writes. Semantic
+/// key/paste encoding reads only this idle authoritative owner; application wheel
+/// support remains an explicit separate capability at the worker boundary.
 pub struct Engine {
     backend: Backend,
     published: Viewport,
@@ -71,6 +72,40 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub fn encode_key(&mut self, event: crate::KeyEvent) -> Result<Vec<u8>, EngineError> {
+        self.ready()?;
+        if !event.valid() {
+            return Err(EngineError::Invalid);
+        }
+        let result = match &mut self.backend {
+            Backend::Vt100(terminal) => Ok(terminal.encode_key(event)),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(terminal) => terminal
+                .encode_key(event.key as u32, event.modifiers, event.action as u8)
+                .map_err(EngineError::from),
+        };
+        if result.is_err() {
+            self.abort();
+        }
+        result
+    }
+    pub fn encode_paste(&mut self, text: &str) -> Result<Vec<u8>, EngineError> {
+        self.ready()?;
+        if text.is_empty() || text.len() > crate::PASTE_BYTES {
+            return Err(EngineError::Invalid);
+        }
+        let result = match &mut self.backend {
+            Backend::Vt100(terminal) => Ok(terminal.encode_paste(text)),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(terminal) => terminal
+                .encode_paste(text.as_bytes())
+                .map_err(EngineError::from),
+        };
+        if result.is_err() {
+            self.abort();
+        }
+        result
+    }
     /// Construct and export the initial frame on its worker before PTY spawn.
     /// Ghostty mapping limits are explicit caller policy, with no production default.
     pub fn new(size: Size, kind: EngineKind) -> Result<Self, EngineError> {

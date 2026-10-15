@@ -13,6 +13,23 @@ pub(crate) enum TerminalOwner {
 }
 
 impl TerminalOwner {
+    pub(crate) fn encode_key(
+        &mut self,
+        event: zmux_terminal_adapter::KeyEvent,
+    ) -> Result<Vec<u8>, SessionError> {
+        match self {
+            Self::Vt100(terminal) => Ok(terminal.encode_key(event)),
+            #[cfg(feature = "ghostty")]
+            Self::Ghostty(terminal) => terminal.encode_key(event).map_err(failure),
+        }
+    }
+    pub(crate) fn encode_paste(&mut self, text: &str) -> Result<Vec<u8>, SessionError> {
+        match self {
+            Self::Vt100(terminal) => Ok(terminal.encode_paste(text)),
+            #[cfg(feature = "ghostty")]
+            Self::Ghostty(terminal) => terminal.encode_paste(text).map_err(failure),
+        }
+    }
     pub(crate) fn new(size: Size, options: Option<EngineOptions>) -> Result<Self, SessionError> {
         let kind = options.map_or(EngineKind::Vt100, |options| options.kind);
         match kind {
