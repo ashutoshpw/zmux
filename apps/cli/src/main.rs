@@ -30,6 +30,8 @@ mod targets;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+const MIN_TIMEOUT_MS: u64 = 50;
+const MAX_TIMEOUT_MS: u64 = 30_000;
 
 #[derive(Debug)]
 struct CliError(String);
@@ -71,6 +73,7 @@ enum Offline {
     Prototype(Vec<String>),
     Guide,
     Catalog,
+    CatalogCheck,
 }
 
 fn main() -> ExitCode {
@@ -95,7 +98,14 @@ fn run() -> Result<u8, Box<dyn Error>> {
             Ok(0)
         }
         Parsed::Offline(Offline::Catalog) => {
-            println!("{}", serde_json::to_string_pretty(&registry::catalog())?);
+            println!("{}", serde_json::to_string_pretty(&registry::catalog()?)?);
+            Ok(0)
+        }
+        Parsed::Offline(Offline::CatalogCheck) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&registry::check_catalog()?)?
+            );
             Ok(0)
         }
         Parsed::Offline(Offline::Version) => {
@@ -183,7 +193,7 @@ fn parse(
                 let milliseconds = utf8_arg(args.get(index + 1), "timeout")?
                     .parse::<u64>()
                     .map_err(|_| CliError("timeout must be an integer in milliseconds".into()))?;
-                if !(50..=30_000).contains(&milliseconds) {
+                if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&milliseconds) {
                     return Err(CliError("timeout must be 50–30000 milliseconds".into()));
                 }
                 timeout = Duration::from_millis(milliseconds);
@@ -239,6 +249,9 @@ fn parse(
             }))
         }
         Some("guide") => help_or_no_args("guide", tail, Offline::Guide)?,
+        Some("commands") if tail == [OsString::from("--check")] => {
+            Parsed::Offline(Offline::CatalogCheck)
+        }
         Some("commands") => help_or_no_args("commands", tail, Offline::Catalog)?,
         Some("version") => help_or_no_args("version", tail, Offline::Version)?,
         Some("capabilities") => app_no_args("capabilities", tail, ControlCommand::Capabilities)?,

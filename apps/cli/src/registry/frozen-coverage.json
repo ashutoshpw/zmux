@@ -1,0 +1,3010 @@
+{
+  "schema_version": 1,
+  "baseline_cmux_sha": "3ba653b9e5afb11d0bc578031142950d6136697e",
+  "inventory_source": "command-inventory.json",
+  "behavioral_parity_verified": false,
+  "scope": "Historical inventory rows, including dynamic forms; mapping is disclosure, never a compatibility or runtime receipt. Unmapped entries may have a local dispatcher without a bounded leaf contract.",
+  "remaining_catalogs": [
+    "source-only CLI candidates",
+    "UI actions",
+    "RPC identifiers"
+  ],
+  "entries": [
+    {
+      "inventory_id": "CMD-001",
+      "reference_command": "restore",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-002",
+      "reference_command": "fork",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-003",
+      "reference_command": "restore-session",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "restore-session"
+    },
+    {
+      "inventory_id": "CMD-004",
+      "reference_command": "session restore",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-005",
+      "reference_command": "sessions list",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-006",
+      "reference_command": "open",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-007",
+      "reference_command": "new-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "new-workspace"
+    },
+    {
+      "inventory_id": "CMD-008",
+      "reference_command": "local-tmux start",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-009",
+      "reference_command": "local-tmux attach",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-010",
+      "reference_command": "local-tmux list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-011",
+      "reference_command": "local-tmux status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-012",
+      "reference_command": "local-tmux detach",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-013",
+      "reference_command": "local-tmux close",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-014",
+      "reference_command": "local-tmux cleanup",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-015",
+      "reference_command": "tmux attach",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-016",
+      "reference_command": "local-zellij start",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-017",
+      "reference_command": "local-zellij attach",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-018",
+      "reference_command": "local-zellij list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-019",
+      "reference_command": "local-zellij status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-020",
+      "reference_command": "local-zellij close",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-021",
+      "reference_command": "surface resume set",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-022",
+      "reference_command": "surface resume show",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-023",
+      "reference_command": "surface resume get",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-024",
+      "reference_command": "surface resume clear",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-025",
+      "reference_command": "agent message",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-026",
+      "reference_command": "agent inbox",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-027",
+      "reference_command": "agent messages on",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-028",
+      "reference_command": "agent messages off",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-029",
+      "reference_command": "agent messages status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-030",
+      "reference_command": "agent-hibernation on",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-031",
+      "reference_command": "agent-hibernation off",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-032",
+      "reference_command": "agent-hibernation hibernate",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-033",
+      "reference_command": "agent-hibernation wake",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-034",
+      "reference_command": "claude-teams",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-035",
+      "reference_command": "codex-teams",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-036",
+      "reference_command": "omo",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-037",
+      "reference_command": "omx",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-038",
+      "reference_command": "omc",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-039",
+      "reference_command": "hooks setup",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-040",
+      "reference_command": "hooks uninstall",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-041",
+      "reference_command": "hooks <agent> install",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-042",
+      "reference_command": "hooks <agent> uninstall",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-043",
+      "reference_command": "hooks <agent> event",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-044",
+      "reference_command": "hooks feed",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-045",
+      "reference_command": "coderouter",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-046",
+      "reference_command": "cr",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-047",
+      "reference_command": "coderouter status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-048",
+      "reference_command": "coderouter machines",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-049",
+      "reference_command": "coderouter claude",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-050",
+      "reference_command": "ai-accounts list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-051",
+      "reference_command": "ai-accounts upload",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-052",
+      "reference_command": "ai-accounts remove",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-053",
+      "reference_command": "new-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-054",
+      "reference_command": "focus-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-055",
+      "reference_command": "close-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-056",
+      "reference_command": "resize-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-057",
+      "reference_command": "move-workspace-to-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-058",
+      "reference_command": "reorder-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-059",
+      "reference_command": "reorder-workspaces",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-060",
+      "reference_command": "workspace-action",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-061",
+      "reference_command": "workspace status",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-062",
+      "reference_command": "workspace status set",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-063",
+      "reference_command": "move-tab-to-new-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-064",
+      "reference_command": "new-split",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "new-split"
+    },
+    {
+      "inventory_id": "CMD-065",
+      "reference_command": "focus-pane",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "focus-pane"
+    },
+    {
+      "inventory_id": "CMD-066",
+      "reference_command": "new-pane",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-067",
+      "reference_command": "new-surface",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "new-surface"
+    },
+    {
+      "inventory_id": "CMD-068",
+      "reference_command": "close-surface",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-069",
+      "reference_command": "move-surface",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-070",
+      "reference_command": "split-off",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-071",
+      "reference_command": "reorder-surface",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-072",
+      "reference_command": "tab-action",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-073",
+      "reference_command": "rename-tab",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-074",
+      "reference_command": "drag-surface-to-split",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-075",
+      "reference_command": "refresh-surfaces",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-076",
+      "reference_command": "list-panels",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-077",
+      "reference_command": "focus-panel",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-078",
+      "reference_command": "close-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-079",
+      "reference_command": "select-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "select-workspace"
+    },
+    {
+      "inventory_id": "CMD-080",
+      "reference_command": "rename-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-081",
+      "reference_command": "rename-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-082",
+      "reference_command": "diff",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-083",
+      "reference_command": "identify",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-084",
+      "reference_command": "list-windows",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-085",
+      "reference_command": "current-window",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-086",
+      "reference_command": "comments list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-087",
+      "reference_command": "review list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-088",
+      "reference_command": "review show",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-089",
+      "reference_command": "review findings",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-090",
+      "reference_command": "vault sessions",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-091",
+      "reference_command": "vault search",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-092",
+      "reference_command": "vault checkpoints",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-093",
+      "reference_command": "vault checkpoint",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-094",
+      "reference_command": "vault fork",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-095",
+      "reference_command": "recover",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-096",
+      "reference_command": "list-workspaces",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "list-workspaces"
+    },
+    {
+      "inventory_id": "CMD-097",
+      "reference_command": "list-panes",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "list-panes"
+    },
+    {
+      "inventory_id": "CMD-098",
+      "reference_command": "list-pane-surfaces",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "list-pane-surfaces"
+    },
+    {
+      "inventory_id": "CMD-099",
+      "reference_command": "current",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-100",
+      "reference_command": "tree",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-101",
+      "reference_command": "top",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-102",
+      "reference_command": "memory",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-103",
+      "reference_command": "surface-health",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-104",
+      "reference_command": "current-workspace",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-105",
+      "reference_command": "read-selection",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-106",
+      "reference_command": "read-screen",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "read-screen"
+    },
+    {
+      "inventory_id": "CMD-107",
+      "reference_command": "record start",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-108",
+      "reference_command": "record stop",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-109",
+      "reference_command": "record status",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-110",
+      "reference_command": "record note",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-111",
+      "reference_command": "record list",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-112",
+      "reference_command": "shot",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-113",
+      "reference_command": "sidebar-state",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-114",
+      "reference_command": "markdown open",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-115",
+      "reference_command": "guide",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-116",
+      "reference_command": "--skill",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-117",
+      "reference_command": "welcome",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-118",
+      "reference_command": "docs settings",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-119",
+      "reference_command": "docs shortcuts",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-120",
+      "reference_command": "docs api",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-121",
+      "reference_command": "docs browser",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-122",
+      "reference_command": "docs capture",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-123",
+      "reference_command": "docs agents",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-124",
+      "reference_command": "docs dock",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-125",
+      "reference_command": "docs sidebars",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-126",
+      "reference_command": "settings open",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-127",
+      "reference_command": "settings path",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-128",
+      "reference_command": "settings docs",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-129",
+      "reference_command": "settings <target>",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-130",
+      "reference_command": "config doctor",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-131",
+      "reference_command": "config check",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-132",
+      "reference_command": "config validate",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-133",
+      "reference_command": "config path",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-134",
+      "reference_command": "config paths",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-135",
+      "reference_command": "config docs",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-136",
+      "reference_command": "config documentation",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-137",
+      "reference_command": "config reload",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-138",
+      "reference_command": "shortcuts",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-139",
+      "reference_command": "feedback",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-140",
+      "reference_command": "feed tui",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-141",
+      "reference_command": "feed clear",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-142",
+      "reference_command": "themes list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-143",
+      "reference_command": "themes set",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-144",
+      "reference_command": "themes clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-145",
+      "reference_command": "import",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-146",
+      "reference_command": "reload-config",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-147",
+      "reference_command": "right-sidebar toggle",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-148",
+      "reference_command": "right-sidebar show",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-149",
+      "reference_command": "right-sidebar hide",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-150",
+      "reference_command": "right-sidebar focus",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-151",
+      "reference_command": "right-sidebar set",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-152",
+      "reference_command": "right-sidebar mode",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-153",
+      "reference_command": "right-sidebar files",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-154",
+      "reference_command": "right-sidebar find",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-155",
+      "reference_command": "right-sidebar vault",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-156",
+      "reference_command": "right-sidebar sessions",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-157",
+      "reference_command": "right-sidebar feed",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-158",
+      "reference_command": "right-sidebar dock",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-159",
+      "reference_command": "right-sidebar cloud",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-160",
+      "reference_command": "right-sidebar devices",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-161",
+      "reference_command": "sidebar templates",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-162",
+      "reference_command": "sidebar try",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-163",
+      "reference_command": "sidebar new",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-164",
+      "reference_command": "sidebar validate",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-165",
+      "reference_command": "sidebar reload",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-166",
+      "reference_command": "sidebar select",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-167",
+      "reference_command": "sidebar open",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-168",
+      "reference_command": "help",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-169",
+      "reference_command": "events",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-170",
+      "reference_command": "automation list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-171",
+      "reference_command": "automation show",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-172",
+      "reference_command": "automation test",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-173",
+      "reference_command": "automation enable",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-174",
+      "reference_command": "automation disable",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-175",
+      "reference_command": "automation logs",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-176",
+      "reference_command": "automation reload",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-177",
+      "reference_command": "glaeda request",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-178",
+      "reference_command": "glaeda observe",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-179",
+      "reference_command": "todo add",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-180",
+      "reference_command": "todo list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-181",
+      "reference_command": "todo check",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-182",
+      "reference_command": "todo uncheck",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-183",
+      "reference_command": "todo start",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-184",
+      "reference_command": "todo rm",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-185",
+      "reference_command": "todo clear",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-186",
+      "reference_command": "send",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-187",
+      "reference_command": "send-key",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-188",
+      "reference_command": "paste",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-189",
+      "reference_command": "send-panel",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-190",
+      "reference_command": "send-key-panel",
+      "review_owner": "audit-terminal-ux.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-191",
+      "reference_command": "notify",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-192",
+      "reference_command": "list-notifications",
+      "review_owner": "audit-agents-remote.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "list-notifications"
+    },
+    {
+      "inventory_id": "CMD-193",
+      "reference_command": "dismiss-notification",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-194",
+      "reference_command": "mark-notification-read",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-195",
+      "reference_command": "open-notification",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-196",
+      "reference_command": "jump-to-unread",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-197",
+      "reference_command": "jump-to-last-prompt",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-198",
+      "reference_command": "clear-notifications",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-199",
+      "reference_command": "pr",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-200",
+      "reference_command": "pr clear",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-201",
+      "reference_command": "set-status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-202",
+      "reference_command": "clear-status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-203",
+      "reference_command": "list-status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-204",
+      "reference_command": "set-progress",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-205",
+      "reference_command": "clear-progress",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-206",
+      "reference_command": "log",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-207",
+      "reference_command": "clear-log",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-208",
+      "reference_command": "list-log",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-209",
+      "reference_command": "disable-browser",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-210",
+      "reference_command": "enable-browser",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-211",
+      "reference_command": "browser-status",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-212",
+      "reference_command": "browser disable",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-213",
+      "reference_command": "browser enable",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-214",
+      "reference_command": "browser status",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-215",
+      "reference_command": "browser open",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser open"
+    },
+    {
+      "inventory_id": "CMD-216",
+      "reference_command": "browser open-split",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-217",
+      "reference_command": "browser goto",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser navigate"
+    },
+    {
+      "inventory_id": "CMD-218",
+      "reference_command": "browser navigate",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser navigate"
+    },
+    {
+      "inventory_id": "CMD-219",
+      "reference_command": "browser back",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser back"
+    },
+    {
+      "inventory_id": "CMD-220",
+      "reference_command": "browser forward",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser forward"
+    },
+    {
+      "inventory_id": "CMD-221",
+      "reference_command": "browser reload",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser reload"
+    },
+    {
+      "inventory_id": "CMD-222",
+      "reference_command": "browser react-grab toggle",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-223",
+      "reference_command": "browser devtools toggle",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-224",
+      "reference_command": "browser devtools console",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-225",
+      "reference_command": "browser focus-mode enter",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-226",
+      "reference_command": "browser focus-mode exit",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-227",
+      "reference_command": "browser focus-mode toggle",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-228",
+      "reference_command": "browser design-mode enable",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-229",
+      "reference_command": "browser design-mode disable",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-230",
+      "reference_command": "browser design-mode toggle",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-231",
+      "reference_command": "browser design-mode status",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-232",
+      "reference_command": "browser zoom in",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-233",
+      "reference_command": "browser zoom out",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-234",
+      "reference_command": "browser zoom reset",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-235",
+      "reference_command": "browser zoom <factor>",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-236",
+      "reference_command": "browser history clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-237",
+      "reference_command": "browser url",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-238",
+      "reference_command": "browser get-url",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-239",
+      "reference_command": "browser snapshot",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser snapshot"
+    },
+    {
+      "inventory_id": "CMD-240",
+      "reference_command": "browser eval",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser eval"
+    },
+    {
+      "inventory_id": "CMD-241",
+      "reference_command": "browser repl",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-242",
+      "reference_command": "browser repl guide",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-243",
+      "reference_command": "browser wait",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser wait"
+    },
+    {
+      "inventory_id": "CMD-244",
+      "reference_command": "browser click",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-245",
+      "reference_command": "browser dblclick",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-246",
+      "reference_command": "browser hover",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-247",
+      "reference_command": "browser focus",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-248",
+      "reference_command": "browser check",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-249",
+      "reference_command": "browser uncheck",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-250",
+      "reference_command": "browser scroll-into-view",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-251",
+      "reference_command": "browser type",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-252",
+      "reference_command": "browser fill",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-253",
+      "reference_command": "browser press",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-254",
+      "reference_command": "browser keydown",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-255",
+      "reference_command": "browser keyup",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-256",
+      "reference_command": "browser select",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-257",
+      "reference_command": "browser scroll",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-258",
+      "reference_command": "browser screenshot",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-259",
+      "reference_command": "browser get url",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get url"
+    },
+    {
+      "inventory_id": "CMD-260",
+      "reference_command": "browser get title",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get title"
+    },
+    {
+      "inventory_id": "CMD-261",
+      "reference_command": "browser get text",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get text"
+    },
+    {
+      "inventory_id": "CMD-262",
+      "reference_command": "browser get html",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get html"
+    },
+    {
+      "inventory_id": "CMD-263",
+      "reference_command": "browser get value",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get value"
+    },
+    {
+      "inventory_id": "CMD-264",
+      "reference_command": "browser get attr",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get attr"
+    },
+    {
+      "inventory_id": "CMD-265",
+      "reference_command": "browser get count",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get count"
+    },
+    {
+      "inventory_id": "CMD-266",
+      "reference_command": "browser get box",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get box"
+    },
+    {
+      "inventory_id": "CMD-267",
+      "reference_command": "browser get styles",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser get styles"
+    },
+    {
+      "inventory_id": "CMD-268",
+      "reference_command": "browser is visible",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-269",
+      "reference_command": "browser is enabled",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-270",
+      "reference_command": "browser is checked",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-271",
+      "reference_command": "browser find role",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-272",
+      "reference_command": "browser find text",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-273",
+      "reference_command": "browser find label",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-274",
+      "reference_command": "browser find placeholder",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-275",
+      "reference_command": "browser find alt",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-276",
+      "reference_command": "browser find title",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-277",
+      "reference_command": "browser find testid",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-278",
+      "reference_command": "browser find first",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-279",
+      "reference_command": "browser find last",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-280",
+      "reference_command": "browser find nth",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-281",
+      "reference_command": "browser frame",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-282",
+      "reference_command": "browser dialog accept",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-283",
+      "reference_command": "browser dialog dismiss",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-284",
+      "reference_command": "browser download",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser download wait"
+    },
+    {
+      "inventory_id": "CMD-285",
+      "reference_command": "browser download list",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser download list"
+    },
+    {
+      "inventory_id": "CMD-286",
+      "reference_command": "browser download wait",
+      "review_owner": "audit-browser-content.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "browser download wait"
+    },
+    {
+      "inventory_id": "CMD-287",
+      "reference_command": "browser profiles list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-288",
+      "reference_command": "browser profiles add",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-289",
+      "reference_command": "browser profiles rename",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-290",
+      "reference_command": "browser profiles clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-291",
+      "reference_command": "browser profiles delete",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-292",
+      "reference_command": "browser import",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-293",
+      "reference_command": "browser cookies get",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-294",
+      "reference_command": "browser cookies set",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-295",
+      "reference_command": "browser cookies clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-296",
+      "reference_command": "browser storage local get",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-297",
+      "reference_command": "browser storage local set",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-298",
+      "reference_command": "browser storage local clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-299",
+      "reference_command": "browser storage session get",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-300",
+      "reference_command": "browser storage session set",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-301",
+      "reference_command": "browser storage session clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-302",
+      "reference_command": "browser tab new",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-303",
+      "reference_command": "browser tab list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-304",
+      "reference_command": "browser tab switch",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-305",
+      "reference_command": "browser tab close",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-306",
+      "reference_command": "browser tab <index>",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-307",
+      "reference_command": "browser console list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-308",
+      "reference_command": "browser console clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-309",
+      "reference_command": "browser errors list",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-310",
+      "reference_command": "browser errors clear",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-311",
+      "reference_command": "browser highlight",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-312",
+      "reference_command": "browser state save",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-313",
+      "reference_command": "browser state load",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-314",
+      "reference_command": "browser addinitscript",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-315",
+      "reference_command": "browser addscript",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-316",
+      "reference_command": "browser addstyle",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-317",
+      "reference_command": "browser identify",
+      "review_owner": "audit-browser-content.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-318",
+      "reference_command": "auth status",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-319",
+      "reference_command": "auth login",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-320",
+      "reference_command": "auth logout",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-321",
+      "reference_command": "auth team",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-322",
+      "reference_command": "login",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-323",
+      "reference_command": "logout",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-324",
+      "reference_command": "vm base",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-325",
+      "reference_command": "vm new",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-326",
+      "reference_command": "vm ls",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-327",
+      "reference_command": "vm domains",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-328",
+      "reference_command": "vm tree",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-329",
+      "reference_command": "vm self",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-330",
+      "reference_command": "vm status",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-331",
+      "reference_command": "vm stats",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-332",
+      "reference_command": "vm resize",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-333",
+      "reference_command": "vm network",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-334",
+      "reference_command": "vm agent-updates",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-335",
+      "reference_command": "vm rename",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-336",
+      "reference_command": "vm pause",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-337",
+      "reference_command": "vm resume",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-338",
+      "reference_command": "vm restart",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-339",
+      "reference_command": "vm snapshot",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-340",
+      "reference_command": "vm fork",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-341",
+      "reference_command": "vm restore",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-342",
+      "reference_command": "vm rm",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-343",
+      "reference_command": "vm run",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-344",
+      "reference_command": "vm route",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-345",
+      "reference_command": "vm agent",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-346",
+      "reference_command": "vm dev",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-347",
+      "reference_command": "vm prompt",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-348",
+      "reference_command": "vm exec",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-349",
+      "reference_command": "vm push",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-350",
+      "reference_command": "vm pull",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-351",
+      "reference_command": "vm wait",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-352",
+      "reference_command": "vm shell",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-353",
+      "reference_command": "vm tui",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-354",
+      "reference_command": "vm desktop",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-355",
+      "reference_command": "vm open",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-356",
+      "reference_command": "vm workspace",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-357",
+      "reference_command": "vm terminal",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-358",
+      "reference_command": "vm tab",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-359",
+      "reference_command": "vm layout",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-360",
+      "reference_command": "vm env",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-361",
+      "reference_command": "vm ports",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-362",
+      "reference_command": "vm tools",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-363",
+      "reference_command": "vm handoff",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-364",
+      "reference_command": "vm promote-template",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-365",
+      "reference_command": "vm attach",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-366",
+      "reference_command": "vm ssh",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-367",
+      "reference_command": "vm ssh-info",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-368",
+      "reference_command": "cloud",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-369",
+      "reference_command": "cloud guide",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-370",
+      "reference_command": "cloud --skill",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-371",
+      "reference_command": "remotes list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-372",
+      "reference_command": "remotes add",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-373",
+      "reference_command": "remotes remove",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-374",
+      "reference_command": "remote list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-375",
+      "reference_command": "remote add",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-376",
+      "reference_command": "remote remove",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-377",
+      "reference_command": "simulator <subcommand>",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-378",
+      "reference_command": "ios <subcommand>",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-379",
+      "reference_command": "ssh",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-380",
+      "reference_command": "mosh",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-381",
+      "reference_command": "mosh-tmux",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-382",
+      "reference_command": "session save",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-383",
+      "reference_command": "session open",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-384",
+      "reference_command": "session move",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-385",
+      "reference_command": "ssh-tmux list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-386",
+      "reference_command": "ssh-tmux ls",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-387",
+      "reference_command": "ssh-tmux attach",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-388",
+      "reference_command": "ssh-session-list",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-389",
+      "reference_command": "ssh-session-attach",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-390",
+      "reference_command": "ssh-session-cleanup",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-391",
+      "reference_command": "remote-daemon-status",
+      "review_owner": "audit-agents-remote.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-392",
+      "reference_command": "ping",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-393",
+      "reference_command": "iroh-diag",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-394",
+      "reference_command": "version",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-395",
+      "reference_command": "sudo run",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-396",
+      "reference_command": "sudo pending",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-397",
+      "reference_command": "sudo setup-touch-id",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-398",
+      "reference_command": "socket-status",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-399",
+      "reference_command": "capabilities",
+      "review_owner": "audit-cli-contract.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "capabilities"
+    },
+    {
+      "inventory_id": "CMD-400",
+      "reference_command": "rpc",
+      "review_owner": "audit-cli-contract.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-401",
+      "reference_command": "debug-terminals",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-402",
+      "reference_command": "trigger-flash",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-403",
+      "reference_command": "set-app-focus",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-404",
+      "reference_command": "simulate-app-active",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-405",
+      "reference_command": "simulate-sidebar-drag",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-406",
+      "reference_command": "capture-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-407",
+      "reference_command": "resize-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-408",
+      "reference_command": "pipe-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-409",
+      "reference_command": "wait-for",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-410",
+      "reference_command": "swap-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-411",
+      "reference_command": "break-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-412",
+      "reference_command": "join-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-413",
+      "reference_command": "next-window",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "next-workspace"
+    },
+    {
+      "inventory_id": "CMD-414",
+      "reference_command": "previous-window",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "previous-workspace"
+    },
+    {
+      "inventory_id": "CMD-415",
+      "reference_command": "last-window",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "last-workspace"
+    },
+    {
+      "inventory_id": "CMD-416",
+      "reference_command": "last-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "last-pane"
+    },
+    {
+      "inventory_id": "CMD-417",
+      "reference_command": "find-window",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-418",
+      "reference_command": "clear-history",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-419",
+      "reference_command": "set-hook",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-420",
+      "reference_command": "popup",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-421",
+      "reference_command": "bind-key",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-422",
+      "reference_command": "unbind-key",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-423",
+      "reference_command": "copy-mode",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-424",
+      "reference_command": "set-buffer",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-425",
+      "reference_command": "list-buffers",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-426",
+      "reference_command": "paste-buffer",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-427",
+      "reference_command": "respawn-pane",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    },
+    {
+      "inventory_id": "CMD-428",
+      "reference_command": "display-message",
+      "review_owner": "audit-cloud-platform.md",
+      "status": "unresolved",
+      "local_contract": null
+    }
+  ]
+}

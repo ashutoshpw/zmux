@@ -2,6 +2,7 @@
 use super::CliError;
 use serde_json::{Value, json};
 use std::fmt::Write;
+mod contracts;
 
 #[derive(Clone, Copy)]
 pub(super) struct CommandSpec {
@@ -559,8 +560,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "customize",
         false,
         false,
-        "commands",
-        "Print the executable command catalog as JSON without connecting to the app."
+        "commands [--check]",
+        "Print the executable command catalog and bounded argument contracts as JSON without connecting to the app. --check validates parser probes and frozen inventory mappings; it does not establish behavioral compatibility."
     ),
     CommandSpec {
         name: "guide",
@@ -669,13 +670,27 @@ pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
     }
     Ok(out)
 }
-pub(super) fn catalog() -> Value {
-    json!({"schema_version": 1, "parity_status": "incomplete", "version": env!("CARGO_PKG_VERSION"), "commands": COMMANDS.iter().map(|s| json!({
+pub(super) fn catalog() -> Result<Value, CliError> {
+    let (leaves, coverage) = contracts::validated()?;
+    Ok(
+        json!({"schema_version": 1, "contract_schema_version": 1, "parity_status": "incomplete", "version": env!("CARGO_PKG_VERSION"), "commands": COMMANDS.iter().map(|s| json!({
         "name": s.name, "aliases": s.aliases, "group": s.group, "usage": s.usage, "description": s.description,
         "targeted": s.targeted, "socket_required": s.socket,
         "socket_required_for": match s.name {"local-tmux"=>Some(vec!["gui_start","gui_attach","operation_status"]),"tmux"=>Some(vec!["gui_attach"]),_=>None},
-        "availability": "implemented"
-    })).collect::<Vec<_>>()})
+        "availability": "implemented", "availability_scope": "dispatcher_only",
+        "argument_contract_status": if leaves.iter().any(|leaf| leaf["dispatcher"] == s.name) {"partial"} else {"unresolved"}
+    })).collect::<Vec<_>>(), "global_arguments": contracts::globals(), "contracts": leaves,
+      "frozen_coverage": coverage, "error_contract": contracts::errors()}),
+    )
+}
+pub(super) fn check_catalog() -> Result<Value, CliError> {
+    let (leaves, coverage) = contracts::validated()?;
+    Ok(
+        json!({"schema_version": 1, "status": "passed", "parity_status": "incomplete",
+        "checks": ["registry_aliases", "actual_parser_probes", "frozen_inventory_ids_and_spellings", "live_contract_references"],
+        "contract_count": leaves.len(), "inventory_entries": coverage["entries"].as_array().map(Vec::len),
+        "compatibility_verified": false}),
+    )
 }
 pub(super) fn guide() -> String {
     format!(
