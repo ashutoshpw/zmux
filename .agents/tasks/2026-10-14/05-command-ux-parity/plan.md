@@ -51,7 +51,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
-- [H01 native credentials](references/h01-native-cloud-credentials.md) — shared credential ownership, cancellation fences and pending real Keychain acceptance.
+- [H01 MFA](references/h01-mfa.md) — authenticator enrollment, login challenge and one-use recovery acceptance.
+- [H01 native credentials](references/h01-native-cloud-credentials.md) — shared credential ownership, cancellation fences and accepted focused Keychain checks.
 - [F04 native shutdown diagnostics](references/f04-native-shutdown-diagnostics.md) — raw Darwin child investigation and exact failing production shutdown evidence.
 - [A01 current inspection](references/a01-current-inspection.md) — bounded published snapshot facts, owner evidence and remaining inspection gates.
 - [Shared shutdown](references/s01-shared-shutdown.md) — one deadline, physical owner barriers and pending native lifecycle acceptance.

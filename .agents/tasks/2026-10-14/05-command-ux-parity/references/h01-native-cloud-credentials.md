@@ -47,6 +47,20 @@ supports a single explicitly selected source for isolated diagnostic use.
 Portable evidence: fixture Python syntax, shell syntax, scoped whitespace, and
 actual loopback HTTP control/response roundtrips pass. These are not native client
 or Keychain acceptance. Strict Swift compilation, the pre-fix red and repaired
-native fixture execution remain hosted gates. Cancellation fences local state;
+native fixture execution are required hosted gates; their execution is recorded
+below. Cancellation fences local state;
 it does not claim rollback of a remotely minted token or completed revocation.
 Public sign-in, deployment and full H01/cloud parity remain separate gates.
+
+Hosted native acceptance: run 38818645717 at
+`352ba3bf46065dd67d3269b1761644d3dc174a71` executed this exact fixture on macOS.
+The pre-fix client SHA256 `bc91b45d9fdcd27c5cfbdf0fda1e575ed74808a649acf5050afd24d1a4cd93d2`
+failed with the required cancelled-sign-in credential assertion; the runner
+verified external Keychain cleanup. The repaired client SHA256
+`f8c24cc98383d5cea3ff84bc1806c491c9a9cb699178292aaca617ad63473937`
+passed every listed case and both in-process and external cleanup. Both native
+Swift slices, the external Save panel driver, Rust/C ABI and the universal native
+build also passed. The later packaged app smoke failed at the existing compound
+sidebar keyboard/AX/persistence assertion, before browser keyboard smoke. This
+establishes focused credential ownership/cancellation acceptance, not a complete
+packaged app pass or public cloud authentication/deployment acceptance.

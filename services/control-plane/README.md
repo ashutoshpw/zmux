@@ -1,7 +1,7 @@
-# Zmux control plane
+# zmux control plane
 
-This is the self-hostable identity and device-control service for Zmux. It uses Better
-Auth 1.7.8 with PostgreSQL for browser email/password sessions and organizations. Its
+This is the self-hostable identity and device-control service for zmux. It uses Better
+Auth 1.7.8 with PostgreSQL for browser email/password sessions, authenticator-based two-factor authentication and organizations. Its
 native flow is an authorization-code flow with S256 PKCE for the single registered
 development client `zmux-macos-dev` and exact callback `zmux-dev://oauth/callback`.
 
@@ -50,6 +50,20 @@ ZMUX_TEST_ORIGIN=http://127.0.0.1:41992 NODE_ENV=test bun run check
 The tests truncate their configured database. Never point test commands at staging or
 production. `../../scripts/check-cloud` runs the locked install, migration, service checks,
 and production image build used by CI.
+
+## Two-factor authentication
+
+The pinned Better Auth two-factor owner handles TOTP enrollment and verification,
+password-login challenges, encrypted authenticator secrets and one-use recovery codes.
+Enrollment requires the current password and a valid authenticator code before enabling
+protection. A pending second-factor challenge is not a browser session and cannot authorize
+a native client. Recovery codes should be saved privately; each successful use consumes one.
+Email/SMS verification is not configured.
+
+Run migrations before starting this version: the auth migration adds `twoFactor` and
+`user.twoFactorEnabled`. Readiness rejects the old password-only schema. The local backup
+restore rehearsal also requires the MFA table. Existing browser/native credentials are
+not globally revoked by deploying this feature; ordinary session revocation still applies.
 
 ## HTTP contract
 

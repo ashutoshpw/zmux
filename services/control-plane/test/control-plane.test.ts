@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { Pool } from "pg";
 import { createApp } from "../src/app";
 import { createAuth } from "../src/auth";
@@ -99,7 +99,7 @@ beforeAll(() => {
 beforeEach(async () => {
   await pool.query(
     `TRUNCATE device, native_access_token, native_authorization_code, invitation, member,
-       organization, verification, account, "session", "user" CASCADE`,
+       organization, verification, "twoFactor", account, "session", "user" CASCADE`,
   );
   auth = createAuth(pool, config);
   app = createApp(pool, auth, config);
@@ -340,4 +340,113 @@ test("expired credential cleanup bounds batches, skips locked rows and retains u
   const identity = await fetch(`${origin}/v1/me`, { headers: { authorization: `Bearer ${liveToken}` } });
   expect(identity.status).toBe(200);
   expect((await exchange(code, "c".repeat(64))).status).toBe(200);
+});
+
+
+describe("authenticator protection", () => {
+  test("requires a confirmed second factor before native authorization and consumes recovery codes once", async () => {
+    // A real browser cookie jar: challenge and session rotation must survive HTTP.
+    const jar = new Map<string, string>();
+    async function request(path: string, body?: unknown) {
+      const response = await fetch(origin + path, {
+        method: body === undefined ? "GET" : "POST",
+        headers: { origin, "content-type": "application/json", cookie: [...jar].map(([k, v]) => `${k}=${v}`).join("; "), "x-test-client-ip": "192.0.2.220" },
+        body: body === undefined ? null : JSON.stringify(body), redirect: "manual",
+      });
+      for (const value of response.headers.getSetCookie()) {
+        const pair = value.split(";", 1)[0]!; const index = pair.indexOf("=");
+        jar.set(pair.slice(0, index), pair.slice(index + 1));
+      }
+      return response;
+    }
+    const credentials = { email: "mfa@example.com", password: "correct horse battery staple" };
+    expect((await request("/api/auth/sign-up/email", { ...credentials, name: "MFA User" })).status).toBe(200);
+    expect((await request("/api/auth/two-factor/enable", { password: "incorrect password" })).ok).toBe(false);
+    const enabled = await request("/api/auth/two-factor/enable", { password: credentials.password });
+    expect(enabled.status).toBe(200);
+    const enrollment = await enabled.json() as { totpURI: string; backupCodes: string[] };
+    const uri = new URL(enrollment.totpURI);
+    const secret = uri.searchParams.get("secret")!;
+    // Decode base32 and compute RFC6238 independently of the auth implementation.
+    const bits = [...secret.replace(/=+$/, "").toUpperCase()].map(c => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(c).toString(2).padStart(5, "0")).join("");
+    const key = Buffer.from(bits.match(/.{8}/g)!.map(b => Number.parseInt(b, 2)));
+    function code(stepOffset = 0) {
+      const counter = Buffer.alloc(8); counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000) + stepOffset));
+      const digest = createHmac("sha1", key).update(counter).digest();
+      return ((digest.readUInt32BE(digest[19]! & 15) & 0x7fffffff) % 1000000).toString().padStart(6, "0");
+    }
+    async function isEnabled() {
+      const response = await request("/api/auth/get-session");
+      expect(response.status).toBe(200);
+      return (await response.json() as { user: { twoFactorEnabled: boolean } }).user.twoFactorEnabled;
+    }
+    expect(await isEnabled()).toBe(false);
+    const wrongCode = () => {
+      const window = new Set([-2, -1, 0, 1, 2].map(code));
+      for (let candidate = 0; ; candidate++) {
+        const value = candidate.toString().padStart(6, "0");
+        if (!window.has(value)) return value;
+      }
+    };
+    expect((await request("/api/auth/two-factor/verify-totp", { code: wrongCode() })).ok).toBe(false);
+    expect(await isEnabled()).toBe(false);
+    expect((await request("/api/auth/two-factor/verify-totp", { code: code() })).status).toBe(200);
+    expect(await isEnabled()).toBe(true);
+    // Respect the real owner's three-verifications-per-ten-seconds limit.
+    await Bun.sleep(10_100);
+    expect((await request("/api/auth/sign-out", {})).status).toBe(200);
+    jar.clear();
+    const signIn = await request("/api/auth/sign-in/email", credentials);
+    expect(signIn.status).toBe(200);
+    expect((await signIn.json() as { twoFactorRedirect: boolean }).twoFactorRedirect).toBe(true);
+    const verifier = "m".repeat(64);
+    const query = new URLSearchParams({ client_id: "zmux-macos-dev", redirect_uri: "zmux-dev://oauth/callback", response_type: "code", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", state: "mfa-state" });
+    async function nativeLocation() {
+      const response = await request("/v1/native/authorize?" + query);
+      expect(response.status).toBe(302);
+      return new URL(response.headers.get("location")!);
+    }
+    expect((await nativeLocation()).pathname).toBe("/");
+    expect((await request("/api/auth/two-factor/verify-totp", { code: wrongCode() })).ok).toBe(false);
+    expect((await nativeLocation()).pathname).toBe("/");
+    expect((await request("/api/auth/two-factor/verify-totp", { code: code() })).status).toBe(200);
+    expect((await nativeLocation()).protocol).toBe("zmux-dev:");
+    expect((await request("/api/auth/sign-out", {})).status).toBe(200); jar.clear();
+    expect((await request("/api/auth/sign-in/email", credentials)).status).toBe(200);
+    expect((await request("/api/auth/two-factor/verify-backup-code", { code: enrollment.backupCodes[0] })).status).toBe(200);
+    expect((await nativeLocation()).protocol).toBe("zmux-dev:");
+    expect((await request("/api/auth/sign-out", {})).status).toBe(200); jar.clear();
+    expect((await request("/api/auth/sign-in/email", credentials)).status).toBe(200);
+    expect((await request("/api/auth/two-factor/verify-backup-code", { code: enrollment.backupCodes[0] })).ok).toBe(false);
+    expect((await nativeLocation()).pathname).toBe("/");
+    expect((await request("/api/auth/two-factor/verify-backup-code", { code: enrollment.backupCodes[1] })).status).toBe(200);
+    expect((await request("/api/auth/two-factor/disable", { password: "incorrect password" })).ok).toBe(false);
+    expect(await isEnabled()).toBe(true);
+    expect((await request("/api/auth/two-factor/disable", { password: credentials.password })).status).toBe(200);
+    expect(await isEnabled()).toBe(false);
+    // A fourth password login also observes the real ten-second auth rate window.
+    await Bun.sleep(10_100);
+    expect((await request("/api/auth/sign-out", {})).status).toBe(200); jar.clear();
+    const passwordOnly = await request("/api/auth/sign-in/email", credentials);
+    expect(passwordOnly.status).toBe(200);
+    expect((await passwordOnly.json() as { twoFactorRedirect?: boolean }).twoFactorRedirect).not.toBe(true);
+    expect((await nativeLocation()).protocol).toBe("zmux-dev:");
+  }, 30_000);
+});
+
+
+test("readiness rejects a password-only schema before MFA migrations", async () => {
+  await pool.query('ALTER TABLE "twoFactor" RENAME TO zmux_pending_mfa');
+  try {
+    expect((await fetch(`${origin}/ready`)).status).toBe(503);
+  } finally {
+    await pool.query('ALTER TABLE zmux_pending_mfa RENAME TO "twoFactor"');
+  }
+  await pool.query('ALTER TABLE "user" RENAME COLUMN "twoFactorEnabled" TO zmux_pending_mfa_enabled');
+  try {
+    expect((await fetch(`${origin}/ready`)).status).toBe(503);
+  } finally {
+    await pool.query('ALTER TABLE "user" RENAME COLUMN zmux_pending_mfa_enabled TO "twoFactorEnabled"');
+  }
+  expect((await fetch(`${origin}/ready`)).status).toBe(200);
 });

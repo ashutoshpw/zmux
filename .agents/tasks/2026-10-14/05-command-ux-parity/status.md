@@ -5,10 +5,17 @@
 
 ## Active implementation
 
+- H01 authenticator/recovery API and web UI pass 17 real PostgreSQL tests and
+  15 real Chrome checks, including pre-fix sign-out red/repaired green. Independent
+  review, TypeScript, production Docker image and parent core checks pass.
+  Local runtime promotion and public/native callback remain separate gates.
+  See [MFA](references/h01-mfa.md).
+
 - H01 native credential fix `352ba3b` passes the early actual macOS HTTP/Keychain
   red/green gate in run38818645717. The same fixture rejects the pinned baseline
   at cancelled-login persistence and accepts the repaired client with external
-  cleanup. Full workflow and independent retained-log review are still pending.
+  cleanup. Independent retained-log/source review accepts that focused gate; the
+  full run stopped at the separately tracked sidebar smoke predicate.
 - R03 package implementation `65471de` passed independent exact source/notice
   review and isolated `scripts/check`. Opt-in both-host run38819411938 is building
   rebuilt plugins and source/notice packages; no default acquisition changed.
@@ -32,8 +39,10 @@
   all-group extinction, native-app/default/typed-input, minimum-OS execution and
   performance acceptance are not established. See [F04](references/f04-session-engine.md).
 - Main `15e8600` includes the reviewed Save panel SDK compiler repair and early
-  both-target driver typecheck. Native38815234251 is the next packaged gate;
-  actual Save panel permission/UI behavior and browser keyboard remain pending.
+  both-target driver typecheck. Main38818219763 later reached packaged sidebar
+  smoke and failed its compound keyboard/AX/persistence predicate. Repair1d8c3f9
+  uses the bound window preference key and separates diagnostics; run38820239578
+  is pending acceptance. Actual Save panel UI and browser keyboard remain pending.
   Workspace metadata and other independent parity slices can proceed while those
   runtime gates and separate Zellij packaging/notices work continue.
 

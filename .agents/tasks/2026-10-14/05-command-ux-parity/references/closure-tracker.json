@@ -449,15 +449,20 @@
       ],
       "exit_gate": "Every retained PR #1 matrix row has independent zmux evidence; real DB transactions and deployed callback/auth flows pass; origin remains zmux.w3dev.app; no raw-token handoff or operational upstream fallback.",
       "implemented_slices": [
-        "Local Docker identity/device/organization service plus bounded expired native credential cleanup d22b6a4; real PostgreSQL checks pass locally and hosted"
+        "Local Docker identity/device/organization service plus bounded expired native credential cleanup d22b6a4; real PostgreSQL checks pass locally and hosted",
+        "Isolated backup restore rehearsal fb999a7 and PostgreSQL transaction ownership 54a0e52; private local Docker runtime health verified",
+        "Native credential generation/cancellation ownership 352ba3b; actual macOS baseline red/current green and Keychain cleanup in run38818645717",
+        "Authenticator/recovery API and web UI; 17 real PostgreSQL tests, 15 real Chrome checks and independent review pass; local runtime promotion pending"
       ],
       "verification_receipts": [
-        "local-cloud.md"
+        "local-cloud.md",
+        "h01-native-cloud-credentials.md",
+        "h01-mfa.md"
       ],
       "remaining_gates": [
         "Public tunnel and authenticated native callback verification",
-        "MFA, mail, member/admin/invite invariants and complete PR1 requirements",
-        "Protected migration/restore rehearsal and broader cloud lifecycle"
+        "Broader MFA/session policy, localized mail, member/admin/invite invariants and complete PR1 requirements",
+        "Broader migration/recovery and cloud lifecycle; focused local backup restore rehearsal accepted"
       ]
     },
     {
@@ -2650,12 +2655,17 @@
       "feature": "Native authentication and session binding",
       "primary_package": "H01",
       "audit_status": "source-verified-subset",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-cloud-platform.json#CLOUD-002",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "352ba3b"
+      ],
+      "verification_receipts": [
+        "h01-native-cloud-credentials.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Real configured public origin and native callback journey; focused Keychain fixture is accepted but is not full authentication parity"
       ]
     },
     {
@@ -2664,12 +2674,15 @@
       "feature": "Organizations, CLI teams, MFA, mail, and admin invariants",
       "primary_package": "H01",
       "audit_status": "partial",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-cloud-platform.json#CLOUD-003",
       "implementation_commits": [],
-      "verification_receipts": [],
+      "verification_receipts": [
+        "h01-mfa.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Focused TOTP/recovery API and web UI are accepted locally; remaining organization/CLI/mail/admin criteria and public/native callback are open"
       ]
     },
     {
