@@ -168,6 +168,14 @@ struct NativeNotificationExecution: Decodable, Sendable {
     let revision: UInt64
     let focusedWorkspaceId: UInt64?
     let focusedSurfaceId: UInt64?
+    let navigation: NotificationNavigation?
+}
+
+struct NotificationNavigation: Decodable, Sendable {
+    let opened: Bool
+    let notificationId: UInt64?
+    let notificationUuid: UUID?
+    let target: NotificationTarget?
 }
 
 enum NativeNotificationEvent: Encodable, Sendable {
@@ -197,6 +205,7 @@ enum NativeAttentionAction: Encodable, Sendable {
     case open(target: NotificationTarget)
     case openInbox(target: NotificationTarget)
     case dismiss(target: NotificationTarget)
+    case jumpToUnread
     private enum CodingKeys: String, CodingKey { case action, target }
     func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -204,6 +213,7 @@ enum NativeAttentionAction: Encodable, Sendable {
         case .open(let target): try c.encode("open", forKey: .action); try c.encode(target, forKey: .target)
         case .openInbox(let target): try c.encode("open_inbox", forKey: .action); try c.encode(target, forKey: .target)
         case .dismiss(let target): try c.encode("dismiss", forKey: .action); try c.encode(target, forKey: .target)
+        case .jumpToUnread: try c.encode("jump_to_unread", forKey: .action)
         }
     }
 }
@@ -296,7 +306,10 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         authorizationGeneration += 1
         let generation = authorizationGeneration
         settingsInFlight = true
-        center.getNotificationSettings { [weak self] settings in
+        // UserNotifications invokes completion blocks on its own queue. Explicit
+        // Sendable boundaries prevent inherited main-actor entry checks; only
+        // value observations cross into the main-actor task below.
+        center.getNotificationSettings { @Sendable [weak self] settings in
             let state: NotificationAuthorization
             switch settings.authorizationStatus {
             case .notDetermined: state = .notDetermined
@@ -325,7 +338,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         guard !stopped, !authorizationInFlight else { return }
         guard NSApp.isActive else { reportError("Activate zmux before enabling system notifications"); return }
         authorizationInFlight = true
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { [weak self] _, error in
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { @Sendable [weak self] _, error in
             let message = error.map { String($0.localizedDescription.prefix(512)) }
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -338,7 +351,22 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func openInbox(_ target: NotificationTarget) {
-        guard !stopped, epoch == target.epoch, actionsInFlight < 8 else {
+        performInboxAction(.openInbox(target: target), expectedEpoch: target.epoch) { target.matches($0) }
+    }
+
+    func jumpToUnread() {
+        guard let epoch else { reportError("Notification actions are unavailable"); return }
+        performInboxAction(.jumpToUnread, expectedEpoch: epoch) { receipt in
+            guard let navigation = receipt.navigation, navigation.opened,
+                  let target = navigation.target, target.epoch == epoch,
+                  navigation.notificationId == target.notificationId else { return false }
+            return target.matches(receipt)
+        }
+    }
+
+    private func performInboxAction(_ action: NativeAttentionAction, expectedEpoch: UUID,
+                                    accepts: @escaping @MainActor (NativeNotificationExecution) -> Bool) {
+        guard !stopped, epoch == expectedEpoch, actionsInFlight < 8 else {
             reportError("Notification actions are unavailable or busy")
             return
         }
@@ -347,9 +375,8 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             guard let self else { return }
             defer { self.actionsInFlight -= 1 }
             do {
-                let receipt = try await self.performAction(.openInbox(target: target))
-                guard !self.stopped, self.epoch == target.epoch,
-                      target.matches(receipt) else { return }
+                let receipt = try await self.performAction(action)
+                guard !self.stopped, self.epoch == expectedEpoch, accepts(receipt) else { return }
                 self.activate()
             } catch { self.reportError("Notification target is unavailable: " + error.localizedDescription) }
         }
@@ -397,9 +424,10 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
                 self.remove([request.identifier])
                 if self.current(request) { self.emit(.failed(target: request.target, authorizationGeneration: request.authorizationGeneration, message: "System notification scheduling timed out; it will not be replayed")) }
             }
-            center.add(UNNotificationRequest(identifier: request.identifier, content: content, trigger: nil)) { [weak self] error in
+            let identifier = request.identifier
+            center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil)) { @Sendable [weak self] error in
                 let message = error.map { String($0.localizedDescription.prefix(512)) }
-                Task { @MainActor [weak self] in self?.scheduled(request.identifier, error: message) }
+                Task { @MainActor [weak self] in self?.scheduled(identifier, error: message) }
             }
         }
     }

@@ -12,7 +12,7 @@ use attention::{
     Attention, AttentionCommand, DismissSelection, NativeAttentionAction, NativeNotificationEvent,
     NativeNotificationSnapshot, Notification, NotificationAction, NotificationAddress,
     NotificationContent, NotificationFilter, NotificationMutation, NotificationMutationKind,
-    NotificationScope, NotificationSelection,
+    NotificationNavigation, NotificationScope, NotificationSelection,
 };
 use browser::{
     BrowserDispatchBatch, BrowserHostEvent, BrowserReceipt, BrowserRequest, BrowserRuntime,
@@ -218,6 +218,7 @@ pub(crate) struct Execution {
     pub created_uploads: Vec<u64>,
     pub session_operation_id: Option<u64>,
     pub notification_mutation: Option<NotificationMutation>,
+    pub notification_navigation: Option<NotificationNavigation>,
     pub browser_operation_id: Option<u64>,
     pub browser_dispatch: Option<BrowserDispatchBatch>,
 }
@@ -241,6 +242,7 @@ pub struct NativeNotificationExecution {
     /// Native presentation may activate its window only after confirmed Open.
     pub focused_workspace_id: Option<zmux_workspace_core::WorkspaceId>,
     pub focused_surface_id: Option<SurfaceId>,
+    pub navigation: Option<NotificationNavigation>,
 }
 
 impl Desktop {
@@ -303,6 +305,7 @@ impl Desktop {
                     session_operation_id: None,
                     attention,
                     notification_mutation: None,
+                    notification_navigation: None,
                     transfers: Vec::new(),
                     next_transfer_id: 1,
                     app_active: false,
@@ -464,7 +467,9 @@ impl Desktop {
         action: NativeAttentionAction,
     ) -> Result<NativeNotificationExecution, DesktopError> {
         let opens = match &action {
-            NativeAttentionAction::Open { .. } | NativeAttentionAction::OpenInbox { .. } => true,
+            NativeAttentionAction::Open { .. }
+            | NativeAttentionAction::OpenInbox { .. }
+            | NativeAttentionAction::JumpToUnread => true,
             NativeAttentionAction::Dismiss { .. } => false,
             NativeAttentionAction::Event { .. } => {
                 return Err(DesktopError::Failure(
@@ -475,6 +480,11 @@ impl Desktop {
         let execution =
             self.execute_native(Command::NativeAttention { action }, NATIVE_COMMAND_TIMEOUT)?;
         execution.result?;
+        let opens = opens
+            && execution
+                .notification_navigation
+                .as_ref()
+                .is_none_or(|navigation| navigation.opened);
         let focused = opens
             .then(|| {
                 execution
@@ -498,6 +508,7 @@ impl Desktop {
                     .find(|pane| pane.id == workspace.focused_pane)
                     .map(|pane| pane.selected_surface)
             }),
+            navigation: execution.notification_navigation,
         })
     }
     fn execute_native(
@@ -688,6 +699,7 @@ struct Worker {
     session_operation_id: Option<u64>,
     attention: Attention,
     notification_mutation: Option<NotificationMutation>,
+    notification_navigation: Option<NotificationNavigation>,
     transfers: Vec<TransferSlot>,
     next_transfer_id: u64,
     app_active: bool,
@@ -877,6 +889,7 @@ impl Worker {
         let previous_upload_id = self.next_transfer_id;
         self.session_operation_id = None;
         self.notification_mutation = None;
+        self.notification_navigation = None;
         self.browser_operation_id = None;
         self.browser_dispatch = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
@@ -950,6 +963,7 @@ impl Worker {
                 result,
                 session_operation_id: self.session_operation_id,
                 notification_mutation: self.notification_mutation.take(),
+                notification_navigation: self.notification_navigation.take(),
                 browser_operation_id: self.browser_operation_id,
                 browser_dispatch: self.browser_dispatch.take(),
                 created_uploads: snapshot
@@ -1200,6 +1214,60 @@ impl Worker {
         );
         Ok(())
     }
+    fn open_notification(
+        &mut self,
+        target: &attention::NotificationTarget,
+        banner: bool,
+    ) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        let address = if banner {
+            self.attention.native_open_target(&model, target)?
+        } else {
+            self.attention.native_inbox_target(&model, target)?
+        };
+        self.select_notification(address)?;
+        self.notification_mutation = Some(self.attention.apply_mutation(
+            &NotificationFilter::Id(target.notification_id),
+            NotificationMutationKind::MarkRead,
+            None,
+            None,
+        )?);
+        Ok(())
+    }
+    fn jump_to_unread(&mut self) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        self.attention.reconcile(&model);
+        let candidate = self
+            .attention
+            .items
+            .iter()
+            .rev()
+            .filter(|item| !item.read)
+            .find_map(|item| {
+                item.target
+                    .as_ref()
+                    .filter(|target| self.attention.native_inbox_target(&model, target).is_ok())
+                    .map(|target| (target.clone(), item.uuid))
+            });
+        let navigation = if let Some((target, uuid)) = candidate {
+            self.open_notification(&target, false)?;
+            NotificationNavigation {
+                opened: true,
+                notification_id: Some(target.notification_id),
+                notification_uuid: Some(uuid),
+                target: Some(target),
+            }
+        } else {
+            NotificationNavigation {
+                opened: false,
+                notification_id: None,
+                notification_uuid: None,
+                target: None,
+            }
+        };
+        self.notification_navigation = Some(navigation);
+        Ok(())
+    }
     fn attention_action(&mut self, command: AttentionCommand) -> Result<(), DesktopError> {
         match command {
             AttentionCommand::Notify {
@@ -1220,6 +1288,7 @@ impl Worker {
                 )?;
             }
             AttentionCommand::Read { id } => {
+                let id = self.attention.resolve(id)?;
                 self.notification_mutation = Some(self.attention.apply_mutation(
                     &NotificationFilter::Id(id),
                     NotificationMutationKind::MarkRead,
@@ -1228,6 +1297,7 @@ impl Worker {
                 )?);
             }
             AttentionCommand::Dismiss { id } => {
+                let id = self.attention.resolve(id)?;
                 self.notification_mutation = Some(self.attention.apply_mutation(
                     &NotificationFilter::Id(id),
                     NotificationMutationKind::Dismiss,
@@ -1250,15 +1320,17 @@ impl Worker {
                 }
             }
             AttentionCommand::Open { id } => {
-                let address = self.attention.open_target(&self.model.snapshot(), id)?;
-                self.select_notification(address)?;
-                self.notification_mutation = Some(self.attention.apply_mutation(
-                    &NotificationFilter::Id(id),
-                    NotificationMutationKind::MarkRead,
-                    None,
-                    None,
-                )?);
+                let id = self.attention.resolve(id)?;
+                let target = self
+                    .attention
+                    .find(id)
+                    .map_err(DesktopError::Failure)?
+                    .target
+                    .clone()
+                    .ok_or(attention::AttentionError::StaleTarget)?;
+                self.open_notification(&target, false)?;
             }
+            AttentionCommand::JumpToUnread => self.jump_to_unread()?,
         }
         Ok(())
     }
@@ -1283,6 +1355,7 @@ impl Worker {
             NotificationAction::MarkRead { selection } => match selection {
                 NotificationSelection::Id { id } => {
                     global()?;
+                    let id = self.attention.resolve(id)?;
                     (
                         NotificationFilter::Id(id),
                         NotificationMutationKind::MarkRead,
@@ -1311,6 +1384,7 @@ impl Worker {
             NotificationAction::Dismiss { selection } => match selection {
                 DismissSelection::Id { id } => {
                     global()?;
+                    let id = self.attention.resolve(id)?;
                     (
                         NotificationFilter::Id(id),
                         NotificationMutationKind::Dismiss,
@@ -1355,19 +1429,16 @@ impl Worker {
         match action {
             NativeAttentionAction::Event { event } => self.attention.native_event(&model, event)?,
             NativeAttentionAction::Open { target } => {
-                let address = self.attention.native_open_target(&model, &target)?;
-                self.select_notification(address)?;
-                self.attention.native_dismiss(&target)?;
+                self.open_notification(&target, true)?;
             }
             NativeAttentionAction::OpenInbox { target } => {
-                let address = self.attention.native_inbox_target(&model, &target)?;
-                self.select_notification(address)?;
-                self.attention.native_dismiss(&target)?;
+                self.open_notification(&target, false)?;
             }
             NativeAttentionAction::Dismiss { target } => {
                 self.attention.native_open_target(&model, &target)?;
                 self.attention.native_dismiss(&target)?;
             }
+            NativeAttentionAction::JumpToUnread => self.jump_to_unread()?,
         }
         Ok(())
     }

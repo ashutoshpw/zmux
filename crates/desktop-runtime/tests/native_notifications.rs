@@ -184,7 +184,7 @@ fn a_pre_restore_notification_cannot_open_a_new_shell_reusing_its_surface_id() {
         7,
         Command::Attention {
             action: AttentionCommand::Open {
-                id: notification_id,
+                id: notification_id.into(),
             },
         },
     );

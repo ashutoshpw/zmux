@@ -679,7 +679,7 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         &desktop,
         5,
         Command::Attention {
-            action: Attention::Open { id: bell },
+            action: Attention::Open { id: bell.into() },
         },
     );
     let opened = wait(&desktop, |s| s.last_request_id == 5);
@@ -752,7 +752,7 @@ fn real_terminal_signals_and_explicit_notifications_route_by_surface_with_genera
         &desktop,
         11,
         Command::Attention {
-            action: Attention::Open { id: target },
+            action: Attention::Open { id: target.into() },
         },
     );
     let stale = wait(&desktop, |s| s.last_request_id == 11);

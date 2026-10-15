@@ -375,7 +375,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         true,
         "notify [--workspace TARGET] [--surface TARGET] [--title TITLE] [--subtitle TEXT] [--body TEXT] [--desktop true|false]\n       zmux notify --clear [--workspace TARGET] [--surface TARGET]",
-        "Add bounded attention to an exact live surface. The title defaults to Notification; subtitle and body default to empty. --desktop false suppresses OS delivery; true requests delivery subject to permissions and suppression policy. OS success is not implied by the inbox receipt. --clear removes notifications for the explicit workspace/surface or inherited caller surface, then caller workspace, then focused surface. Surface clear requires workspace context. Workspace-only creation still resolves a surface; workspace-level notification destinations remain unavailable. Content and --desktop conflict with --clear."
+        "Add bounded attention to a live workspace or exact terminal caller. The title defaults to Notification; subtitle and body default to empty. --desktop false suppresses OS delivery; true requests delivery subject to permissions and suppression policy. OS success is not implied by the inbox receipt. --clear removes notifications for the explicit workspace/surface or inherited caller surface, then caller workspace, then focused surface. Surface clear requires workspace context. With only a workspace selector, a live caller surface in that workspace remains the owner; otherwise the notification belongs to the workspace. External callers without surface evidence target the focused workspace. Workspace notifications open without changing the selected tab. Content and --desktop conflict with --clear."
     ),
     command!(
         "list-notifications",
@@ -383,7 +383,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         false,
         true,
         "list-notifications",
-        "List notification IDs, content, targets, read/delivery state, dropped-event count, epoch and cursor. Use an observed cursor with clear-notifications --through to preserve newer arrivals."
+        "List numeric IDs, UUIDs and notification:UUID references, content, targets, read/delivery state, dropped-event count, epoch and cursor. Use an observed cursor with clear-notifications --through to preserve newer arrivals."
     ),
     command!(
         "mark-notification-read",
@@ -391,7 +391,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         true,
         "mark-notification-read <--id ID | --workspace TARGET [--surface TARGET] | --all>",
-        "Mark exactly one notification, a workspace (optionally limited to one surface), or all notifications read. --surface requires an explicit workspace or ZMUX_WORKSPACE_ID. ID and global selectors accept no target scope. This operation preserves focus."
+        "Mark exactly one notification, a workspace (optionally limited to one surface), or all notifications read. --surface requires an explicit workspace or ZMUX_WORKSPACE_ID. ID and global selectors accept no target scope. ID accepts a positive numeric ID, UUID or notification:UUID reference. This operation preserves focus."
     ),
     command!(
         "open-notification",
@@ -399,7 +399,15 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         false,
         true,
         "open-notification --id ID",
-        "Focus the notification's live target and acknowledge that generation."
+        "Focus the notification's live target and acknowledge that generation. ID accepts a positive numeric ID, UUID or notification:UUID reference. Closed or stale targets fail without changing focus."
+    ),
+    command!(
+        "jump-to-unread",
+        "automation",
+        false,
+        true,
+        "jump-to-unread",
+        "Open the newest reachable unread notification and acknowledge only that notification. Closed or stale targets are skipped. Returns opened:false without changing focus when none can open. Caller target environment does not limit this action."
     ),
     command!(
         "dismiss-notification",
@@ -407,7 +415,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         true,
         "dismiss-notification <--id ID | --all-read>",
-        "Remove exactly one notification or every read notification. Unread rows survive --all-read. Target selectors are not accepted and focus is preserved."
+        "Remove exactly one notification or every read notification. Unread rows survive --all-read. ID accepts a positive numeric ID, UUID or notification:UUID reference. Target selectors are not accepted and focus is preserved."
     ),
     command!(
         "clear-notifications",
@@ -415,7 +423,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         true,
         true,
         "clear-notifications [--workspace TARGET [--surface TARGET]] [--through CURSOR]",
-        "Clear notifications for an explicit workspace or surface. Without selectors, ZMUX_WORKSPACE_ID scopes the clear to that workspace, ignoring the caller surface; without workspace context it clears all notifications. Surface scope requires workspace context. --through accepts an observed list-notifications cursor (including zero) and preserves newer arrivals. Receipts report epoch, cursor and affected_ids. Focus is preserved."
+        "Clear notifications for an explicit workspace or surface. Without selectors, ZMUX_WORKSPACE_ID scopes the clear to that workspace, ignoring the caller surface; without workspace context it clears all notifications. Surface scope requires workspace context. --through accepts an observed list-notifications cursor (including zero) and preserves newer arrivals. Receipts report epoch, cursor, affected_ids and affected_uuids. Focus is preserved."
     ),
     command!(
         "browser",

@@ -103,6 +103,161 @@ fn workspace(id: u64) -> TargetScope {
 }
 
 #[test]
+fn notification_uuid_handles_open_read_and_dismiss_the_exact_admitted_generation() {
+    let mut app = App::new();
+    let initial = app.desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let surface = first.root.panes()[0].selected_surface;
+    app.action(Action::CreateWorkspace {
+        name: "Keep foreground".into(),
+    });
+    let created = app.notify(surface, "Handle owner");
+    let row = created.notifications.last().unwrap();
+    let id = row.id;
+    let wire = serde_json::to_value(row).unwrap();
+    let uuid = wire["uuid"]
+        .as_str()
+        .expect("admission must expose a UUID handle");
+    assert!(Uuid::parse_str(uuid).is_ok());
+    assert_eq!(wire["reference"], format!("notification:{uuid}"));
+    let action =
+        serde_json::from_value(serde_json::json!({"operation":"open", "id":uuid})).unwrap();
+    let opened = app.send(Command::Attention { action });
+    assert!(opened.last_error.is_none());
+    assert_eq!(opened.model.focused_workspace, Some(first.id));
+    assert!(
+        opened
+            .notifications
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .read
+    );
+    let action = serde_json::from_value(
+        serde_json::json!({"operation":"read", "id":format!("notification:{uuid}")}),
+    )
+    .unwrap();
+    assert!(app.send(Command::Attention { action }).last_error.is_none());
+    let action =
+        serde_json::from_value(serde_json::json!({"operation":"dismiss", "id":uuid})).unwrap();
+    let dismissed = app.send(Command::Attention { action });
+    assert!(dismissed.last_error.is_none());
+    assert!(dismissed.notifications.iter().all(|row| row.id != id));
+    let action =
+        serde_json::from_value(serde_json::json!({"operation":"open", "id":uuid})).unwrap();
+    let missing = app.send(Command::Attention { action });
+    assert!(missing.last_error.is_some());
+    assert_eq!(missing.model.focused_workspace, Some(first.id));
+    app.close();
+}
+
+#[test]
+fn jump_to_unread_skips_stale_newer_rows_and_acknowledges_only_the_selected_live_owner() {
+    let mut app = App::new();
+    let initial = app.desktop.snapshot().unwrap();
+    let first = initial.model.workspaces[0].clone();
+    let oldest = app.notify(first.root.panes()[0].selected_surface, "Oldest reachable");
+    let oldest_id = oldest.notifications.last().unwrap().id;
+    let workspace_owner = app.action(Action::CreateWorkspace {
+        name: "Newest live workspace".into(),
+    });
+    let live_workspace = workspace_owner.model.workspaces.last().unwrap().id;
+    let live = app.send(Command::Targeted {
+        request: TargetRequest {
+            scope: workspace(live_workspace.0),
+            caller: CallerContext::default(),
+            expected_model_revision: None,
+            operation: TargetOperation::Notify {
+                title: "Newest reachable".into(),
+                subtitle: String::new(),
+                body: String::new(),
+                desktop: Some(false),
+            },
+        },
+    });
+    let live_id = live.notifications.last().unwrap().id;
+    let other = app.action(Action::CreateWorkspace {
+        name: "Will close".into(),
+    });
+    let second = other.model.workspaces.last().unwrap().clone();
+    let stale = app.notify(
+        second.root.panes()[0].selected_surface,
+        "Newest closed owner",
+    );
+    let stale_id = stale.notifications.last().unwrap().id;
+    app.action(Action::CloseWorkspace {
+        workspace_id: second.id,
+    });
+    let foreground = app.action(Action::CreateWorkspace {
+        name: "Foreground".into(),
+    });
+    let foreground = foreground.model.focused_workspace;
+    let action = serde_json::from_value(serde_json::json!({"action":"jump_to_unread"})).unwrap();
+    let result = app
+        .desktop
+        .native_notification_action(action)
+        .expect("shared unread navigation must be supported");
+    let receipt = serde_json::to_value(result).unwrap();
+    assert_eq!(receipt["navigation"]["opened"], true);
+    assert_eq!(receipt["navigation"]["notification_id"], live_id);
+    assert_eq!(receipt["focused_workspace_id"], live_workspace.0);
+    let opened = app.desktop.snapshot().unwrap();
+    assert_ne!(opened.model.focused_workspace, foreground);
+    assert!(
+        opened
+            .notifications
+            .iter()
+            .find(|row| row.id == live_id)
+            .unwrap()
+            .read
+    );
+    assert!(
+        !opened
+            .notifications
+            .iter()
+            .find(|row| row.id == oldest_id)
+            .unwrap()
+            .read
+    );
+    assert!(
+        !opened
+            .notifications
+            .iter()
+            .find(|row| row.id == stale_id)
+            .unwrap()
+            .read
+    );
+    let action = serde_json::from_value(serde_json::json!({"action":"jump_to_unread"})).unwrap();
+    let next = app.desktop.native_notification_action(action).unwrap();
+    assert_eq!(
+        serde_json::to_value(next).unwrap()["navigation"]["notification_id"],
+        oldest_id
+    );
+    let last_opened = app.desktop.snapshot().unwrap();
+    assert_eq!(last_opened.model.focused_workspace, Some(first.id));
+    let action = serde_json::from_value(serde_json::json!({"action":"jump_to_unread"})).unwrap();
+    let no_candidate = app.desktop.native_notification_action(action).unwrap();
+    assert_eq!(
+        serde_json::to_value(no_candidate).unwrap()["navigation"]["opened"],
+        false
+    );
+    let unchanged = app.desktop.snapshot().unwrap();
+    assert_eq!(
+        unchanged.model.focused_workspace,
+        last_opened.model.focused_workspace
+    );
+    assert!(
+        !unchanged
+            .notifications
+            .iter()
+            .find(|row| row.id == stale_id)
+            .unwrap()
+            .read
+    );
+    app.close();
+}
+
+#[test]
 fn notification_creation_preserves_workspace_intent_and_uses_only_proven_caller_surfaces() {
     let mut app = App::new();
     let initial = app.desktop.snapshot().unwrap();

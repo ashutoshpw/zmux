@@ -455,6 +455,7 @@ fn restore_epoch_fences_same_namespace_browser_targets_and_old_permission_callba
         NotificationAuthorization::Authorized,
     );
     let old = create(&mut attention, &store, surface, "Old browser");
+    let old_uuid = attention.find(old.notification_id).unwrap().uuid;
     assert!(old.destination.session_id().is_none());
     attention.reset_native("session restore");
     assert_ne!(attention.epoch(), old.epoch);
@@ -485,6 +486,11 @@ fn restore_epoch_fences_same_namespace_browser_targets_and_old_permission_callba
     ));
     let fresh = create(&mut attention, &store, surface, "Current browser");
     assert_eq!(fresh.epoch, attention.epoch());
+    assert_eq!(attention.find(old.notification_id).unwrap().uuid, old_uuid);
+    assert_ne!(
+        attention.find(fresh.notification_id).unwrap().uuid,
+        old_uuid
+    );
     assert!(!attention.find(old.notification_id).unwrap().read);
 }
 
@@ -499,7 +505,15 @@ fn coalescing_and_cursor_clear_remove_obsolete_native_jobs_without_consuming_new
         NotificationAuthorization::Authorized,
     );
     let first = create(&mut attention, &store, surface, "Duplicate");
+    let first_uuid = attention.find(first.notification_id).unwrap().uuid;
     let replacement = create(&mut attention, &store, surface, "Duplicate");
+    let replacement_uuid = attention.find(replacement.notification_id).unwrap().uuid;
+    assert_ne!(first_uuid, replacement_uuid);
+    assert!(
+        attention
+            .resolve(NotificationSelector::Uuid(first_uuid))
+            .is_err()
+    );
     assert_ne!(first.notification_id, replacement.notification_id);
     assert_eq!(attention.items.len(), 1);
     assert!(attention.read(first.notification_id).is_err());
@@ -519,7 +533,7 @@ fn coalescing_and_cursor_clear_remove_obsolete_native_jobs_without_consuming_new
         Err(AttentionError::StaleTarget)
     ));
     let later = create(&mut attention, &store, surface, "Later arrival");
-    attention
+    let cleared = attention
         .apply_mutation(
             &NotificationFilter::All,
             NotificationMutationKind::Clear,
@@ -527,6 +541,8 @@ fn coalescing_and_cursor_clear_remove_obsolete_native_jobs_without_consuming_new
             None,
         )
         .unwrap();
+    assert_eq!(cleared.affected_ids, vec![replacement.notification_id]);
+    assert_eq!(cleared.affected_uuids, vec![replacement_uuid]);
     let desired = attention.native_snapshot(&store.snapshot()).desired;
     assert_eq!(desired.len(), 1);
     assert_eq!(desired[0].target, later);
