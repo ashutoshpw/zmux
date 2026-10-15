@@ -154,14 +154,16 @@ def main():
                 "downloads": [], "phases": [], "targets": [],
                 "dependency_cache": "explicit_existing_cache" if args.dependency_cache else "fresh_temporary_cache",
                 "harness_sha256": {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
-                                   for name in ["run.py", "pins.json", "probe.c", "probe.rs", "current-adapter.rs"]},
+                                   for name in ["run.py", "pins.json", "probe.c", "probe.rs", "owner.rs",
+                                                "frame.h", "compatibility.rs", "current-adapter.rs"]},
                 "limits": {"build_deadline_seconds": BUILD_TIMEOUT,
                            "build_jobs": 2, "retained_log_bytes_per_phase": MAX_LOG_BYTES,
                            "fixture_wall_seconds": 10, "snapshot_bytes": 512 * 1024,
                            "reply_bytes": 4096, "cell_utf8_bytes": 256},
                 "claims": {"production_engine_changed": False, "native_app_launched": False,
                            "performance_measured": False, "graphics_tested": False,
-                           "cross_architecture_execution": False}}
+                           "cross_architecture_execution": False,
+                           "compatibility_exporter_linked_into_application": False}}
     try:
         if host not in pins["zig"]["hosts"]:
             raise RuntimeError(f"unsupported host {host}")
@@ -200,6 +202,7 @@ def main():
                 if args.macos_universal:
                     architectures = ["arm64", "x86_64"]
             libraries, executables = [], []
+            components = {}
             for architecture in architectures:
                 prefix = work / ("install-" + architecture)
                 command = [str(zig), "build", "-Demit-lib-vt=true", "-Demit-xcframework=false",
@@ -220,6 +223,7 @@ def main():
                     compile_c += ["-arch", architecture, "-isysroot", sdk]
                 run(compile_c, "c-shim-" + architecture, output, phases, env=environment)
                 library = prefix / "lib/libghostty-vt.a"
+                components[architecture] = (obj, library)
                 executable = work / ("probe-" + architecture)
                 compile_rust = ["rustc", "--edition=2024", str(HERE / "probe.rs"),
                                 "-C", "link-arg=" + str(obj), "-C", "link-arg=" + str(library),
@@ -265,6 +269,24 @@ def main():
             document["current_adapter_observation_stdout"] = run(
                 [sys.executable, str(HERE / "run.py"), "--execute-fixture", str(baseline)],
                 "current-adapter-fixture", output, phases, timeout=10)[:16384]
+            # Public Viewport types are linked only into this separate host fixture.
+            obj, library = components[machine]
+            compatibility = work / "compatibility-probe"
+            command = ["rustc", "--edition=2024", str(HERE / "compatibility.rs"),
+                       "-L", "dependency=" + str(adapter_target / "debug/deps"),
+                       "--extern", "zmux_terminal_adapter=" + str(matches[0]),
+                       "-C", "link-arg=" + str(obj), "-C", "link-arg=" + str(library),
+                       "-o", str(compatibility)]
+            if sdk:
+                command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + sdk]
+            run(command, "compatibility-owner", output, phases, env=environment)
+            stdout = run([sys.executable, str(HERE / "run.py"), "--execute-fixture",
+                          str(compatibility)], "compatibility-fixture", output, phases, timeout=10)
+            if "compatibility_success=true" not in stdout:
+                raise RuntimeError("compatibility fixture returned no completed assertion receipt")
+            document["compatibility_exporter"] = {"architecture": machine,
+                "scope": "host_architecture_only", "compile": "passed", "execution": "passed",
+                "observation_stdout": stdout[:16384]}
             document["state"] = "complete"
     except Exception as error:
         document.update(state="failed", error=f"{type(error).__name__}: {error}")
