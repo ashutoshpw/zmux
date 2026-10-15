@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Native `38791991724` at `10b8f1b` passes universal compilation and reaches
+  final-window termination. Its stack exposes a nested AppKit termination loop
+  retaining the main actor before asynchronous shutdown can run. Termination is
+  now scheduled through a run-loop selector; isolated `scripts/check` passes
+  (`/tmp/zmux-termination-runloop-check.log`). Native confirmation is pending.
+- Numbered workspace shortcuts/browser focus (`bb2b98c`) and reviewed static
+  terminal artifact provenance/notices (`2360fb0`) pass isolated checks.
+  Full parity remains incomplete; these are incremental implementation slices.
+
 - `01b28e7` Foundation passes both hosts; universal native build passes, packaged
   startup again stops at initial makeKeyAndOrderFront. The bounded sample shows
   an idle AppKit run loop, not a blocking Rust/PTY stack. Retaining one menu tree
