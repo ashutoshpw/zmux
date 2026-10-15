@@ -49,7 +49,7 @@ def main():
     root = args.root.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    receipt = dict(state='starting', source_sha=args.source_sha, phases=[],
+    receipt = dict(schema_version=1, state='starting', source_sha=args.source_sha, phases=[],
                    engine_rebuilt=False, default_engine_changed=False,
                    physical_keyboard_delivery=False, full_keyboard_ime_fidelity=False)
     spec = importlib.util.spec_from_file_location('native_engine_runner', REPO / 'tools/terminal-feasibility/run.py')
