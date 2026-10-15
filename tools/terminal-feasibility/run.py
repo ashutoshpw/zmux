@@ -245,7 +245,8 @@ def main():
                     fat = work / ("universal-" + label)
                     run(["lipo", "-create", *inputs, "-output", str(fat)],
                         "universal-" + label, output, phases)
-                    run(["lipo", "-verify_arch", "arm64", "x86_64", str(fat)],
+                    # -verify_arch consumes all remaining arguments as arch names.
+                    run(["lipo", str(fat), "-verify_arch", "arm64", "x86_64"],
                         "verify-universal-" + label, output, phases)
                 document["universal_compile"] = "passed"
             # Build the existing adapter in scratch output without changing its lockfile.

@@ -83,7 +83,9 @@ descendant. Both workflow jobs run these checks before building upstream code:
 python3 -B -m unittest discover -s tools/terminal-feasibility -p test_runner.py -v
 ```
 
-See the F04 evaluation for red/green logs, receipt paths and exact evidence
-boundaries. The earlier complete Linux receipt predates the lifecycle repair;
-the focused process regressions validate that repair without repeating the
-upstream build.
+The first hosted run completed Linux with a fresh dependency cache and passed the
+Mac arm64 fixture after compiling both Mac architectures. It exposed a `lipo`
+argument-order bug in universal verification, now repaired; universal verification
+and the later Mac baseline stages still require a hosted rerun. Mac address-space
+containment was unavailable. See the F04 evaluation for exact SHA, receipts,
+red/green logs and remaining evidence boundaries.
