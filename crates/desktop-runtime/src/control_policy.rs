@@ -223,6 +223,7 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
+        ControlCommand::WorkspaceOrder { request } => request.dry_run,
         ControlCommand::WindowStatus { .. } => true,
         ControlCommand::Windows { request } => matches!(
             request.action,

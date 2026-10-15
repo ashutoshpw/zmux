@@ -35,3 +35,11 @@ struct WorkspaceMoveTarget {
     let destination: UUID
     let focus: Bool
 }
+
+struct WorkspaceOrderTarget {
+    let namespace: UUID
+    let workspace: UUID
+    let window: UUID
+    let index: Int
+    let revision: UInt64
+}

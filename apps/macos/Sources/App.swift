@@ -728,6 +728,19 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         rename.representedObject = NSNumber(value: workspace.id)
         if let shared = coordinator.snapshot,
            let workspaceUUID = shared.workspaceIdentities.first(where: { $0.workspaceId == workspace.id })?.uuid {
+            if let owner = shared.model.windows.first(where: { $0.workspaceIds.contains(workspace.id) }),
+               let index = owner.workspaceIds.firstIndex(of: workspace.id),
+               let windowUUID = coordinator.mainWindowHosts[MainWindowIdentity(namespace: shared.model.identityNamespace, windowId: owner.id)]?.windowUUID {
+                let arrange = NSMenu(title: "Reorder Workspace")
+                arrange.autoenablesItems = false
+                for (title, destination) in [("Move Up", index - 1), ("Move Down", index + 1), ("Move to Top", 0), ("Move to Bottom", owner.workspaceIds.count - 1)] {
+                    let item = arrange.addItem(withTitle: title, action: #selector(reorderWorkspaceFromMenu(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.isEnabled = destination >= 0 && destination < owner.workspaceIds.count && destination != index
+                    item.representedObject = WorkspaceOrderTarget(namespace: shared.model.identityNamespace, workspace: workspaceUUID, window: windowUUID, index: destination, revision: shared.model.revision)
+                }
+                menu.addItem(withTitle: "Reorder Workspace", action: nil, keyEquivalent: "").submenu = arrange
+            }
             let move = NSMenu(title: "Move to Window")
             for (index, window) in shared.model.windows.enumerated() where !window.workspaceIds.contains(workspace.id) {
                 guard let destination = coordinator.mainWindowHosts[MainWindowIdentity(namespace: shared.model.identityNamespace, windowId: window.id)]?.windowUUID else { continue }
@@ -750,6 +763,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let identity else { showError("Window startup is still pending"); return }
         workspaceCount += 1
         enqueue(.workspaceCreate(identity.windowId, "Workspace \(workspaceCount)"))
+    }
+    @objc private func reorderWorkspaceFromMenu(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? WorkspaceOrderTarget,
+              coordinator.snapshot?.model.identityNamespace == target.namespace else { return }
+        enqueue(.workspaceOrder(target.workspace, target.window, target.index, target.revision))
     }
     @objc private func moveWorkspaceFromMenu(_ sender: NSMenuItem) {
         guard let target = sender.representedObject as? WorkspaceMoveTarget,
@@ -1504,6 +1522,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "split_panes": true,
             "kernel_resize": true,
             "workspace_switch": true,
+            "workspace_order": true,
             "pane_close": true,
             "terminal_tab_shortcut": true,
             "close_tab_shortcut": true,
@@ -2051,6 +2070,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await smokeBrowserProfiles(origin: origin, pane: pane.id, privateSurface: surface)
         try await BrowserZoomSmoke.validate(surface: surface, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         try await BrowserFillSmoke.validate(cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
+        try await WorkspaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, rows: { self.workspaceList.arrangedSubviews.compactMap { $0 as? WorkspaceRowView } }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
               let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }

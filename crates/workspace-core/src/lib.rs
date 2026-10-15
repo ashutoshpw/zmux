@@ -6,6 +6,7 @@ mod navigation;
 mod restore;
 mod surfaces;
 mod windows;
+pub mod workspace_order;
 pub use restore::{
     MAX_NEXT_IDENTIFIER, PreparedSessionRestore, RestoreError, RestoreLimits,
     SESSION_DOCUMENT_VERSION, SavedContent, SavedPane, SavedSshConnection, SavedSurface, SavedTree,
@@ -216,6 +217,10 @@ pub enum Action {
         index: Option<usize>,
         #[serde(default)]
         focus: bool,
+    },
+    ReorderWorkspaces {
+        window_id: WindowId,
+        order: workspace_order::WorkspaceOrder,
     },
     CreateWorkspaceInWindow {
         window_id: WindowId,
@@ -434,7 +439,10 @@ impl WorkspaceStore {
             action,
             Action::NavigateFocus { .. } | Action::NavigateFocusInWindow { .. }
         );
-        let record_current = !matches!(action, Action::MoveWorkspaceToWindow { focus: false, .. });
+        let record_current = !matches!(
+            action,
+            Action::MoveWorkspaceToWindow { focus: false, .. } | Action::ReorderWorkspaces { .. }
+        );
         let result = candidate.apply_inner(action)?;
         candidate.check_window_layout()?;
         candidate.record_focus(prior, prior_window, is_history_navigation, record_current);
@@ -460,6 +468,9 @@ impl WorkspaceStore {
                 focus,
             } => {
                 self.move_workspace_to_window(workspace_id, destination_window_id, index, focus)?;
+            }
+            Action::ReorderWorkspaces { window_id, order } => {
+                self.reorder_workspaces(window_id, order)?
             }
             Action::CreateWorkspaceInWindow {
                 window_id,

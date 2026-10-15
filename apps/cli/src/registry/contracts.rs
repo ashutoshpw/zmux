@@ -133,6 +133,62 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    let mut single = contract(
+        "reorder-workspace",
+        &["workspace:1", "--index", "0"],
+        vec![
+            positional("workspace", ValueKind::Target, false),
+            option("workspace_option", &["--workspace"], ValueKind::Target),
+            option("index", &["--index"], ValueKind::SignedInteger),
+            option(
+                "before",
+                &["--before", "--before-workspace"],
+                ValueKind::Target,
+            ),
+            option(
+                "after",
+                &["--after", "--after-workspace"],
+                ValueKind::Target,
+            ),
+            option("window", &["--window"], ValueKind::Target),
+            option("dry_run", &["--dry-run"], ValueKind::Flag),
+            option(
+                "expected_model_revision",
+                &["--expect-revision"],
+                ValueKind::Integer(0, u64::MAX),
+            ),
+        ],
+        "workspace_order",
+    );
+    single.argument_rules.push(json!({"exactly_one":["index","before","after"], "workspace":"one positional or --workspace", "index":"signed i64; final zero-based index clamps"}));
+    single
+        .default_pointers
+        .push(("dry_run", "/request/dry_run"));
+    single.defaults = json!({"dry_run":false});
+    single.expected.push(("/request/order/operation", "single"));
+    single.limitations = "Ungrouped canonical window order only. index:N targets are one-based within the selected window; final --index is zero-based and clamps. After-self advances one place, clamped. Full text/error/protocol and pin/group parity unresolved.";
+    result.push(single);
+    let mut bulk = contract(
+        "reorder-workspaces",
+        &["--order", "workspace:1,workspace:2"],
+        vec![
+            option("order", &["--order"], ValueKind::Text),
+            option("window", &["--window"], ValueKind::Target),
+            option("dry_run", &["--dry-run"], ValueKind::Flag),
+            option(
+                "expected_model_revision",
+                &["--expect-revision"],
+                ValueKind::Integer(0, u64::MAX),
+            ),
+        ],
+        "workspace_order",
+    );
+    bulk.arguments[0].required = true;
+    bulk.default_pointers.push(("dry_run", "/request/dry_run"));
+    bulk.defaults = json!({"dry_run":false});
+    bulk.expected.push(("/request/order/operation", "bulk"));
+    bulk.limitations = "Stable prefix order in one ungrouped window; no pin/group model. Empty/duplicate/cross-window entries reject atomically. Full output/error/protocol parity unresolved.";
+    result.push(bulk);
     let mut movement = contract(
         "move-workspace-to-window",
         &["--workspace", "workspace:1", "--window", "window:2"],
