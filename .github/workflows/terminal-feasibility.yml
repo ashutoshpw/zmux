@@ -3,6 +3,11 @@ name: Terminal engine feasibility
 on:
   workflow_dispatch:
     inputs:
+      integrated_experiment:
+        description: Run one bounded terminal and callback owner (also enables resource experiment)
+        type: boolean
+        required: false
+        default: false
       effects_experiment:
         description: Run isolated terminal callback ownership experiment
         type: boolean
@@ -29,6 +34,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.95.0
       RESOURCE_EXPERIMENT: ${{ inputs.resource_experiment }}
       EFFECTS_EXPERIMENT: ${{ inputs.effects_experiment }}
+      INTEGRATED_EXPERIMENT: ${{ inputs.integrated_experiment }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -41,7 +47,8 @@ jobs:
       - name: Compile and execute isolated Linux fixtures
         run: |
           args=()
-          if [[ "$RESOURCE_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
+          if [[ "$RESOURCE_EXPERIMENT" == "true" || "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
+          if [[ "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--integrated-experiment); fi
           if [[ "$EFFECTS_EXPERIMENT" == "true" ]]; then args+=(--effects-experiment); fi
           python3 tools/terminal-feasibility/run.py "${args[@]}" --output "$RUNNER_TEMP/terminal-feasibility-results"
       - name: Upload bounded receipts and logs
@@ -62,6 +69,7 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.95.0
       RESOURCE_EXPERIMENT: ${{ inputs.resource_experiment }}
       EFFECTS_EXPERIMENT: ${{ inputs.effects_experiment }}
+      INTEGRATED_EXPERIMENT: ${{ inputs.integrated_experiment }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -74,7 +82,8 @@ jobs:
       - name: Compile both Mac architectures and execute the runner architecture
         run: |
           args=(--macos-universal)
-          if [[ "$RESOURCE_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
+          if [[ "$RESOURCE_EXPERIMENT" == "true" || "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--resource-experiment); fi
+          if [[ "$INTEGRATED_EXPERIMENT" == "true" ]]; then args+=(--integrated-experiment); fi
           if [[ "$EFFECTS_EXPERIMENT" == "true" ]]; then args+=(--effects-experiment); fi
           python3 tools/terminal-feasibility/run.py "${args[@]}" --output "$RUNNER_TEMP/terminal-feasibility-results"
       - name: Upload bounded receipts and logs

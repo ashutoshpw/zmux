@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [F04 integrated owner](references/f04-integrated-owner.md) — one bounded terminal/collector, aggregate accounting and failure-fenced publication acceptance.
 - [T03 multiwindow design](references/t03-multiwindow-design.md) — singleton model v6/session v4 foundation passes portable core/runtime checks; shared native coordinator, no-focus moves, caller/attention ownership and last-close recovery remain pending.
 - [F04 callback effects](references/f04-effects-slice.md) — isolated ordered BEL/reply/RESET batches, overflow/publication contracts and remaining metadata provenance gates.
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.

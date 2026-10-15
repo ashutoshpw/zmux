@@ -143,6 +143,8 @@ def main():
                         help="Apply the original hashed allocator/exact-history patch; experiment only")
     parser.add_argument("--effects-experiment", action="store_true",
                         help="Exercise original bounded BEL/reply/RESET callback batches; experiment only")
+    parser.add_argument("--integrated-experiment", action="store_true",
+                        help="Exercise one quota/callback/publication owner; requires --resource-experiment")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -156,9 +158,14 @@ def main():
               "compatibility.rs", "current-adapter.rs"]
     if args.resource_experiment:
         inputs += ["resource.patch", "resource.c", "resource.h", "resource.rs",
-                   "RESOURCE_CONTRACT.md", "licenses/Ghostty-LICENSE"]
+                   "RESOURCE_CONTRACT.md", "licenses/Ghostty-LICENSE", "resource-internal.h"]
     if args.effects_experiment:
         inputs += ["effects.c", "effects.h", "effects.rs"]
+    if args.effects_experiment or args.integrated_experiment:
+        inputs += ["collector.c", "collector.h", "effects.h"]
+    if args.integrated_experiment:
+        inputs += ["integrated.c", "integrated.h", "integrated.rs"]
+    inputs = list(dict.fromkeys(inputs))
     document = {"schema_version": 1, "state": "starting", "pins": pins,
                 "host": {"system": system, "architecture": machine,
                          "os_release": platform.release(), "macos": platform.mac_ver()[0]},
@@ -180,6 +187,9 @@ def main():
                     "scope": "host_architecture_only", "total_app_memory_bound": False,
                     "real_pty_round_trip": False, "metadata_osc_notifications_supported": False,
                     "callback_reply_bytes": 4096, "callback_events": 1024},
+                "integrated_experiment": {"requested": args.integrated_experiment,
+                    "scope": "host_architecture_only", "total_app_memory_bound": False,
+                    "real_pty_round_trip": False, "single_bounded_terminal_owner": True},
                 "claims": {"production_engine_changed": False, "native_app_launched": False,
                            "performance_measured": False, "graphics_tested": False,
                            "cross_architecture_execution": False,
@@ -189,6 +199,8 @@ def main():
             raise RuntimeError(f"unsupported host {host}")
         if args.macos_universal and system != "Darwin":
             raise RuntimeError("universal compilation requires a macOS host and SDK")
+        if args.integrated_experiment and not args.resource_experiment:
+            raise RuntimeError("--integrated-experiment requires --resource-experiment")
         phases = document["phases"]
         document["source_sha"] = run(["git", "rev-parse", "HEAD"], "source", output, phases,
                                       cwd=REPO).strip()
@@ -357,9 +369,50 @@ def main():
                 document["resource_experiment"].update(
                     execution="passed", architecture=machine, negative_controls=controls,
                     observation_stdout=stdout[:16384])
+            def compile_shim(c_source, c_object, label):
+                command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-DGHOSTTY_STATIC",
+                           "-I", str(source / "include"), "-I", str(HERE),
+                           "-c", str(c_source), "-o", str(c_object)]
+                if sdk:
+                    command += ["-arch", machine, "-isysroot", sdk]
+                run(command, label, output, phases, env=environment)
+
+            def compile_owner(rust_source, objects, binary, label, adapter=False):
+                command = ["rustc", "--edition=2024", str(rust_source)]
+                if adapter:
+                    command += ["-L", "dependency=" + str(adapter_target / "debug/deps"),
+                                "--extern", "zmux_terminal_adapter=" + str(matches[0])]
+                for item in [obj, *objects, library]:
+                    command += ["-C", "link-arg=" + str(item)]
+                command += ["-o", str(binary)]
+                if sdk:
+                    command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + sdk]
+                run(command, label, output, phases, env=environment)
+
+            def expect_assertion(binary, label, assertion, mutated_source):
+                try:
+                    run([sys.executable, str(HERE / "run.py"), "--execute-fixture", str(binary)],
+                        label, output, phases, timeout=10)
+                except RuntimeError:
+                    record = phases[-1]
+                    log = (output / record["log"]).read_text(errors="replace")
+                    if record["timed_out"] or record["exit_code"] != 101 or assertion not in log:
+                        raise RuntimeError(label + " did not fail for the intended assertion")
+                    record["expected_failure"] = True
+                    return {"name": label, "execution": "expected_assertion_failure",
+                            "scope": "temporary_original_shim_mutation",
+                            "mutated_source_sha256": hashlib.sha256(mutated_source.read_bytes()).hexdigest(),
+                            "log": record["log"]}
+                raise RuntimeError(label + " unexpectedly passed")
+
+            if args.effects_experiment or args.integrated_experiment:
+                collector_obj = work / "collector.o"
+                compile_shim(HERE / "collector.c", collector_obj, "collector-c-shim")
             if args.effects_experiment:
+                effects_obj = work / "effects.o"
+                compile_shim(HERE / "effects.c", effects_obj, "effects-wrapper-c-shim")
                 controls = []
-                original = (HERE / "effects.c").read_text()
+                original = (HERE / "collector.c").read_text()
                 variants = [
                     ("normal", None, None, None),
                     ("silent-reply-drop", "e->failure = ZMUX_EFFECT_ERROR_REPLY; return;", "return;",
@@ -370,52 +423,53 @@ def main():
                 ]
                 for name, old, new, assertion in variants:
                     label = "effects" if name == "normal" else "effects-control-" + name
-                    c_source = HERE / "effects.c"
-                    mutation_hash = None
+                    variant_obj = collector_obj
+                    mutated = None
                     if old is not None:
                         if original.count(old) != 1:
                             raise RuntimeError(label + " mutation no longer has one exact source target")
-                        c_source = work / (label + ".c")
-                        c_source.write_text(original.replace(old, new))
-                        mutation_hash = hashlib.sha256(c_source.read_bytes()).hexdigest()
-                    effect_obj = work / (label + ".o")
-                    command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-DGHOSTTY_STATIC",
-                               "-I", str(source / "include"), "-I", str(HERE),
-                               "-c", str(c_source), "-o", str(effect_obj)]
-                    if sdk:
-                        command += ["-arch", machine, "-isysroot", sdk]
-                    run(command, label + "-c-shim", output, phases, env=environment)
-                    effect_binary = work / (label + "-probe")
-                    command = ["rustc", "--edition=2024", str(HERE / "effects.rs"),
-                               "-L", "dependency=" + str(adapter_target / "debug/deps"),
-                               "--extern", "zmux_terminal_adapter=" + str(matches[0]),
-                               "-C", "link-arg=" + str(obj), "-C", "link-arg=" + str(effect_obj),
-                               "-C", "link-arg=" + str(library), "-o", str(effect_binary)]
-                    if sdk:
-                        command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + sdk]
-                    run(command, label + "-rust-owner", output, phases, env=environment)
-                    command = [sys.executable, str(HERE / "run.py"), "--execute-fixture", str(effect_binary)]
+                        mutated = work / (label + ".c")
+                        mutated.write_text(original.replace(old, new))
+                        variant_obj = work / (label + ".o")
+                        compile_shim(mutated, variant_obj, label + "-c-shim")
+                    binary = work / (label + "-probe")
+                    compile_owner(HERE / "effects.rs", [effects_obj, variant_obj], binary,
+                                  label + "-rust-owner", adapter=True)
                     if assertion is None:
-                        stdout = run(command, label + "-fixture", output, phases, timeout=10)
+                        stdout = run([sys.executable, str(HERE / "run.py"), "--execute-fixture", str(binary)],
+                                     "effects-fixture", output, phases, timeout=10)
                         if "effects_success=true" not in stdout:
                             raise RuntimeError("effects fixture returned no completed assertion receipt")
                         document["effects_experiment"].update(execution="passed", architecture=machine,
                                                               observation_stdout=stdout[:16384])
                     else:
-                        try:
-                            run(command, label + "-fixture", output, phases, timeout=10)
-                        except RuntimeError:
-                            record = phases[-1]
-                            log = (output / record["log"]).read_text(errors="replace")
-                            if record["timed_out"] or record["exit_code"] != 101 or assertion not in log:
-                                raise RuntimeError(label + " did not fail for the intended assertion")
-                            record["expected_failure"] = True
-                            controls.append({"name": name, "execution": "expected_assertion_failure",
-                                             "scope": "temporary_original_shim_mutation",
-                                             "mutated_source_sha256": mutation_hash, "log": record["log"]})
-                        else:
-                            raise RuntimeError(label + " unexpectedly passed")
+                        controls.append(expect_assertion(binary, label + "-fixture", assertion, mutated))
                 document["effects_experiment"]["negative_controls"] = controls
+            if args.integrated_experiment:
+                integrated_obj = work / "integrated.o"
+                compile_shim(HERE / "integrated.c", integrated_obj, "integrated-c-shim")
+                binary = work / "integrated-probe"
+                compile_owner(HERE / "integrated.rs", [resource_obj, collector_obj, integrated_obj], binary,
+                              "integrated-rust-owner")
+                stdout = run([sys.executable, str(HERE / "run.py"), "--execute-fixture", str(binary)],
+                             "integrated-fixture", output, phases, timeout=10)
+                if "integrated_success=true" not in stdout:
+                    raise RuntimeError("integrated fixture returned no completed assertion receipt")
+                original = (HERE / "integrated.c").read_text()
+                old = "if (snapshot_status || fence(i, 0)) return fence(i, ZMUX_INTEGRATED_EXPORT);"
+                if original.count(old) != 1:
+                    raise RuntimeError("integrated render control no longer has one exact source target")
+                mutated = work / "integrated-control-unchecked-render.c"
+                mutated.write_text(original.replace(old, "(void)snapshot_status;"))
+                control_obj = work / "integrated-control.o"
+                compile_shim(mutated, control_obj, "integrated-control-c-shim")
+                control_binary = work / "integrated-control-probe"
+                compile_owner(HERE / "integrated.rs", [resource_obj, collector_obj, control_obj], control_binary,
+                              "integrated-control-rust-owner")
+                control = expect_assertion(control_binary, "integrated-control-fixture",
+                                           "post-render allocation denial must fence publication", mutated)
+                document["integrated_experiment"].update(execution="passed", architecture=machine,
+                    observation_stdout=stdout[:16384], negative_controls=[control])
             document["state"] = "complete"
     except Exception as error:
         document.update(state="failed", error=f"{type(error).__name__}: {error}")
