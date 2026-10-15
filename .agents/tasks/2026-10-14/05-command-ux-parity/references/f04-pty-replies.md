@@ -213,6 +213,51 @@ both intended controls. Independent receipt:
 `/tmp/zmux-f04-pty-direct-child-cleanup-parent-20261015/receipt.json`, SHA-256
 `150d735dc04752c10d16068a63183d0d3879da6d539cd465a672d7163d9bce98`.
 
+## Darwin reaping deadline and master-close repair
+
+Workflow [38786746778](https://github.com/ashutoshpw/zmux/actions/runs/38786746778)
+at `c01c3bc2774d7be7d49fb813aa0739ff3a3f188e` passes Linux again (receipt SHA-256
+`0733134d1e6a195c0e54bff328784416c07d9206fe6f873948be1effc560cc4e`).
+Darwin passes construction exhaustion, both direct-child cleanup cases, basic
+ordering/resize and flood; flood observes one EAGAIN and one kernel short write.
+The stalled-reader cleanup then fails at `child cleanup deadline`, errno 60
+(ETIMEDOUT), with one live/unreaped child, zero owned descriptor slots and no
+preceding wait/signal error. Darwin receipt SHA-256:
+`c7946c6b3b42236f4cef841162f0bbd996066827214fcb5b9887ae2b5cba0438`.
+Artifacts are under `/tmp/zmux-pty-hosted-38786746778-{macos,linux}/`.
+
+The observed failure is not an EPERM case. The transport waited for the child
+before closing its PTY master; on Darwin an output-blocked child can remain in
+exit until that master closes. The original production session worker already
+documents and handles this lifecycle ordering. The fixture now signals its live
+owned child, closes its own master, then performs the same 50/200-ms bounded waits.
+It retains the report descriptor until afterward. No deadline was increased and
+last-good frame/metadata publication remains unchanged.
+
+The additional `cleanup-master-first` case uses the actual existing stalled Python
+peer, observes pending terminal output and identifies the owned master through
+public descriptor/TTY checks. At the forwarded actual waitpid boundary it requires
+the master to be physically closed after signalling, then checks child reaping
+and all descriptor closure. Before repair it exits 10 at `cleanup waited with
+owned PTY master still open`; afterward it passes. Local red/green receipts live
+in `/tmp/zmux-pty-master-first-20261015/`. Linux verifies physical ordering, not
+Darwin's blocked-exit kernel behavior; the hosted stall is the actual Darwin red.
+
+The final nine-input freeze is
+`/tmp/zmux-f04-pty-master-first-frozen-manifest-20261015.json`, SHA-256
+`b2be5b3b5de1dc5c45507b1219b5df20398af8ce680c7b0e229de82e2b9410c2`.
+All 31 base inputs remain fixed. Author focused acceptance passes construction,
+all three cleanup cases, all seven PTY modes and both intended controls without
+another engine build:
+`/tmp/zmux-f04-pty-master-first-author-20261015/receipt.json`, SHA-256
+`1cfdfadddc21b0dc3bf23e49319bf9284c0c3ce0fcdc4457de99aeb095f048ea`.
+The independent parent run matches this freeze and passes the same assertions:
+`/tmp/zmux-f04-pty-master-first-parent-20261015/receipt.json`, SHA-256
+`b9040642bb17c57a74a0397ac0c2262fb2535ad10f1d829853a14bf1cb618122`.
+Independent source review finds no blocking issue. Current fixed storage remains
+296 C bytes, 12,096 inline coordinator bytes and the same 24,576-byte reply/input
+subset. Exact-source hosted Darwin acceptance of this ordering repair remains open.
+
 ## Capacity ledger and remaining boundary
 
 These are allocated/reserved capacities or configured limits, separately from
@@ -234,8 +279,8 @@ child heap/threads, runtime/allocator overhead and kernel PTY/pipe buffers are
 separate and excluded from a total-RSS claim. No per-operation coordinator payload
 allocation is needed for prepare/validate/exact commit/slot swap.
 
-Hosted execution of the new nine-input cleanup follow-up remains separate from
-local acceptance. The earlier Darwin cleanup failure remains an open hosted gate;
+Hosted execution of the new nine-input master-close follow-up remains separate from
+local acceptance. The diagnosed Darwin reaping failure remains an open hosted gate;
 the accepted metadata workflow cannot prove the new kernel transport.
 Native input/shell/job-control, production adapter integration and
 representative workloads remain open gates; the application engine is unchanged.

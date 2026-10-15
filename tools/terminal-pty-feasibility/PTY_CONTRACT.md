@@ -47,6 +47,10 @@ the lock.
   exact direct child is actually reaped. Failures retain the first cleanup
   operation and errno. Kernel-boundary cases cover an exited unreaped child and
   a real ECHILD after external reaping; neither authorizes a stale-PID signal.
+  After signalling a live child, close the owned PTY master before bounded
+  reaping waits so an output-blocked Darwin child can finish exiting. Retain
+  the report descriptor until after reaping. A real stalled child and physical
+  descriptor checks guard this ordering without extending cleanup deadlines.
 - The original child has fixed modes and finite transcripts. Its stdout is actual
   terminal bytes; report/control pipes contain only bounded protocol bytes, not
   VT data. No shell or arbitrary code is injected into a terminal.

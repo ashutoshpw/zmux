@@ -101,8 +101,12 @@ int pty_stop(Pty *p) {
   if (!p) return -1;
   // Do not signal an already-exited child. WNOHANG reaps only our direct child;
   // a wait error is surfaced and never grants authority to signal its stale PID.
-  if (p->child && pty_wait(p, 0) == 0) {
-    (void)signal_child(p, SIGTERM, CLEANUP_TERM);
+  int running = p->child ? pty_wait(p, 0) : 1;
+  if (running == 0) (void)signal_child(p, SIGTERM, CLEANUP_TERM);
+  // Darwin can retain an output-blocked process in exit while this master is
+  // open. Release our master before bounded waits; keep the report pipe alive.
+  close_slot(p, 0);
+  if (running == 0 && p->child) {
     if (pty_wait(p, 50) == 0) {
       (void)signal_child(p, SIGKILL, CLEANUP_KILL);
       if (pty_wait(p, 200) == 0) cleanup_error(p, CLEANUP_DEADLINE, ETIMEDOUT);
