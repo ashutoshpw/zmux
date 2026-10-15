@@ -135,3 +135,83 @@ The workflow shares those owners instead of duplicating build/test logic. Before
 binary publication, the rebuilt-plugin producer, manifest/notice resolution,
 negative gates and both actual host journeys need independent source review and
 fresh executed receipts.
+
+## Implementation candidate and review boundary
+
+The explicit opt-in producer/package/workflow candidate is implemented locally.
+The initial Linux prepare-only run passed exact embedded-byte extraction and
+retained 410 actual native/plugin compiler components, including 394 pristine
+registry source archives; it was marked unreviewed and was not uploaded. A fresh
+chain is being executed after tightening metadata/source binding and owner
+behavior admission. The current owner suite has 28 passing checks in six suites,
+including every named baseline behavior; that count is a report, not parity proof.
+
+See [the exact policy review brief](r03-package-policy-review.md) before promotion.
+It preserves the four explicit metadata-only standard-term supplements and the
+independent policy decisions required. Existing default workflow execution still
+uploads no executable. Opt-in publication requires the exact reviewed policy SHA,
+all owner/source/plugin/notice gates and the separate successful-package artifact
+step. Hosted package execution on both requested architectures remains pending.
+
+## Frozen local validation receipt
+
+The tightened source/plugin/owner/package path passed locally on Linux x86_64.
+
+- Producer receipt: `target/agent-validation/zellij-package-producer-v2-20261015/receipt.json`; real EINTR red/green, non-EINTR fatal controls, ten rebuilt WASM plugins and pinned Wasmtime compile checks passed.
+- Owner receipt: `target/agent-validation/zellij-package-owner-v2-20261015/receipt.json`; `28` checks passed across suites `[2, 14, 3, 4, 3, 2]`, including every baseline behavior and mandatory real input/resize/stop-resume/TERM/HUP/reattach/termios journey field. Before/after source inventory covers `139` exact Rust/manifest/config inputs. Reported source base SHA: `c9404cfb2d66d0a1d327d3f4e1edae061c495c2a`; the local source inventory, rather than a clean-checkout claim, binds concurrent working source.
+- Admission controls: `target/agent-validation/zellij-package-negative-v2-20261015/receipt.json`; `9` intended negative cases rejected after a positive exact-chain control. A fixture initially looked for logs below the receipt filename; that harness-only path error was fixed and a fresh run passed.
+- Prepare-only receipt: `target/agent-validation/zellij-package-review-v3-20261015/receipt.json`; `promotion_ready=false`, exact binary SHA256 `d2b9ea3857ee64e9f51a58084d7f8f792b9ac38bf915ef6ad5cf61a4d7d5061c`.
+- Review archive SHA256: `d8090f768ec60bc9aaaaa89c28d38aaf0380c6169dfc99ee1d24f49de5e64b2b`. It contains 410 actual native/plugin compiler components and 394 pristine registry archives; no validator-only dev closure.
+- Independent archive verification: `target/agent-validation/zellij-package-review-v3-20261015/verified-archive.json`; every one of 1,236 regular members matched manifest size/hash, component notice/source references resolved, and both MPL component source archives were retained. Payload total: 113,022,597 bytes.
+- Exact notice-policy SHA256: `e2945ed1ff4646c2cde4c90b7f138df08d433c9e7dcfdbcd4c4303e356cf68be`. All four metadata-only supplements remain explicitly disclosed and unapproved for publication.
+- Linux recorded GLIBC symbol maximum: `2.34`; interpreter `/lib64/ld-linux-x86-64.so.2`. This is observed ELF metadata, not a backward-host support claim.
+- Python AST syntax and workflow YAML parsing passed. Repository-wide `scripts/check` is coordinated by the parent task owner; no standalone native build was needed for this portable tooling slice.
+- No archive/executable bytes were uploaded, no default pin/acquisition/native selection changed, and no stage/commit/push/workflow dispatch was performed by this task owner.
+
+Independent source/policy review and both-host hosted package execution remain before promotion. The earlier local archive from the initial candidate is superseded for review by this tightened V3 archive; neither is approved for publication.
+
+## Refrozen source-filtered candidate
+
+The V3 source-container issue is repaired; V4 supersedes V3 for review. No original
+upstream prebuilt WASM bytes are distributed inside the source archive. The private
+pinned original archive remains available for audit, with its URL/SHA and all fifteen
+excluded member paths, sizes and hashes retained in
+`SOURCES/upstream-source-provenance.json`. The filtered source tar preserves every
+other original source member, materializing twelve relative MIT license links as
+exact regular-file license bytes. It includes 1,331 retained source/legal files,
+unchanged Cargo.lock, original patch and exact pinned native/plugin build instructions.
+
+A full registry source-container scan additionally found one wit-parser WASM test
+fixture and sixteen unused rustix fallback static archives. Those two exact
+version/checksum-scoped source transforms preserve all other source/legal/assembly
+and regeneration files; their component records bind original URLs/archive hashes,
+filtered archive hashes and every excluded member. The two filtered bundles use
+`-source.tar.gz` names. The other 392 registry source archives, including both MPL
+components, remain pristine. Empty vcpkg DLL/static-archive-named test placeholders
+contain no compiled bytes and are preserved. No ELF/PE/Mach-O source payload was found.
+
+- Fresh actual owner receipt: `target/agent-validation/zellij-package-owner-v3-20261015/receipt.json`;
+  all 28 checks in six suites `[2, 14, 3, 4, 3, 2]`, every baseline behavior and full
+  real semantic journey passed, with 141 exact source/manifest/config inputs retained.
+- Adversarial receipt: `target/agent-validation/zellij-package-negative-v4-20261015/receipt.json`;
+  all 13 intended rejections passed, including disguised old WASM inside a source tar,
+  lost Cargo.lock, altered excluded-member provenance and unreviewed registry WASM.
+- Prepare-only receipt: `target/agent-validation/zellij-package-review-v4-20261015/receipt.json`;
+  `promotion_ready=false`; exact accepted binary remains
+  `d2b9ea3857ee64e9f51a58084d7f8f792b9ac38bf915ef6ad5cf61a4d7d5061c`.
+- Current unreviewed archive SHA256:
+  `637799f69b5a5945d17d441670c2ba2cbfba25f8f382a48235a54f546545a932`.
+- Current exact policy SHA256:
+  `1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79`.
+- Independent `verified-archive.json` checked all 1,239 outer members and hashes,
+  plus all 395 nested source containers for WASM/native/static-archive magic.
+  Payload bytes: 108,308,615. `verified-source-transforms.json` independently compared
+  every retained/excluded member with the private pinned original source archives:
+  upstream 1,331 retained/15 excluded, wit-parser 466/1, rustix 256/16.
+- Python syntax, workflow YAML parse and scoped diff whitespace checks passed.
+  Repository-wide validation remains coordinated by the parent task owner.
+
+The original unfiltered archive is omitted from both package payload and workflow
+evidence upload paths. Defaults/acquisition/native selection remain unchanged.
+Independent implementation/policy review and both-host hosted execution still remain;
+no executable publication, staging, commit, push or dispatch was performed here.

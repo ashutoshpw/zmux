@@ -118,3 +118,4 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [Verification](references/verification.md) — contract fields, evidence and commit cadence.
 - [Original roadmap](../01-build-zmux/references/delivery-roadmap.md) — retained M0–M7 scope.
 - [PR #1 parity](../01-build-zmux/references/pr-1-parity.md) — retained auth/product requirements.
+- [references/r03-package-policy-review.md](references/r03-package-policy-review.md) — exact four-package declarations, attribution evidence and independent standard-term supplementation decisions before opt-in package publication.
