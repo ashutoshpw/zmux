@@ -861,6 +861,49 @@ fn leading_browser_targets_preserve_legacy_url_operands() {
     }
 }
 
+/// Desktop snapshots are nonblocking. Retry only publication contention under
+/// the caller's original deadline; lifecycle failures remain test failures.
+#[track_caller]
+fn profile_snapshot(desktop: &Desktop, deadline: Instant) -> Arc<zmux_desktop_runtime::Snapshot> {
+    loop {
+        match desktop.snapshot() {
+            Ok(snapshot) => return snapshot,
+            Err(zmux_desktop_runtime::DesktopError::Busy) => {
+                assert!(Instant::now() < deadline, "profile snapshot remained busy");
+                thread::sleep(
+                    Duration::from_millis(2)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => panic!("profile snapshot failed: {error}"),
+        }
+    }
+}
+
+struct ProfileApp {
+    desktop: Arc<Desktop>,
+    server: ControlServer,
+}
+impl Drop for ProfileApp {
+    fn drop(&mut self) {
+        // Both success and assertion unwinding wait for actual worker cleanup
+        // before the outer fixture can remove its private state directory.
+        let server = self.server.shutdown(Duration::from_secs(2));
+        let desktop = self.desktop.shutdown(Duration::from_secs(3));
+        if thread::panicking() {
+            if let Err(error) = server {
+                eprintln!("profile server cleanup: {error}");
+            }
+            if let Err(error) = desktop {
+                eprintln!("profile desktop cleanup: {error}");
+            }
+        } else {
+            server.expect("profile server cleanup");
+            desktop.expect("profile desktop cleanup");
+        }
+    }
+}
+
 #[test]
 fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_catalog() {
     let fixture = Fixture::new();
@@ -879,21 +922,35 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
             .unwrap(),
         );
         let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+        let running = ProfileApp { desktop, server };
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            let snapshot = desktop.snapshot().unwrap();
+            let snapshot = profile_snapshot(&running.desktop, deadline);
+            assert!(
+                snapshot.persistence.error.is_none(),
+                "{:?}",
+                snapshot.persistence.error
+            );
+            assert!(
+                snapshot.browser_profiles.error.is_none(),
+                "{:?}",
+                snapshot.browser_profiles.error
+            );
             if !snapshot.persistence.startup_pending
                 && !snapshot.browser_profiles.loading
                 && snapshot.pending_launches == 0
+                && !snapshot.model.workspaces.is_empty()
             {
                 break;
             }
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(5));
         }
-        (desktop, server)
+        running
     };
-    let (desktop, server) = start();
+    let running = start();
+    let desktop = &running.desktop;
+    let server = &running.server;
     let profile = value(&socket, &fixture.0, &["browser", "profiles", "add", "Work"]);
     let original_epoch = value(&socket, &fixture.0, &["browser", "profiles", "list"])["epoch"]
         .as_str()
@@ -905,15 +962,20 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
         value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"][0],
         profile
     );
-    let pane = desktop.snapshot().unwrap().model.workspaces[0].focused_pane;
-    let before = desktop.snapshot().unwrap().model.clone();
+    let before = profile_snapshot(desktop, Instant::now() + Duration::from_secs(5))
+        .model
+        .clone();
+    let pane = before.workspaces[0].focused_pane;
     let bad = invoke(
         &socket,
         &fixture.0,
         &["browser", "open", "--profile", "Missing", "about:blank"],
     );
     assert!(String::from_utf8_lossy(&bad.stderr).contains("unknown browser profile"));
-    assert_eq!(desktop.snapshot().unwrap().model, before);
+    assert_eq!(
+        profile_snapshot(desktop, Instant::now() + Duration::from_secs(5)).model,
+        before
+    );
     // Raw generic action ingress must share the catalog owner, not bypass it.
     desktop
         .submit(zmux_desktop_runtime::Request {
@@ -931,7 +993,7 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let snapshot = desktop.snapshot().unwrap();
+        let snapshot = profile_snapshot(desktop, deadline);
         if snapshot.last_request_id == 9999 {
             assert!(
                 snapshot
@@ -980,7 +1042,11 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
         );
         value(&socket, &fixture.0, &["reopen-closed"]);
         assert_eq!(
-            desktop.snapshot().unwrap().model.workspaces[0].root.panes()[0]
+            profile_snapshot(desktop, Instant::now() + Duration::from_secs(5))
+                .model
+                .workspaces[0]
+                .root
+                .panes()[0]
                 .selected()
                 .browser_profile_id
                 .unwrap()
@@ -1007,25 +1073,26 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
         )
         .contains("read-only")
     );
-    server.shutdown(Duration::from_secs(2)).unwrap();
-    desktop.shutdown(Duration::from_secs(3)).unwrap();
-    drop(server);
-    drop(desktop);
-    let (desktop, server) = start();
+    drop(running);
+    let running = start();
+    let desktop = &running.desktop;
     assert_eq!(
         value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"][0],
         profile
     );
+    let restored = profile_snapshot(desktop, Instant::now() + Duration::from_secs(5));
+    let browsers: Vec<_> = restored
+        .model
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .flat_map(|p| &p.surfaces)
+        .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser)
+        .collect();
+    assert_eq!(browsers.len(), 2, "restart lost browser descriptors");
     assert!(
-        desktop
-            .snapshot()
-            .unwrap()
-            .model
-            .workspaces
+        browsers
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| &p.surfaces)
-            .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser)
             .all(|s| s.browser_profile_id.unwrap().to_string() == id)
     );
     // The new runtime reuses receipt 1. Old owner epochs must not observe this
@@ -1056,6 +1123,5 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
             .unwrap()
             .contains("runtime owner changed")
     );
-    server.shutdown(Duration::from_secs(2)).unwrap();
-    desktop.shutdown(Duration::from_secs(3)).unwrap();
+    drop(running);
 }
