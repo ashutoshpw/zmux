@@ -5,6 +5,12 @@
 
 ## Active implementation
 
+- Darwin terminal artifact recipe independently passes17 integrity/real Clang
+  Mach-O checks, source recipe verification and isolated full `scripts/check`
+  (`/tmp/zmux-darwin-parent-check.log`). Manual workflow retains two thin macOS14
+  slices, source/patches/notices and receipts; actual hosted build, inventory review
+  and ARM64 runtime acceptance are pending. No production engine switch.
+
 - Browser double-click, hover, DOM focus, check/uncheck and centered-scroll aliases
   now share admitted document-bound actions. Parent integrated `scripts/check`
   and all106 Chromium DOM cases pass. Browser startup-focus precondition repaired

@@ -126,3 +126,47 @@ Actual CLI verification passes for library `bdc3fc3c...` with its exact producer
 receipt; modified and older unpatched archives and wrong targets still fail.
 No default engine, production Cargo/AppKit linkage, Darwin artifact/minimum OS/ABI,
 native application execution or workload/performance gate was cleared.
+
+## Bounded Darwin artifact recipe
+
+The next manual prerequisite is implemented in
+`tools/terminal-engine-artifacts/build-darwin.py` and
+`.github/workflows/terminal-engine-artifacts.yml`; operator details are in
+`tools/terminal-engine-artifacts/DARWIN_ARTIFACTS.md`. One macos-15 arm64 job builds
+exactly two thin libraries using Xcode 16.4/SDK 15.5, Zig 0.16.0, Rust 1.95.0,
+ReleaseSafe, two jobs, SIMD false and the same explicit VT feature list. Both
+architectures target macOS 14.0, matching the existing native app minimum.
+No Linux rebuild, feature matrix or universal assembly is added.
+
+The shared bounded archive reader feeds actual Mach-O CPU-subtype and macOS
+load-command checks. Generic arm64/x86_64, declared minOS 14.0 and SDK 15.5 or an
+explicit unspecified object SDK are required. The actual SDK/toolchain is checked
+separately and recorded; an unspecified object SDK is never promoted into proof.
+Both C/extension and Rust metadata consumers compile/link for each architecture;
+only arm64 executes. The x86_64 runtime remains explicitly unexecuted.
+
+The driver verifies all 32 source inputs, patched headers and the actual Darwin
+Zig archive's 37 reviewed runtime-source hashes. Required exports and defined/
+undefined symbols are recorded, including deltas from the actual retained Linux
+629-symbol baseline. Completed libraries are immediately copied/hash-recorded;
+workflow failure retains slices, objects, fixtures, headers, notices and logs.
+Exact source pins, both raw patches and original tooling/C/Rust inputs are bundled
+under `sources/repository/` with their full commit/hash map, so checkout loss does
+not erase patch contents. Explicit reuse refuses changed recipe/SDK/header/archive
+identity and avoids repeating completed engine builds after a later fixture failure.
+
+Local acceptance uses 17 passing Python tests, including real Clang-produced
+arm64/x86_64 Mach-O archives and real lower-minimum/wrong-SDK/iOS/specialized-CPU
+objects. Damaged bytes are negative cases only. Recipe validation passes 136
+hashed inputs with no engine build. The original Linux candidate still passes
+integrity acceptance; the new C ABI consumer also compiles/executes on Linux
+against that actual patched archive. An off-host driver invocation refuses before
+any download or process launch. These local checks establish no Darwin engine build
+or native execution. Receipt `/tmp/zmux-darwin-artifact-author-20261015/receipt.json`,
+SHA-256 `72e12ba60e8c7f18b5af66f8bf186a1086650fbe55238cf530c6dd5e7b2c162b`.
+
+Hosted execution and review of the resulting Darwin artifact bytes/symbol delta
+remain required. The current candidate manifest still accepts only its reviewed
+Linux archive. No bit-identical second build, macOS 14 execution, Intel execution,
+production AppKit/Cargo linkage, Viewport/input integration, named-Mac workload or
+default-engine decision follows from recipe validation.

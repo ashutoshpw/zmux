@@ -1,0 +1,43 @@
+name: Terminal engine Darwin artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terminal-engine-artifacts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  darwin-slices:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust with both Apple standard libraries
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - name: Check archive, actual Mach-O and retained notice policies
+        run: python3 -B -m unittest discover -s tools/terminal-engine-artifacts -p 'test_*.py' -v
+      - name: Verify the bounded two-slice recipe
+        run: python3 -B tools/terminal-engine-artifacts/build-darwin.py --check-recipe
+      - name: Build retained thin slices, inspect deployment and execute arm64 only
+        run: python3 -B tools/terminal-engine-artifacts/build-darwin.py --output "$RUNNER_TEMP/terminal-engine-artifacts"
+      - name: Retain completed slices and diagnostics even after a later failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terminal-engine-darwin-thin-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/terminal-engine-artifacts/receipt.json
+            ${{ runner.temp }}/terminal-engine-artifacts/*.log
+            ${{ runner.temp }}/terminal-engine-artifacts/bundle/
+          if-no-files-found: warn
+          retention-days: 7
