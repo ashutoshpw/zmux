@@ -1,0 +1,601 @@
+{
+  "schema_version": 1,
+  "scope": "Exact pinned Zellij package compiler units; explicit reviewed licensing material, not arbitrary SPDX approval",
+  "allowed_license_expressions": [
+    "(Apache-2.0 OR MIT) AND BSD-3-Clause",
+    "0BSD OR MIT OR Apache-2.0",
+    "Apache-2.0",
+    "Apache-2.0 / MIT",
+    "Apache-2.0 OR BSL-1.0",
+    "Apache-2.0 OR MIT",
+    "Apache-2.0 WITH LLVM-exception",
+    "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+    "Apache-2.0/MIT",
+    "BSD-2-Clause OR Apache-2.0 OR MIT",
+    "BSD-2-Clause OR MIT OR Apache-2.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT / Apache-2.0",
+    "MIT AND Unicode-DFS-2016",
+    "MIT OR Apache-2.0",
+    "MIT OR Apache-2.0 OR Zlib",
+    "MIT OR Zlib OR Apache-2.0",
+    "MIT/Apache-2.0",
+    "MPL-2.0",
+    "Unlicense OR MIT",
+    "Unlicense/MIT",
+    "WTFPL",
+    "Zlib",
+    "Zlib OR Apache-2.0 OR MIT"
+  ],
+  "missing_text_overrides": {
+    "include_dir@0.7.3": {
+      "archive_sha256": "18762faeff7122e89e0857b02f7ce6fcc0d101d5e9ad2ad7846cc01d61b7f19e",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/include_dir-1e76b91179ba-LICENSE",
+          "sha256": "9369f62987b3a116111f2edfdc4cc72633e44ddc94d5d0c68659cf537b76a31f",
+          "source": "https://github.com/Michael-F-Bryan/include_dir/blob/1e76b91179babd98ad9d709ee7af1e39631d7d8d/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 1e76b91179babd98ad9d709ee7af1e39631d7d8d (original full source archive included)"
+    },
+    "include_dir_macros@0.7.3": {
+      "archive_sha256": "b139284b5cf57ecfa712bcc66950bb635b31aff41c188e8a4cfc758eca374a3f",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/include_dir-1e76b91179ba-LICENSE",
+          "sha256": "9369f62987b3a116111f2edfdc4cc72633e44ddc94d5d0c68659cf537b76a31f",
+          "source": "https://github.com/Michael-F-Bryan/include_dir/blob/1e76b91179babd98ad9d709ee7af1e39631d7d8d/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 1e76b91179babd98ad9d709ee7af1e39631d7d8d (original full source archive included)"
+    },
+    "vte_generate_state_changes@0.1.1": {
+      "archive_sha256": "d257817081c7dffcdbab24b9e62d2def62e2ff7d00b1c20062551e6cccc145ff",
+      "selected_license": "Apache-2.0 OR MIT",
+      "texts": [
+        {
+          "path": "licenses/components/vte-1712405055f5-LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "source": "https://github.com/jwilm/vte/blob/1712405055f5d97f6dc7b6156885c940982ec20d/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/vte-1712405055f5-LICENSE-MIT",
+          "sha256": "e4c9b06fa850cb9b540a5e400e9f6394cf15efcf4098144de477d1d3dae10150",
+          "source": "https://github.com/jwilm/vte/blob/1712405055f5d97f6dc7b6156885c940982ec20d/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 1712405055f5d97f6dc7b6156885c940982ec20d (original full source archive included)"
+    },
+    "backtrace-ext@0.2.1": {
+      "archive_sha256": "537beee3be4a18fb023b570f80e3ae28003db9167a751266b259926e25539d50",
+      "selected_license": "Apache-2.0",
+      "review_basis": "Published source commit 043c95350875a36be6cd755dcef21a44a52ec2cc declares MIT OR Apache-2.0 but carries no license file; select declared Apache branch with canonical standard terms, retain pristine source and manifest attribution; no upstream-version license-file or copyright-holder claim",
+      "texts": [
+        {
+          "path": "licenses/components/canonical-Apache-2.0-terms",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "source": "Complete standard Apache-2.0 text from exact Rust 1.95.0 license inventory, including instructional appendix and literal template placeholders; no component copyright holder inferred"
+        }
+      ]
+    },
+    "pretty-bytes@0.2.2": {
+      "archive_sha256": "009d6edd2c1dbf2e1c0cd48a2f7766e03498d49ada7109a01c6911815c685316",
+      "selected_license": "MIT",
+      "review_basis": "Verified published manifest and README declare MIT without license text; retain canonical permission terms plus original source/README attribution (Kohei Hasegawa; credited port of sindresorhus/pretty-bytes); no invented copyright year",
+      "texts": [
+        {
+          "path": "licenses/components/canonical-MIT-terms",
+          "sha256": "5afc22050b6dfd55677fab336d50f1ac0b9173a53a4cb6bb99b9ef2525b3306c",
+          "source": "MIT permission/disclaimer text from exact Rust 1.95.0 license inventory; template copyright placeholder removed; actual attribution remains in component/source records"
+        }
+      ]
+    },
+    "wasmparser@0.221.3": {
+      "archive_sha256": "d06bfa36ab3ac2be0dee563380147a5b81ba10dd8885d7fbbc9eb574be67d185",
+      "selected_license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "texts": [
+        {
+          "path": "licenses/components/wasm-tools-1b2c8585415d-LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/1b2c8585415dde926134e57b0d1e6a4c9438abe3/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/wasm-tools-1b2c8585415d-LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/1b2c8585415dde926134e57b0d1e6a4c9438abe3/LICENSE-Apache-2.0_WITH_LLVM-exception"
+        },
+        {
+          "path": "licenses/components/wasm-tools-1b2c8585415d-LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/1b2c8585415dde926134e57b0d1e6a4c9438abe3/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 1b2c8585415dde926134e57b0d1e6a4c9438abe3 (original full source archive included)"
+    },
+    "wit-parser@0.221.3": {
+      "archive_sha256": "896112579ed56b4a538b07a3d16e562d101ff6265c46b515ce0c701eef16b2ac",
+      "selected_license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "texts": [
+        {
+          "path": "licenses/components/wasm-tools-1b2c8585415d-LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/1b2c8585415dde926134e57b0d1e6a4c9438abe3/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/wasm-tools-1b2c8585415d-LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/1b2c8585415dde926134e57b0d1e6a4c9438abe3/LICENSE-Apache-2.0_WITH_LLVM-exception"
+        },
+        {
+          "path": "licenses/components/wasm-tools-1b2c8585415d-LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/1b2c8585415dde926134e57b0d1e6a4c9438abe3/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 1b2c8585415dde926134e57b0d1e6a4c9438abe3 (original full source archive included)"
+    },
+    "wasm-encoder@0.221.2": {
+      "archive_sha256": "c17a3bd88f2155da63a1f2fcb8a56377a24f0b6dfed12733bb5f544e86f690c5",
+      "selected_license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "texts": [
+        {
+          "path": "licenses/components/wasm-tools-549c283b2e14-LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/549c283b2e14c4eba75daa35573b71cdcc110c5d/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/wasm-tools-549c283b2e14-LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/549c283b2e14c4eba75daa35573b71cdcc110c5d/LICENSE-Apache-2.0_WITH_LLVM-exception"
+        },
+        {
+          "path": "licenses/components/wasm-tools-549c283b2e14-LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/549c283b2e14c4eba75daa35573b71cdcc110c5d/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 549c283b2e14c4eba75daa35573b71cdcc110c5d (original full source archive included)"
+    },
+    "wasmprinter@0.221.2": {
+      "archive_sha256": "a80742ff1b9e6d8c231ac7c7247782c6fc5bce503af760bca071811e5fc9ee56",
+      "selected_license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "texts": [
+        {
+          "path": "licenses/components/wasm-tools-549c283b2e14-LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/549c283b2e14c4eba75daa35573b71cdcc110c5d/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/wasm-tools-549c283b2e14-LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/549c283b2e14c4eba75daa35573b71cdcc110c5d/LICENSE-Apache-2.0_WITH_LLVM-exception"
+        },
+        {
+          "path": "licenses/components/wasm-tools-549c283b2e14-LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/549c283b2e14c4eba75daa35573b71cdcc110c5d/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 549c283b2e14c4eba75daa35573b71cdcc110c5d (original full source archive included)"
+    },
+    "wast@35.0.2": {
+      "archive_sha256": "2ef140f1b49946586078353a453a1d28ba90adfc54dde75710bc1931de204d68",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasm-tools-61b23615e378-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasm-tools/blob/61b23615e3784c6e1aad8904e3832bb55ce9356e/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 61b23615e3784c6e1aad8904e3832bb55ce9356e (original full source archive included)"
+    },
+    "cranelift-bitset@0.116.1": {
+      "archive_sha256": "7c6e3969a7ce267259ce244b7867c5d3bc9e65b0a87e81039588dfdeaede9f34",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "cranelift-isle@0.116.1": {
+      "archive_sha256": "1ca20d576e5070044d0a72a9effc2deacf4d6aa650403189d8ea50126483944d",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-asm-macros@29.0.1": {
+      "archive_sha256": "1f178b0d125201fbe9f75beaf849bd3e511891f9e45ba216a5b620802ccf64f2",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-component-macro@29.0.1": {
+      "archive_sha256": "d74de6592ed945d0a602f71243982a304d5d02f1e501b638addf57f42d57dfaf",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-component-util@29.0.1": {
+      "archive_sha256": "707dc7b3c112ab5a366b30cfe2fb5b2f8e6a0f682f16df96a5ec582bfe6f056e",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-jit-icache-coherence@29.0.1": {
+      "archive_sha256": "ec5e8552e01692e6c2e5293171704fed8abdec79d1a6995a0870ab190e5747d1",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-math@29.0.1": {
+      "archive_sha256": "29210ec2aa25e00f4d54605cedaf080f39ec01a872c5bd520ad04c67af1dde17",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-slab@29.0.1": {
+      "archive_sha256": "fcb5821a96fa04ac14bc7b158bb3d5cd7729a053db5a74dad396cd513a5e5ccf",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-versioned-export-macros@29.0.1": {
+      "archive_sha256": "86ff86db216dc0240462de40c8290887a613dddf9685508eb39479037ba97b5b",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "wasmtime-wit-bindgen@29.0.1": {
+      "archive_sha256": "8358319c2dd1e4db79e3c1c5d3a5af84956615343f9f89f4e4996a36816e06e6",
+      "selected_license": "Apache-2.0 WITH LLVM-exception",
+      "texts": [
+        {
+          "path": "licenses/components/wasmtime-58282df898d7-LICENSE",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "source": "https://github.com/bytecodealliance/wasmtime/blob/58282df898d79a787a726d829b166272dde155b9/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 58282df898d79a787a726d829b166272dde155b9 (original full source archive included)"
+    },
+    "daemonize@0.5.0": {
+      "archive_sha256": "ab8bfdaacb3c887a54d41bdf48d3af8873b3f5566469f8ba21b92057509f116e",
+      "selected_license": "MIT/Apache-2.0",
+      "texts": [
+        {
+          "path": "licenses/components/daemonize-8a87c0b9e556-LICENSE-APACHE",
+          "sha256": "502ea0f4d4fbd69d5fcea01c811c700d25008e4b4116eed1d9907706f61243fb",
+          "source": "https://github.com/knsd/daemonize/blob/8a87c0b9e5568d2d57284d68e18ea5f24dcad5fb/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/daemonize-8a87c0b9e556-LICENSE-MIT",
+          "sha256": "6416b712a750e20d54b4a3248f627b4531d79a64048e97bfb3e17fee1a5215a4",
+          "source": "https://github.com/knsd/daemonize/blob/8a87c0b9e5568d2d57284d68e18ea5f24dcad5fb/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 8a87c0b9e5568d2d57284d68e18ea5f24dcad5fb (original full source archive included)"
+    },
+    "highway@0.6.4": {
+      "archive_sha256": "3461b968f695ca312b968503261f5a345de0f02a39dbaa3021f20d53b426395d",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/highway-rs-0bd0272efe4d-LICENSE.txt",
+          "sha256": "91276db973f25602d1aa43491f59cbc84cb88e6f151e1d0cc82a755563ce0195",
+          "source": "https://github.com/nickbabcock/highway-rs/blob/0bd0272efe4de7ba32206ced0d533784cb47bfc5/LICENSE.txt"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 0bd0272efe4de7ba32206ced0d533784cb47bfc5 (original full source archive included)"
+    },
+    "trait-variant@0.1.2": {
+      "archive_sha256": "70977707304198400eb4835a78f6a9f928bf41bba420deb8fdb175cd965d77a7",
+      "selected_license": "MIT OR Apache-2.0",
+      "texts": [
+        {
+          "path": "licenses/components/impl-trait-utils-a9bea3f025b2-LICENSE-APACHE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "source": "https://github.com/rust-lang/impl-trait-utils/blob/a9bea3f025b2474c60b508408b09324642978e5a/LICENSE-APACHE"
+        },
+        {
+          "path": "licenses/components/impl-trait-utils-a9bea3f025b2-LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "source": "https://github.com/rust-lang/impl-trait-utils/blob/a9bea3f025b2474c60b508408b09324642978e5a/LICENSE-MIT"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit a9bea3f025b2474c60b508408b09324642978e5a (original full source archive included)"
+    },
+    "phf@0.11.1": {
+      "archive_sha256": "928c6535de93548188ef63bb7c4036bd415cd8f36ad25af44b9789b2ee72a48c",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/rust-phf-3897b21c6d38-LICENSE",
+          "sha256": "0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38",
+          "source": "https://github.com/rust-phf/rust-phf/blob/3897b21c6d38e5adcaf9110b4bb33c19f6b41977/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 3897b21c6d38e5adcaf9110b4bb33c19f6b41977 (original full source archive included)"
+    },
+    "phf_generator@0.11.1": {
+      "archive_sha256": "b1181c94580fa345f50f19d738aaa39c0ed30a600d95cb2d3e23f94266f14fbf",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/rust-phf-3897b21c6d38-LICENSE",
+          "sha256": "0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38",
+          "source": "https://github.com/rust-phf/rust-phf/blob/3897b21c6d38e5adcaf9110b4bb33c19f6b41977/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 3897b21c6d38e5adcaf9110b4bb33c19f6b41977 (original full source archive included)"
+    },
+    "phf_macros@0.11.1": {
+      "archive_sha256": "92aacdc5f16768709a569e913f7451034034178b05bdc8acda226659a3dccc66",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/rust-phf-3897b21c6d38-LICENSE",
+          "sha256": "0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38",
+          "source": "https://github.com/rust-phf/rust-phf/blob/3897b21c6d38e5adcaf9110b4bb33c19f6b41977/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 3897b21c6d38e5adcaf9110b4bb33c19f6b41977 (original full source archive included)"
+    },
+    "phf_shared@0.11.1": {
+      "archive_sha256": "e1fb5f6f826b772a8d4c0394209441e7d37cbbb967ae9c7e0e8134365c9ee676",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/rust-phf-3897b21c6d38-LICENSE",
+          "sha256": "0ab4d106b6faac07fb6a051815fd1b4d862d730895e2d7d7358c2f13565e7a38",
+          "source": "https://github.com/rust-phf/rust-phf/blob/3897b21c6d38e5adcaf9110b4bb33c19f6b41977/LICENSE"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit 3897b21c6d38e5adcaf9110b4bb33c19f6b41977 (original full source archive included)"
+    },
+    "wezterm-input-types@0.1.0": {
+      "archive_sha256": "7012add459f951456ec9d6c7e6fc340b1ce15d6fc9629f8c42853412c029e57e",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/wezterm-d5ca5509b95e-LICENSE.md",
+          "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca",
+          "source": "https://github.com/wez/wezterm/blob/d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d/LICENSE.md"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d (original full source archive included)"
+    },
+    "vtparse@0.6.2": {
+      "archive_sha256": "6d9b2acfb050df409c972a37d3b8e08cdea3bddb0c09db9d53137e504cfabed0",
+      "selected_license": "MIT",
+      "texts": [
+        {
+          "path": "licenses/components/wezterm-edeae72b5fc5-LICENSE.md",
+          "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca",
+          "source": "https://github.com/wez/wezterm/blob/edeae72b5fc55c7fa4aa1d08bbefd08c5493f757/LICENSE.md"
+        }
+      ],
+      "review_basis": "Published registry subpackage omits license text; retain upstream repository root legal files at its exact .cargo_vcs_info commit edeae72b5fc55c7fa4aa1d08bbefd08c5493f757 (original full source archive included)"
+    },
+    "sptr@0.3.2": {
+      "archive_sha256": "3b9b39299b249ad65f3b7e96443bad61c02ca5cd3589f46cb6d610a0fd6c0d6a",
+      "selected_license": "Apache-2.0",
+      "texts": [
+        {
+          "path": "licenses/components/canonical-Apache-2.0-terms",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "source": "Complete standard Apache-2.0 text from exact Rust 1.95.0 license inventory, including instructional appendix and literal template placeholders; no component copyright holder inferred"
+        }
+      ],
+      "review_basis": "Published source at e59792814876b4948279ec3121921fbe827b1077 declares MIT OR Apache-2.0 but supplies no root license file; retain standard Apache-2.0 terms selecting that declared branch, full pristine package source and manifest attribution; no upstream-version license-file claim"
+    },
+    "interprocess@1.2.1": {
+      "archive_sha256": "81f2533f3be42fffe3b5e63b71aeca416c1c3bc33e4e27be018521e76b1f38fb",
+      "selected_license": "Apache-2.0",
+      "texts": [
+        {
+          "path": "licenses/components/canonical-Apache-2.0-terms",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "source": "Complete standard Apache-2.0 text from exact Rust 1.95.0 license inventory, including instructional appendix and literal template placeholders; no component copyright holder inferred"
+        }
+      ],
+      "review_basis": "Published source at 4cdf61265fec855d7e0ce997fc98f1829e29c861 declares MIT OR Apache-2.0 but supplies no root license file; retain standard Apache-2.0 terms selecting that declared branch, full pristine package source and manifest attribution; no upstream-version license-file claim"
+    }
+  },
+  "local_root_mit_paths": [
+    ".",
+    "zellij-client",
+    "zellij-server",
+    "zellij-utils",
+    "zellij-tile",
+    "zellij-tile-utils",
+    "default-plugins/compact-bar",
+    "default-plugins/status-bar",
+    "default-plugins/tab-bar",
+    "default-plugins/strider",
+    "default-plugins/session-manager",
+    "default-plugins/configuration",
+    "default-plugins/plugin-manager",
+    "default-plugins/about",
+    "default-plugins/share",
+    "default-plugins/multiple-select"
+  ],
+  "native_extra_notice_paths": {
+    "curl-sys": [
+      "curl/COPYING"
+    ],
+    "openssl-src": [
+      "openssl/LICENSE.txt"
+    ],
+    "libnghttp2-sys": [
+      "nghttp2/COPYING",
+      "nghttp2/LICENSE"
+    ],
+    "libz-sys": [
+      "src/zlib/zlib.h"
+    ]
+  },
+  "source_policy": "retain checksum-verified registry sources for every actual compiler component, including pristine corresponding MPL source and otherwise missing file-level notices; omit only explicitly version/checksum-scoped prebuilt WASM fixtures and unused fallback static archives from source containers, retaining original archive URL/SHA and exact excluded hashes; distribute complete upstream Zellij source with exactly fifteen original prebuilt WASM members removed and full provenance",
+  "metadata_only_text_supplements": [
+    "backtrace-ext@0.2.1",
+    "pretty-bytes@0.2.2",
+    "sptr@0.3.2",
+    "interprocess@1.2.1"
+  ],
+  "supplement_review_scope": "These four explicit grants lack upstream-version license text; canonical-term supplementation is version/checksum-scoped and requires independent policy review before package workflow publication. Do not describe them as recovered upstream license files.",
+  "registry_source_compiled_exclusions": {
+    "wit-parser@0.221.3": {
+      "archive_sha256": "896112579ed56b4a538b07a3d16e562d101ff6265c46b515ce0c701eef16b2ac",
+      "review_basis": "Omit the prebuilt upstream WASM test fixture from distributed corresponding source; preserve every other source member and original registry URL/archive checksum/excluded hash. This fixture is outside the actual final native/plugin compiler units, and no substitute binary is distributed.",
+      "excluded_prebuilt_files": [
+        {
+          "path": "tests/ui/kinds-of-deps/deps/e.wasm",
+          "bytes": 35,
+          "sha256": "33fc738466bf4d6e8dde7ff530a23831e3a42519d30e6f5d63269c292cd7255f"
+        }
+      ]
+    },
+    "rustix@0.37.28": {
+      "archive_sha256": "519165d378b97752ca44bbe15047d5d3409e875f39327546b42ac81d7e18c1b6",
+      "excluded_prebuilt_files": [
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_aarch64.a",
+          "bytes": 5910,
+          "sha256": "aa3a37d9ad312881968d40c48bd3c960fb3ac0eba232a5f1979cb809d081c340"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_arm.a",
+          "bytes": 5710,
+          "sha256": "9991ea0ccd16a175ef4b82916b6cd4b45cf67f4388eb58567b0a6e520bda3740"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_mips.a",
+          "bytes": 4590,
+          "sha256": "145be0e9638cb5541860ec97ce5270767c24b61f415f0ee3c2f86cc962ee44af"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_mips64.a",
+          "bytes": 6326,
+          "sha256": "6c6d007368beb5e53bb1c402afacc1c139ee65dddb82ba3e2eada0493af94ef6"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_powerpc64.a",
+          "bytes": 5766,
+          "sha256": "355db5c83dda1074636c40fa6fee6564c668c492a71e149bcb444ea896e8167e"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_riscv64.a",
+          "bytes": 10982,
+          "sha256": "c4fd54d0fcab2e28b1b18df77a7814b145a4c2d13fc04b937a55bf0abf420227"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_x86.a",
+          "bytes": 7178,
+          "sha256": "7ae3635dd3fbc2049e09d4218224e1eaaa4dd2ddd78d3901fb444d481abf2a33"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/debug/librustix_outline_x86_64.a",
+          "bytes": 5574,
+          "sha256": "039c928213bd0b67c899412084a30eb9a51526e64a01e1901cd4905ef8d7cf6d"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_aarch64.a",
+          "bytes": 3374,
+          "sha256": "fa8d31702cafb24d9799c162d3319c522892e91c58fbbff2b09950a0fa81b46f"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_arm.a",
+          "bytes": 4278,
+          "sha256": "0f7c8c5c02d5329d884f800da70aaf6b5b67c14000b12afb708f3e4758aa1f7a"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_mips.a",
+          "bytes": 3078,
+          "sha256": "d9a093ee2b2c94b70aa059e878a0211715fe6fdcc95a9098566c87d61be4e4b3"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_mips64.a",
+          "bytes": 3766,
+          "sha256": "ad19a967ade7067a12b08f61628cc56f72eaff1393544783647e1c4dde2629a3"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_powerpc64.a",
+          "bytes": 3206,
+          "sha256": "1f04e44c3d863bac066520c787444c314f2aa2f8d8d3cae38990ecc008b9b6e1"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_riscv64.a",
+          "bytes": 5182,
+          "sha256": "beb0eb046d36545a04ad7f264ed1173062f9f85ba7f4215bef64a98f30a74dce"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_x86.a",
+          "bytes": 5106,
+          "sha256": "691d867358475c701c20b816b99bab2a4c90c3796a302ccaa56d5983be1ba8b2"
+        },
+        {
+          "path": "src/backend/linux_raw/arch/outline/release/librustix_outline_x86_64.a",
+          "bytes": 3062,
+          "sha256": "434a79197510876c5a49f594e7886c95cf4c15e876c3404ed136846c95d6ee30"
+        }
+      ],
+      "review_basis": "Omit sixteen prebuilt outline assembly archives; preserve all assembly source and build/regeneration scripts and exact original registry URL/checksum/excluded hashes. Rust1.95 executed x86_64 uses inline asm and Darwin uses libc, so these fallback archive bytes are not needed by either accepted target. No other-platform build-support claim follows."
+    }
+  }
+}

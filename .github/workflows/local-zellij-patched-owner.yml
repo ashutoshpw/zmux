@@ -2,6 +2,15 @@ name: Patched zellij production owner
 
 on:
   workflow_dispatch:
+    inputs:
+      dependency_package:
+        description: Build source plugins and retain an independently reviewed dependency package
+        type: boolean
+        default: false
+      reviewed_notice_policy_sha256:
+        description: Exact independently reviewed notice-policy SHA256 (required for package upload)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -23,12 +32,37 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
+      - name: Require exact notice policy review before package work
+        if: inputs.dependency_package
+        env:
+          REVIEWED_POLICY_SHA256: ${{ inputs.reviewed_notice_policy_sha256 }}
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib, os
+          from pathlib import Path
+          actual = hashlib.sha256(Path("tools/local-zellij-feasibility/notice-policy.json").read_bytes()).hexdigest()
+          if os.environ["REVIEWED_POLICY_SHA256"] != actual:
+              raise SystemExit("Package publication requires the exact independently reviewed notice-policy SHA256")
+          PYTHON
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.95.0 --profile minimal
       - name: Build pinned source and prove real stdin interruption repair
-        run: python3 -B tools/local-zellij-feasibility/produce-patched.py --output "$RUNNER_TEMP/patched-zellij" --jobs 2
+        env:
+          DEPENDENCY_PACKAGE: ${{ inputs.dependency_package }}
+        run: |
+          package_args=()
+          if [ "$DEPENDENCY_PACKAGE" = true ]; then package_args+=(--rebuild-plugins); fi
+          python3 -B tools/local-zellij-feasibility/produce-patched.py --output "$RUNNER_TEMP/patched-zellij" --jobs 2 "${package_args[@]}"
       - name: Exercise unchanged actual production owners
         run: python3 -B tools/local-zellij-feasibility/run-patched-owner.py --producer-receipt "$RUNNER_TEMP/patched-zellij/receipt.json" --output "$RUNNER_TEMP/patched-zellij-owner"
+      - name: Reject unreviewed, altered, incomplete and stale package inputs
+        if: inputs.dependency_package
+        run: python3 -B tools/local-zellij-feasibility/check-package-gates.py --producer-receipt "$RUNNER_TEMP/patched-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/patched-zellij-owner/receipt.json" --output "$RUNNER_TEMP/patched-zellij-package-gates"
+      - name: Package exact accepted binary with sources, notices and ABI evidence
+        if: inputs.dependency_package
+        env:
+          REVIEWED_POLICY_SHA256: ${{ inputs.reviewed_notice_policy_sha256 }}
+        run: python3 -B tools/local-zellij-feasibility/package-patched.py --producer-receipt "$RUNNER_TEMP/patched-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/patched-zellij-owner/receipt.json" --output "$RUNNER_TEMP/patched-zellij-package" --reviewed-policy-sha256 "$REVIEWED_POLICY_SHA256"
       - name: Upload immutable source inputs and host evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -37,15 +71,34 @@ jobs:
           path: |
             ${{ runner.temp }}/patched-zellij/receipt.json
             ${{ runner.temp }}/patched-zellij/*.log
-            ${{ runner.temp }}/patched-zellij/source.tar.gz
             ${{ runner.temp }}/patched-zellij/dependency-metadata.json
             ${{ runner.temp }}/patched-zellij/prebuilt-assets-manifest.json
+            ${{ runner.temp }}/patched-zellij/embedded-assets-manifest.json
+            ${{ runner.temp }}/patched-zellij/*compiler-units.json
+            ${{ runner.temp }}/patched-zellij-package-gates/receipt.json
+            ${{ runner.temp }}/patched-zellij-package-gates/*.log
+            ${{ runner.temp }}/patched-zellij-package/receipt.json
+            ${{ runner.temp }}/patched-zellij-package/*.log
+            ${{ runner.temp }}/patched-zellij-package/platform.json
+            ${{ runner.temp }}/patched-zellij-package/payload/manifest.json
+            ${{ runner.temp }}/patched-zellij-package/payload/components.json
+            ${{ runner.temp }}/patched-zellij-package/payload/SOURCES/upstream-source-provenance.json
             ${{ runner.temp }}/patched-zellij/Zellij-LICENSE.md
             ${{ runner.temp }}/patched-zellij-owner/receipt.json
             ${{ runner.temp }}/patched-zellij-owner/*.log
             .github/workflows/local-zellij-patched-owner.yml
             tools/local-zellij-feasibility/produce-patched.py
             tools/local-zellij-feasibility/run-patched-owner.py
+            tools/local-zellij-feasibility/owner_contract.py
+            tools/local-zellij-feasibility/package-patched.py
+            tools/local-zellij-feasibility/check-package-gates.py
+            tools/local-zellij-feasibility/package_build.py
+            tools/local-zellij-feasibility/package_notices.py
+            tools/local-zellij-feasibility/package_sources.py
+            tools/local-zellij-feasibility/package_platform.py
+            tools/local-zellij-feasibility/validate-wasm.rs
+            tools/local-zellij-feasibility/notice-policy.json
+            tools/local-zellij-feasibility/licenses/components/*
             tools/local-zellij-feasibility/patched-producer-lock.json
             tools/local-zellij-feasibility/stdin-eintr.rs
             tools/local-zellij-feasibility/patches/0001-retry-interrupted-stdin.patch
@@ -57,5 +110,15 @@ jobs:
             vendor/darwin-libproc/LICENSE*
             THIRD_PARTY_NOTICES.md
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload independently reviewed successful dependency package
+        if: success() && inputs.dependency_package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: experimental-zellij-package-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/patched-zellij-package/zellij-*.tar.gz
+            ${{ runner.temp }}/patched-zellij-package/zellij-*.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7

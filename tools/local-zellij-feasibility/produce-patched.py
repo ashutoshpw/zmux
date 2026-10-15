@@ -19,6 +19,8 @@ import urllib.request
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(HERE))
+from package_build import compiler_units, rebuild_plugins, validate_plugins
 from process_group import ProcessGroup
 _spec = importlib.util.spec_from_file_location("zmux_bounded_runner", REPO / "tools/terminal-feasibility/run.py")
 bounded_runner = importlib.util.module_from_spec(_spec)
@@ -43,6 +45,7 @@ def digest(path, max_bytes=None):
 
 def run(command, cwd, environment, log, timeout=1800):
     phases = []
+    print(f"producer phase {log.stem} started", flush=True)
     bounded_runner.run(command, log.stem, log.parent, phases, timeout=timeout,
                        cwd=cwd, env=environment)
     actual = log.parent / (log.stem + ".log")
@@ -51,6 +54,7 @@ def run(command, cwd, environment, log, timeout=1800):
     phase = phases[0]
     if phase["log_bytes_seen"] != phase["log_bytes_retained"]:
         raise RuntimeError(f"phase output exceeded 8 MiB: {log}")
+    print(f"producer phase {log.stem} passed ({phase['wall_seconds']}s)", flush=True)
     return {**phase, "log": str(log), "sha256": digest(log)}
 
 
@@ -129,9 +133,12 @@ def main():
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--cargo-target", type=Path, help="explicit absolute reusable Cargo cache")
     parser.add_argument("--test-only", action="store_true")
+    parser.add_argument("--rebuild-plugins", action="store_true", help="rebuild ten embedded WASM plugins and capture package provenance")
     args = parser.parse_args()
     if not args.output.is_absolute() or (args.cargo_target and not args.cargo_target.is_absolute()) or not 1 <= args.jobs <= 4:
         parser.error("output must be absolute; jobs must be 1..4")
+    if args.test_only and args.rebuild_plugins:
+        parser.error("plugin package evidence requires the complete native build")
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     lock = json.loads((HERE / "patched-producer-lock.json").read_text())
@@ -186,6 +193,9 @@ def main():
                "patch_sha256": digest(HERE / "patches/0001-retry-interrupted-stdin.patch"),
                "fixture_sha256": digest(example), "cargo_lock_sha256": digest(source / "Cargo.lock"),
                "producer_sha256": digest(Path(__file__)), "cargo_target": str(target),
+               "package_build_sha256": digest(HERE / "package_build.py"),
+               "wasm_validator_sha256": digest(HERE / "validate-wasm.rs"),
+               "embedded_assets_rebuilt": args.rebuild_plugins,
                "shared_runner_sha256": digest(REPO / "tools/terminal-feasibility/run.py"),
                "process_group_sha256": digest(REPO / "scripts/process_group.py"),
                "prebuilt_assets_manifest_sha256": digest(assets_path),
@@ -202,8 +212,16 @@ def main():
         # extracted tree. Invalidate our two source products in this explicit
         # cache; registry dependencies remain reusable. Red must compile the
         # original client, never a previously patched example.
-        receipt["steps"].append(run(cargo + ["clean", "--release", "-p", "zellij-client", "-p", "zellij"],
-                                    source, environment, output / "source-products-clean.log", 60))
+        clean = cargo + ["clean", "--release", "-p", "zellij-client", "-p", "zellij"]
+        if args.rebuild_plugins:
+            clean += ["-p", "zellij-utils"]
+        receipt["steps"].append(run(clean, source, environment, output / "source-products-clean.log", 60))
+        if args.rebuild_plugins:
+            receipt["steps"].append(run(["rustup", "target", "add", "--toolchain", lock["rust_toolchain"], "wasm32-wasip1"],
+                                        source, environment, output / "wasm-target.log", 300))
+            receipt["plugins"] = rebuild_plugins(source, target, cargo, environment, output, run, digest)
+            receipt["wasm_validation"] = validate_plugins(source, target, cargo, environment, output,
+                                                          HERE / "validate-wasm.rs", run, digest)
         receipt["steps"].append(run(command, source, environment, output / "baseline-build.log"))
         red = stdin_case(binary)
         receipt["real_eintr_red"] = red
@@ -227,7 +245,12 @@ def main():
         if not args.test_only:
             build = cargo + ["build", "--locked", "--release", "-p", "zellij",
                              "--no-default-features", "--features", ",".join(lock["features"])]
+            if args.rebuild_plugins:
+                build += ["--message-format=json-render-diagnostics"]
             receipt["steps"].append(run(build, source, environment, output / "zellij-build.log"))
+            if args.rebuild_plugins:
+                receipt["native_compiler_units"] = compiler_units(output / "zellij-build.log", output / "native-compiler-units.json",
+                                                                  target, "native_and_build_support", digest)
             artifact_directory = output / "artifacts"
             artifact_directory.mkdir()
             product = artifact_directory / "zellij"
@@ -242,6 +265,7 @@ def main():
             receipt["license_sha256"] = digest(output / "Zellij-LICENSE.md")
             metadata_command = cargo + ["metadata", "--locked", "--format-version", "1", "--no-default-features", "--features", ",".join(lock["features"])]
             receipt["steps"].append(run(metadata_command, source, environment, output / "dependency-metadata.json"))
+            receipt["dependency_metadata_sha256"] = digest(output / "dependency-metadata.json")
         if digest(source / "Cargo.lock") != receipt["cargo_lock_sha256"]:
             raise RuntimeError("upstream dependency lock changed")
         if any(digest(path) != sha for path, sha in cargo_configs.items()):

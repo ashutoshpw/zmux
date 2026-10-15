@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+from owner_contract import source_hashes, verify_logs
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -38,7 +39,9 @@ def main():
                   "patch_sha256": HERE / "patches/0001-retry-interrupted-stdin.patch",
                   "fixture_sha256": HERE / "stdin-eintr.rs",
                   "shared_runner_sha256": ROOT / "tools/terminal-feasibility/run.py",
-                  "process_group_sha256": ROOT / "scripts/process_group.py"}
+                  "process_group_sha256": ROOT / "scripts/process_group.py",
+                  "package_build_sha256": HERE / "package_build.py",
+                  "wasm_validator_sha256": HERE / "validate-wasm.rs"}
         for key, path in inputs.items():
             if producer.digest(path) != artifact[key]:
                 raise RuntimeError(f"producer input no longer matches: {path}")
@@ -47,6 +50,9 @@ def main():
             raise RuntimeError("retained producer executable does not match its receipt")
         if artifact["binary_version"] != "zellij 0.43.0":
             raise RuntimeError("retained producer version changed")
+        inputs["owner_contract_sha256"] = HERE / "owner_contract.py"
+        sources = source_hashes(ROOT, producer.digest)
+        receipt["source_inputs_sha256"] = sources
         receipt.update(producer_receipt_sha256=producer.digest(artifact_receipt),
                        binary_sha256=artifact["binary_sha256"], binary_path=str(binary),
                        harness_sha256=producer.digest(Path(__file__)),
@@ -65,6 +71,9 @@ def main():
             runner.run(command, f"owner-{index}", output, phases, timeout=300, cwd=ROOT, env=environment)
             if any(phase["log_bytes_seen"] != phase["log_bytes_retained"] for phase in phases):
                 raise RuntimeError("owner gate output exceeded its retained byte bound")
+        if source_hashes(ROOT, producer.digest) != sources:
+            raise RuntimeError("owner source changed during execution")
+        receipt["executed_owner_contract"] = verify_logs(output)
         receipt["status"] = "passed"
     except Exception as error:
         receipt["error"] = f"{type(error).__name__}: {error}"

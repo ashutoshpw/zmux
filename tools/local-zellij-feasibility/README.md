@@ -183,3 +183,61 @@ retained distributable binaries, complete notices, native app integration and
 default acquisition remain separate. The
 [dependency package audit](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/r03-dependency-package.md)
 describes the proposed source-built plugin and notice package before binary uploads.
+
+## Opt-in dependency package
+
+The same manual workflow now exposes `dependency_package`, false by default.
+When selected, it requires `reviewed_notice_policy_sha256` to match the exact
+independently reviewed [notice policy](notice-policy.json). The
+[policy review brief](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/r03-package-policy-review.md)
+records four published-version provenance uncertainties; canonical standard-term
+supplements do not turn them into recovered upstream notices. Policy approval and
+fresh hosted Linux/Darwin package execution are separate gates.
+
+Package mode rebuilds the ten release plugins from the pinned source and unchanged
+lock, compiles each with pinned Wasmtime, captures actual final compiler units,
+and reruns the production owner against the exact resulting executable. The owner
+receipt requires every named baseline behavior, six successful suites, semantic
+journey fields and unchanged executed source hashes. It records actual counts
+rather than using a count as behavior parity proof.
+
+```sh
+python3 -B tools/local-zellij-feasibility/produce-patched.py --output /absolute/fresh/producer --rebuild-plugins
+python3 -B tools/local-zellij-feasibility/run-patched-owner.py --producer-receipt /absolute/fresh/producer/receipt.json --output /absolute/fresh/owner
+python3 -B tools/local-zellij-feasibility/check-package-gates.py --producer-receipt /absolute/fresh/producer/receipt.json --owner-receipt /absolute/fresh/owner/receipt.json --output /absolute/fresh/negative-gates
+python3 -B tools/local-zellij-feasibility/package-patched.py --producer-receipt /absolute/fresh/producer/receipt.json --owner-receipt /absolute/fresh/owner/receipt.json --output /absolute/fresh/review --prepare-only
+```
+
+Local `--prepare-only` creates an explicitly `UNREVIEWED-` archive with
+`promotion_ready=false`. It supplies material for review and never satisfies the
+workflow's upload gate. Promotion requires `--reviewed-policy-sha256` with the exact
+reviewed hash. Keep outputs in fresh directories and run the chain against stable
+source; source or tooling changes require fresh corresponding evidence.
+
+The package independently extracts the executable's embedded plugins and compares
+all ten hashes, then retains component notices, checksum-verified registry
+sources with explicit prebuilt exclusions (MPL sources remain pristine), filtered
+upstream source/patch, exact Rust standard-library
+notices, compiler/linker/ABI metadata and file/archive hashes. Actual compiler
+components include conservatively marked host build support, with validator dev
+closure excluded. Optional plugin UI behavior is untested. ABI records describe
+only the executed host/binary; they establish no universal build, backward OS,
+application signing or reproducible-build guarantee.
+
+Negative gates use successful real evidence as a positive control before rejecting
+missing/mismatched policy review, a replaced baseline behavior with unchanged test
+count, incomplete semantic input proof, failed/altered producer or owner evidence,
+missing notice supplements and stale embedded plugin hashes. The workflow always
+uploads bounded metadata/source evidence and separately uploads executable package
+bytes only after the opt-in package and all required gates succeed. Product pins,
+ordinary acquisition and native app launch selection remain unchanged.
+
+Source bundles retain no original prebuilt WASM bytes or unused rustix fallback
+static archives. The upstream source archive excludes exactly fifteen WASM files;
+explicit version/checksum-scoped registry source transforms omit one wit-parser
+WASM fixture and sixteen rustix fallback archives. Every excluded member hash and
+original URL/archive checksum remains in provenance, with full nonexcluded source,
+unchanged lock, licenses, patch and exact rebuild instructions. Original archives
+stay in private audit caches, outside package and workflow evidence uploads.
+The two transformed registry bundles are named `-source.tar.gz`; all other registry
+sources, including both MPL archives, remain pristine.
