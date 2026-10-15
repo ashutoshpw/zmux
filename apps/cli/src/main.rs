@@ -55,7 +55,7 @@ struct ClientOptions {
 enum Parsed {
     Offline(Offline),
     App(ControlCommand),
-    Browser(ControlCommand),
+    Browser(ControlCommand, Option<Duration>),
 }
 
 enum Offline {
@@ -108,11 +108,11 @@ fn run() -> Result<u8, Box<dyn Error>> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(0)
         }
-        Parsed::Browser(command) => {
+        Parsed::Browser(command, wait_timeout) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&browser::run(&options, command)?)?
+                serde_json::to_string_pretty(&browser::run(&options, command, wait_timeout)?)?
             );
             Ok(0)
         }
@@ -126,6 +126,7 @@ fn parse(
     let mut socket = None;
     let mut password = None;
     let mut timeout = DEFAULT_TIMEOUT;
+    let mut explicit_timeout = false;
     while let Some(argument) = args.get(index).and_then(|value| value.to_str()) {
         match argument {
             "--socket" => {
@@ -155,6 +156,7 @@ fn parse(
                     return Err(CliError("timeout must be 50–30000 milliseconds".into()));
                 }
                 timeout = Duration::from_millis(milliseconds);
+                explicit_timeout = true;
                 index += 2;
             }
             _ => break,
@@ -166,7 +168,11 @@ fn parse(
         .map(|name| registry::find(name).map_or(name, |spec| spec.name));
     let tail = &args[(index + 1).min(args.len())..];
     if command == Some("browser") {
-        return Ok((browser::parse(tail)?, socket, timeout, password));
+        let parsed = browser::parse(tail)?;
+        if !explicit_timeout && let Parsed::Browser(_, Some(wait)) = &parsed {
+            timeout = *wait + Duration::from_secs(1);
+        }
+        return Ok((parsed, socket, timeout, password));
     }
     if let Some(command) = command
         && registry::find(command).is_some_and(|spec| spec.targeted)

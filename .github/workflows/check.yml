@@ -9,6 +9,7 @@ on:
       - 'rust-toolchain.toml'
       - 'crates/**'
       - 'apps/cli/**'
+      - 'apps/macos/Sources/BrowserAutomation.swift'
       - 'scripts/**'
       - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/check.yml'
@@ -19,6 +20,7 @@ on:
       - 'rust-toolchain.toml'
       - 'crates/**'
       - 'apps/cli/**'
+      - 'apps/macos/Sources/BrowserAutomation.swift'
       - 'scripts/**'
       - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/check.yml'
@@ -46,3 +48,6 @@ jobs:
           sudo apt-get install -y openssh-server
       - name: Check existing Rust modules and foreign C ABI
         run: scripts/check
+      - name: Check browser locator and readiness DOM behavior
+        if: runner.os == 'Linux'
+        run: scripts/check-browser-dom --browser "$(command -v google-chrome)"

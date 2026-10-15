@@ -207,6 +207,67 @@ fn automation_help_is_offline_and_invalid_options_fail_before_connecting() {
             vec!["browser", "open", "about:blank", "--bogus"],
             "unknown browser open option",
         ),
+        (vec!["browser", "is", "title"], "requires visible"),
+        (vec!["browser", "find", "role"], "query is required"),
+        (
+            vec!["browser", "find", "text", "foo", "--name", "bar"],
+            "options conflict",
+        ),
+        (
+            vec!["browser", "find", "text", "foo", "--exact", "--exact"],
+            "repeated --exact",
+        ),
+        (
+            vec![
+                "browser",
+                "find",
+                "first",
+                "--selector",
+                "button",
+                "--exact",
+            ],
+            "require only a selector",
+        ),
+        (
+            vec![
+                "browser",
+                "find",
+                "last",
+                "--selector",
+                "button",
+                "--index",
+                "0",
+            ],
+            "only for nth",
+        ),
+        (
+            vec![
+                "browser",
+                "find",
+                "nth",
+                "--selector",
+                "button",
+                "--index",
+                "4096",
+            ],
+            "0..4095",
+        ),
+        (
+            vec!["browser", "wait", "--selector", "#one", "#two"],
+            "conflicting",
+        ),
+        (
+            vec!["browser", "wait", "#one", "--state", "ready"],
+            "unknown browser wait state",
+        ),
+        (
+            vec!["browser", "wait", "#one", "--timeout-ms", "0"],
+            "1..30000",
+        ),
+        (
+            vec!["browser", "wait", "#one", "--timeout-ms", "30001"],
+            "1..30000",
+        ),
         (vec!["browser", "get"], "requires a kind"),
         (
             vec!["browser", "get", "unknown"],
@@ -412,6 +473,12 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
     let fixture = Fixture::new();
     let script = " \n({text: 'quoted \\\" text', value: -1})\n ";
     for (index, (args, expected)) in [
+        (vec!["find", "role", "button", "--name", "Continue", "--exact"], json!({"action":"find","locator":{"kind":"role","query":"button","name":"Continue","exact":true,"selector":null,"index":null}})),
+        (vec!["find", "text", "--", "--literal"], json!({"action":"find","locator":{"kind":"text","query":"--literal","name":null,"exact":false,"selector":null,"index":null}})),
+        (vec!["find", "nth", "--selector", "button", "--index", "2"], json!({"action":"find","locator":{"kind":"nth","query":null,"name":null,"exact":false,"selector":"button","index":2}})),
+        (vec!["wait", "--selector", "#ready", "--state", "enabled"], json!({"action":"wait","selector":"#ready","state":"enabled"})),
+        (vec!["wait", "#ready"], json!({"action":"wait","selector":"#ready","state":"visible"})),
+        (vec!["is", "checked", "#ready"], json!({"action":"get","kind":"checked","selector":"#ready","attribute":null,"property":null})),
         (vec!["eval", "--script", script], json!({"action":"eval","script":script})),
         (vec!["eval", script], json!({"action":"eval","script":script})),
         (vec!["eval", "--", "-1"], json!({"action":"eval","script":"-1"})),
@@ -431,7 +498,7 @@ fn browser_wire_preserves_scripts_options_and_existing_target_precedence() {
     ].into_iter().enumerate() {
         let socket = fixture.0.join(format!("c{index}"));
         let capture = capture_rejection(UnixListener::bind(&socket).unwrap());
-        let prefix = if args[0] == "get" { 2 } else { 1 };
+        let prefix = if matches!(args[0], "get" | "is" | "find") { 2 } else { 1 };
         let output = client(&socket, &fixture.0).arg("browser").args(&args[..prefix])
             .args(["--surface", "surface:7", "--expect-revision", "12"]).args(&args[prefix..])
             .env("ZMUX_WORKSPACE_ID", "invalid-caller-workspace")
@@ -501,12 +568,19 @@ fn portable_browser_requests_cannot_claim_native_dom_success_or_bypass_read_only
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let read = invoke(
-        &socket,
-        &fixture.0,
-        &["browser", "get", "title", "--surface", surface],
-    );
-    assert!(String::from_utf8_lossy(&read.stderr).contains("browser_unavailable"));
+    for args in [
+        vec!["browser", "get", "title"],
+        vec!["browser", "find", "role", "button"],
+        vec!["browser", "wait", "--selector", "#ready"],
+        vec!["browser", "is", "visible", "#ready"],
+    ] {
+        let read = invoke(
+            &socket,
+            &fixture.0,
+            &[args, vec!["--surface", surface]].concat(),
+        );
+        assert!(String::from_utf8_lossy(&read.stderr).contains("browser_unavailable"));
+    }
     assert!(value(&socket, &fixture.0, &["status"])["workspace_count"].is_u64());
     // Attach a real runtime lease, but provide no native consumer. The production
     // owner must expire the queued operation; the fixture never claims DOM execution.
@@ -719,4 +793,70 @@ fn browser_open_returns_unselected_creation_receipts_and_defaults_to_focus() {
     );
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn wait_local_budget_respects_explicit_global_deadline_and_literal_target_order() {
+    let fixture = Fixture::new();
+    for (index, global, expected_min, expected_max) in
+        [(0, None, 9000, 10_000), (1, Some("500"), 1, 500)]
+    {
+        let socket = fixture.0.join(format!("wait{index}"));
+        let capture = capture_rejection(UnixListener::bind(&socket).unwrap());
+        let mut command = client(&socket, &fixture.0);
+        if let Some(timeout) = global {
+            command.args(["--timeout", timeout]);
+        }
+        let output = command
+            .args([
+                "browser",
+                "--surface",
+                "surface:7",
+                "wait",
+                "--timeout-ms",
+                "10000",
+                "--",
+                "#ready",
+            ])
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output.stderr).contains("capture_only"));
+        let wire = capture.join().unwrap();
+        let request = &wire["command"]["request"];
+        assert_eq!(request["scope"]["surface"], "surface:7");
+        assert_eq!(request["action"]["selector"], "#ready");
+        assert!((expected_min..=expected_max).contains(&request["timeout_ms"].as_u64().unwrap()));
+    }
+}
+
+#[test]
+fn leading_browser_targets_preserve_legacy_url_operands() {
+    let fixture = Fixture::new();
+    for (index, verb) in ["open", "navigate", "goto"].into_iter().enumerate() {
+        let socket = fixture.0.join(format!("leading{index}"));
+        let capture = capture_rejection(UnixListener::bind(&socket).unwrap());
+        let flag = if verb == "open" {
+            "--pane"
+        } else {
+            "--surface"
+        };
+        let output = client(&socket, &fixture.0)
+            .args(["browser", flag, "7", verb, "https://example.org"])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("capture_only"),
+            "{verb}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let wire = capture.join().unwrap();
+        assert_eq!(
+            wire["command"]["request"]["scope"][if verb == "open" { "pane" } else { "surface" }],
+            "7"
+        );
+        assert_eq!(
+            wire["command"]["request"]["operation"]["action"]["url"],
+            "https://example.org"
+        );
+    }
 }

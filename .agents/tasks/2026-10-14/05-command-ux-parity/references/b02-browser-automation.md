@@ -140,3 +140,123 @@ WebKit title/URL and current owner; an old signal carries no stale page data.
 Navigation, close and process termination invalidate observation; transport recovery
 reannounces the latest current page. Fresh source review found no blocker.
 Hosted green on the repaired source remains pending.
+
+## B02b frozen readiness and locator contract
+
+This slice implements main-document discovery/readiness, not pointer/keyboard input,
+profiles, frames, shadow-root traversal or a complete platform accessibility tree.
+It is original MIT code; no cmux implementation or tests are imported.
+
+Public grammar (TARGET_OPTIONS may precede the browser verb or follow operands):
+
+```text
+browser find role ROLE [--name TEXT] [--exact]
+browser find text|label|placeholder|alt|title|testid TEXT [--exact]
+browser find first|last --selector CSS_OR_REF
+browser find nth --index N --selector CSS_OR_REF
+browser wait --selector CSS_OR_REF [--state STATE] [--timeout-ms N]
+browser is visible|enabled|checked CSS_OR_REF
+```
+
+Canonical `is` and `wait --selector ... --timeout-ms ...` follow the public cmux
+CLI contract (`docs/cli-contract.md`, browser table) and its published browser
+command reference (`skills/cmux-browser/references/commands.md`, Wait). The find
+families/role-name-exact and first/last/nth selector/index operands follow this
+task's frozen browser audit. Convenience aliases `get visible|enabled|checked`
+and positional `wait CSS_OR_REF` are additive; they do not replace canonical
+commands. No upstream implementation is read or translated for this slice.
+
+TARGET_OPTIONS remain `--workspace`, `--pane`, `--surface`/`--tab`,
+`--expect-revision`. `--` permits literal option-looking text. Repeated, conflicting
+or irrelevant options fail before admission. `--name` is role-only; `--exact` is
+semantic-locator-only; `--index` is nth-only and is zero-based, 0–4095. First/last/nth
+require `--selector` and no text. Wait `--timeout-ms` accepts 1–30000 milliseconds
+as the execution budget, with at most one second of bounded CLI receipt headroom.
+An explicitly supplied global `--timeout` remains an outer admission/result
+deadline and may shorten that wait; without it, `--timeout-ms` sets the CLI budget
+plus headroom. Without either flag, the existing CLI default remains. Native and
+runtime deadlines derive from the admitted budget, never independent fresh clocks.
+
+Semantic queries normalize whitespace (`trim`, collapse Unicode whitespace).
+Default comparison is case-insensitive substring; `--exact` means case-sensitive
+normalized equality. Roles are compared as lowercase exact tokens. Explicit role
+uses its first nonempty token; implicit roles cover links, buttons, headings,
+images, lists/items, text inputs/textarea, checkbox/radio/range/number inputs,
+select/option and progress. Role names resolve, in order, through aria-labelledby,
+aria-label, associated HTML labels, image alt, button-input value, button/link text,
+then title. Label queries match associated label text (including aria labels),
+placeholder/alt/title/testid query those attributes (`data-testid` for testid).
+Text queries match innermost matching content elements, excluding script/style/
+noscript/template. Discovery includes hidden DOM elements; readiness is explicit.
+Exactly one semantic match is required (`element_not_found` or `ambiguous_locator`
+otherwise). First/last/nth explicitly select document order from CSS/ref matches.
+Malformed CSS fails `invalid_selector`; selection beyond results fails
+`element_not_found`. No locator silently searches another frame or document.
+
+Find returns the existing result envelope with `value: {ref, role, name, text}`;
+descriptor name/text are bounded like snapshots. Refs remain scoped to exact host
+and document generation and are reusable by get/wait. Stale or disconnected refs
+always fail `stale_reference`, including negative waits; they never become CSS.
+
+Wait states are `attached`, `detached`, `visible` (default), `hidden`, `enabled`,
+`disabled`, `checked`, `unchecked`. CSS/ref waits require at most one matching node;
+ambiguity fails immediately. Missing CSS matches satisfy only detached/hidden.
+Visibility uses the existing computed-style/nonzero-box predicate; enabled uses
+native disabled plus aria-disabled; checked uses checked plus aria-checked.
+Success returns `value: {matched: true, state, ref}` with null ref when absent.
+Only get/find/wait/snapshot are read actions; existing eval/navigation policy stays.
+
+Bounds remain selectors/query text 2048 UTF-8 bytes, role 128 bytes, reference
+registry 4096 and result 64 KiB. Locator enumeration visits at most 4096 elements, 16384 total DOM nodes and
+1048576 UTF-16 text code units, including excluded content,
+and fails `dom_scan_limit` if incomplete rather than returning a partial match.
+Waits use short isolated-world probes separated by a cancellable 100 ms native
+timer. One operation owns at most one physical JavaScript callback, sharing the
+existing cap of eight with eval/reads. Timeout never releases a physical callback
+until WebKit returns; no page Promise or unbounded page polling loop is installed.
+An absolute native deadline is checked before dispatch and completion. Navigation,
+host/namespace change, close and timeout terminate the exact pending owner; a
+later document cannot satisfy its wait. Hidden views stay hidden and focus remains.
+
+Acceptance owns three distinct risks: runtime/CLI tests protect read policy,
+validation, lifecycle/deadline and submit-once transport; a real DOM harness checks
+locator semantics independently; packaged WebKit uses the actual bundled CLI to
+find/wait/reuse refs on delayed and hidden DOM, reject ambiguity/stale refs, time
+out and cancel on navigation while the terminal stays responsive. Linux checks do
+not establish native compilation or WebKit success.
+
+## B02b implementation and local evidence
+
+The runtime/CLI/native implementation now includes the frozen find/is/wait grammar,
+read-only policy, exact document references and bounded native timer probes. Native
+callbacks keep their physical slots after timeout, with deadline checks before dispatch
+and completion. Text discovery excludes script/style/noscript/template descendants;
+role names are deliberately the documented common HTML subset.
+
+Focused checks use `CARGO_TARGET_DIR=/tmp/zmux-b02b-target` to prevent another checkout's
+concurrent Cargo build from replacing the CLI executable between build and invocation.
+`cargo test -p zmux -p zmux-desktop-runtime --test browser` passes 18 tests (6 CLI,
+12 runtime); strict Clippy for those packages/all targets and workspace formatting pass.
+The legacy leading-target URL regression first failed privately with “expected pane
+and URL”; the repaired adapter passes for open/navigate/goto. Earlier shared-target
+runs are not the evidence for this regression.
+
+`scripts/check-browser-dom` passes 35 real Chromium DOM cases using the actual Swift-owned
+script. It checks semantic naming, Unicode whitespace, hidden discovery, strict ambiguity,
+ordered selection, reusable/stale refs, readiness transitions and explicit element/node/text
+scan-limit failures. It is independent DOM evidence, not isolated-world/WebKit proof.
+
+The packaged App smoke now uses the bundled CLI against a never-selected WebKit host for
+role/name/exact discovery, label/testid agreement, ref reuse, delayed/hidden readiness,
+strict ambiguity, timeout and disconnected refs; focus retention is asserted afterward.
+Swift compilation and this new smoke await hosted macOS execution. Native concurrent
+wait/navigation ordering and terminal input during an admitted wait are not established
+by this fixture; runtime owner tests cover cancellation/late completion, and the existing
+native pending-eval journey separately covers terminal responsiveness. Physical callback
+saturation and native scheduler-delayed deadline behavior remain hosted verification gaps.
+No pointer/keyboard, frame, profile or full B02/V01 parity claim is made.
+
+Parent integrated validation passes 193 Rust tests, strict Clippy, formatting, notices and
+the C ABI in a private build directory. The parent also ran all35 Chromium DOM cases.
+Linux Foundation CI now executes this DOM suite; packaged native acceptance requires
+`browser_locators_waits`. Hosted results remain pending.

@@ -34,8 +34,10 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private struct PendingAutomation {
         let request: NativeBrowserRequest
         var owner: BrowserOwner
+        let deadline: ContinuousClock.Instant
         var navigation: WKNavigation?
         var timer: Task<Void, Never>?
+        var waitTask: Task<Void, Never>?
         var isolatedEval = false
         var userScriptStarted = false
     }
@@ -215,7 +217,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "host_busy", message: "Browser operation capacity or timeout limit exceeded", outcomeUnknown: false)))
             return
         }
-        operations[request.operationId] = PendingAutomation(request: request, owner: current)
+        operations[request.operationId] = PendingAutomation(request: request, owner: current,
+            deadline: ContinuousClock().now.advanced(by: .milliseconds(Int64(request.timeoutMs))))
         let id = request.operationId
         let timer = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(Int64(request.timeoutMs))) } catch { return }
@@ -228,7 +231,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         } else if processTerminated {
             failOperation(id, code: "web_process_terminated", message: "Web content process stopped; reload to recover", outcomeUnknown: false)
         } else if webView.isLoading {
-            failOperation(id, code: "document_loading", message: "Document is loading; wait for navigation completion", outcomeUnknown: false)
+            if request.action.isWait { scheduleWait(id) }
+            else { failOperation(id, code: "document_loading", message: "Document is loading; wait for navigation completion", outcomeUnknown: false) }
         } else if case .eval = request.action {
             preflightEval(id)
         } else {
@@ -237,6 +241,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     }
     private func startNavigation(_ id: UInt64) {
         guard let operation = operations[id] else { return }
+        guard beforeDeadline(id, operation) else { return }
         guard !operations.contains(where: { $0.key != id && $0.value.navigation != nil }) else {
             failOperation(id, code: "navigation_pending", message: "Another browser navigation is still pending", outcomeUnknown: false)
             return
@@ -284,10 +289,12 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private func failOperation(_ id: UInt64, code: String, message: String, outcomeUnknown: Bool) {
         guard let operation = operations.removeValue(forKey: id) else { return }
         operation.timer?.cancel()
+        operation.waitTask?.cancel()
         emitAutomation?(.fail(operationId: id, owner: operation.owner, error: .init(code: code, message: String(message.prefix(1024)), outcomeUnknown: outcomeUnknown)))
     }
     private func completeOperation(_ id: UInt64, value: BrowserJSON) {
         guard let operation = operations[id] else { return }
+        guard beforeDeadline(id, operation) else { return }
         guard !closed, automationOwner == operation.owner else {
             failOperation(id, code: "document_changed", message: "Browser document changed before completion", outcomeUnknown: operation.request.action.outcomeMayBeUnknown)
             return
@@ -312,11 +319,13 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             }
         } catch { failOperation(id, code: "invalid_result", message: error.localizedDescription, outcomeUnknown: operation.request.action.outcomeMayBeUnknown); return }
         operations.removeValue(forKey: id)?.timer?.cancel()
+        operation.waitTask?.cancel()
         emitAutomation?(.complete(operationId: id, owner: operation.owner, result: result))
     }
     private func preflightEval(_ id: UInt64) {
         guard let operation = operations[id] else { return }
-        guard javaScriptInFlight.count < 8 else {
+        guard beforeDeadline(id, operation) else { return }
+        guard !javaScriptInFlight.contains(id), javaScriptInFlight.count < 8 else {
             failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: false)
             return
         }
@@ -326,6 +335,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             guard let self else { return }
             self.javaScriptInFlight.remove(id)
             guard let pending = self.operations[id] else { return }
+            guard self.beforeDeadline(id, pending) else { return }
             guard !self.closed, self.automationOwner == expectedOwner, pending.owner == expectedOwner else {
                 self.failOperation(id, code: "document_changed", message: "Browser document changed before user evaluation started", outcomeUnknown: false)
                 return
@@ -352,7 +362,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     }
     private func runJavaScript(_ id: UInt64, action: BrowserAction) {
         guard let operation = operations[id] else { return }
-        guard javaScriptInFlight.count < 8 else {
+        guard beforeDeadline(id, operation) else { return }
+        guard !javaScriptInFlight.contains(id), javaScriptInFlight.count < 8 else {
             failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: false)
             return
         }
@@ -372,6 +383,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
             guard let self else { return }
             self.javaScriptInFlight.remove(id)
             guard let pending = self.operations[id] else { return }
+            guard self.beforeDeadline(id, pending) else { return }
             guard !self.closed, self.automationOwner == pending.owner else {
                 self.failOperation(id, code: "document_changed", message: "Browser document changed during JavaScript execution", outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
                 return
@@ -399,11 +411,38 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
                     let json = try JSONDecoder().decode(BrowserJSON.self, from: Data(text.utf8))
                     if case .object(let object) = json, case .object(let error)? = object["error"], case .string(let code)? = error["code"], case .string(let message)? = error["message"] {
                         self.failOperation(id, code: code, message: message, outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
+                    } else if pending.request.action.isWait {
+                        guard case .object(let root) = json, case .object(let value)? = root["value"],
+                              case .bool(let matched)? = value["matched"] else {
+                            throw BrowserAutomationFailure(code: "invalid_result", message: "Wait probe did not return a predicate result", outcomeUnknown: false)
+                        }
+                        if matched { self.completeOperation(id, value: json) }
+                        else { self.scheduleWait(id) }
                     } else { self.completeOperation(id, value: json) }
                 } catch let failure as BrowserAutomationFailure {
                     self.failOperation(id, code: failure.code, message: failure.message, outcomeUnknown: failure.outcomeUnknown)
                 } catch { self.failOperation(id, code: "invalid_result", message: error.localizedDescription, outcomeUnknown: pending.request.action.outcomeMayBeUnknown) }
             }
+        }
+    }
+    private func beforeDeadline(_ id: UInt64, _ operation: PendingAutomation) -> Bool {
+        guard ContinuousClock().now < operation.deadline else {
+            failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: operation.request.action.isNavigation || operation.userScriptStarted)
+            return false
+        }
+        return true
+    }
+    private func scheduleWait(_ id: UInt64) {
+        guard let operation = operations[id], operation.request.action.isWait,
+              beforeDeadline(id, operation) else { return }
+        operation.waitTask?.cancel()
+        operations[id]?.waitTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            guard let self, let pending = self.operations[id] else { return }
+            self.operations[id]?.waitTask = nil
+            guard !self.closed, self.automationOwner == pending.owner, self.beforeDeadline(id, pending) else { return }
+            if self.webView.isLoading { self.scheduleWait(id) }
+            else { self.runJavaScript(id, action: pending.request.action) }
         }
     }
     @objc private func submitAddress() {

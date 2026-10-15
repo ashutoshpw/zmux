@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Exercise original browser read scripts in a real DOM, independently of WebKit.
+
+Requires Chromium (CHROMIUM or --browser). This does not establish native bridge,
+isolated-world or WebKit lifecycle correctness; packaged macOS smoke owns those.
+"""
+import argparse
+import html
+import http.server
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import threading
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--browser', default=os.environ.get('CHROMIUM', shutil.which('chromium')))
+args = parser.parse_args()
+if not args.browser:
+    parser.error('Chromium is required; set CHROMIUM or --browser')
+root = Path(__file__).resolve().parent.parent
+swift = (root / 'apps/macos/Sources/BrowserAutomation.swift').read_text()
+source = swift.split('static let source = #"""\n', 1)[1].split('\n    """#', 1)[0]
+# Extraction runs the production-owned script unchanged. Expectations below are
+# public locator/readiness examples, not copies of its private helper algorithms.
+suite = r'''
+const runScript = new (Object.getPrototypeOf(async function(){}).constructor)('payload', SOURCE);
+let generation = '1', passed = 0;
+const call = async action => JSON.parse(await runScript(JSON.stringify({action, host_id:'fixture', document_generation:generation})));
+const assert = (condition, label) => { if (!condition) throw new Error(label); passed++; };
+const find = async locator => call({action:'find',locator});
+const wait = async (selector,state='visible') => call({action:'wait',selector,state});
+const code = (result, expected) => assert(result.error?.code === expected, `expected ${expected}: ${JSON.stringify(result)}`);
+(async () => {
+ document.body.innerHTML = `<main>
+ <label for="entry">  Account\n name </label><input id="entry" placeholder="Your account" data-testid="user-entry">
+ <button id="send" aria-labelledby="send-label">Ignored text</button><span id="send-label">Send   now</span>
+ <a href="/">Documentation</a><img alt="Brand badge" title="Company mark">
+ <div role="button link" aria-label="Custom action" id="custom"></div>
+ <div id="nested"><span>Unique   nested content</span></div>
+ <button class="many">Repeated</button><button class="many">Repeated</button>
+ <div id="hidden" style="display:none">Hidden content</div>
+ <input type="checkbox" checked id="check"><fieldset disabled><input id="disabled"></fieldset>
+ <textarea aria-label="Notes"></textarea><input type="color" id="color"><img title="Fallback image" id="fallback"><script type="text/plain">Excluded script locator text</script><select multiple id="choices"><option>One</option></select>
+ </main>`;
+ code(await find({kind:'text',query:'Excluded script locator text',exact:false}), 'element_not_found');
+ assert((await find({kind:'first',selector:'#color'})).value?.role === '', 'color input is not textbox');
+ assert((await find({kind:'title',query:'Fallback image',exact:true})).value?.name === 'Fallback image', 'image title fallback');
+ const button = await find({kind:'role',query:'button',name:'Send now',exact:true});
+ assert(button.value?.name === 'Send now' && button.value?.role === 'button', 'aria-labelledby role/name');
+ assert((await call({action:'get',kind:'text',selector:button.value.ref})).value === 'Ignored text', 'find ref can be reused');
+ assert((await find({kind:'label',query:'account\u0085name',exact:false})).value?.ref === (await find({kind:'placeholder',query:'Your account',exact:true})).value?.ref, 'associated label normalizes whitespace');
+ assert((await find({kind:'testid',query:'user-entry',exact:true})).value?.role === 'textbox', 'test id');
+ assert((await find({kind:'alt',query:'brand',exact:false})).value?.role === 'image', 'alt substring');
+ assert((await find({kind:'title',query:'Company mark',exact:true})).value?.name === 'Brand badge', 'image alt precedes title');
+ assert((await find({kind:'role',query:'BUTTON',name:'Custom action',exact:true})).value?.name === 'Custom action', 'explicit first role token');
+ const nested = await find({kind:'text',query:'unique nested',exact:false});
+ assert(nested.value?.text === 'Unique nested content' && (await call({action:'get',kind:'html',selector:nested.value.ref})).value.startsWith('<span>'), 'innermost text');
+ code(await find({kind:'text',query:'Unique nested Content',exact:true}), 'element_not_found');
+ code(await find({kind:'text',query:'Repeated',exact:true}), 'ambiguous_locator');
+ const first = await find({kind:'first',selector:'.many'}), last = await find({kind:'last',selector:'.many'});
+ assert(first.value.ref !== last.value.ref && (await find({kind:'nth',selector:'.many',index:1})).value.ref === last.value.ref, 'ordered selection');
+ code(await find({kind:'nth',selector:'.many',index:2}), 'element_not_found');
+ code(await find({kind:'first',selector:'['}), 'invalid_selector');
+ code(await wait('.many'), 'ambiguous_locator');
+ assert((await find({kind:'text',query:'Hidden content',exact:true})).value?.ref != null, 'hidden discovery');
+ for (const [selector,state,expected] of [
+ ['#hidden','visible',false], ['#hidden','hidden',true], ['#hidden','attached',true],
+ ['#missing','hidden',true], ['#missing','detached',true], ['#missing','disabled',false],
+ ['#check','checked',true], ['#check','unchecked',false], ['#disabled','disabled',true], ['#entry','enabled',true]
+ ]) assert((await wait(selector,state)).value?.matched === expected, `${selector} ${state}`);
+ document.querySelector('#hidden').style.display = 'block';
+ assert((await wait('#hidden')).value?.matched === true, 'fresh probe sees visibility transition');
+ document.querySelector('#send').remove();
+ code(await wait(button.value.ref, 'detached'), 'stale_reference');
+ generation = '2';
+ code(await wait(first.value.ref, 'hidden'), 'stale_reference');
+ document.body.innerHTML = '<div>' + '<i></i>'.repeat(4096) + '</div>';
+ code(await find({kind:'text',query:'anything'}), 'dom_scan_limit');
+ code(await wait('#absent','hidden'), 'dom_scan_limit');
+ document.body.innerHTML = '<div id="large"></div>';
+ document.getElementById('large').textContent = 'x'.repeat(1048577);
+ code(await wait('#absent','hidden'), 'dom_scan_limit');
+ document.body.innerHTML = '<div id="many-nodes"></div>';
+ for (let i=0; i<16384; i++) document.getElementById('many-nodes').append(document.createComment('bounded'));
+ code(await find({kind:'first',selector:'#many-nodes'}), 'dom_scan_limit');
+ document.documentElement.innerHTML = `<body><output id="result">${passed} DOM cases passed</output></body>`;
+})().catch(error => { document.documentElement.innerHTML = '<body><output id="result">FAIL: ' + String(error.stack) + '</output></body>'; });
+'''.replace('SOURCE', json.dumps(source), 1)
+page = ('<!doctype html><meta charset="utf-8"><body><script>' + suite.replace('</script', '<\\/script') + '</script>').encode()
+class Fixture(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
+    def log_message(self, *_):
+        pass
+
+with http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture) as server:
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        result = subprocess.run([args.browser, '--headless', '--no-sandbox', '--disable-gpu',
+                                 '--disable-dev-shm-usage', '--virtual-time-budget=3000',
+                                 '--dump-dom', f'http://127.0.0.1:{server.server_port}/'],
+                                text=True, capture_output=True, timeout=20)
+    finally:
+        server.shutdown()
+        worker.join()
+    matches = re.findall(r'<output id="result">(.*?)</output>', result.stdout, re.S)
+    message = html.unescape(matches[-1]) if matches else result.stderr[-2000:]
+    if result.returncode or not re.fullmatch(r'\d+ DOM cases passed', message):
+        raise SystemExit(message or 'Chromium did not finish the DOM suite')
+    print(message)
