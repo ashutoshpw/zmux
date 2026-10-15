@@ -220,6 +220,73 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
         .unwrap();
     assert_eq!(guide["socket_required"], false);
     assert_eq!(guide["aliases"], serde_json::json!(["--skill"]));
+    assert_eq!(catalog["contract_schema_version"], 1);
+    let contracts = catalog["contracts"].as_array().unwrap();
+    let split = contracts
+        .iter()
+        .find(|leaf| leaf["name"] == "new-split")
+        .unwrap();
+    assert_eq!(split["parser_defaults"]["focus"], false);
+    assert_eq!(split["output"]["schema_status"], "partial");
+    let open = contracts
+        .iter()
+        .find(|leaf| leaf["name"] == "browser open")
+        .unwrap();
+    assert_eq!(open["parser_defaults"]["focus"], true);
+    let url = contracts
+        .iter()
+        .find(|leaf| leaf["name"] == "browser get url")
+        .unwrap();
+    assert!(
+        !url["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|arg| arg["name"] == "selector")
+    );
+    let wait = contracts
+        .iter()
+        .find(|leaf| leaf["name"] == "browser download wait")
+        .unwrap();
+    assert_eq!(wait["parser_defaults"]["wait_timeout_ms"], 10_000);
+    assert_eq!(
+        catalog["error_contract"]["machine_readable_error_json"],
+        false
+    );
+    let frozen = &catalog["frozen_coverage"];
+    assert_eq!(frozen["behavioral_parity_verified"], false);
+    let entries = frozen["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 428);
+    for spelling in ["new-window", "browser click"] {
+        let row = entries
+            .iter()
+            .find(|row| row["reference_command"] == spelling)
+            .unwrap();
+        assert_eq!(row["status"], "unresolved");
+        assert!(row["local_contract"].is_null());
+        assert!(!contracts.iter().any(|leaf| leaf["name"] == spelling));
+    }
+    let checked = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        .args([
+            "--socket",
+            "relative-must-not-be-used",
+            "commands",
+            "--check",
+        ])
+        .env("ZMUX_LOCAL_TMUX", "1")
+        .env_remove("TMUX")
+        .env("ZMUX_SURFACE_ID", "surface:0")
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    let checked: Value = serde_json::from_slice(&checked.stdout).unwrap();
+    assert_eq!(checked["status"], "passed");
+    assert_eq!(checked["inventory_entries"], 428);
+    assert_eq!(checked["compatibility_verified"], false);
 
     let version = offline(&["version"]);
     assert!(version.status.success());
@@ -229,6 +296,7 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
         vec!["help", "nonexistent-topic"],
         vec!["browser", "bogus", "--help"],
         vec!["browser", "help", "unexpected"],
+        vec!["commands", "--check", "unexpected"],
     ] {
         let rejected = offline(&args);
         assert!(!rejected.status.success());
