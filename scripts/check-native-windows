@@ -72,9 +72,14 @@ def main():
             # trace and current executable path. Never launch another app on failure.
             trace = directory / "prepared.json.trace.log"
             if trace.is_file():
-                match = re.search(r"\[window-lifecycle pid=(\d+) ", trace.read_text()[:4096])
-                if match:
-                    pid = match.group(1)
+                with trace.open("rb") as stream:
+                    stream.seek(max(0, trace.stat().st_size - 65536))
+                    recent_trace = stream.read(65536).decode(errors="replace")
+                # Reopen appends to the same trace; use its latest process, not
+                # the already exited close-phase PID at the start of the file.
+                pids = re.findall(r"\[window-lifecycle pid=(\d+) ", recent_trace)
+                if pids:
+                    pid = pids[-1]
                     try:
                         command = subprocess.check_output(
                             ["/bin/ps", "-p", pid, "-o", "comm="], text=True, timeout=5).strip()

@@ -94,7 +94,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         sidebarCollapsed = saved ?? (inheritLegacy && UserDefaults.standard.bool(forKey: "sidebarCollapsed"))
         applySidebarLayout()
     }
-    func installMenus() { buildMenus() }
+    private lazy var windowMenu = makeMenus()
+    func installMenus() {
+        // A menu belongs to one tree. Key-window changes must switch the retained
+        // tree, not attach its persistent submenus to newly constructed parents.
+        if NSApp.mainMenu !== windowMenu { NSApp.mainMenu = windowMenu }
+    }
     func closeAuthorized() { authorizedClose = true; nativeReady = false; window.close(); finishPresentation() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !authorizedClose else { return true }
@@ -324,7 +329,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         return button
     }
 
-    private func buildMenus() {
+    private func makeMenus() -> NSMenu {
         let menu = NSMenu()
         let appItem = NSMenuItem()
         menu.addItem(appItem)
@@ -431,7 +436,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             item.target = self
         }
         editItem.submenu = edit
-        NSApp.mainMenu = menu
+        return menu
     }
 
     func present(_ snapshot: DesktopSnapshot, identity: MainWindowIdentity?) -> (selectionChanged: Bool, layoutChanged: Bool) {
