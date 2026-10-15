@@ -27,11 +27,14 @@ Release signing, notarization and automatic updates are later distribution gates
 
 - Real local login shells managed by Rust session workers.
 - Native AppKit terminal drawing with ANSI colors, cursor and wide-character grid positions.
+- Wheel/trackpad and keyboard history navigation, anchored output and post-exit browsing;
+  typing/paste returns to live output. Mouse-aware applications receive negotiated wheel bytes.
 - Workspace creation, renaming and switching; horizontal/vertical pane splits and closure.
 - Independent terminal tabs, selection/traversal, renaming, drag between panes, and close-other.
 - In-process Recently Closed history with retryable restoration of tabs and grouped layouts.
 - Collapsible sidebar (⌘B), Workspaces/Notifications tabs, unread workspace/tab badges and an
-  always-visible bell control. Inbox entries open their exact terminal, mark read or dismiss.
+  always-visible bell control and Dock unread count. Inbox entries open their exact terminal,
+  mark read or dismiss; tab focus/window activation acknowledges that focused surface.
 - Bell, OSC 9 and OSC 777 notifications, plus explicit `zmux notify`; plain output does not notify.
 - Embedded system WebKit browser tabs with address bar, back/forward/reload/stop, find and zoom.
   Browser views retain in-memory page state when hidden and do not allocate PTYs.
@@ -47,9 +50,11 @@ split down, **⌘W** to close the selected tab, and **⇧⌘T** to reopen the la
 Use **⇧⌘[** / **⇧⌘]** to traverse tabs, or History → Recently Closed to choose an item. Use the globe icon or Workspace → New Browser Tab to browse, and ⌘L to focus the browser
 address bar. Use the Browser menu for page find/zoom/navigation. Use the Edit menu for copy/paste.
 
+Use Shift-PageUp/PageDown for history pages and Command-Home/End for oldest/live output.
+Hold Shift while scrolling to bypass application mouse tracking.
+
 Initial limits: eight terminals and four browser tabs per app context, 16 KiB per paste, 1,000 retained terminal
-scrollback lines, and bounded command/input buffers. The first view displays the live
-viewport; scrollback navigation, saved layouts, search, full terminal-protocol coverage,
+scrollback lines, and bounded command/input buffers. Saved layouts, search, full terminal-protocol coverage,
 remote SSH sessions and iOS are not delivered by this build. Cloud browser sign-in and
 account/device management are integrated, but production service deployment remains pending
 the hosting discussion. This does not yet provide remote terminals.

@@ -75,3 +75,6 @@ focused-read indicators, desktop OS notification delivery/preferences, persisten
 agent hooks and command-completion notifications. Current attention source contracts
 are BEL, OSC 9, OSC 777 and explicit local notify. Plain output is never guessed as
 agent completion. The full CLI backlog above remains in progress.
+
+First hosted run 38692498847 passed Rust/ABI checks but rejected an unused Swift binding
+under warnings-as-errors. Remove the obsolete binding; rerun the unchanged native gates.
