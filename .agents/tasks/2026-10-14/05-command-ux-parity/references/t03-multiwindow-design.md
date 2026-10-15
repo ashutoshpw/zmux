@@ -308,3 +308,53 @@ A first run reused a sequential Cargo target across snapshots with preserved
 source mtimes and consumed stale pre-change library metadata. The fresh target
 passed without changing production source; per-snapshot targets are required.
 Hosted native execution of model 6 remains pending.
+
+## Native coordinator extraction foundation
+
+Original MIT extraction implemented locally, 2026-10-15; native compilation and
+packaged execution remain pending. No additional logical/native window action,
+CLI command, capacity or multiwindow capability is exposed.
+
+`ApplicationCoordinator` now owns the sole production `NativeBridge`, bounded
+command/polling/browser-event loops, notification delivery, image-paste operations,
+downloads, profile data stores and global terminal/browser registries. Startup is
+one-shot; shutdown callers share one retained task, and startup cannot launch loops
+after shutdown interrupts its bridge await. `MainWindowHost` owns the existing
+NSWindow, sidebar/header/layout, menu targets and responder state. It receives its
+coordinator and never starts or shuts down a Desktop.
+
+Native decoding now includes canonical window records. `MainWindowProjection`
+validates the singleton membership and selection before native resource changes,
+then constructs the presenter's read projection in canonical membership order.
+The coordinator retains the full snapshot and registers the presenter by identity
+namespace plus canonical WindowId. A never-started empty owner may be unbound;
+additional windows or inconsistent ownership fail explicitly. Layout runs before
+the shared view-content update and responder reconciliation, preserving first-frame
+and focus ordering.
+
+Browser views use the injected application-level `BrowserCommandOwner` rather than
+the window presenter. Downloads use `BrowserDownloadOwner`; destination sheets
+resolve their immutable origin surface and current canonical workspace/window to
+the registered presenter, without choosing a focused window. Existing download
+tokens, physical-credit retention, conversion delegates, staging/file publication
+and cancellation state transitions are unchanged. Terminal view creation remains
+in the shared registry; presenter callbacks keep their existing explicit pane,
+surface and session routes.
+
+Validation: `CARGO_TARGET_DIR=/tmp/zmux-t03-coordinator-target scripts/check` passed,
+including workspace tests, strict Clippy, notice inventory and actual C ABI checks;
+log `/tmp/zmux-t03-coordinator-check.log`. Scoped whitespace checks passed. Swift
+and the macOS SDK are unavailable on this Linux host, so these portable checks do
+not establish Swift compilation, native resource lifetime or UI behavior. Universal
+native compilation and the existing packaged journeys, especially browser profiles,
+downloads, clipboard images, notifications and local tmux, remain required gates.
+
+Two-window lifecycle/admission receipts, per-window sidebar preferences, menu/context
+routing, observed key-window attention, no-focus moves and last-main-window close
+with auxiliary windows remain future vertical work. This extraction is a singleton
+foundation and does not satisfy the multiwindow acceptance list above.
+
+Parent independent source review and full `scripts/check` passed against frozen
+snapshot `/tmp/zmux-coordinator-parent-verify-dnkj0s2o` with a fresh private Cargo
+target; log `/tmp/zmux-coordinator-parent-check.log`. Native compilation and packaged
+smoke remain required before native acceptance.

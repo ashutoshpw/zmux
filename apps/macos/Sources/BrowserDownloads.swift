@@ -36,7 +36,7 @@ final class BrowserDownloads: NSObject, WKDownloadDelegate {
         }
     }
     private let bridge: NativeBridge
-    private weak var owner: AppController?
+    private weak var owner: (any BrowserDownloadOwner)?
     private let files = BrowserDownloadFiles()
     private var jobs: [UUID: Job] = [:]
     private var panelOwner: UUID?
@@ -45,7 +45,7 @@ final class BrowserDownloads: NSObject, WKDownloadDelegate {
     private var timer: Task<Void, Never>?
     private var stopping = false
 
-    init(owner: AppController, bridge: NativeBridge) { self.owner = owner; self.bridge = bridge }
+    init(owner: any BrowserDownloadOwner, bridge: NativeBridge) { self.owner = owner; self.bridge = bridge }
 
     func reserve(origin: BrowserOwner, profile: UUID?, webView: WKWebView, conversionOwner: BrowserView, filename: String) async throws -> BrowserDownloadToken {
         guard !stopping, jobs.count < 4, jobs.values.filter({ $0.origin.surfaceId == origin.surfaceId }).count < 2,
@@ -249,7 +249,7 @@ final class BrowserDownloads: NSObject, WKDownloadDelegate {
         while panelOwner != nil, !job.cancelled, ContinuousClock.now < deadline {
             do { try await Task.sleep(for: .milliseconds(50)) } catch { job.cancelled = true }
         }
-        guard !job.cancelled, ContinuousClock.now < deadline, let window = owner?.window else {
+        guard !job.cancelled, ContinuousClock.now < deadline, let window = owner?.downloadWindow(for: job.origin) else {
             finishCancelled(job); return nil
         }
         panelOwner = job.token.downloadId

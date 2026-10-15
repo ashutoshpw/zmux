@@ -8,7 +8,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     let hostID = UUID()
     private(set) var documentGeneration: UInt64 = 1
     var onAutomationAction: (@MainActor (BrowserAction) -> Void)?
-    private weak var owner: AppController?
+    private weak var owner: (any BrowserCommandOwner)?
     let webView: WKWebView
     private let address = NSTextField()
     private let status = NSTextField(labelWithString: "Private browser")
@@ -58,7 +58,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private lazy var reload = IconButton(symbol: "arrow.clockwise", label: "Reload or stop", target: self, action: #selector(reloadPage))
 
     let profileID: UUID?
-    init(surface: Surface, owner: AppController, dataStore: WKWebsiteDataStore) {
+    init(surface: Surface, owner: any BrowserCommandOwner, dataStore: WKWebsiteDataStore) {
         profileID = surface.browserProfileId
         surfaceID = surface.id
         self.owner = owner

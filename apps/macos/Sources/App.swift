@@ -2,54 +2,23 @@ import AppKit
 import Darwin
 import WebKit
 
-private enum UICommand: Sendable {
-    case action(String, UInt64?, String?, String?, UInt64?)
-    case surface(String, UInt64?, UInt64?, Int?, UInt64?)
-    case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
-    case attention(String, UInt64?, UInt64?, Bool?)
-    case browser(String, UInt64?, UInt64?, String, String?, UUID?)
-    case browserAutomation(UInt64, BrowserAction)
-    case downloadCancel(BrowserDownloadRecord)
-    case pasteFiles(UInt64, [String])
-    case cancelUpload(UInt64)
-    case input(UInt64, String)
-    case resize(UInt64, Int, Int)
-    case scroll(UInt64, Int)
-    case wheel(UInt64, Int, Int, Int, Int, Bool)
-}
-
+/// One main window's presentation. Shared sessions and resource lifetimes belong
+/// to its injected coordinator, including views retained while this host is hidden.
 @MainActor
-final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWindowDelegate {
+final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWindowDelegate {
     let window: NSWindow
     var cloudWindow: NSWindowController?
     private(set) var snapshot: DesktopSnapshot?
 
-    private let bridge = NativeBridge()
-    private lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
-    private lazy var notificationDelivery = makeNotificationDelivery()
-    private func makeNotificationDelivery() -> NotificationDelivery {
-        NotificationDelivery(
-            sendEvent: { [weak self] event in
-                guard let self else { throw BridgeFailure(message: "Desktop is closed") }
-                try await self.bridge.notificationEvent(event)
-            },
-            performAction: { [weak self] action in
-                guard let self else { throw BridgeFailure(message: "Desktop is closed") }
-                return try await self.bridge.notificationAction(action)
-            },
-            activate: { [weak self] in
-                self?.window.makeKeyAndOrderFront(nil)
-                NSApp.activate()
-            },
-            reportError: { [weak self] message in self?.showError(message) }
-        )
-    }
-    private lazy var imagePastes = ClipboardImagePastes(bridge: bridge, reportError: { [weak self] message in
-        self?.showError(message)
-    }, statusChanged: { [weak self] in
-        guard let self, let snapshot = self.snapshot else { return }
-        self.updateHeader(snapshot)
-    })
+    private unowned let coordinator: ApplicationCoordinator
+    private(set) var identity: MainWindowIdentity?
+    private var bridge: NativeBridge { coordinator.bridge }
+    private var browserDownloads: BrowserDownloads { coordinator.browserDownloads }
+    private var notificationDelivery: NotificationDelivery { coordinator.notificationDelivery }
+    private var imagePastes: ClipboardImagePastes { coordinator.imagePastes }
+    private var terminals: [UInt64: TerminalView] { coordinator.terminals }
+    private var browsers: [UInt64: BrowserView] { coordinator.browsers }
+    var browserViewportSize: NSSize { canvas.bounds.size }
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarLayout = SidebarLayout()
@@ -73,21 +42,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var presentationError: String?
     private lazy var cloudFooter = CloudFooterView(target: self, action: #selector(showCloudSettings))
     private var actionButtons: [IconButton] = []
-    private let stream: AsyncStream<UICommand>
-    private let continuation: AsyncStream<UICommand>.Continuation
-    private var commandTask: Task<Void, Never>?
-    private var pollingTask: Task<Void, Never>?
-    private let browserEvents = AsyncStream<(UInt64, BrowserHostEvent?)>.makeStream(bufferingPolicy: .bufferingOldest(256))
-    private var browserEventGeneration: UInt64 = 0
-    private var browserEventsNeedRecovery = false
-    private var browserEventTask: Task<Void, Never>?
-    private var browserEpoch: UUID?
     private var layoutKey = ""
     private var splitFractions: [String: CGFloat] = [:]
     private var modelRevision: UInt64 = .max
-    private var terminals: [UInt64: TerminalView] = [:]
-    private var browsers: [UInt64: BrowserView] = [:]
-    private var browserDataStores: [UUID: WKWebsiteDataStore] = [:]
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
     private var workspaceRowsNamespace: UUID?
     private var metadataPopover: NSPopover?
@@ -98,8 +55,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private var workspaceCount = 1
     private var didSetInitialTerminalFocus = false
 
-    override init() {
-        (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
+    init(coordinator: ApplicationCoordinator) {
+        self.coordinator = coordinator
         window = SidebarFocusWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -122,106 +79,13 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         buildMenus()
     }
 
-    func start(storage: NativeDesktopStorage = .applicationSupport) async throws {
-        try await bridge.start(storage: storage)
-        browserEventTask = Task { [weak self] in
-            guard let self else { return }
-            for await (generation, event) in self.browserEvents.stream {
-                if Task.isCancelled { break }
-                if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
-                guard generation == self.browserEventGeneration, let event else { continue }
-                do { try await self.bridge.browserEvent(event) }
-                catch {
-                    self.browserEventsNeedRecovery = true
-                    self.showError("Browser host synchronization failed: " + error.localizedDescription)
-                }
-                if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
-            }
-        }
-        commandTask = Task { [weak self, stream] in
-            for await command in stream {
-                guard let self, !Task.isCancelled else { break }
-                do {
-                    switch command {
-                    case .action(let action, let pane, let axis, let title, let workspace):
-                        try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
-                    case .surface(let action, let surface, let pane, let index, let closed):
-                        try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
-                    case .navigation(let action, let direction, let pane, let surface, let workspace, let focus):
-                        try await self.bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
-                    case .browser(let operation, let surface, let pane, let url, let title, let profile):
-                        try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title, profile: profile)
-                    case .downloadCancel(let record):
-                        try await self.bridge.cancelBrowserDownload(record)
-                    case .browserAutomation(let surface, let action):
-                        try await self.bridge.browserAction(surface: surface, action: action)
-                    case .attention(let operation, let id, let through, let active):
-                        try await self.bridge.attention(operation, id: id, through: through, active: active)
-                    case .pasteFiles(let surface, let paths):
-                        try await self.bridge.pasteFiles(surface: surface, paths: paths)
-                    case .cancelUpload(let id):
-                        try await self.bridge.cancelUpload(id: id)
-                    case .input(let session, let text):
-                        try await self.bridge.input(session: session, text: text)
-                    case .wheel(let session, let lines, let row, let col, let modifiers, let history):
-                        try await self.bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
-                    case .scroll(let session, let lines):
-                        try await self.bridge.scroll(session: session, lines: lines)
-                    case .resize(let session, let rows, let cols):
-                        try await self.bridge.resize(session: session, rows: rows, cols: cols)
-                    }
-                } catch {
-                    self.showError(error.localizedDescription)
-                }
-            }
-        }
-        pollingTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { break }
-                do {
-                    if self.browserEventsNeedRecovery {
-                        // A wakeup, not a second sender: recovery must progress even
-                        // when the last lifecycle event was the one that failed.
-                        _ = self.browserEvents.continuation.yield((self.browserEventGeneration, nil))
-                    }
-                    if let snapshot = try await self.bridge.poll() { self.present(snapshot) }
-                    if (self.snapshot?.browserPendingRequests ?? 0) > 0 {
-                        let batch = try await self.bridge.drainBrowserRequests()
-                        if batch.epoch == self.browserEpoch {
-                            for request in batch.requests {
-                                self.browsers[request.owner.surfaceId]?.executeAutomation(request)
-                            }
-                        }
-                    }
-                    try await Task.sleep(for: .milliseconds(32))
-                } catch is CancellationError {
-                    break
-                } catch {
-                    self.showError(error.localizedDescription)
-                    do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
-                }
-            }
-        }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        appActive(NSApp.isActive)
-    }
-
-    func shutdown() async throws {
-        continuation.finish()
-        commandTask?.cancel()
-        pollingTask?.cancel()
-        browsers.values.forEach { $0.close() }
-        browsers.removeAll()
-        try await browserDownloads.shutdown()
-        browserEvents.continuation.finish()
-        browserEventTask?.cancel()
-        notificationDelivery.stop()
+    func finishPresentation() {
         metadataPopover?.performClose(nil)
         metadataPopover = nil; metadataInspector = nil
-        await imagePastes.stopAccepting()
-        try await bridge.close()
-        await imagePastes.desktopClosed()
+    }
+    func refreshSharedStatus(_ snapshot: DesktopSnapshot) {
+        guard let current = self.snapshot, current.revision == snapshot.revision else { return }
+        updateHeader(current)
     }
 
     func updateCloudStatus(_ label: String, connected: Bool) {
@@ -229,13 +93,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
 
     private func enqueue(_ command: UICommand) {
-        presentationError = nil
-        if case .dropped = continuation.yield(command) {
-            showError("Command queue is full; the new command was not accepted")
-        }
+        coordinator.enqueue(command)
     }
 
-    private func showError(_ message: String) {
+    func clearErrorForCommand() { presentationError = nil }
+
+    func showError(_ message: String) {
         presentationError = message
         statusMessage = message
         mainHeader.update(title: mainHeader.titleLabel.stringValue, detail: message, error: true)
@@ -410,8 +273,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     func windowDidResize(_ notification: Notification) { applySidebarLayout() }
 
     func appActive(_ active: Bool) {
-        enqueue(.attention("app_active", nil, nil, active && window.isKeyWindow))
-        if active { notificationDelivery.refreshPermission() }
+        coordinator.appActive(active)
     }
     func windowDidBecomeKey(_ notification: Notification) { appActive(NSApp.isActive) }
     func windowDidResignKey(_ notification: Notification) { appActive(false) }
@@ -530,77 +392,30 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         NSApp.mainMenu = menu
     }
 
-    private func present(_ snapshot: DesktopSnapshot) {
+    func present(_ snapshot: DesktopSnapshot, identity: MainWindowIdentity?) -> (selectionChanged: Bool, layoutChanged: Bool) {
         let selectionChanged = self.snapshot?.model.focusedWorkspace != snapshot.model.focusedWorkspace
             || self.snapshot?.workspace?.focusedPane != snapshot.workspace?.focusedPane
             || focusedPane?.selectedSurface != snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane })?.selectedSurface
         let layoutChanged = layoutKey != (snapshot.workspace?.root.key ?? "empty")
-        let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
-        terminals = terminals.filter { liveSessions.contains($0.key) }
-        let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
-        browsers = browsers.filter { key, value in
-            if liveBrowsers.contains(key) { return true }
-            value.close(); return false
-        }
-        if browserEpoch != snapshot.browserEpoch {
-            browsers.values.forEach { $0.close() }
-            browsers.removeAll()
-            browserEpoch = snapshot.browserEpoch
-            layoutKey = ""
-        }
+        if self.snapshot?.browserEpoch != snapshot.browserEpoch || self.identity != identity { layoutKey = "" }
+        self.identity = identity
         self.snapshot = snapshot
-        browserDownloads.update(snapshot)
         browserProfilesWindow?.update(snapshot.browserProfiles)
-        // Keep the bounded browser set mounted even when its tabs are hidden so
-        // automation targets never need to change the user's selection or focus.
-        for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
-            let view: BrowserView
-            if let existing = browsers[surface.id], existing.profileID == surface.browserProfileId { view = existing }
-            else {
-                browsers.removeValue(forKey: surface.id)?.close()
-                let dataStore: WKWebsiteDataStore
-                if let profile = surface.browserProfileId {
-                    guard snapshot.browserProfiles.profiles.contains(where: { $0.id == profile }) else {
-                        showError("Browser profile is unavailable; its data store was not replaced")
-                        continue
-                    }
-                    if let existing = browserDataStores[profile] { dataStore = existing }
-                    else {
-                        guard browserDataStores.count < 32 else { showError("Browser profile data store capacity reached"); continue }
-                        dataStore = WKWebsiteDataStore(forIdentifier: profile)
-                        browserDataStores[profile] = dataStore
-                    }
-                } else { dataStore = .nonPersistent() }
-                view = BrowserView(surface: surface, owner: self, dataStore: dataStore)
-                view.frame = NSRect(x: 0, y: 0, width: min(1920, max(640, canvas.bounds.width)), height: min(1200, max(480, canvas.bounds.height)))
-                view.layoutSubtreeIfNeeded()
-            }
-            browsers[surface.id] = view
-            view.onAutomationAction = { [weak self] action in self?.enqueue(.browserAutomation(surface.id, action)) }
-            view.bindAutomation(epoch: snapshot.browserEpoch, identityNamespace: snapshot.model.identityNamespace) { [weak self] event in
-                guard let self else { return }
-                if case .dropped = self.browserEvents.continuation.yield((self.browserEventGeneration, event)) {
-                    self.browserEventsNeedRecovery = true
-                    self.showError("Browser event queue is full; resynchronizing browser hosts")
-                }
-            }
-        }
-        imagePastes.update(snapshot)
         statusMessage = snapshot.lastError ?? "Ready"
         rebuildWorkspaceRowsIfNeeded(snapshot)
         updateWorkspaceRows(snapshot)
         updateHeader(snapshot)
         updateNotifications(snapshot)
-        notificationDelivery.update(snapshot.nativeNotifications)
         updateTerminalLayoutIfNeeded(snapshot)
         let liveSplits = Set(snapshot.model.workspaces.flatMap { $0.root.splitKeys })
         splitFractions = splitFractions.filter { liveSplits.contains($0.key) }
 
-        for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
-        for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
-            browsers[surface.id]?.update(surface)
-        }
         updateTabAttention(canvas, snapshot: snapshot)
+        return (selectionChanged, layoutChanged)
+    }
+
+    func completePresentation(selectionChanged: Bool, layoutChanged: Bool) {
+        guard let snapshot else { return }
         if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }),
            let session = pane.sessionId, let terminal = terminals[session] {
             if selectionChanged || !didSetInitialTerminalFocus {
@@ -611,24 +426,6 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             }
         } else if selectionChanged && !layoutChanged, let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
             window.makeFirstResponder(browser.webView)
-        }
-    }
-
-    private func recoverBrowserHostEvents() async {
-        browserEventsNeedRecovery = false
-        browserEventGeneration &+= 1
-        // Discard queued incremental events captured before this full-owner snapshot.
-        // New events retain order after the snapshot while acknowledgements are awaited.
-        let attachments = browsers.values.compactMap { $0.automationAttachment() }
-        let observations = browsers.values.compactMap { $0.automationObservation() }
-        for event in attachments + observations {
-            if Task.isCancelled { return }
-            do { try await bridge.browserEvent(event) }
-            catch {
-                browserEventsNeedRecovery = true
-                showError("Browser synchronization is retrying: " + error.localizedDescription)
-                return
-            }
         }
     }
 
@@ -815,8 +612,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         case .leaf(let pane):
             let view: NSView
             if let session = pane.sessionId {
-                let terminal = terminals[session] ?? TerminalView(pane: pane)
-                terminal.pane = pane
+                let terminal = coordinator.terminal(session: session, pane: pane)
                 terminal.onFiles = { [weak self] paths in self?.enqueue(.pasteFiles(pane.selectedSurface, paths)) }
                 terminal.onImage = { [weak self] data in
                     guard let self else { return false }
@@ -829,7 +625,6 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                 terminal.onScroll = { [weak self] lines in self?.enqueue(.scroll(session, lines)) }
                 terminal.onResize = { [weak self] rows, cols in self?.enqueue(.resize(session, rows, cols)) }
                 terminal.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
-                terminals[session] = terminal
                 view = terminal
             } else {
                 // Reconciliation owns profile validation, datastore selection and
@@ -920,14 +715,6 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         createBrowser(in: pane.id, url: "about:blank", profile: profile)
     }
     @objc private func showBrowserDownloads(_ sender: Any?) { browserDownloads.showWindow(sender) }
-    func reserveBrowserDownload(origin: BrowserOwner, profile: UUID?, webView: WKWebView, conversionOwner: BrowserView, filename: String) async throws -> BrowserDownloadToken {
-        try await browserDownloads.reserve(origin: origin, profile: profile, webView: webView, conversionOwner: conversionOwner, filename: filename)
-    }
-    func adoptBrowserDownload(_ download: WKDownload, token: BrowserDownloadToken, webView: WKWebView) { browserDownloads.adopt(download, token: token, webView: webView) }
-    func abandonBrowserDownload(_ token: BrowserDownloadToken) { browserDownloads.abandon(token) }
-    func cancelBrowserDownloadConversion(_ token: BrowserDownloadToken) { browserDownloads.cancelConversion(token) }
-    func cancelBrowserDownloads(host: UUID) { browserDownloads.cancelHost(host) }
-    func cancelBrowserDownload(_ record: BrowserDownloadRecord) { enqueue(.downloadCancel(record)) }
     @objc private func showBrowserProfiles(_ sender: Any?) {
         if browserProfilesWindow == nil {
             let bridge = self.bridge
@@ -2519,12 +2306,13 @@ emit("done")
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var controller: AppController?
+    private var coordinator: ApplicationCoordinator?
     private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let controller = AppController()
-        self.controller = controller
+        let coordinator = ApplicationCoordinator()
+        self.coordinator = coordinator
+        let controller = coordinator.mainWindowHost
         Task {
             do {
                 if CommandLine.arguments.contains("--smoke-test") {
@@ -2537,16 +2325,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
                 } else { storage = .applicationSupport }
-                try await controller.start(storage: storage)
+                try await coordinator.start(storage: storage)
                 if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
                         try await controller.smokeTest(report: report)
-                        try await controller.shutdown()
+                        try await coordinator.shutdown()
                         exit(0)
                     } catch {
                         FileHandle.standardError.write(Data("Native smoke failed: \(error.localizedDescription)\n".utf8))
-                        do { try await controller.shutdown() } catch {
+                        do { try await coordinator.shutdown() } catch {
                             FileHandle.standardError.write(Data("Cleanup failed: \(error)\n".utf8))
                         }
                         exit(1)
@@ -2564,17 +2352,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) { controller?.appActive(true) }
-    func applicationDidResignActive(_ notification: Notification) { controller?.appActive(false) }
+    func applicationDidBecomeActive(_ notification: Notification) { coordinator?.appActive(true) }
+    func applicationDidResignActive(_ notification: Notification) { coordinator?.appActive(false) }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let controller else { return .terminateNow }
+        guard let coordinator else { return .terminateNow }
         if terminating { return .terminateLater }
         terminating = true
         Task {
-            do { try await controller.shutdown() } catch {
+            do { try await coordinator.shutdown() } catch {
                 FileHandle.standardError.write(Data("zmux shutdown: \(error)\n".utf8))
                 // Teardown has already stopped sessions. Do not offer a misleading
                 // Cancel/Retry that would return the user to a dead desktop.

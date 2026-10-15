@@ -3,7 +3,7 @@ import AuthenticationServices
 
 @MainActor
 final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAuthenticationPresentationContextProviding {
-    private weak var appController: AppController?
+    private weak var appController: MainWindowHost?
     private let endpoint: CloudEndpoint
     private let client: CloudClient
     private let accountLabel = NSTextField(labelWithString: "Connect your workspace")
@@ -19,7 +19,7 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
     private var generation: UInt64 = 0
     private var busy = false
 
-    init(owner: AppController) {
+    init(owner: MainWindowHost) {
         self.appController = owner
         // Build validation supplies a valid owned origin. A malformed configuration fails visibly.
         do { endpoint = try CloudEndpoint(CloudEndpoint.configured) }
@@ -256,7 +256,7 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
 }
 
 @MainActor
-extension AppController {
+extension MainWindowHost {
     @objc func installCommandLineTool(_ sender: Any?) {
         guard let resources = Bundle.main.resourceURL else { return }
         let executable = resources.appendingPathComponent("bin/zmux")

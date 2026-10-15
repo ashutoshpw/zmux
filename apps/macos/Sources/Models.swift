@@ -75,7 +75,16 @@ indirect enum PaneTree: Decodable, Sendable {
 }
 struct Workspace: Decodable, Sendable { let id: UInt64; let name: String; let focusedPane: UInt64; let root: PaneTree }
 struct ClosedItem: Decodable, Sendable { let id: UInt64; let title: String; let workspaceName: String; let restoring: Bool }
-struct Model: Decodable, Sendable { let identityNamespace: UUID; let modelVersion: UInt32; let closedItems: [ClosedItem]; let revision: UInt64; let focusedWorkspace: UInt64?; let workspaces: [Workspace] }
+struct DesktopWindow: Decodable, Sendable {
+    let id: UInt64
+    let workspaceIds: [UInt64]
+    let selectedWorkspace: UInt64?
+}
+struct Model: Decodable, Sendable {
+    let identityNamespace: UUID; let modelVersion: UInt32; let closedItems: [ClosedItem]
+    let revision: UInt64; let focusedWorkspace: UInt64?; let workspaces: [Workspace]
+    let windows: [DesktopWindow]; let focusedWindow: UInt64?
+}
 struct AttentionNotification: Decodable, Sendable {
     let id: UInt64; let surfaceId: UInt64?; let workspaceId: UInt64; let identityNamespace: UUID
     let title: String; let subtitle: String; let body: String; let source: String
@@ -148,7 +157,7 @@ struct DesktopSnapshot: Decodable, Sendable {
     let uploads: [UploadProgress]
     let workspaceMetadata: [WorkspaceMetadata]?
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
-    let revision: UInt64; let model: Model; let frames: [Frame]
+    let revision: UInt64; var model: Model; let frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool
     var workspace: Workspace? { model.workspaces.first { $0.id == model.focusedWorkspace } }
 }

@@ -512,13 +512,13 @@ final class CloudFooterView: BackgroundView {
 @MainActor
 final class TerminalTabBar: BackgroundView {
     private let pane: Pane
-    private weak var owner: AppController?
+    private weak var owner: MainWindowHost?
     private let scroll = NSScrollView()
     private let strip = NSView()
     private var tabs: [TerminalTabControl] = []
     private static let dragType = NSPasteboard.PasteboardType("app.zmux.terminal-surface")
 
-    init(pane: Pane, owner: AppController) {
+    init(pane: Pane, owner: MainWindowHost) {
         self.pane = pane
         self.owner = owner
         super.init(color: ZmuxPalette.chrome)
@@ -584,11 +584,11 @@ final class TerminalTabBar: BackgroundView {
 @MainActor
 final class TerminalTabControl: BackgroundView, NSDraggingSource {
     var surface: Surface
-    weak var owner: AppController?
+    weak var owner: MainWindowHost?
     private var mouseOrigin: NSPoint?
     private let titleLabel = NSTextField(labelWithString: "")
 
-    init(surface: Surface, selected: Bool, owner: AppController) {
+    init(surface: Surface, selected: Bool, owner: MainWindowHost) {
         self.surface = surface
         self.owner = owner
         super.init(color: selected ? ZmuxPalette.terminal : ZmuxPalette.chrome)
@@ -664,8 +664,8 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
 @MainActor
 final class NotificationRowView: BackgroundView {
     private let item: AttentionNotification
-    private weak var owner: AppController?
-    init(item: AttentionNotification, workspaceName: String?, available: Bool, owner: AppController) {
+    private weak var owner: MainWindowHost?
+    init(item: AttentionNotification, workspaceName: String?, available: Bool, owner: MainWindowHost) {
         self.item = item; self.owner = owner
         super.init(color: NSColor.white.withAlphaComponent(item.read ? 0.025 : 0.065))
         layer?.cornerRadius = 7
