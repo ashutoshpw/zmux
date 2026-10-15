@@ -1,0 +1,35 @@
+name: Browser keyboard feasibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-keyboard-feasibility-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  public-native-keyboard:
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Inspect isolated probe inputs
+        run: python3 -B tools/native-fixtures/browser-keyboard/run.py --check
+      - name: Compile and observe real public WebKit keyboard behavior
+        run: python3 -B tools/native-fixtures/browser-keyboard/run.py --output "$RUNNER_TEMP/browser-keyboard"
+      - name: Retain native observations, binary and bounded compiler/runtime logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-keyboard-feasibility-${{ github.sha }}
+          path: ${{ runner.temp }}/browser-keyboard/
+          if-no-files-found: warn
+          retention-days: 7
