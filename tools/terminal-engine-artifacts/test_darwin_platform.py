@@ -77,11 +77,16 @@ class DarwinPlatformChecks(unittest.TestCase):
 
     @unittest.skipUnless(platform.system() == "Darwin", "actual Apple linker is required")
     def test_actual_linked_consumers_keep_deployment_14(self):
+        sdk = subprocess.run(["xcrun", "--sdk", "macosx", "--show-sdk-path"],
+                             check=True, capture_output=True, text=True, timeout=15).stdout.strip()
+        source = self.root / "linked-consumer.c"
+        source.write_text(self.source.read_text() + "int main(void) { return (int)zmux_macho_probe(0) - 7; }\n")
         for arch in ("arm64", "x86_64"):
             binary = self.root / ("consumer-" + arch)
-            subprocess.run([self.clang, "-target", arch + "-apple-macos14.0", "-nostdlib",
-                            "-Wl,-e,_zmux_macho_probe", str(self.source), "-o", str(binary)],
-                           check=True, capture_output=True, timeout=15)
+            compiled = subprocess.run([self.clang, "-target", arch + "-apple-macos14.0",
+                                       "-isysroot", sdk, str(source), "-o", str(binary)],
+                                      capture_output=True, timeout=15)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr[:8192].decode(errors="replace"))
             result = inspect_macho(binary.read_bytes(), arch, executable=True)
             self.assertEqual(result["minimum_macos"], [14, 0, 0])
 
