@@ -67,6 +67,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [F04 worker startup](references/f04-worker-startup.md) — production worker-owned engine lifecycle and explicit startup failure before candidate linkage.
 - [F04 engine artifacts](references/f04-engine-artifacts.md) — pinned static-library provenance, linked notices and fail-closed artifact prerequisites before app linkage.
 - [A01 workspace metadata](references/a01-workspace-metadata.md) — scoped status/progress/log commands, aggregate bounds and native presentation gates.
+- [F04 production linkage](references/f04-production-linkage.md) — explicit retained-library bridge, staged Viewport publication and native linkage gates.
 - [F04 resource telemetry](references/f04-native-resource-sampler.md) — bounded external Mac measurements and remaining workload/budget gates.
 - [T01 terminal input](references/t01-terminal-input.md) — legacy special-key encoding and real PTY acceptance.
 - [N01 sidebar resizing](references/n01-sidebar-resizing.md) — persistent width, native drag/keyboard/accessibility controls and acceptance.

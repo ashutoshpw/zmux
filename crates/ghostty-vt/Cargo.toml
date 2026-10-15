@@ -1,0 +1,23 @@
+[package]
+name = "zmux-ghostty-vt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+links = "zmux_ghostty_vt"
+
+[features]
+linked = []
+
+[build-dependencies]
+serde_json.workspace = true
+
+# Unsafe is confined to the C owner boundary. No pointer escapes this crate.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

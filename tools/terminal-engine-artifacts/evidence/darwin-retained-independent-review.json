@@ -1,0 +1,308 @@
+{
+  "review": "independent retained byte/source/notice/symbol/deployment/host-log review",
+  "workflow_run": 38799601657,
+  "source_sha": "41f1645372daca1282d0387aeb338315e2acab60",
+  "producer_receipt_sha256": "a40d6c048636432a4be4b1ffd2db39e611ecf955d1ab495ec029f1dc77a89891",
+  "original_bundle_complete": false,
+  "original_frozen_files_verified": 137,
+  "supplemental_required_files": [
+    ".github/workflows/terminal-engine-artifacts.yml"
+  ],
+  "supplemental_root": "/tmp/zmux-darwin-supplemental-source-38799601657",
+  "header_files_verified": 37,
+  "notices_verified": 80,
+  "runtime_source_hashes_matched_by_host": 37,
+  "targets": [
+    {
+      "architecture": "arm64",
+      "library_sha256": "df2aa776d0637f13e6641ac443695c9ea4cd592416b9b1a35bf2e73be9c7e658",
+      "library_bytes": 9061048,
+      "members": 2,
+      "library_minimum_macos": [
+        13,
+        0,
+        0
+      ],
+      "defined_symbols": 563,
+      "undefined_symbols": 108,
+      "external_undefined_count": 102,
+      "delta": {
+        "added": [
+          "__isPlatformVersionAtLeast"
+        ],
+        "removed": [
+          "__gnu_f2h_ieee",
+          "__gnu_h2f_ieee",
+          "__memcpy_chk",
+          "__memmove_chk",
+          "__memset_chk",
+          "__strcat_chk",
+          "__strcpy_chk",
+          "__zig_probe_stack",
+          "bcmp",
+          "ceil",
+          "ceilf",
+          "ceill",
+          "cos",
+          "cosf",
+          "cosl",
+          "exp",
+          "exp2",
+          "exp2f",
+          "exp2l",
+          "expf",
+          "expl",
+          "fabs",
+          "fabsf",
+          "fabsl",
+          "floor",
+          "floorf",
+          "floorl",
+          "fma",
+          "fmaf",
+          "fmal",
+          "fmax",
+          "fmaxf",
+          "fmaxl",
+          "fmin",
+          "fminf",
+          "fminl",
+          "fmod",
+          "fmodf",
+          "fmodl",
+          "log",
+          "log10",
+          "log10f",
+          "log10l",
+          "log2",
+          "log2f",
+          "log2l",
+          "logf",
+          "logl",
+          "memcmp",
+          "memcpy",
+          "memmove",
+          "round",
+          "roundf",
+          "roundl",
+          "sin",
+          "sinf",
+          "sinl",
+          "sqrt",
+          "sqrtf",
+          "sqrtl",
+          "strlen",
+          "tan",
+          "tanf",
+          "tanl",
+          "trunc",
+          "truncf",
+          "truncl"
+        ]
+      },
+      "binaries": {
+        "c-abi": {
+          "sha256": "fd61aa8243f06edf4ef3ed0d966bbf883b465a449166687d433b37a477fd02a4",
+          "inventory": {
+            "format": "Mach-O",
+            "architecture": "arm64",
+            "cpu_subtype": 0,
+            "file_type": "executable",
+            "minimum_macos": [
+              14,
+              0,
+              0
+            ],
+            "object_sdk": [
+              15,
+              5,
+              0
+            ],
+            "sdk_unspecified_in_object": false
+          },
+          "dynamic_libraries": [
+            "/usr/lib/libSystem.B.dylib"
+          ]
+        },
+        "metadata-fixture": {
+          "sha256": "6336bbdaf82f2ea80aee0479ddab2111e1f597fbd2bbd7883ae4a17852e46ba8",
+          "inventory": {
+            "format": "Mach-O",
+            "architecture": "arm64",
+            "cpu_subtype": 0,
+            "file_type": "executable",
+            "minimum_macos": [
+              14,
+              0,
+              0
+            ],
+            "object_sdk": [
+              15,
+              5,
+              0
+            ],
+            "sdk_unspecified_in_object": false
+          },
+          "dynamic_libraries": [
+            "/usr/lib/libSystem.B.dylib"
+          ]
+        }
+      },
+      "execution": "passed_on_arm64_runner",
+      "library_reused": true
+    },
+    {
+      "architecture": "x86_64",
+      "library_sha256": "3933947add88a2bbb4bc3ccec7ead6615127396536385d99069fbf46c789f941",
+      "library_bytes": 9230728,
+      "members": 2,
+      "library_minimum_macos": [
+        13,
+        0,
+        0
+      ],
+      "defined_symbols": 566,
+      "undefined_symbols": 110,
+      "external_undefined_count": 103,
+      "delta": {
+        "added": [
+          "__isPlatformVersionAtLeast"
+        ],
+        "removed": [
+          "__memcpy_chk",
+          "__memmove_chk",
+          "__memset_chk",
+          "__strcat_chk",
+          "__strcpy_chk",
+          "bcmp",
+          "ceil",
+          "ceilf",
+          "ceill",
+          "cos",
+          "cosf",
+          "cosl",
+          "exp",
+          "exp2",
+          "exp2f",
+          "exp2l",
+          "expf",
+          "expl",
+          "fabs",
+          "fabsf",
+          "fabsl",
+          "floor",
+          "floorf",
+          "floorl",
+          "fma",
+          "fmaf",
+          "fmal",
+          "fmax",
+          "fmaxf",
+          "fmaxl",
+          "fmin",
+          "fminf",
+          "fminl",
+          "fmod",
+          "fmodf",
+          "fmodl",
+          "log",
+          "log10",
+          "log10f",
+          "log10l",
+          "log2",
+          "log2f",
+          "log2l",
+          "logf",
+          "logl",
+          "memcmp",
+          "memcpy",
+          "memmove",
+          "round",
+          "roundf",
+          "roundl",
+          "sin",
+          "sinf",
+          "sinl",
+          "sqrt",
+          "sqrtf",
+          "sqrtl",
+          "strlen",
+          "tan",
+          "tanf",
+          "tanl",
+          "trunc",
+          "truncf",
+          "truncl"
+        ]
+      },
+      "binaries": {
+        "c-abi": {
+          "sha256": "505d72a304933cf29bb83f0a7aff867c68cdff0d4985302dce984af02851744b",
+          "inventory": {
+            "format": "Mach-O",
+            "architecture": "x86_64",
+            "cpu_subtype": 3,
+            "file_type": "executable",
+            "minimum_macos": [
+              14,
+              0,
+              0
+            ],
+            "object_sdk": [
+              15,
+              5,
+              0
+            ],
+            "sdk_unspecified_in_object": false
+          },
+          "dynamic_libraries": [
+            "/usr/lib/libSystem.B.dylib"
+          ]
+        },
+        "metadata-fixture": {
+          "sha256": "d506c78c435a3469c3849c1d4bdd85cebaa02909af531a996ed21ca69743ef08",
+          "inventory": {
+            "format": "Mach-O",
+            "architecture": "x86_64",
+            "cpu_subtype": 3,
+            "file_type": "executable",
+            "minimum_macos": [
+              14,
+              0,
+              0
+            ],
+            "object_sdk": [
+              15,
+              5,
+              0
+            ],
+            "sdk_unspecified_in_object": false
+          },
+          "dynamic_libraries": [
+            "/usr/lib/libSystem.B.dylib"
+          ]
+        }
+      },
+      "execution": "not_run_cross_architecture",
+      "library_reused": false
+    }
+  ],
+  "actual_engine_builds_this_run": [
+    "x86_64"
+  ],
+  "actual_execution": "arm64 C ABI + actual Rust/C metadata owner on macOS15.7.9/Xcode16.4/SDK15.5",
+  "additional_platform_symbol": "__isPlatformVersionAtLeast comes from hash-reviewed Zig lib/compiler_rt/os_version_check.zig, referencing retained LLVM13 compiler-rt notice; no new runtime component found",
+  "not_claimed": [
+    "Intel execution",
+    "execution on macOS13 or14",
+    "AppKit/Cargo engine linkage",
+    "production Viewport/input parity",
+    "hard process memory/time bounds",
+    "default engine selection"
+  ],
+  "reviewed_root": "/tmp/zmux-darwin-hosted-38799601657/terminal-engine-darwin-thin-41f1645372daca1282d0387aeb338315e2acab60/terminal-engine-artifacts",
+  "full_library_recipe_reuse_equality_verified": true,
+  "additional_platform_symbol_source_sha256": "8b17b5b97ce5330b68c8dcbe073686f1f4dcf633079b1caabd70fb9403b1d78a",
+  "platform_symbol_source_checked_against_reviewed_zig_archive": true,
+  "retained_copy": "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/darwin-38799601657"
+}

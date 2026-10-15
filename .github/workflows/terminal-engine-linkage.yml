@@ -1,0 +1,48 @@
+name: Terminal engine retained Darwin linkage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: terminal-engine-linkage-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  retained-linkage:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust with both Apple standard libraries
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+      - name: Check bounded retained-input, archive and Mach-O policies
+        run: |
+          python3 -B -m unittest discover -s tools/terminal-engine-artifacts -p 'test_*.py' -v
+          python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --check-inputs
+      - name: Link retained libraries to production shim and adapter; execute ARM only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/terminal-engine-artifacts/check-darwin-linkage.py --output "$RUNNER_TEMP/terminal-engine-linkage"
+      - name: Retain original provenance and new linkage evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terminal-engine-linkage-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/terminal-engine-linkage/receipt.json
+            ${{ runner.temp }}/terminal-engine-linkage/*.log
+            ${{ runner.temp }}/terminal-engine-linkage/bundle/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 7

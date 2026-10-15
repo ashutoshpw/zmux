@@ -769,6 +769,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zmux-ghostty-vt"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "zmux-native-bridge"
 version = "0.1.0"
 dependencies = [
@@ -818,6 +825,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "vt100",
+ "zmux-ghostty-vt",
 ]
 
 [[package]]

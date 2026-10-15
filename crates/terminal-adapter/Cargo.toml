@@ -6,7 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+ghostty = ["dep:zmux-ghostty-vt"]
+
 [dependencies]
+zmux-ghostty-vt = { path = "../ghostty-vt", optional = true, features = ["linked"] }
 vt100.workspace = true
 serde.workspace = true
 thiserror.workspace = true
