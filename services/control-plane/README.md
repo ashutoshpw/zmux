@@ -103,6 +103,14 @@ Do not run them in image build or server startup. The runtime user is non-root, 
 `PORT` (default 3000), and the image health check calls `/health`. Route external traffic
 through an HTTPS reverse proxy to the same origin configured in `ZMUX_CLOUD_ORIGIN`.
 
+After migrations, operators can run `bun run cleanup` with the same private service
+environment. Each invocation removes at most 1,000 expired native authorization codes
+and 1,000 expired native access tokens in one transaction, with a five-second statement
+deadline. Concurrently locked rows are skipped. The JSON result contains deletion counts;
+zero does not prove that another transaction holds no expired rows. Repeat later to drain
+a backlog. Live credentials, browser sessions, accounts and devices are retained. This
+command has no automatic schedule and does not implement broader audit/device retention.
+
 VM provisioning, relay/tunnel service, transactional email delivery, MFA, invite/recovery
 mail journeys, billing, hosting, DNS, TLS certificates, backups, observability, and a
 production deployment are not implemented by this slice. `/ready` reports VM, relay, and
