@@ -1,7 +1,10 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
 pub mod attention;
 pub mod control;
+pub mod targets;
 use attention::{Attention, AttentionCommand, Notification};
+use targets::{TargetOperation, TargetRequest};
+use zmux_workspace_core::targets::TargetError;
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -62,6 +65,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    Targeted {
+        request: TargetRequest,
+    },
     Attention {
         action: AttentionCommand,
     },
@@ -96,6 +102,12 @@ pub struct Request {
 
 #[derive(Debug, Error)]
 pub enum DesktopError {
+    #[error("target surface is not a terminal")]
+    NotTerminal,
+    #[error("terminal is starting or no longer available")]
+    TerminalUnavailable,
+    #[error("{0}")]
+    Target(#[from] TargetError),
     #[error("desktop command queue is full; command was not accepted")]
     QueueFull,
     #[error("desktop is closed")]
@@ -147,17 +159,18 @@ struct Envelope {
 }
 
 pub(crate) struct Execution {
-    pub result: Result<(), String>,
+    pub result: Result<(), DesktopError>,
     pub snapshot: Arc<Snapshot>,
 }
 
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
+        let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             snapshot: Mutex::new(Arc::new(Snapshot {
                 revision: 0,
-                model: Model::default(),
+                model: model.snapshot(),
                 frames: Vec::new(),
                 notifications: Vec::new(),
                 notifications_dropped: 0,
@@ -176,7 +189,7 @@ impl Desktop {
             .name("zmux-workspaces".into())
             .spawn(move || {
                 let mut worker = Worker {
-                    model: WorkspaceStore::default(),
+                    model,
                     attention: Attention::default(),
                     app_active: false,
                     slots: HashMap::new(),
@@ -478,6 +491,7 @@ impl Worker {
         let request = envelope.request;
         self.last_request_id = request.request_id;
         let result = match request.payload {
+            Command::Targeted { request } => self.targeted(request),
             Command::Attention { action } => self.attention_action(action),
             Command::Action { action } => {
                 let result = self.action(action);
@@ -531,11 +545,52 @@ impl Worker {
                 None => Err(DesktopError::Failure("terminal no longer exists".into())),
             },
         };
-        let result = result.map_err(|error| error.to_string());
-        self.last_error = result.as_ref().err().cloned();
+        self.last_error = result.as_ref().err().map(ToString::to_string);
         let snapshot = self.publish(false);
         if let Some(sender) = envelope.acknowledgement {
             let _ = sender.try_send(Execution { result, snapshot });
+        }
+    }
+    fn targeted(&mut self, request: TargetRequest) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        request.validate_revision(&model)?;
+        match request.operation {
+            TargetOperation::Action { action } => {
+                let action = action.resolve(&model, &request.scope, &request.caller)?;
+                self.action(action)?;
+                self.acknowledge_focused();
+                Ok(())
+            }
+            TargetOperation::Notify { title, body } => {
+                let target = request.scope.resolve(&model, &request.caller)?;
+                self.attention_action(AttentionCommand::Notify {
+                    surface_id: target.surface,
+                    title,
+                    body,
+                })
+            }
+            TargetOperation::SendText { text } => {
+                let target = request.scope.resolve(&model, &request.caller)?;
+                let session_id = model
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .find(|s| s.id == target.surface)
+                    .and_then(|s| s.session_id)
+                    .ok_or(DesktopError::NotTerminal)?;
+                let session = self
+                    .slots
+                    .get(&session_id)
+                    .and_then(|s| s.session.as_ref())
+                    .ok_or(DesktopError::TerminalUnavailable)?;
+                session
+                    .send_input(text.as_bytes())
+                    .map_err(|e| DesktopError::Failure(e.to_string()))
+            }
+            _ => Err(DesktopError::Failure(
+                "read operation cannot mutate the desktop".into(),
+            )),
         }
     }
     fn acknowledge_focused(&mut self) {
@@ -708,16 +763,29 @@ impl Worker {
                         self.model
                             .set_session_cwd(session_id, cwd.to_string_lossy().into_owned());
                     }
+                    let model = self.model.snapshot();
+                    let context = model.workspaces.iter().find_map(|w| {
+                        w.root.panes().into_iter().find_map(|p| {
+                            p.surfaces.iter().find(|s| s.session_id == Some(session_id)).map(|s| vec![
+                                ("ZMUX_WORKSPACE_ID".into(), model.object_uuid(zmux_workspace_core::targets::TargetKind::Workspace, w.id.0).to_string()),
+                                ("ZMUX_SURFACE_ID".into(), model.object_uuid(zmux_workspace_core::targets::TargetKind::Surface, s.id.0).to_string()),
+                                ("ZMUX_TAB_ID".into(), model.object_uuid(zmux_workspace_core::targets::TargetKind::Surface, s.id.0).to_string()),
+                            ])
+                        })
+                    }).expect("live terminal has an owning surface");
                     self.pending_launches += 1;
                     let result = thread::Builder::new()
                         .name(format!("zmux-launch-{}", session_id.0))
                         .spawn(move || {
-                            let result = Session::spawn(Launch {
-                                program: shell.program,
-                                args: shell.args,
-                                cwd: shell.cwd,
-                                size: zmux_session_runtime::default_size(),
-                            });
+                            let result = Session::spawn_with_environment(
+                                Launch {
+                                    program: shell.program,
+                                    args: shell.args,
+                                    cwd: shell.cwd,
+                                    size: zmux_session_runtime::default_size(),
+                                },
+                                &context,
+                            );
                             // A dropped coordinator rejects the result; dropping Session cancels its worker.
                             if let Err(error) = sender.send(Completion {
                                 id: session_id,

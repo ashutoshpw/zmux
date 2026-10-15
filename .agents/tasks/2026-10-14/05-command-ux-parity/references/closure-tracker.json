@@ -21,14 +21,26 @@
     {
       "id": "F02",
       "title": "Stable identities and shared action routing",
-      "status": "planned",
+      "status": "implementing",
       "owner": "workspace-core, desktop-runtime, native-bridge",
       "depends_on": [],
       "commit_slices": [
         "Add stable object identities, typed refs/index resolution and caller-context precedence with model/ABI migration",
         "Centralize target ownership, focus/no-focus, result/errors and lifecycle generations; migrate existing entrypoints"
       ],
-      "exit_gate": "Wrong-kind, stale and cross-owner targets fail atomically; UUID/ref/index/legacy numeric forms resolve deterministically; UI and CLI share effects; remote routing cannot fall back locally."
+      "exit_gate": "Wrong-kind, stale and cross-owner targets fail atomically; UUID/ref/index/legacy numeric forms resolve deterministically; UI and CLI share effects; remote routing cannot fall back locally.",
+      "implemented_slices": [
+        "F02a live-model UUID/ref/index resolution, ownership, caller context and executor routing"
+      ],
+      "verification_receipts": [
+        "f02-target-routing.md"
+      ],
+      "remaining_gates": [
+        "Native hosted build/runtime",
+        "Window model and focus/no-focus semantics",
+        "Durable identity persistence in S01",
+        "ID presentation and full flag grammar/caller socket/auth contracts"
+      ]
     },
     {
       "id": "F03",
@@ -2842,5 +2854,11 @@
         "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
       ]
     }
-  ]
+  ],
+  "artifact_delivery_contract": {
+    "requested_by_user": "2026-10-15: next shared artifact must have full feature parity with cmux",
+    "share_only_after": "V01 verified with all applicable audited contracts and native/remote/cloud/resource gates passed",
+    "intermediate_ci_archives": "diagnostic evidence only; do not share as the requested build",
+    "currently_eligible": false
+  }
 }

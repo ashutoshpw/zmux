@@ -190,7 +190,9 @@ pub extern "C" fn zmux_core_create() -> ZmuxResult {
         {
             return Err(CAPACITY);
         }
-        registry.insert(Entry::Core(Arc::new(Mutex::new(WorkspaceStore::default()))))
+        registry.insert(Entry::Core(Arc::new(Mutex::new(
+            WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4()),
+        ))))
     })
 }
 

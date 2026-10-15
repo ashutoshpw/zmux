@@ -39,6 +39,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] P8: simulator/iOS, platform/advanced commands and exhaustive parity closure.
 
 ## Acceptance criteria
+- [ ] Share the next user-facing artifact only after V01 establishes full audited parity.
 - [ ] Every frozen command leaf/alias/option has behavioral evidence; no unresolved gaps.
 - [ ] ⌘T creates a terminal tab without splitting; tabs retain independent live sessions.
 - [ ] ⇧⌘T restores closed tabs; close-other, workspace/window recovery and failure paths pass.
@@ -50,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [F02a target routing](references/f02-target-routing.md) — implementation, red/green evidence, remaining identity gates and full-parity artifact policy.
 - [Gap-closure execution plan](references/gap-closure-plan.md) — milestone order, first batch, integration, artifact gates and external dependencies.
 - [Work packages](references/closure-work-packages.md) — 26 concrete owners, dependencies, commit slices and exit gates.
 - [Closure tracker](references/closure-tracker.json) — all 172 audit families assigned; delivery status and evidence slots.

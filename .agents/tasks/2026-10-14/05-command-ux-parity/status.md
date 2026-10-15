@@ -5,6 +5,11 @@
 
 ## Delivered slices
 
+- F02a implemented locally: live UUIDs/typed refs/indices, scoped target resolution on
+  the workspace executor, caller defaults, revision guards and real shell context.
+  `scripts/check` passes (47 tests plus C ABI); fresh repair review passed. Native gates remain; F02 and
+  whole parity are incomplete. See [receipt](references/f02-target-routing.md).
+
 - Audit-driven closure plan prepared: 26 dependency-ordered packages cover all 172
   audited families, with commit slices, verification/artifact gates and first SSH/transfer
   delivery batch. See [execution plan](references/gap-closure-plan.md). Package execution
@@ -32,6 +37,9 @@
 - Original MIT implementation; no imported or translated cmux GPL/BUSL code/assets.
 
 ## Verification and download
+
+The next artifact shared with the user must pass full feature parity (V01). Existing
+links below are historical evidence for earlier subsets, not the requested new delivery.
 
 Accepted runtime source: `70cd3b614e0b3f9cf0fcaa0e33bec4c59c228d7a`.
 [Download macOS build](https://github.com/ashutoshpw/zmux/actions/runs/38692821187/artifacts/11952308942).

@@ -112,6 +112,11 @@ microcommits. Retain user/unrelated edits; do not revert another owner's work. C
 
 ## Verification and artifacts
 
+User steering on 2026-10-15: share the next artifact only after full feature parity
+is verified at V01. Intermediate Actions archives support diagnosis/acceptance work;
+they are not the requested delivery. Do not substitute a partial build or audit review
+for the applicable native, two-host, deployed-service and stability gates.
+
 - Test observable behavior at the owning layer. Cover invalid/stale targets, focus,
   cancellation, duplicate/retried events, permission denial, disconnect, restore and
   bounded overload as relevant; do not count parser tests as feature implementation.

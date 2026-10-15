@@ -175,6 +175,14 @@ impl Drop for ProcessGuard {
 
 impl Session {
     pub fn spawn(launch: Launch) -> Result<Self, SessionError> {
+        Self::spawn_with_environment(launch, &[])
+    }
+
+    /// Application-owned terminal context overrides any inherited parent-terminal context.
+    pub fn spawn_with_environment(
+        launch: Launch,
+        environment: &[(String, String)],
+    ) -> Result<Self, SessionError> {
         // portable-pty may fall back to a home directory on a failed chdir. Restore
         // must fail visibly rather than launching a shell in an unexpected location.
         if let Some(cwd) = &launch.cwd {
@@ -221,6 +229,9 @@ impl Session {
         let mut command = CommandBuilder::new(&launch.program);
         command.args(&launch.args);
         command.env("TERM", "xterm-256color");
+        for (name, value) in environment {
+            command.env(name, value);
+        }
         if let Some(cwd) = launch.cwd {
             command.cwd(cwd);
         }
