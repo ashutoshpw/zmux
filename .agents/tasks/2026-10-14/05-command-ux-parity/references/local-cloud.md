@@ -73,3 +73,31 @@ auth callbacks remain unverified; VM, relay and email remain unavailable.
 This receipt supersedes the earlier statements that migration002 and cleanup had
 not been run against the persistent local service. Private credentials, backups and
 operation logs remain outside Git under the existing local state directory.
+
+## Local archive restore rehearsal — 2026-10-15
+
+`scripts/local-cloud restore-check` now makes a fresh private archive and restores it
+with `pg_restore --single-transaction --exit-on-error` into a fresh random database
+on the owned PostgreSQL instance. It validates the eleven required tables, current
+migration names and validated constraints, then drops only that temporary database.
+The serving database is never replaced. Each attempt logs the temporary database name
+privately for recovery if database creation or cleanup is interrupted. Cleanup failure
+prevents a success receipt and retains both errors when restoration also failed.
+
+Actual local execution restored a 22,537-byte archive with both migrations and no
+unvalidated constraints; the disposable database was removed. The private receipt
+contains only the archive hash, schema names and verification scope. The real PostgreSQL
+failure-path check rejects an invalid archive and a transport failure after actual database
+creation, verifies the database inventory is unchanged, and does not replace the earlier
+success receipt. An isolated checkout is rejected before adopting the running Docker
+project. Compose environment isolation also passes;
+serving health and database readiness remain HTTP200 after the rehearsal.
+
+This closes the local archive/schema restore rehearsal gate only. It does not establish
+account/session recovery through the public tunnel, independent off-host backups, VM/relay
+recovery or full cloud parity. Backups and logs remain in the private state directory.
+
+Parent isolated `scripts/check` passes287 Rust tests, strict Clippy, notices and the C ABI.
+The final script-only cleanup changes also pass actual PostgreSQL failure-path checks.
+Interrupted creation is always a failure: attempted cleanup does not establish server
+completion when the transport itself was interrupted; the private log records that limit.

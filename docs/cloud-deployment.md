@@ -65,12 +65,22 @@ Every start builds from the locked Bun dependency file, starts PostgreSQL, saves
 A failed backup or migration stops promotion. Backups are local, contain database data,
 and have no automated retention or off-host replication. Review migrations for backward
 compatibility before restarting an existing service; there is no automatic database
-rollback. Restore rehearsal and off-host recovery remain operational work.
+rollback. Off-host recovery remains operational work.
 
 ```sh
 scripts/local-cloud backup  # retains a private database archive
+scripts/local-cloud restore-check # restores a fresh archive into a disposable database
 scripts/local-cloud stop    # stops only this project; retains database and credentials
 ```
+
+`restore-check` takes a fresh backup, restores it transactionally into a randomly named
+empty database on the same PostgreSQL instance, verifies the migrated schema and validated
+constraints, then drops that temporary database. It never replaces the serving database.
+A private `restore-check.json` receipt records the archive hash and schema only, with no
+account contents. A failed restore or cleanup returns failure; operation logs remain private.
+This requires temporary disk space for a second database and is a local archive recovery
+check, not an off-host recovery or browser authentication rehearsal. The development
+failure-path check `scripts/test-local-cloud-restore` also uses only disposable databases.
 
 `check` records `/health` and database-backed `/ready` results in private `health.json`.
 It records public tunnel verification as false. Identity, devices and organizations may
