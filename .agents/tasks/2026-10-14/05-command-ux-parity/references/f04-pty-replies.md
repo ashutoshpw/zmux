@@ -164,10 +164,59 @@ Flood/stall observe 1/234 actual EAGAIN returns, zero kernel short-return writes
 and 768 pending bytes at high-water; fixed capacities remain as listed below.
 This is local native-host Linux evidence, separate from hosted Darwin execution.
 
+## Hosted result and direct-child cleanup follow-up
+
+Workflow [38784165438](https://github.com/ashutoshpw/zmux/actions/runs/38784165438)
+at `16cf61aef74e1d95dda266c6c737ff8716a02eba` passes Linux x86_64. Its receipt
+SHA-256 is `1ac9bae214f3f300bfdd19adf312acedeef329d09e0ede242b12e60c8b0f150d`.
+Darwin arm64 on macOS 15.7.9 passes the small ordering/resize journey and flood
+journey, observing one actual EAGAIN and one actual kernel short-write return,
+then fails with the generic `pty_stop == -1` assertion. The Darwin receipt SHA-256
+is `a22186ebc23415d6330e8964b9cc521ec0c14a19e767b0a4c4a1b56c17888df9`.
+Downloaded artifacts live under `/tmp/zmux-pty-hosted-38784165438/`. No cleanup
+stage/errno was recorded by that source, so its exact Darwin cause is unresolved;
+the earlier successful flood does not establish complete Darwin acceptance.
+
+Source review separately proves cleanup attempted SIGTERM before checking whether
+its own child had already exited. The original `cleanup.c` syscall-boundary
+regression creates a real PTY/Python child, uses public `waitid(...WNOWAIT)` to
+hold its actual exited/unreaped state and observes/forwards the real signal call.
+Before repair it exits 6 at `cleanup attempted a signal to an exited/released owned
+child`; after repair it reaps without any signal and checks physical FD closure.
+This Linux regression proves unnecessary signalling, not the unrecorded Darwin
+errno. Red/green evidence is `/tmp/zmux-pty-cleanup-signal-20261015/`.
+
+The repair first checks/reaps its direct child with `waitpid(WNOHANG)`. A wait
+error never grants signalling authority; signal EPERM/ESRCH is accepted only if
+that exact child is subsequently reaped. First cleanup failure retains operation
+and errno, printed with full transport stats by the Rust failure assertion.
+A second case intentionally reaps only the fixture's child through the kernel,
+then verifies real ECHILD is reported at the wait operation without signalling a
+released PID. It does not pretend that this error path successfully owns/reaps the
+child. TERM/50-ms and KILL/200-ms bounds and existing construction cleanup remain.
+
+The new nine-input freeze is
+`/tmp/zmux-f04-pty-direct-child-cleanup-frozen-manifest-20261015.json`, SHA-256
+`f061c612cea234e3cf9ae7994a5c364671139727d92ab5ea70eae8d26a64ce4f`.
+All 31 base inputs remain fixed. A focused Linux rebuild of the new transport,
+construction/cleanup fixtures and Rust normal/controls passes against the hashed
+preserved accepted engine library/C objects, without another engine rebuild:
+`/tmp/zmux-f04-pty-direct-child-cleanup-author-20261015/receipt.json`, SHA-256
+`f00f65fee4c5f92003b9ee8a73e28fffae03887a3756864c67f0b9f6dbd1bfea`.
+All seven PTY modes, construction exhaustion and both new cleanup cases pass;
+both controls still fail their named assertions with exit 101 and no timeout.
+Observed flood/stall EAGAIN counts are 1/230 and kernel short writes zero in this
+Linux run. Hosted Darwin execution of this exact follow-up remains required.
+Parent independent source review finds no blocking issue and its separate focused
+run matches the same nine hashes, passing construction/cleanup/all PTY modes and
+both intended controls. Independent receipt:
+`/tmp/zmux-f04-pty-direct-child-cleanup-parent-20261015/receipt.json`, SHA-256
+`150d735dc04752c10d16068a63183d0d3879da6d539cd465a672d7163d9bce98`.
+
 ## Capacity ledger and remaining boundary
 
 These are allocated/reserved capacities or configured limits, separately from
-the observed 768-byte pending high-water. Linux sizes from the frozen local run:
+the observed 768-byte pending high-water. Linux sizes from the frozen cleanup follow-up:
 
 | Storage | Bytes / bound | Accounting |
 | --- | --- | --- |
@@ -175,7 +224,7 @@ the observed 768-byte pending high-water. Linux sizes from the frozen local run:
 | Accepted fixed C owner/collector/metadata sidecar | 201,056 | Same accepted fixed charge; includes Probe/collector reply payloads and fixed event/raw metadata capture. |
 | Accepted Rust backing allocations | 1,693,696 | Both preallocated frame/effect/metadata slots and operation scratch; no coordinator duplication. |
 | Complete new Rust coordinator inline storage | 12,096 | Includes the accepted metadata owner's 3,064 inline bytes, transport handle, 8,192-byte input, 512-byte read storage and 256 report flags; do not add accepted inline bytes again. |
-| New fixed C transport owner | 280 | Descriptor/status fields and 128-byte saved report; separate from accepted fixed C charge. |
+| New fixed C transport owner | 296 | Descriptor/status fields, first cleanup operation/errno and 128-byte saved report; separate from accepted fixed C charge. The predecessor owner was 280 bytes. |
 | Reserved reply/input payload subset | 24,576 | Probe 4,096 + collector 4,096 + two publication slots 8,192 + transport input 8,192; already included in rows above, never additive. |
 
 The original Probe's reply storage remains reserved even though the active
@@ -185,7 +234,8 @@ child heap/threads, runtime/allocator overhead and kernel PTY/pipe buffers are
 separate and excluded from a total-RSS claim. No per-operation coordinator payload
 allocation is needed for prepare/validate/exact commit/slot swap.
 
-Hosted execution of this new eight-input slice remains separate from local
-acceptance. The already accepted metadata workflow cannot prove the new kernel
-transport. Native input/shell/job-control, production adapter integration and
+Hosted execution of the new nine-input cleanup follow-up remains separate from
+local acceptance. The earlier Darwin cleanup failure remains an open hosted gate;
+the accepted metadata workflow cannot prove the new kernel transport.
+Native input/shell/job-control, production adapter integration and
 representative workloads remain open gates; the application engine is unchanged.

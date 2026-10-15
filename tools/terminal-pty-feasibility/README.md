@@ -35,6 +35,10 @@ A separate two-second subprocess sets `RLIMIT_NOFILE` and exhausts real descript
 after report-pipe creation, verifying prompt construction failure and physical
 closure of all acquired descriptors. Report preservation never reads a pipe whose
 nonblocking setup did not complete.
+Direct-child cleanup cases observe real exited/unreaped state at the signal
+boundary and require reaping without signalling; a separate actual ECHILD case
+checks precise operation/errno diagnostics and refuses stale-PID signals. Linux
+coverage of unnecessary signalling does not reproduce Darwin's errno behavior.
 
 The coordinator seals a validated frame/metadata result and defers exact commit
 until its replies have entered the kernel. Kernel acceptance differs from child

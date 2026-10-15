@@ -22,7 +22,10 @@
 typedef struct {
   uint64_t read_bytes, written_bytes, write_calls, eagain, short_writes;
   uint64_t open_fds, child_live, cleanup_errors, reaped, exit_code;
+  uint64_t cleanup_stage, cleanup_errno;
 } PtyStats;
+enum { CLEANUP_CLOSE = 1, CLEANUP_WAIT = 2, CLEANUP_TERM = 3,
+       CLEANUP_KILL = 4, CLEANUP_REPORT = 5, CLEANUP_DEADLINE = 6 };
 typedef struct {
   int fd[6], original[6]; // master/slave, report read/write, control read/write
   pid_t child;
@@ -31,11 +34,18 @@ typedef struct {
   size_t saved_length;
   int report_nonblocking;
 } Pty;
+static void cleanup_error(Pty *p, uint64_t stage, int number) {
+  p->stats.cleanup_errors++;
+  if (!p->stats.cleanup_stage) {
+    p->stats.cleanup_stage = stage;
+    p->stats.cleanup_errno = (uint64_t)number;
+  }
+}
 static int close_slot(Pty *p, size_t i) {
   if (p->fd[i] < 0) return 0;
   int fd = p->fd[i]; p->fd[i] = -1;
   p->stats.open_fds--;
-  if (close(fd)) { p->stats.cleanup_errors++; return -1; }
+  if (close(fd)) { cleanup_error(p, CLEANUP_CLOSE, errno); return -1; }
   return 0;
 }
 static int high_fd(int raw) {
@@ -72,25 +82,36 @@ int pty_wait(Pty *p, unsigned milliseconds) {
         WIFSIGNALED(status) ? (uint64_t)(128 + WTERMSIG(status)) : 255;
       return 1;
     }
-    if (result < 0 && errno != EINTR) { p->stats.cleanup_errors++; return -1; }
+    if (result < 0 && errno != EINTR) { cleanup_error(p, CLEANUP_WAIT, errno); return -1; }
     if (i < milliseconds) (void)poll(NULL, 0, 1);
   }
   return 0;
 }
 int pty_close_master(Pty *p) { return p ? close_slot(p, 0) : -1; }
+static int signal_child(Pty *p, int value, uint64_t stage) {
+  if (!p->child || kill(p->child, value) == 0) return 0;
+  int saved = errno;
+  // Exit can race the prior wait. Accept these signal errors only after this
+  // exact direct child is actually reaped, never from a PID liveness guess.
+  if ((saved == EPERM || saved == ESRCH) && pty_wait(p, 0) == 1) return 0;
+  cleanup_error(p, stage, saved);
+  return -1;
+}
 int pty_stop(Pty *p) {
   if (!p) return -1;
-  if (p->child) {
-    if (kill(p->child, SIGTERM) && errno != ESRCH) p->stats.cleanup_errors++;
+  // Do not signal an already-exited child. WNOHANG reaps only our direct child;
+  // a wait error is surfaced and never grants authority to signal its stale PID.
+  if (p->child && pty_wait(p, 0) == 0) {
+    (void)signal_child(p, SIGTERM, CLEANUP_TERM);
     if (pty_wait(p, 50) == 0) {
-      if (kill(p->child, SIGKILL) && errno != ESRCH) p->stats.cleanup_errors++;
-      if (pty_wait(p, 200) != 1) p->stats.cleanup_errors++;
+      (void)signal_child(p, SIGKILL, CLEANUP_KILL);
+      if (pty_wait(p, 200) == 0) cleanup_error(p, CLEANUP_DEADLINE, ETIMEDOUT);
     }
   }
   if (p->report_nonblocking && p->fd[2] >= 0 && p->saved_length < sizeof(p->saved_report)) {
     ssize_t n = read(p->fd[2], p->saved_report + p->saved_length, sizeof(p->saved_report) - p->saved_length);
     if (n > 0) p->saved_length += (size_t)n;
-    else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) p->stats.cleanup_errors++;
+    else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) cleanup_error(p, CLEANUP_REPORT, errno);
   }
   for (size_t i = 0; i < 6; i++) close_slot(p, i);
   return p->child || p->stats.open_fds || p->stats.cleanup_errors ? -1 : 0;

@@ -22,6 +22,8 @@ struct PtyStats {
     cleanup_errors: u64,
     reaped: u64,
     exit_code: u64,
+    cleanup_stage: u64,
+    cleanup_errno: u64,
 }
 unsafe extern "C" {
     fn pty_new(
@@ -87,8 +89,23 @@ impl Transport {
         (r, c)
     }
     fn stop(&mut self) {
-        assert_eq!(unsafe { pty_stop(self.ptr()) }, 0);
+        let result = unsafe { pty_stop(self.ptr()) };
         let s = self.stats();
+        let stage = match s.cleanup_stage {
+            0 => "none",
+            1 => "close descriptor",
+            2 => "waitpid child",
+            3 => "SIGTERM child",
+            4 => "SIGKILL child",
+            5 => "read report",
+            6 => "child cleanup deadline",
+            _ => "invalid stage",
+        };
+        assert_eq!(
+            result, 0,
+            "PTY cleanup failed at {stage}, errno={}: {s:?}",
+            s.cleanup_errno
+        );
         assert_eq!(
             (s.open_fds, s.child_live, s.cleanup_errors, s.reaped),
             (0, 0, 0, 1)

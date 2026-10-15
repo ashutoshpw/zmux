@@ -29,7 +29,7 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     lock = json.loads((HERE / "base-lock.json").read_text())
     new_inputs = ["run.py", "base-lock.json", "transport.c", "child.py", "pty.rs",
-                  "pty-owner.rs", "PTY_CONTRACT.md", "construction.c"]
+                  "pty-owner.rs", "PTY_CONTRACT.md", "construction.c", "cleanup.c"]
     document = {"schema_version": 1, "state": "starting", "phases": [], "downloads": [],
                 "base_lock": lock, "source_sha256": {n: sha(HERE / n) for n in new_inputs},
                 "host": {"system": platform.system(), "architecture": platform.machine(),
@@ -125,6 +125,22 @@ def main():
                               "construction-fixture", output, phases, timeout=2)
             if "construction_exhaustion=true owned_fds_closed=true child_started=false" not in stdout:
                 raise RuntimeError("partial-construction cleanup did not complete")
+            cleanup = work / "cleanup"
+            command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(HERE / "cleanup.c"),
+                       "-o", str(cleanup)]
+            if system == "Linux":
+                command += ["-l", "util"]
+            if sdk:
+                command += ["-arch", machine, "-isysroot", sdk]
+            base.run(command, "cleanup-c", output, phases, env=env)
+            for name, arguments, expected in [
+                ("cleanup-exited", [], "exited_child_cleanup=true no_signal_attempt=true owned_fds_closed=true"),
+                ("cleanup-wait-error", ["reaped-error"], "wait_error_diagnostic=true operation=waitpid errno=ECHILD no_signal_attempt=true"),
+            ]:
+                stdout = base.run([sys.executable, str(BASE / "run.py"), "--execute-fixture", str(cleanup),
+                                   sys.executable, *arguments], name, output, phases, timeout=4)
+                if expected not in stdout:
+                    raise RuntimeError("direct-child cleanup did not complete: " + name)
             variants = [
                 ("normal", None, None, None),
                 ("duplicate-reply", "        self.end = n;", "        self.end = n;\n        if n > 0 { self.input[n] = b'!'; self.end += 1; }",
