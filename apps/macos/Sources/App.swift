@@ -8,6 +8,7 @@ private enum UICommand: Sendable {
     case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
     case attention(String, UInt64?, UInt64?, Bool?)
     case browser(String, UInt64?, UInt64?, String, String?)
+    case browserAutomation(UInt64, BrowserAction)
     case pasteFiles(UInt64, [String])
     case cancelUpload(UInt64)
     case input(UInt64, String)
@@ -52,6 +53,11 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     private let continuation: AsyncStream<UICommand>.Continuation
     private var commandTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
+    private let browserEvents = AsyncStream<(UInt64, BrowserHostEvent?)>.makeStream(bufferingPolicy: .bufferingOldest(256))
+    private var browserEventGeneration: UInt64 = 0
+    private var browserEventsNeedRecovery = false
+    private var browserEventTask: Task<Void, Never>?
+    private var browserEpoch: UUID?
     private var layoutKey = ""
     private var splitFractions: [String: CGFloat] = [:]
     private var modelRevision: UInt64 = .max
@@ -88,6 +94,20 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
 
     func start(persistent: Bool = true) async throws {
         try await bridge.start(persistent: persistent)
+        browserEventTask = Task { [weak self] in
+            guard let self else { return }
+            for await (generation, event) in self.browserEvents.stream {
+                if Task.isCancelled { break }
+                if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
+                guard generation == self.browserEventGeneration, let event else { continue }
+                do { try await self.bridge.browserEvent(event) }
+                catch {
+                    self.browserEventsNeedRecovery = true
+                    self.showError("Browser host synchronization failed: " + error.localizedDescription)
+                }
+                if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
+            }
+        }
         commandTask = Task { [weak self, stream] in
             for await command in stream {
                 guard let self, !Task.isCancelled else { break }
@@ -101,6 +121,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
                         try await self.bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
                     case .browser(let operation, let surface, let pane, let url, let title):
                         try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title)
+                    case .browserAutomation(let surface, let action):
+                        try await self.bridge.browserAction(surface: surface, action: action)
                     case .attention(let operation, let id, let through, let active):
                         try await self.bridge.attention(operation, id: id, through: through, active: active)
                     case .pasteFiles(let surface, let paths):
@@ -125,7 +147,20 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             while !Task.isCancelled {
                 guard let self else { break }
                 do {
+                    if self.browserEventsNeedRecovery {
+                        // A wakeup, not a second sender: recovery must progress even
+                        // when the last lifecycle event was the one that failed.
+                        _ = self.browserEvents.continuation.yield((self.browserEventGeneration, nil))
+                    }
                     if let snapshot = try await self.bridge.poll() { self.present(snapshot) }
+                    if (self.snapshot?.browserPendingRequests ?? 0) > 0 {
+                        let batch = try await self.bridge.drainBrowserRequests()
+                        if batch.epoch == self.browserEpoch {
+                            for request in batch.requests {
+                                self.browsers[request.owner.surfaceId]?.executeAutomation(request)
+                            }
+                        }
+                    }
                     try await Task.sleep(for: .milliseconds(32))
                 } catch is CancellationError {
                     break
@@ -144,6 +179,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
+        browserEvents.continuation.finish()
+        browserEventTask?.cancel()
         await imagePastes.stopAccepting()
         try await bridge.close()
         await imagePastes.desktopClosed()
@@ -424,7 +461,33 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             if liveBrowsers.contains(key) { return true }
             value.close(); return false
         }
+        if browserEpoch != snapshot.browserEpoch {
+            browsers.values.forEach { $0.close() }
+            browsers.removeAll()
+            browserEpoch = snapshot.browserEpoch
+            layoutKey = ""
+        }
         self.snapshot = snapshot
+        // Keep the bounded browser set mounted even when its tabs are hidden so
+        // automation targets never need to change the user's selection or focus.
+        for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
+            let view: BrowserView
+            if let existing = browsers[surface.id] { view = existing }
+            else {
+                view = BrowserView(surface: surface, owner: self)
+                view.frame = NSRect(x: 0, y: 0, width: min(1920, max(640, canvas.bounds.width)), height: min(1200, max(480, canvas.bounds.height)))
+                view.layoutSubtreeIfNeeded()
+            }
+            browsers[surface.id] = view
+            view.onAutomationAction = { [weak self] action in self?.enqueue(.browserAutomation(surface.id, action)) }
+            view.bindAutomation(epoch: snapshot.browserEpoch, identityNamespace: snapshot.model.identityNamespace) { [weak self] event in
+                guard let self else { return }
+                if case .dropped = self.browserEvents.continuation.yield((self.browserEventGeneration, event)) {
+                    self.browserEventsNeedRecovery = true
+                    self.showError("Browser event queue is full; resynchronizing browser hosts")
+                }
+            }
+        }
         imagePastes.update(snapshot)
         statusMessage = snapshot.lastError ?? "Ready"
         rebuildWorkspaceRowsIfNeeded(snapshot)
@@ -450,6 +513,23 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             }
         } else if selectionChanged && !layoutChanged, let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
             window.makeFirstResponder(browser.webView)
+        }
+    }
+
+    private func recoverBrowserHostEvents() async {
+        browserEventsNeedRecovery = false
+        browserEventGeneration &+= 1
+        // Discard queued incremental events captured before this full-owner snapshot.
+        // New events retain order after the snapshot while acknowledgements are awaited.
+        let attachments = browsers.values.compactMap { $0.automationAttachment() }
+        for attachment in attachments {
+            if Task.isCancelled { return }
+            do { try await bridge.browserEvent(attachment) }
+            catch {
+                browserEventsNeedRecovery = true
+                showError("Browser synchronization is retrying: " + error.localizedDescription)
+                return
+            }
         }
     }
 
@@ -686,9 +766,9 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         guard let pane = focusedPane else { return nil }
         return browsers[pane.selectedSurface]
     }
-    @objc private func browserBack() { focusedBrowser?.webView.goBack() }
-    @objc private func browserForward() { focusedBrowser?.webView.goForward() }
-    @objc private func browserReload() { focusedBrowser?.webView.reload() }
+    @objc private func browserBack() { focusedBrowser?.requestNavigation(.back(snapshotAfter: false)) }
+    @objc private func browserForward() { focusedBrowser?.requestNavigation(.forward(snapshotAfter: false)) }
+    @objc private func browserReload() { focusedBrowser?.requestNavigation(.reload(snapshotAfter: false)) }
     @objc private func browserZoomIn() { focusedBrowser?.adjustZoom(0.1) }
     @objc private func browserZoomOut() { focusedBrowser?.adjustZoom(-0.1) }
     @objc private func browserZoomReset() { focusedBrowser?.resetZoom() }
@@ -1178,6 +1258,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try performShortcut(String(UnicodeScalar(NSRightArrowFunctionKey)!), modifiers: [.command, .option])
         try await waitUntil { $0.workspace?.focusedPane == browserPane.id }
         guard window.firstResponder === browser.webView else { throw BridgeFailure(message: "Terminal-to-browser navigation did not focus WebKit") }
+        try await smokeBrowserAutomation(report: report, surface: browserPane.selectedSurface, pane: browserPane, terminalSession: originalSession)
         let pagePNG: Data = try await withCheckedThrowingContinuation { continuation in
             browser.webView.takeSnapshot(with: nil) { image, error in
                 if let error { continuation.resume(throwing: error); return }
@@ -1218,6 +1299,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
         let evidence: [String: Any] = [
             "success": true,
+            "browser_cli_automation": true,
             "native_input": true,
             "ansi_color": true,
             "split_panes": true,
@@ -1265,6 +1347,89 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             "source_sha": Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local"
         ]
         try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+    }
+
+    private func nativeCLI(_ arguments: [String], expectFailure: Bool = false, timeout: Int = 5000) async throws -> Data {
+        let executable = Bundle.main.resourceURL!.appendingPathComponent("bin/zmux")
+        return try await Task.detached {
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = ["--timeout", String(timeout)] + arguments
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard (process.terminationStatus != 0) == expectFailure else {
+                throw BridgeFailure(message: "Bundled browser CLI failed its expected outcome: " + String(decoding: data, as: UTF8.self))
+            }
+            return data
+        }.value
+    }
+    private func browserCLIValue(_ arguments: [String]) async throws -> Any {
+        let data = try await nativeCLI(arguments)
+        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = result["value"] else {
+            throw BridgeFailure(message: "Browser CLI did not return a typed completion")
+        }
+        return value
+    }
+    private func smokeBrowserAutomation(report: URL, surface: UInt64, pane: Pane, terminalSession: UInt64) async throws {
+        let data = try Data(contentsOf: report.deletingLastPathComponent().appendingPathComponent("native-browser-fixture.json"))
+        guard let fixture = try JSONSerialization.jsonObject(with: data) as? [String: String], let origin = fixture["origin"] else {
+            throw BridgeFailure(message: "Missing browser HTTP fixture")
+        }
+        let target = ["--surface", String(surface)]
+        _ = try await nativeCLI(["browser", "goto"] + target + [origin + "/first"])
+        try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "First fixture" && self?.browsers[surface]?.webView.isLoading == false }
+        guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "First fixture",
+              try await browserCLIValue(["browser", "get", "value", "#entry"] + target) as? String == "initial" else {
+            throw BridgeFailure(message: "Browser CLI reads did not inspect the live page")
+        }
+        let evaluated = try await browserCLIValue(["browser", "eval", "({answer: 6 * 7, label: document.title})"] + target) as? [String: Any]
+        guard evaluated?["answer"] as? Int == 42, evaluated?["label"] as? String == "First fixture" else {
+            throw BridgeFailure(message: "Browser CLI eval lost typed page results")
+        }
+        let scriptFailure = try await nativeCLI(["browser", "eval", "throw new Error('expected native fixture failure')"] + target, expectFailure: true)
+        guard String(decoding: scriptFailure, as: UTF8.self).contains("javascript_failed") else { throw BridgeFailure(message: "Script failure had an unrelated cause") }
+        guard let tree = try await browserCLIValue(["browser", "snapshot", "--interactive", "--compact", "--selector", "main", "--max-depth", "3"] + target) as? [String: Any],
+              let nodes = tree["nodes"] as? [[String: Any]],
+              let reference = nodes.first(where: { $0["role"] as? String == "button" })?["ref"] as? String,
+              try await browserCLIValue(["browser", "get", "text", reference] + target) as? String == "Continue" else {
+            throw BridgeFailure(message: "Browser CLI snapshot refs did not resolve the live button")
+        }
+        if let terminal = pane.surfaces.first(where: { $0.kind == "terminal" }) {
+            selectTab(terminal.id)
+            try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == terminal.id }
+            guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "First fixture",
+                  snapshot?.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == terminal.id else {
+                throw BridgeFailure(message: "Hidden browser CLI changed focus or lost its document")
+            }
+            selectTab(surface)
+            try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane.id })?.selectedSurface == surface }
+        }
+        _ = try await nativeCLI(["browser", "goto"] + target + [origin + "/second"])
+        try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "Second fixture" && self?.browsers[surface]?.webView.isLoading == false }
+        let staleFailure = try await nativeCLI(["browser", "get", "text", reference] + target, expectFailure: true)
+        guard String(decoding: staleFailure, as: UTF8.self).contains("stale_reference") else { throw BridgeFailure(message: "Stale reference failed for an unrelated reason") }
+        guard let back = try await browserCLIValue(["browser", "back", "--snapshot-after"] + target) as? [String: Any], back["title"] as? String == "First fixture" else {
+            throw BridgeFailure(message: "Back snapshot was captured before navigation completed")
+        }
+        _ = try await nativeCLI(["browser", "forward", "--snapshot-after"] + target)
+        _ = try await nativeCLI(["browser", "reload", "--snapshot-after"] + target)
+        guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "Second fixture" else {
+            throw BridgeFailure(message: "Browser history/reload lost the current page")
+        }
+        async let pending = nativeCLI(["browser", "eval", "new Promise(() => {document.title = 'Pending fixture';})"] + target, expectFailure: true, timeout: 1000)
+        try await waitUntil { [weak self] _ in self?.browsers[surface]?.webView.title == "Pending fixture" }
+        enqueue(.input(terminalSession, "printf '\\nZMUX_BROWSER_PENDING_INPUT\\n'\r"))
+        try await waitUntil { $0.frames.contains { $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("ZMUX_BROWSER_PENDING_INPUT") == true } }
+        let timeoutFailure = try await pending
+        guard String(decoding: timeoutFailure, as: UTF8.self).contains("browser_timeout") else { throw BridgeFailure(message: "Pending evaluation failed for an unrelated reason") }
+        guard try await browserCLIValue(["browser", "get", "title"] + target) as? String == "Pending fixture" else {
+            throw BridgeFailure(message: "Browser did not recover after an evaluation timeout")
+        }
     }
 
     private func smokeClipboardImagePaste() async throws {

@@ -49,6 +49,12 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    Browser {
+        request: crate::browser::BrowserRequest,
+    },
+    BrowserStatus {
+        operation_id: u64,
+    },
     Session {
         action: crate::sessions::SessionCommand,
     },
@@ -558,6 +564,27 @@ fn dispatch(
                 Ok(json!(snapshot.persistence))
             }
         }
+        ControlCommand::Browser {
+            request: browser_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::Browser {
+                request: browser_request,
+            },
+        ),
+        ControlCommand::BrowserStatus { operation_id } => current_snapshot(desktop)?
+            .browser_operations
+            .iter()
+            .find(|op| op.operation_id == operation_id)
+            .map(|op| json!(op))
+            .ok_or_else(|| {
+                (
+                    "browser_operation_not_found",
+                    "browser operation receipt expired or does not exist".into(),
+                )
+            }),
         ControlCommand::Targeted {
             request: target_request,
         } => match target_request.operation {
@@ -642,6 +669,14 @@ fn dispatch(
             "max_response_bytes": MAX_CONTROL_RESPONSE_BYTES,
             "max_terminals": crate::MAX_TERMINALS,
             "max_browsers": crate::MAX_BROWSERS,
+            "browser_automation": {
+                "native_host_required": true,
+                "document_generation_fencing": true,
+                "max_pending_operations": crate::browser::MAX_PENDING_BROWSER_OPERATIONS,
+                "max_result_bytes": crate::browser::MAX_BROWSER_RESULT_BYTES,
+                "max_script_bytes": crate::browser::MAX_SCRIPT_BYTES,
+                "max_timeout_ms": crate::browser::MAX_OPERATION_TIMEOUT_MS,
+            },
         })),
         ControlCommand::Status => {
             let snapshot = current_snapshot(desktop)?;
@@ -787,10 +822,25 @@ fn mutate(
     execution.result.map_err(|error| match error {
         DesktopError::Policy(error) => (error.code(), error.to_string()),
         DesktopError::Target(error) => (error.code(), error.to_string()),
+        DesktopError::Browser(error) => (error.code(), error.to_string()),
         DesktopError::NotTerminal => ("not_terminal", error.to_string()),
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(operation_id) = execution.browser_operation_id {
+        return execution
+            .snapshot
+            .browser_operations
+            .iter()
+            .find(|op| op.operation_id == operation_id)
+            .map(|op| json!(op))
+            .ok_or_else(|| {
+                (
+                    "browser_operation_not_found",
+                    "browser admission receipt missing".into(),
+                )
+            });
+    }
     if let Some(operation_id) = execution.session_operation_id {
         return Ok(
             json!({"operation_id": operation_id, "state": "pending", "revision": execution.snapshot.revision}),
@@ -873,6 +923,7 @@ fn desktop_error(error: DesktopError) -> (&'static str, String) {
         DesktopError::Busy => "desktop_busy",
         DesktopError::Timeout => "outcome_unknown",
         DesktopError::Target(ref error) => error.code(),
+        DesktopError::Browser(ref error) => error.code(),
         DesktopError::Failure(_) => "desktop_error",
     };
     (code, error.to_string())

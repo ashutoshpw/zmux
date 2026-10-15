@@ -103,6 +103,15 @@ static void command(uint64_t core, const char *request) {
 static void native_transfer_receipts_are_session_bound(void) {
     ZmuxResult desktop = zmux_desktop_create();
     assert(desktop.status == ZMUX_OK);
+    ZmuxResult browser_batch = zmux_desktop_browser_drain(desktop.value);
+    assert(browser_batch.status == ZMUX_OK);
+    char *batch_text = consume(browser_batch.value);
+    assert(strstr(batch_text, "\"requests\":[]") != NULL);
+    free(batch_text);
+    assert(zmux_desktop_browser_event(desktop.value, NULL, 1) == ZMUX_INVALID_ARGUMENT);
+    const uint8_t bad_event[] = "{}";
+    assert(zmux_desktop_browser_event(desktop.value, bad_event, 300001) == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_browser_event(desktop.value, bad_event, sizeof bad_event - 1) == ZMUX_INVALID_ARGUMENT);
     uint64_t surface = 0;
     uint64_t session = 0;
     for (int attempt = 0; attempt < 500; attempt++) {

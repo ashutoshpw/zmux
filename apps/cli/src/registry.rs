@@ -422,8 +422,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "browser",
         true,
         true,
-        "browser open [PANE] URL\n       zmux browser navigate|goto [SURFACE] URL",
-        "Open or navigate an embedded browser tab. Allowed URLs: HTTP(S) and about:blank. Browser surfaces allocate no PTY."
+        "browser open [PANE] URL\n       zmux browser navigate|goto [SURFACE] URL\n       zmux browser back|forward|reload [TARGET_OPTIONS] [--snapshot-after]\n       zmux browser get url|title [TARGET_OPTIONS]\n       zmux browser get text|html|value|count|box|styles [TARGET_OPTIONS] [--selector SELECTOR | SELECTOR] [--property NAME]\n       zmux browser get attr [TARGET_OPTIONS] [--selector SELECTOR | SELECTOR] [--attr NAME | NAME]\n       zmux browser eval [TARGET_OPTIONS] SCRIPT\n       zmux browser eval [TARGET_OPTIONS] --script SCRIPT\n       zmux browser snapshot [TARGET_OPTIONS] [--interactive|-i] [--cursor] [--compact] [--max-depth DEPTH] [--selector SELECTOR]",
+        "Control an embedded browser through shared native WebKit execution. TARGET_OPTIONS: --workspace, --pane, --surface (or --tab), --expect-revision. Automation targets use named options; selector options may precede or follow positional arguments. Browser open/navigate retain the leading-selector and positional-target grammar. HTTP(S) and about:blank are allowed. Automation returns completed JSON results; the global --timeout bounds admission plus result polling. Admission is never retried. Read-only sockets allow get/snapshot and deny eval/navigation. Eval runs in the page content world; built-in DOM reads use an isolated world. Eval scripts are limited to 8192 UTF-8 bytes, selectors to 2048, depth to 0–32 and results to 64 KiB. --property applies only to get styles. Snapshot is a bounded document tree with document-scoped element refs, not a screenshot. Native execution must be available; a portable desktop alone cannot execute DOM operations. Profiles, frames, semantic input, screenshots and waits remain unavailable."
     ),
     command!(
         "doctor",

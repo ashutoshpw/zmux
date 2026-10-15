@@ -5,11 +5,30 @@ import WebKit
 @MainActor
 final class BrowserView: BackgroundView, WKNavigationDelegate {
     let surfaceID: UInt64
+    let hostID = UUID()
+    private(set) var documentGeneration: UInt64 = 1
+    var onAutomationAction: (@MainActor (BrowserAction) -> Void)?
     private weak var owner: AppController?
     let webView: WKWebView
     private let address = NSTextField()
     private let status = NSTextField(labelWithString: "Private browser")
     private var generation: UInt64?
+    private var automationOwner: BrowserOwner?
+    private var emitAutomation: (@MainActor (BrowserHostEvent) -> Void)?
+    private var closed = false
+    private var processTerminated = false
+    private var currentNavigation: WKNavigation?
+    private var lastOperationID: UInt64 = 0
+    private struct PendingAutomation {
+        let request: NativeBrowserRequest
+        var owner: BrowserOwner
+        var navigation: WKNavigation?
+        var timer: Task<Void, Never>?
+    }
+    private var operations: [UInt64: PendingAutomation] = [:]
+    // A timed-out page promise cannot be cancelled by WebKit. Keep its actual
+    // callback slot charged until WebKit resolves it, so retries cannot grow it.
+    private var javaScriptInFlight: Set<UInt64> = []
     private lazy var back = IconButton(symbol: "chevron.left", label: "Back", target: self, action: #selector(goBack))
     private lazy var forward = IconButton(symbol: "chevron.right", label: "Forward", target: self, action: #selector(goForward))
     private lazy var reload = IconButton(symbol: "arrow.clockwise", label: "Reload or stop", target: self, action: #selector(reloadPage))
@@ -53,16 +72,19 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     }
     required init?(coder: NSCoder) { nil }
     func update(_ surface: Surface) {
+        guard !closed else { return }
         guard generation != surface.navigation else { return }
+        let previous = automationOwner
         generation = surface.navigation
+        if previous != nil { advanceDocument(causedBy: nil, previousOwner: previous) }
         guard let value = surface.url, let url = URL(string: value), Self.allowed(url) else {
             showError("This address is not supported"); return
         }
         address.stringValue = value == "about:blank" ? "" : value
         status.stringValue = "Loading…"
         if value == "about:blank" {
-            webView.loadHTMLString("<!doctype html><title>New tab · zmux</title><style>body{margin:0;background:#1c1c1e;color:#ddd;font:14px -apple-system;display:grid;place-items:center;min-height:100vh}.hint{text-align:center}h1{font-size:26px;font-weight:500;letter-spacing:-1px}p{color:#888}</style><div class='hint'><h1>zmux</h1><p>Enter a URL above to get started.</p></div>", baseURL: nil)
-        } else { webView.load(URLRequest(url: url)) }
+            currentNavigation = webView.loadHTMLString("<!doctype html><title>New tab · zmux</title><style>body{margin:0;background:#1c1c1e;color:#ddd;font:14px -apple-system;display:grid;place-items:center;min-height:100vh}.hint{text-align:center}h1{font-size:26px;font-weight:500;letter-spacing:-1px}p{color:#888}</style><div class='hint'><h1>zmux</h1><p>Enter a URL above to get started.</p></div>", baseURL: nil)
+        } else { currentNavigation = webView.load(URLRequest(url: url)) }
     }
     func adjustZoom(_ delta: Double) { webView.pageZoom = min(3, max(0.5, webView.pageZoom + delta)) }
     func resetZoom() { webView.pageZoom = 1 }
@@ -82,7 +104,199 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         }
     }
     func focusAddress() { window?.makeFirstResponder(address); address.selectText(nil) }
-    func close() { webView.stopLoading(); webView.navigationDelegate = nil; webView.removeFromSuperview() }
+    func bindAutomation(epoch: UUID, identityNamespace: UUID, emit: @escaping @MainActor (BrowserHostEvent) -> Void) {
+        guard !closed else { return }
+        if let current = automationOwner, current.epoch == epoch, current.identityNamespace == identityNamespace {
+            emitAutomation = emit
+            return
+        }
+        if let current = automationOwner {
+            cancelOperations(code: "host_replaced", message: "Browser runtime owner changed")
+            emitAutomation?(.detach(owner: current))
+        }
+        emitAutomation = emit
+        let current = BrowserOwner(epoch: epoch, identityNamespace: identityNamespace, surfaceId: surfaceID, hostId: hostID, documentGeneration: documentGeneration, modelNavigation: generation ?? 0)
+        automationOwner = current
+        emit(.attach(owner: current))
+    }
+    /// Reannounce a complete owner after bounded transport loss. Rust accepts only
+    /// the same host with a nondecreasing generation; this cannot revive old work.
+    func automationAttachment() -> BrowserHostEvent? {
+        guard !closed, let owner = automationOwner, owner.documentGeneration > 0 else { return nil }
+        return .attach(owner: owner)
+    }
+    /// Toolbar and menus enter the same Rust admission/receipt route as the CLI.
+    func requestNavigation(_ action: BrowserAction) {
+        guard action.isNavigation, !closed else { return }
+        onAutomationAction?(action)
+    }
+    func close() {
+        guard !closed else { return }
+        closed = true
+        cancelOperations(code: "host_closed", message: "Browser surface was closed")
+        if let current = automationOwner { emitAutomation?(.detach(owner: current)) }
+        automationOwner = nil
+        currentNavigation = nil
+        webView.stopLoading(); webView.navigationDelegate = nil; webView.removeFromSuperview()
+    }
+    /// Starts exactly once; asynchronous WebKit callbacks cannot replay a timed-out operation.
+    func executeAutomation(_ request: NativeBrowserRequest) {
+        guard !closed, let current = automationOwner, request.owner == current else {
+            emitAutomation?(.fail(operationId: request.operationId, owner: request.owner, error: .init(code: "stale_owner", message: "Browser owner or document changed before dispatch", outcomeUnknown: false)))
+            return
+        }
+        guard request.operationId > lastOperationID else {
+            emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "already_dispatched", message: "Browser operation will not be replayed", outcomeUnknown: true)))
+            return
+        }
+        lastOperationID = request.operationId
+        guard operations.count < 8, request.timeoutMs > 0, request.timeoutMs <= 30_000 else {
+            emitAutomation?(.fail(operationId: request.operationId, owner: current, error: .init(code: "host_busy", message: "Browser operation capacity or timeout limit exceeded", outcomeUnknown: false)))
+            return
+        }
+        operations[request.operationId] = PendingAutomation(request: request, owner: current)
+        let id = request.operationId
+        let timer = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(Int64(request.timeoutMs))) } catch { return }
+            self?.failOperation(id, code: "browser_timeout", message: "Browser operation deadline elapsed; the operation will not be replayed", outcomeUnknown: request.action.outcomeMayBeUnknown)
+        }
+        operations[id]?.timer = timer
+        if request.action.isNavigation {
+            startNavigation(id)
+        } else if processTerminated {
+            failOperation(id, code: "web_process_terminated", message: "Web content process stopped; reload to recover", outcomeUnknown: false)
+        } else if webView.isLoading {
+            failOperation(id, code: "document_loading", message: "Document is loading; wait for navigation completion", outcomeUnknown: false)
+        } else {
+            runJavaScript(id, action: request.action)
+        }
+    }
+    private func startNavigation(_ id: UInt64) {
+        guard let operation = operations[id] else { return }
+        guard !operations.contains(where: { $0.key != id && $0.value.navigation != nil }) else {
+            failOperation(id, code: "navigation_pending", message: "Another browser navigation is still pending", outcomeUnknown: false)
+            return
+        }
+        let navigation: WKNavigation?
+        switch operation.request.action {
+        case .back:
+            guard webView.canGoBack else { failOperation(id, code: "no_history", message: "No previous browser history entry", outcomeUnknown: false); return }
+            navigation = webView.goBack()
+        case .forward:
+            guard webView.canGoForward else { failOperation(id, code: "no_history", message: "No next browser history entry", outcomeUnknown: false); return }
+            navigation = webView.goForward()
+        case .reload: navigation = webView.reload()
+        default: return
+        }
+        guard let navigation else { failOperation(id, code: "navigation_rejected", message: "WebKit did not start navigation", outcomeUnknown: false); return }
+        operations[id]?.navigation = navigation
+        currentNavigation = navigation
+    }
+    private func advanceDocument(causedBy operationID: UInt64?, previousOwner: BrowserOwner? = nil) {
+        guard let previous = previousOwner ?? automationOwner else {
+            if documentGeneration < UInt64.max { documentGeneration += 1 }
+            return
+        }
+        guard documentGeneration < UInt64.max else { close(); return }
+        documentGeneration += 1
+        let current = BrowserOwner(epoch: previous.epoch, identityNamespace: previous.identityNamespace, surfaceId: surfaceID, hostId: hostID, documentGeneration: documentGeneration, modelNavigation: generation ?? 0)
+        for id in Array(operations.keys) {
+            if id == operationID { operations[id]?.owner = current }
+            else { failOperation(id, code: "document_changed", message: "Browser document changed during the operation", outcomeUnknown: operations[id]?.request.action.outcomeMayBeUnknown ?? false) }
+        }
+        automationOwner = current
+        emitAutomation?(.documentChanged(owner: previous, documentGeneration: documentGeneration, modelNavigation: current.modelNavigation, causedBy: operationID))
+    }
+    private func cancelOperations(code: String, message: String) {
+        for id in Array(operations.keys) {
+            failOperation(id, code: code, message: message, outcomeUnknown: operations[id]?.request.action.outcomeMayBeUnknown ?? false)
+        }
+    }
+    private func navigationOperation(_ navigation: WKNavigation?) -> UInt64? {
+        guard let navigation else { return nil }
+        return operations.first { $0.value.navigation === navigation }?.key
+    }
+    private func failOperation(_ id: UInt64, code: String, message: String, outcomeUnknown: Bool) {
+        guard let operation = operations.removeValue(forKey: id) else { return }
+        operation.timer?.cancel()
+        emitAutomation?(.fail(operationId: id, owner: operation.owner, error: .init(code: code, message: String(message.prefix(1024)), outcomeUnknown: outcomeUnknown)))
+    }
+    private func completeOperation(_ id: UInt64, value: BrowserJSON) {
+        guard let operation = operations[id] else { return }
+        guard !closed, automationOwner == operation.owner else {
+            failOperation(id, code: "document_changed", message: "Browser document changed before completion", outcomeUnknown: operation.request.action.outcomeMayBeUnknown)
+            return
+        }
+        var fields: [String: BrowserJSON]
+        if case .object(let object) = value { fields = object } else { fields = ["value": value] }
+        fields["surface_id"] = .unsigned(surfaceID)
+        fields["host_id"] = .string(hostID.uuidString.lowercased())
+        fields["document_generation"] = .unsigned(documentGeneration)
+        if case .eval = operation.request.action { fields["content_world"] = .string("page") }
+        else { fields["content_world"] = .string("isolated") }
+        let result = BrowserJSON.object(fields)
+        do {
+            guard try JSONEncoder().encode(result).count <= BrowserAutomationScript.resultBytes else {
+                failOperation(id, code: "result_too_large", message: "Browser result exceeds the byte limit", outcomeUnknown: operation.request.action.outcomeMayBeUnknown)
+                return
+            }
+        } catch { failOperation(id, code: "invalid_result", message: error.localizedDescription, outcomeUnknown: operation.request.action.outcomeMayBeUnknown); return }
+        operations.removeValue(forKey: id)?.timer?.cancel()
+        emitAutomation?(.complete(operationId: id, owner: operation.owner, result: result))
+    }
+    private func runJavaScript(_ id: UInt64, action: BrowserAction) {
+        guard let operation = operations[id] else { return }
+        guard javaScriptInFlight.count < 8 else {
+            failOperation(id, code: "host_busy", message: "WebKit still owns the maximum number of pending JavaScript callbacks", outcomeUnknown: false)
+            return
+        }
+        struct Input: Encodable { let action: BrowserAction; let hostId: String; let documentGeneration: String }
+        let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
+        let payload: String
+        do {
+            payload = String(decoding: try encoder.encode(Input(action: action, hostId: hostID.uuidString.lowercased(), documentGeneration: String(operation.owner.documentGeneration))), as: UTF8.self)
+        } catch { failOperation(id, code: "invalid_argument", message: error.localizedDescription, outcomeUnknown: false); return }
+        let world: WKContentWorld
+        if case .eval = action { world = .page } else { world = BrowserAutomationScript.isolatedWorld }
+        javaScriptInFlight.insert(id)
+        webView.callAsyncJavaScript(BrowserAutomationScript.source, arguments: ["payload": payload], in: nil, in: world) { [weak self] result in
+            guard let self else { return }
+            self.javaScriptInFlight.remove(id)
+            guard let pending = self.operations[id] else { return }
+            guard !self.closed, self.automationOwner == pending.owner else {
+                self.failOperation(id, code: "document_changed", message: "Browser document changed during JavaScript execution", outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
+                return
+            }
+            switch result {
+            case .failure(let error): self.failOperation(id, code: "javascript_failed", message: error.localizedDescription, outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
+            case .success(let value):
+                guard let text = value as? String, text.utf8.count <= BrowserAutomationScript.resultBytes else {
+                    self.failOperation(id, code: "result_too_large", message: "Browser returned an invalid or oversized JSON result", outcomeUnknown: pending.request.action.outcomeMayBeUnknown); return
+                }
+                do {
+                    // Validate the Foundation tree before recursive Codable decoding;
+                    // explicit page-world eval can replace JSON.stringify itself.
+                    let untyped = try JSONSerialization.jsonObject(with: Data(text.utf8))
+                    var stack: [(Any, Int)] = [(untyped, 0)]
+                    var count = 0
+                    while let (item, depth) = stack.popLast() {
+                        count += 1
+                        guard depth <= 32, count <= 4096 else {
+                            throw BrowserAutomationFailure(code: "result_too_large", message: "Browser result exceeds its structural limit", outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
+                        }
+                        if let array = item as? [Any] { stack.append(contentsOf: array.map { ($0, depth + 1) }) }
+                        else if let object = item as? [String: Any] { stack.append(contentsOf: object.values.map { ($0, depth + 1) }) }
+                    }
+                    let json = try JSONDecoder().decode(BrowserJSON.self, from: Data(text.utf8))
+                    if case .object(let object) = json, case .object(let error)? = object["error"], case .string(let code)? = error["code"], case .string(let message)? = error["message"] {
+                        self.failOperation(id, code: code, message: message, outcomeUnknown: pending.request.action.outcomeMayBeUnknown)
+                    } else { self.completeOperation(id, value: json) }
+                } catch let failure as BrowserAutomationFailure {
+                    self.failOperation(id, code: failure.code, message: failure.message, outcomeUnknown: failure.outcomeUnknown)
+                } catch { self.failOperation(id, code: "invalid_result", message: error.localizedDescription, outcomeUnknown: pending.request.action.outcomeMayBeUnknown) }
+            }
+        }
+    }
     @objc private func submitAddress() {
         var value = address.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty { value = "about:blank" }
@@ -92,15 +306,16 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         window?.makeFirstResponder(webView)
     }
     @objc private func focusSurface() { owner?.selectTab(surfaceID) }
-    @objc private func goBack() { webView.goBack() }
-    @objc private func goForward() { webView.goForward() }
-    @objc private func reloadPage() { if webView.isLoading { webView.stopLoading() } else { webView.reload() } }
+    @objc private func goBack() { requestNavigation(.back(snapshotAfter: false)) }
+    @objc private func goForward() { requestNavigation(.forward(snapshotAfter: false)) }
+    @objc private func reloadPage() { requestNavigation(.reload(snapshotAfter: false)) }
     private static func allowed(_ url: URL) -> Bool {
         if url.absoluteString == "about:blank" { return true }
         return ["https", "http"].contains(url.scheme?.lowercased() ?? "") && url.host?.isEmpty == false && url.user == nil && url.password == nil
     }
     private func showError(_ message: String) { status.stringValue = message; status.textColor = .systemRed }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        guard !closed else { return .cancel }
         if navigationAction.shouldPerformDownload { showError("Downloads are not available in this development build"); return .cancel }
         guard let url = navigationAction.request.url, Self.allowed(url) else { showError("This link type is not supported"); return .cancel }
         if navigationAction.targetFrame == nil {
@@ -112,24 +327,47 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         return .allow
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        guard !closed else { return .cancel }
         guard navigationResponse.canShowMIMEType else { showError("Downloads are not available in this development build"); return .cancel }
         return .allow
     }
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard !closed else { return }
+        currentNavigation = navigation
+        processTerminated = false
+        let cause = navigationOperation(navigation)
+        advanceDocument(causedBy: cause)
         status.stringValue = "Loading…"; status.textColor = ZmuxPalette.subdued
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !closed else { return }
+        if let currentNavigation, currentNavigation !== navigation { return }
         back.isEnabled = webView.canGoBack; forward.isEnabled = webView.canGoForward
         status.stringValue = "Private browser"; status.textColor = ZmuxPalette.subdued
         if let url = webView.url ?? URL(string: "about:blank"), Self.allowed(url) {
             address.stringValue = url.absoluteString == "about:blank" ? "" : url.absoluteString
             owner?.observeBrowser(surfaceID, url: url.absoluteString, title: webView.title ?? "Browser")
         }
+        if let id = navigationOperation(navigation), let operation = operations[id] {
+            if operation.request.action.snapshotAfter { runJavaScript(id, action: .snapshot(options: .init())) }
+            else { completeOperation(id, value: .object(["value": .object(["url": .string(webView.url?.absoluteString ?? "about:blank"), "title": .string(webView.title ?? "")]), "truncated": .bool(false)])) }
+        }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        guard !closed else { return }
+        if let id = navigationOperation(navigation) { failOperation(id, code: "navigation_failed", message: error.localizedDescription, outcomeUnknown: true) }
         if (error as NSError).code != NSURLErrorCancelled { showError(error.localizedDescription) }
     }
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { showError(error.localizedDescription) }
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { showError("Page stopped unexpectedly. Reload to recover.") }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        guard !closed else { return }
+        if let id = navigationOperation(navigation) { failOperation(id, code: "navigation_failed", message: error.localizedDescription, outcomeUnknown: true) }
+        showError(error.localizedDescription)
+    }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard !closed else { return }
+        processTerminated = true
+        advanceDocument(causedBy: nil)
+        showError("Page stopped unexpectedly. Reload to recover.")
+    }
 
 }

@@ -480,6 +480,49 @@ pub unsafe extern "C" fn zmux_desktop_transfer_files(
         reservation.publish(response)
     })
 }
+/// Drain trusted native browser work. May wait for executor acknowledgement; call off UI.
+/// A failed call must not be replayed automatically: delivery may have occurred.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_browser_drain(id: u64) -> ZmuxResult {
+    guard(|| {
+        let desktop = desktop(id)?;
+        // Claim output capacity before dequeuing any at-most-once browser operation.
+        let reservation = Reservation::new()?;
+        let batch = desktop
+            .browser_drain_requests(std::time::Duration::from_secs(1))
+            .map_err(|_| INTERNAL)?;
+        reservation.publish(serde_json::to_vec(&batch).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Trusted native host lifecycle/completion channel; never exposed to socket clients.
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_browser_event(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> i32 {
+    guard(|| {
+        if request.is_null() || length == 0 || length > 300_000 {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: bounded nonnull storage, readable by the caller contract.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let event: zmux_desktop_runtime::browser::BrowserHostEvent =
+            serde_json::from_slice(bytes).map_err(|_| INVALID_ARGUMENT)?;
+        desktop(id)?
+            .browser_host_event(event)
+            .map_err(|error| match error {
+                DesktopError::QueueFull | DesktopError::Busy => BUSY,
+                _ => INTERNAL,
+            })?;
+        Ok(0)
+    })
+    .status
+}
+
 /// OK/value=0 means no change since revision; otherwise value owns a JSON snapshot buffer.
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_desktop_snapshot(id: u64, revision: u64) -> ZmuxResult {
