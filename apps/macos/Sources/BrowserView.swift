@@ -19,6 +19,18 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     private var processTerminated = false
     private var currentNavigation: WKNavigation?
     private var lastOperationID: UInt64 = 0
+    private var titleObservation: NSKeyValueObservation?
+    // KVO only signals a change. One consumer reads current WebKit state and owner
+    // on MainActor, coalescing page-controlled title churn into a bounded slot.
+    private let titleEvents = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    private var titleTask: Task<Void, Never>?
+    private var documentReady = false
+    private struct PageObservation: Equatable {
+        let owner: BrowserOwner
+        let url: String
+        let title: String
+    }
+    private var lastObservation: PageObservation?
     private struct PendingAutomation {
         let request: NativeBrowserRequest
         var owner: BrowserOwner
@@ -70,6 +82,13 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         let click = NSClickGestureRecognizer(target: self, action: #selector(focusSurface))
         click.delaysPrimaryMouseButtonEvents = false
         addGestureRecognizer(click)
+        let stream = titleEvents.stream
+        titleTask = Task { [weak self] in
+            for await _ in stream {
+                guard !Task.isCancelled else { break }
+                self?.publishPageObservation()
+            }
+        }
         update(surface)
     }
     required init?(coder: NSCoder) { nil }
@@ -120,12 +139,46 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         let current = BrowserOwner(epoch: epoch, identityNamespace: identityNamespace, surfaceId: surfaceID, hostId: hostID, documentGeneration: documentGeneration, modelNavigation: generation ?? 0)
         automationOwner = current
         emit(.attach(owner: current))
+        observeTitle()
     }
     /// Reannounce a complete owner after bounded transport loss. Rust accepts only
     /// the same host with a nondecreasing generation; this cannot revive old work.
     func automationAttachment() -> BrowserHostEvent? {
         guard !closed, let owner = automationOwner, owner.documentGeneration > 0 else { return nil }
         return .attach(owner: owner)
+    }
+    /// Recovery publishes the current page after reattachment, so a dropped final
+    /// title signal cannot leave the Rust model behind WebKit indefinitely.
+    func automationObservation() -> BrowserHostEvent? {
+        guard let observation = pageObservation() else { return nil }
+        return .observed(owner: observation.owner, url: observation.url, title: observation.title)
+    }
+    private func pageObservation() -> PageObservation? {
+        guard !closed, !processTerminated, documentReady, !webView.isLoading,
+              let current = automationOwner, current.modelNavigation == generation,
+              let url = webView.url ?? URL(string: "about:blank"), Self.allowed(url),
+              url.absoluteString.utf8.count <= 8192 else { return nil }
+        // Scalar bounding keeps the raw payload within 4096 UTF-8 bytes even for
+        // a page-controlled grapheme containing many combining characters.
+        let title = String(String.UnicodeScalarView((webView.title ?? "Browser").unicodeScalars.prefix(1024)))
+        return PageObservation(owner: current, url: url.absoluteString, title: title)
+    }
+    private func publishPageObservation() {
+        guard let observation = pageObservation(),
+              observation != lastObservation else { return }
+        lastObservation = observation
+        emitAutomation?(.observed(owner: observation.owner, url: observation.url, title: observation.title))
+    }
+    private func observeTitle() {
+        titleObservation?.invalidate(); titleObservation = nil
+        lastObservation = nil
+        guard !closed, documentReady, automationOwner != nil else { return }
+        publishPageObservation()
+    }
+    private func invalidateTitleObservation() {
+        documentReady = false
+        titleObservation?.invalidate(); titleObservation = nil
+        lastObservation = nil
     }
     /// Toolbar and menus enter the same Rust admission/receipt route as the CLI.
     func requestNavigation(_ action: BrowserAction) {
@@ -135,6 +188,8 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
     func close() {
         guard !closed else { return }
         closed = true
+        invalidateTitleObservation()
+        titleEvents.continuation.finish(); titleTask?.cancel(); titleTask = nil
         cancelOperations(code: "host_closed", message: "Browser surface was closed")
         if let current = automationOwner { emitAutomation?(.detach(owner: current)) }
         automationOwner = nil
@@ -198,6 +253,7 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         currentNavigation = navigation
     }
     private func advanceDocument(causedBy operationID: UInt64?, previousOwner: BrowserOwner? = nil) {
+        invalidateTitleObservation()
         guard let previous = previousOwner ?? automationOwner else {
             if documentGeneration < UInt64.max { documentGeneration += 1 }
             return
@@ -395,8 +451,9 @@ final class BrowserView: BackgroundView, WKNavigationDelegate {
         status.stringValue = "Private browser"; status.textColor = ZmuxPalette.subdued
         if let url = webView.url ?? URL(string: "about:blank"), Self.allowed(url) {
             address.stringValue = url.absoluteString == "about:blank" ? "" : url.absoluteString
-            owner?.observeBrowser(surfaceID, url: url.absoluteString, title: webView.title ?? "Browser")
         }
+        documentReady = true
+        observeTitle()
         if let id = navigationOperation(navigation), let operation = operations[id] {
             if operation.request.action.snapshotAfter { runJavaScript(id, action: .snapshot(options: .init())) }
             else { completeOperation(id, value: .object(["value": .object(["url": .string(webView.url?.absoluteString ?? "about:blank"), "title": .string(webView.title ?? "")]), "truncated": .bool(false)])) }

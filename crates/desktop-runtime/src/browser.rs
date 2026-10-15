@@ -14,7 +14,7 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 use zmux_workspace_core::{
-    Snapshot, Surface, SurfaceId, SurfaceKind,
+    Action, Snapshot, Surface, SurfaceId, SurfaceKind,
     targets::{CallerContext, TargetError, TargetScope},
 };
 
@@ -28,6 +28,8 @@ pub const MAX_PENDING_BROWSER_OPERATIONS: usize = 8;
 pub const MAX_BROWSER_RECEIPTS: usize = 16;
 pub const MAX_BROWSER_RESULT_BYTES: usize = 64 * 1024;
 pub const MAX_BROWSER_RETAINED_RESULT_BYTES: usize = 256 * 1024;
+pub const MAX_OBSERVED_TITLE_BYTES: usize = 4096;
+pub const MAX_OBSERVED_URL_BYTES: usize = 8192;
 fn default_timeout() -> u64 {
     DEFAULT_OPERATION_TIMEOUT_MS
 }
@@ -329,6 +331,11 @@ pub enum BrowserHostEvent {
         #[serde(default)]
         caused_by: Option<u64>,
     },
+    Observed {
+        owner: BrowserOwner,
+        url: String,
+        title: String,
+    },
     Complete {
         operation_id: u64,
         owner: BrowserOwner,
@@ -528,10 +535,32 @@ impl BrowserRuntime {
         model: &Snapshot,
         event: BrowserHostEvent,
         now: Instant,
-    ) -> Result<(), BrowserError> {
+    ) -> Result<Option<Action>, BrowserError> {
         // DocumentChanged may bridge an intentionally changed core navigation, so
         // reconcile only after validating and adopting that trusted native transition.
+        let mut action = None;
         match event {
+            BrowserHostEvent::Observed { owner, url, title } => {
+                self.check_owner(&owner)?;
+                if owner.identity_namespace != model.identity_namespace
+                    || surface(model, owner.surface_id)
+                        .is_none_or(|surface| surface.navigation != owner.model_navigation)
+                {
+                    return Err(BrowserError::StaleOwner);
+                }
+                if title.len() > MAX_OBSERVED_TITLE_BYTES || url.len() > MAX_OBSERVED_URL_BYTES {
+                    return Err(BrowserError::Invalid(
+                        "browser observation exceeds the bounded title or URL size",
+                    ));
+                }
+                // Validation and application share the workspace executor.
+                // Reuse its URL/title normalization without issuing navigation.
+                action = Some(Action::ObserveBrowser {
+                    surface_id: owner.surface_id,
+                    url,
+                    title,
+                });
+            }
             BrowserHostEvent::Attach {
                 epoch,
                 surface_id,
@@ -652,7 +681,7 @@ impl BrowserRuntime {
             }
         }
         self.reconcile(model, now);
-        Ok(())
+        Ok(action)
     }
     fn check_owner(&self, owner: &BrowserOwner) -> Result<(), BrowserError> {
         if owner.epoch != self.epoch || self.hosts.get(&owner.surface_id) != Some(owner) {

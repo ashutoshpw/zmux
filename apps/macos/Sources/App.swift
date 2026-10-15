@@ -198,6 +198,8 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
+        browsers.values.forEach { $0.close() }
+        browsers.removeAll()
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
@@ -548,9 +550,10 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         // Discard queued incremental events captured before this full-owner snapshot.
         // New events retain order after the snapshot while acknowledgements are awaited.
         let attachments = browsers.values.compactMap { $0.automationAttachment() }
-        for attachment in attachments {
+        let observations = browsers.values.compactMap { $0.automationObservation() }
+        for event in attachments + observations {
             if Task.isCancelled { return }
-            do { try await bridge.browserEvent(attachment) }
+            do { try await bridge.browserEvent(event) }
             catch {
                 browserEventsNeedRecovery = true
                 showError("Browser synchronization is retrying: " + error.localizedDescription)
@@ -804,7 +807,6 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
     }
     func createBrowser(in pane: UInt64, url: String) { enqueue(.browser("create_browser", nil, pane, url, nil)) }
     func navigateBrowser(_ id: UInt64, url: String) { enqueue(.browser("navigate_browser", id, nil, url, nil)) }
-    func observeBrowser(_ id: UInt64, url: String, title: String) { enqueue(.browser("observe_browser", id, nil, url, title)) }
     @objc func focusBrowserAddress() {
         if let pane = focusedPane, let browser = browsers[pane.selectedSurface] { browser.focusAddress() }
         else { newBrowser() }

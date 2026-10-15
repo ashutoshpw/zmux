@@ -233,8 +233,9 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
         })
         .unwrap();
     let title = "\u{0007}界".repeat(130);
+    let valid_url = format!("https://example.org/{}", "p".repeat(4500));
     desktop
-        .browser_host_event(observed(&current, "https://example.org/redirected", &title))
+        .browser_host_event(observed(&current, &valid_url, &title))
         .unwrap();
     let accepted = desktop.snapshot().unwrap();
     let actual = accepted.model.workspaces[0].root.panes()[0]
@@ -243,10 +244,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
         .find(|surface| surface.id == browser.id)
         .unwrap();
     assert_eq!(actual.title, "界".repeat(128));
-    assert_eq!(
-        actual.url.as_deref(),
-        Some("https://example.org/redirected")
-    );
+    assert_eq!(actual.url.as_deref(), Some(valid_url.as_str()));
     assert_eq!(
         actual.navigation, current.model_navigation,
         "observations must not cause another load"
@@ -286,7 +284,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
         desktop
             .browser_host_event(observed(
                 &current,
-                &format!("https://example.org/{}", "x".repeat(4096)),
+                &format!("https://example.org/{}", "x".repeat(8192)),
                 "oversized URL"
             ))
             .is_err()
