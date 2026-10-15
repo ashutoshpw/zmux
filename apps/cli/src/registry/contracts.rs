@@ -443,6 +443,33 @@ fn definitions() -> Vec<Contract> {
         c.limitations = "Live public WKWebView page zoom mutation; read-only clients reject. In/out step 0.1; explicit finite factors and step results clamp to 0.25..5. Reset selects 1; reset to a configured default is unresolved. Completion reports the actual native factor and exact host/document identity. Preserves selection; no persistence, viewport emulation or replay after uncertainty. Historical compatibility remains unverified.";
         result.push(c);
     }
+    let mut fill = contract(
+        "browser fill",
+        &["--surface", "1", "--selector", "#example"],
+        target_arguments(),
+        "browser",
+    );
+    fill.route = "browser";
+    fill.requirements = &["running_app", "native_webkit_host"];
+    fill.expected.push(("/request/action/action", "fill"));
+    fill.arguments.extend([
+        option("selector", &["--selector"], ValueKind::Text),
+        positional("selector_operand", ValueKind::Text, false),
+        option("text", &["--text"], ValueKind::Text),
+        positional("text_operands", ValueKind::Text, false),
+        option("snapshot_after", &["--snapshot-after"], ValueKind::Flag),
+    ]);
+    fill.argument_rules.extend([
+        json!({"exactly_one": ["selector", "selector_operand"]}),
+        json!({"text_max_utf8_bytes": browser::MAX_INPUT_TEXT_BYTES, "empty_text_clears": true, "explicit_text_overrides_operands": true}),
+    ]);
+    fill.default_pointers.extend([
+        ("text", "/request/action/text"),
+        ("snapshot_after", "/request/action/snapshot_after"),
+        ("operation_timeout_ms", "/request/timeout_ms"),
+    ]);
+    fill.limitations = "Synthetic isolated-world DOM replacement, not trusted keyboard input. CSS selects its first match; document refs select their exact element. Focuses the DOM element without selecting its app tab. Cancelable beforeinput precedes native value/text replacement and input/change events; cancellation reports input_rejected. Omitted/empty text clears; positional text joins with spaces. No frame/shadow traversal or automatic replay; read-only sockets deny. Full historical compatibility remains unverified.";
+    result.push(fill);
     for verb in ["wait", "snapshot", "eval", "back", "forward", "reload"] {
         let mut operands = vec!["--surface", "1"];
         if verb == "wait" {

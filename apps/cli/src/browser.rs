@@ -96,6 +96,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             | "forward"
             | "reload"
             | "zoom"
+            | "fill"
     ) {
         return Err(CliError(format!("unknown browser subcommand `{verb}`")));
     }
@@ -149,6 +150,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     let mut revision = None;
     let mut selector = None;
     let mut script = None;
+    let mut fill_text = None;
     let mut attribute = None;
     let mut property = None;
     let mut max_depth = None;
@@ -198,8 +200,17 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 })?);
                 index += 2;
             }
-            "--selector" if matches!(verb, "get" | "is" | "snapshot" | "find" | "wait") => {
+            "--selector"
+                if matches!(verb, "get" | "is" | "snapshot" | "find" | "wait" | "fill") =>
+            {
                 set(&mut selector, value(&args, index, flag)?, flag)?;
+                index += 2;
+            }
+            "--text" if verb == "fill" => {
+                let text = args.get(index + 1).ok_or_else(|| {
+                    CliError("--text requires a value (which may be empty)".into())
+                })?;
+                set(&mut fill_text, text, flag)?;
                 index += 2;
             }
             "--name" if verb == "find" => {
@@ -284,7 +295,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 flag_once(&mut compact, flag)?;
                 index += 1;
             }
-            "--snapshot-after" if matches!(verb, "back" | "forward" | "reload") => {
+            "--snapshot-after" if matches!(verb, "back" | "forward" | "reload" | "fill") => {
                 flag_once(&mut snapshot_after, flag)?;
                 index += 1;
             }
@@ -304,6 +315,17 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         }
     }
     let action = match verb {
+        "fill" => {
+            if selector.is_none() && !values.is_empty() {
+                selector = Some(values.remove(0));
+            }
+            BrowserAction::Fill {
+                selector: selector
+                    .ok_or_else(|| CliError("browser fill requires a selector".into()))?,
+                text: fill_text.unwrap_or_else(|| values.join(" ")),
+                snapshot_after,
+            }
+        }
         "zoom" => {
             if values.len() != 1 {
                 return Err(CliError(

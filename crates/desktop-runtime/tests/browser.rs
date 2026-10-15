@@ -621,6 +621,62 @@ fn deadlines_bound_queue_and_distinguish_unexecuted_from_uncertain_mutations() {
 }
 
 #[test]
+fn fill_text_validation_is_bounded_and_empty_replacement_is_a_mutation() {
+    let (model, surface) = fixture();
+    let now = Instant::now();
+    let before = model.snapshot();
+    let mut runtime = BrowserRuntime::default();
+    attach(&mut runtime, &model, surface, now);
+    let action = |selector: &str, text: String| BrowserAction::Fill {
+        selector: selector.into(),
+        text,
+        snapshot_after: false,
+    };
+    for rejected in [
+        action("", String::new()),
+        action("#entry", "x".repeat(MAX_INPUT_TEXT_BYTES + 1)),
+        action("#entry", "bad\0text".into()),
+    ] {
+        assert!(matches!(
+            runtime.admit(&before, request(&model, surface, rejected), now),
+            Err(BrowserError::Invalid(_))
+        ));
+    }
+    assert!(runtime.drain_requests(&before, now).requests.is_empty());
+    for text in [
+        String::new(),
+        " quoted \"\n雪 ".into(),
+        "x".repeat(MAX_INPUT_TEXT_BYTES),
+    ] {
+        let mut fill = request(&model, surface, action("#entry", text.clone()));
+        assert!(!fill.action.is_read());
+        fill.timeout_ms = 10;
+        let id = runtime.admit(&before, fill, now).unwrap();
+        let batch = runtime.drain_requests(&before, now);
+        assert_eq!(batch.requests.len(), 1);
+        assert!(
+            matches!(&batch.requests[0].action, BrowserAction::Fill { text: actual, .. } if actual == &text)
+        );
+        assert!(runtime.drain_requests(&before, now).requests.is_empty());
+        runtime.reconcile(&before, now + Duration::from_millis(10));
+        assert!(
+            runtime
+                .receipt(id)
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .outcome_unknown
+        );
+    }
+    assert_eq!(
+        model.snapshot(),
+        before,
+        "admission must not change app selection or the document"
+    );
+}
+
+#[test]
 fn zoom_finite_validation_precedes_dispatch_and_expired_native_mutation_is_not_replayed() {
     let (model, surface) = fixture();
     let now = Instant::now();

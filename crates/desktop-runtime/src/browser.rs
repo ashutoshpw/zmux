@@ -19,6 +19,7 @@ use zmux_workspace_core::{
 };
 
 pub const MAX_SCRIPT_BYTES: usize = 8192;
+pub const MAX_INPUT_TEXT_BYTES: usize = 8192;
 pub const MAX_SELECTOR_BYTES: usize = 2048;
 pub const MAX_ATTRIBUTE_BYTES: usize = 128;
 pub const MAX_SNAPSHOT_DEPTH: u32 = 32;
@@ -76,6 +77,12 @@ pub enum BrowserAction {
     },
     Zoom {
         operation: BrowserZoom,
+    },
+    Fill {
+        selector: String,
+        text: String,
+        #[serde(default)]
+        snapshot_after: bool,
     },
     Eval {
         script: String,
@@ -248,6 +255,18 @@ impl BrowserAction {
     }
     pub fn validate(&self) -> Result<(), BrowserError> {
         match self {
+            Self::Fill {
+                selector: value,
+                text,
+                ..
+            } => {
+                selector(Some(value))?;
+                if text.len() > MAX_INPUT_TEXT_BYTES || text.contains('\0') {
+                    return Err(BrowserError::Invalid(
+                        "browser fill text must contain no NUL and fit 8192 UTF-8 bytes",
+                    ));
+                }
+            }
             Self::Zoom {
                 operation: BrowserZoom::Set { factor },
             } if !factor.is_finite() => {

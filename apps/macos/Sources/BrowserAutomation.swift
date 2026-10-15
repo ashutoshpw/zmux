@@ -69,13 +69,14 @@ enum BrowserAction: Codable, Sendable {
     case forward(snapshotAfter: Bool)
     case reload(snapshotAfter: Bool)
     case zoom(operation: BrowserZoom)
+    case fill(selector: String, text: String, snapshotAfter: Bool)
     case eval(script: String)
     case snapshot(options: BrowserSnapshotOptions)
     case get(kind: String, selector: String?, attribute: String?, property: String?)
     case find(locator: BrowserLocator)
     case wait(selector: String, state: String)
 
-    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation }
+    private enum CodingKeys: String, CodingKey { case action, snapshotAfter, script, options, kind, selector, attribute, property, locator, state, operation, text }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .action) {
@@ -83,6 +84,7 @@ enum BrowserAction: Codable, Sendable {
         case "forward": self = .forward(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "reload": self = .reload(snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "zoom": self = .zoom(operation: try c.decode(BrowserZoom.self, forKey: .operation))
+        case "fill": self = .fill(selector: try c.decode(String.self, forKey: .selector), text: try c.decode(String.self, forKey: .text), snapshotAfter: try c.decodeIfPresent(Bool.self, forKey: .snapshotAfter) ?? false)
         case "eval": self = .eval(script: try c.decode(String.self, forKey: .script))
         case "snapshot": self = .snapshot(options: try c.decodeIfPresent(BrowserSnapshotOptions.self, forKey: .options) ?? .init())
         case "find": self = .find(locator: try c.decode(BrowserLocator.self, forKey: .locator))
@@ -100,6 +102,9 @@ enum BrowserAction: Codable, Sendable {
             try c.encode(name, forKey: .action); try c.encode(after, forKey: .snapshotAfter)
         case .eval(let script): try c.encode("eval", forKey: .action); try c.encode(script, forKey: .script)
         case .zoom(let operation): try c.encode("zoom", forKey: .action); try c.encode(operation, forKey: .operation)
+        case .fill(let selector, let text, let after):
+            try c.encode("fill", forKey: .action); try c.encode(selector, forKey: .selector)
+            try c.encode(text, forKey: .text); try c.encode(after, forKey: .snapshotAfter)
         case .snapshot(let options): try c.encode("snapshot", forKey: .action); try c.encode(options, forKey: .options)
         case .find(let locator): try c.encode("find", forKey: .action); try c.encode(locator, forKey: .locator)
         case .wait(let selector, let state):
@@ -111,7 +116,7 @@ enum BrowserAction: Codable, Sendable {
     }
     var isNavigation: Bool { switch self { case .back, .forward, .reload: true; default: false } }
     var snapshotAfter: Bool { switch self { case .back(let after), .forward(let after), .reload(let after): after; default: false } }
-    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom: true; default: false } }
+    var outcomeMayBeUnknown: Bool { switch self { case .back, .forward, .reload, .eval, .zoom, .fill: true; default: false } }
     var isWait: Bool { if case .wait = self { return true }; return false }
 }
 
@@ -356,6 +361,28 @@ enum BrowserAutomationScript {
       }
       return {matched,state:req.state,ref:matched && node ? reference(node) : null};
     };
+    const fill = () => {
+      const node = resolve(req.selector);
+      if (!node) fault('element_not_found', 'Fill selector did not match an element');
+      if (typeof node.focus === 'function') node.focus({preventScroll:true});
+      const hasValue = 'value' in node;
+      const edit = {bubbles:true, cancelable:true, inputType:'insertReplacementText', data:req.text};
+      if (!node.dispatchEvent(new InputEvent('beforeinput', edit))) fault('input_rejected', 'The page rejected the replacement text');
+      if (hasValue) {
+        // Use an inherited setter so an instance-level framework tracker can
+        // observe the subsequent input event against the changed native value.
+        let prototype = Object.getPrototypeOf(node), setter;
+        for (let depth = 0; prototype && depth < 32; depth++, prototype = Object.getPrototypeOf(prototype)) {
+          const property = Object.getOwnPropertyDescriptor(prototype, 'value');
+          if (property?.set) { setter = property.set; break; }
+        }
+        if (setter) setter.call(node, req.text);
+        else node.value = req.text;
+      } else node.textContent = req.text;
+      node.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertReplacementText', data:req.text}));
+      if (hasValue) node.dispatchEvent(new Event('change', {bubbles:true}));
+      return {filled:true, ref:reference(node)};
+    };
     const snapshot = options => {
       const root = resolve(options.selector);
       if (!root) fault('element_not_found', 'Snapshot root was not found');
@@ -453,8 +480,9 @@ enum BrowserAutomationScript {
       else if (req.action === 'get') value = get();
       else if (req.action === 'find') value = find(req.locator);
       else if (req.action === 'wait') value = wait();
+      else if (req.action === 'fill') value = fill();
       else fault('unsupported_action', 'Unsupported browser action');
-      const result = JSON.stringify({value, truncated});
+      const result = JSON.stringify({value, ...(req.action === 'fill' && req.snapshot_after ? {snapshot:snapshot({})} : {}), truncated});
       if (new TextEncoder().encode(result).length > 58000) fault('result_too_large', 'Browser result exceeds the byte limit; narrow the selector');
       return result;
     } catch (error) {
