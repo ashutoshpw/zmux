@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Type-check both native app slices before spending time building Rust libraries."""
+from pathlib import Path
+import platform
+import subprocess
+import sys
+
+if sys.platform != "darwin":
+    raise SystemExit("Native source checks require macOS and its SDK")
+
+root = Path(__file__).resolve().parent.parent
+sdk = subprocess.check_output(
+    ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True
+).strip()
+sources = sorted((root / "apps/macos/Sources").glob("*.swift"))
+if not sources:
+    raise SystemExit("No native app sources found")
+architectures = ["arm64", "x86_64"]
+if platform.machine() == "x86_64":
+    architectures.reverse()
+for architecture in architectures:
+    subprocess.run([
+        "xcrun", "swiftc", "-typecheck", "-swift-version", "6",
+        "-strict-concurrency=complete", "-warnings-as-errors",
+        "-target", f"{architecture}-apple-macosx14.0", "-sdk", sdk,
+        "-import-objc-header", str(root / "crates/native-bridge/include/zmux.h"),
+        *map(str, sources),
+    ], check=True)
+print("Both native Swift slices type-check; linking and runtime checks remain required.")

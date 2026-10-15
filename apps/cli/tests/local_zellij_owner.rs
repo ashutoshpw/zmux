@@ -63,13 +63,35 @@ impl Client {
     fn pid(&self) -> u32 {
         self.child.process_id().unwrap()
     }
+    fn capture(&mut self, bytes: &[u8]) {
+        // Keep the bounded tail so final diagnostics survive initial rendering.
+        let excess = (self.output.len() + bytes.len()).saturating_sub(65536);
+        self.output.drain(..excess);
+        self.output.extend_from_slice(bytes);
+    }
+    fn drain_final_output(&mut self) -> Option<std::io::Error> {
+        let mut bytes = [0; 16384];
+        for _ in 0..32 {
+            match self.io.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(count) => self.capture(&bytes[..count]),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(nix::errno::Errno::EIO as i32) =>
+                {
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+                Err(error) => return Some(error),
+            }
+        }
+        None
+    }
     fn pump(&mut self, replies: bool) {
         let mut bytes = [0; 16384];
         match self.io.read(&mut bytes) {
             Ok(count) if count > 0 => {
-                self.output.extend_from_slice(
-                    &bytes[..count.min(65536usize.saturating_sub(self.output.len()))],
-                );
+                self.capture(&bytes[..count]);
                 if replies {
                     for (query, answer) in [
                         (b"\x1b[c".as_slice(), b"\x1b[?1;2c".as_slice()),
@@ -92,18 +114,26 @@ impl Client {
     fn send(&mut self, bytes: &[u8]) {
         self.io.write_all(bytes).unwrap();
     }
+    #[track_caller]
     fn probe(&mut self, bytes: &[u8], mut predicate: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut next = Instant::now();
         while !predicate() {
             self.pump(true);
-            assert!(
-                observe_child(self.pid(), false).unwrap().is_none(),
-                "CLI ended while awaiting input proof"
-            );
+            let status = observe_child(self.pid(), false).unwrap();
+            if let Some(status) = status {
+                // Retain the same bounded PTY transcript used by until/finish.
+                // Drain queued final diagnostics without answering further queries.
+                let read_error = self.drain_final_output();
+                panic!(
+                    "CLI ended {status:?} while awaiting input proof; final_pty_read_error={read_error:?}: {}",
+                    String::from_utf8_lossy(&self.output)
+                );
+            }
             assert!(
                 Instant::now() < deadline,
-                "actual workload input proof deadline"
+                "actual workload input proof deadline: {}",
+                String::from_utf8_lossy(&self.output)
             );
             if Instant::now() >= next {
                 self.send(bytes);
@@ -112,6 +142,7 @@ impl Client {
             thread::sleep(Duration::from_millis(5));
         }
     }
+    #[track_caller]
     fn prove_input(&mut self, path: &std::path::Path, mut ready: impl FnMut() -> bool) {
         let token = format!("proof-{}", uuid::Uuid::new_v4().simple());
         let request = format!("{token}\r");
