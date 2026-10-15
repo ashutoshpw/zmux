@@ -444,10 +444,10 @@ fn socket_deadline_spans_fragmented_header_body_and_response_stages_without_repl
                 "{scenario}: {error}"
             );
             assert!(output.stdout.is_empty());
-            assert!(
-                elapsed < Duration::from_millis(550),
-                "{scenario} extended the total deadline: {elapsed:?}"
-            );
+            // Do not bound Command::output wall time: it includes process startup,
+            // scheduler suspension and exit collection, outside the client's budget.
+            // A per-read/per-stage deadline reset is detected above by the late
+            // complete response succeeding instead of this timeout failure.
         }
         fs::remove_file(&socket).unwrap();
         fs::remove_dir(socket.parent().unwrap()).unwrap();

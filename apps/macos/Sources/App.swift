@@ -2222,7 +2222,10 @@ emit("done")
             return root
         }.value
         func removeFixture() async throws {
-            try await Task.detached { try FileManager.default.removeItem(at: fixture) }.value
+            let cleanup = Task<Void, Error>.detached {
+                try FileManager.default.removeItem(at: fixture)
+            }
+            try await cleanup.value
         }
         do {
             let path = fixture.appendingPathComponent("keys.py").path
