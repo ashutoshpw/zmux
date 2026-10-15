@@ -57,6 +57,7 @@ fn reply_opt_in_requires_a_terminal_session_and_claiming_once_withdraws_native_d
     let workspace = store.snapshot().workspaces[0].clone();
     store
         .apply(Action::CreateBrowser {
+            profile_id: None,
             pane_id: workspace.focused_pane,
             url: "https://example.org".into(),
             focus: true,
@@ -507,6 +508,7 @@ fn restore_epoch_fences_same_namespace_browser_targets_and_old_permission_callba
     let pane = store.snapshot().workspaces[0].focused_pane;
     store
         .apply(Action::CreateBrowser {
+            profile_id: None,
             pane_id: pane,
             url: "https://example.org/".into(),
             focus: true,

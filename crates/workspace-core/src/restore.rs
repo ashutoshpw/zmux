@@ -1,13 +1,14 @@
 //! Versioned topology descriptors. No process state, input, filesystem or network I/O.
 //!
-//! V1 preserves current selections, not undo-close or navigation history. Browser query
+//! V1 preserves selections; V2 adds explicit browser profile identity with a V1 reader.
+//! Neither version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
-//! Full browser restoration and native split ratios need their own future schema version.
+//! Page state and native split ratios need their own future schema version.
 use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 1;
+pub const SESSION_DOCUMENT_VERSION: u32 = 2;
 const FORMAT: &str = "zmux.session";
 // Retain room for an ordinary four-ID create-workspace action after restoration.
 const MAX_NEXT_ID: u64 = u64::MAX - 4;
@@ -64,9 +65,48 @@ pub struct SavedSurface {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SavedContent {
-    LocalTerminal { cwd: Option<String> },
-    SshTerminal { connection: SavedSshConnection },
-    Browser { url: String },
+    LocalTerminal {
+        cwd: Option<String>,
+    },
+    SshTerminal {
+        connection: SavedSshConnection,
+    },
+    Browser {
+        url: String,
+        #[serde(default, skip_serializing_if = "SavedBrowserProfile::is_missing")]
+        profile_id: SavedBrowserProfile,
+    },
+}
+
+/// Presence distinguishes a v1 descriptor from a v2 descriptor without discarding
+/// an explicit null or UUID. The wire value remains null or a UUID string.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedBrowserProfile {
+    pub id: Option<uuid::Uuid>,
+    present: bool,
+}
+impl SavedBrowserProfile {
+    fn is_missing(&self) -> bool {
+        !self.present
+    }
+}
+impl From<Option<uuid::Uuid>> for SavedBrowserProfile {
+    fn from(id: Option<uuid::Uuid>) -> Self {
+        Self { id, present: true }
+    }
+}
+impl Serialize for SavedBrowserProfile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.id.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for SavedBrowserProfile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            id: Option::<uuid::Uuid>::deserialize(deserializer)?,
+            present: true,
+        })
+    }
 }
 
 /// Explicit allowlist: startup commands, environment and credential contents have no field.
@@ -155,6 +195,7 @@ struct Validation {
     terminals: usize,
     browsers: usize,
     next_id: u64,
+    version: u32,
     limits: RestoreLimits,
 }
 impl Validation {
@@ -215,7 +256,15 @@ impl Validation {
                                 .map_err(|e| invalid(format!("invalid SSH connection: {e}")))?;
                             self.terminals += 1;
                         }
-                        SavedContent::Browser { url } => {
+                        SavedContent::Browser { url, profile_id } => {
+                            if (self.version == 1 && profile_id.present)
+                                || (self.version == 2 && !profile_id.present)
+                                || profile_id.id.is_some_and(|id| id.is_nil())
+                            {
+                                return Err(invalid(
+                                    "invalid browser profile field for session version",
+                                ));
+                            }
                             surfaces::validate_browser_url(url)
                                 .map_err(|e| invalid(e.to_string()))?;
                             if url.contains(['?', '#']) {
@@ -241,7 +290,7 @@ impl Validation {
 impl SessionDocument {
     /// Byte-length and parse-recursion limits belong to the persistence worker before this call.
     pub fn validate(self, limits: RestoreLimits) -> Result<ValidatedSessionDocument, RestoreError> {
-        if self.format != FORMAT || self.version != SESSION_DOCUMENT_VERSION {
+        if self.format != FORMAT || !matches!(self.version, 1 | SESSION_DOCUMENT_VERSION) {
             return Err(invalid("unsupported format or version"));
         }
         if self.identity_namespace.is_nil() {
@@ -265,6 +314,7 @@ impl SessionDocument {
             terminals: 0,
             browsers: 0,
             next_id: self.next_id,
+            version: self.version,
             limits,
         };
         for workspace in &self.workspaces {
@@ -320,6 +370,7 @@ impl SavedTree {
                                     },
                                 },
                                 SurfaceKind::Browser => SavedContent::Browser {
+                                    profile_id: surface.browser_profile_id.into(),
                                     url: surface
                                         .url
                                         .as_deref()
@@ -356,7 +407,8 @@ impl SavedTree {
                     .surfaces
                     .into_iter()
                     .map(|saved| match saved.content {
-                        SavedContent::Browser { url } => Surface {
+                        SavedContent::Browser { url, profile_id } => Surface {
+                            browser_profile_id: profile_id.id,
                             id: saved.id,
                             kind: SurfaceKind::Browser,
                             session_id: None,

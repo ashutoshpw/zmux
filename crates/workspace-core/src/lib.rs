@@ -32,7 +32,7 @@ identifier!(PaneId);
 identifier!(SessionId);
 identifier!(SurfaceId);
 
-pub const MODEL_VERSION: u32 = 3;
+pub const MODEL_VERSION: u32 = 4;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
 pub const MAX_CLOSED_ITEMS: usize = 32;
 
@@ -192,6 +192,8 @@ impl Default for Snapshot {
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     CreateBrowser {
+        #[serde(default)]
+        profile_id: Option<uuid::Uuid>,
         pane_id: PaneId,
         url: String,
         #[serde(default = "default_focus")]

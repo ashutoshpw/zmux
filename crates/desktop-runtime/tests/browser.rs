@@ -18,6 +18,7 @@ fn fixture() -> (WorkspaceStore, SurfaceId) {
     let pane = model.snapshot().workspaces[0].focused_pane;
     model
         .apply(Action::CreateBrowser {
+            profile_id: None,
             focus: true,
             pane_id: pane,
             url: "https://example.org".into(),
@@ -136,6 +137,7 @@ fn observed_browser_metadata_is_bounded_and_fenced_after_a_newer_cli_navigation(
         1,
         Command::Action {
             action: Action::CreateBrowser {
+                profile_id: None,
                 focus: true,
                 pane_id: initial.model.workspaces[0].focused_pane,
                 url: "https://example.org/old".into(),
@@ -790,6 +792,7 @@ fn desktop_shutdown_fails_queued_reads_and_marks_dispatched_evaluation_uncertain
             request_id: 1,
             payload: Command::Action {
                 action: Action::CreateBrowser {
+                    profile_id: None,
                     focus: true,
                     pane_id: initial.model.workspaces[0].focused_pane,
                     url: "https://example.org/".into(),

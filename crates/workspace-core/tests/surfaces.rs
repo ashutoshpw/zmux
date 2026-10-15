@@ -404,6 +404,7 @@ fn browser_tabs_have_no_pty_and_restore_the_observed_url_without_replaying_navig
     let (_, pane, terminal, _) = workspace(&mut store);
     let created = store
         .apply(Action::CreateBrowser {
+            profile_id: None,
             focus: true,
             pane_id: pane,
             url: "https://example.com/initial".into(),

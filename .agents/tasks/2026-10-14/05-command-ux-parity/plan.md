@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 - [R02 local tmux](references/r02-local-tmux.md) — durable headless session ownership, verified lifecycle and remaining GUI integration.
+
+- [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.
 - [F04 engine evaluation](references/f04-engine-evaluation.md) — pinned permissive sources, isolated C/Rust snapshot/reflow evidence and remaining engine/native decision gates.
 - [A01 workspace metadata](references/a01-workspace-metadata.md) — scoped status/progress/log commands, aggregate bounds and native presentation gates.
 - [F04 resource telemetry](references/f04-native-resource-sampler.md) — bounded external Mac measurements and remaining workload/budget gates.

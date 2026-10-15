@@ -15,6 +15,7 @@ pub struct Surface {
     pub session_id: Option<SessionId>,
     pub url: Option<String>,
     pub navigation: u64,
+    pub browser_profile_id: Option<uuid::Uuid>,
     pub title: String,
     pub cwd: Option<String>,
     pub remote: Option<zmux_remote_runtime::SshConnectionConfig>,
@@ -27,6 +28,7 @@ impl Surface {
             session_id: Some(session_id),
             url: None,
             navigation: 0,
+            browser_profile_id: None,
             title: "Terminal".into(),
             cwd: None,
             remote: None,
@@ -183,7 +185,13 @@ impl WorkspaceStore {
                 pane_id,
                 url,
                 focus,
+                profile_id,
             } => {
+                if profile_id.is_some_and(|id| id.is_nil()) {
+                    return Err(ActionError::InvalidOperation(
+                        "profile UUID must be nonnil".into(),
+                    ));
+                }
                 validate_browser_url(&url)?;
                 let wi = self.workspace_index(pane_id)?;
                 let pane = self.pane(pane_id)?;
@@ -195,6 +203,7 @@ impl WorkspaceStore {
                     session_id: None,
                     url: Some(url),
                     navigation: 0,
+                    browser_profile_id: profile_id,
                     title: "Browser".into(),
                     cwd: None,
                     remote: None,
@@ -564,6 +573,7 @@ impl WorkspaceStore {
         let surface = Surface {
             id: SurfaceId(ids),
             kind: old.kind.clone(),
+            browser_profile_id: old.browser_profile_id,
             session_id: old.session_id.map(|_| SessionId(ids + 1)),
             url: old.url.clone(),
             navigation: 0,
