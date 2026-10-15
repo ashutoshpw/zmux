@@ -12,6 +12,7 @@ zmux-desktop-runtime.workspace = true
 zmux-workspace-core.workspace = true
 serde_json.workspace = true
 socket2.workspace = true
+nix = { workspace = true, features = ["poll"] }
 zmux-remote-runtime.workspace = true
 
 [lints]
