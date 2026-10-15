@@ -51,6 +51,38 @@ fn write_result(receipt: &mut InputReceipt) -> InputWriteResult {
 }
 
 #[test]
+fn failed_start_releases_its_owned_resource_on_the_session_worker() {
+    struct Resource(std::sync::mpsc::SyncSender<thread::ThreadId>);
+    impl Drop for Resource {
+        fn drop(&mut self) {
+            let _ = self.0.try_send(thread::current().id());
+        }
+    }
+    let caller = thread::current().id();
+    let (released, observation) = std::sync::mpsc::sync_channel(1);
+    let result = Session::spawn_with_resource(
+        Launch {
+            program: "/dev/null/zmux-missing-command".into(),
+            args: Vec::new(),
+            cwd: None,
+            size: Size { rows: 8, cols: 60 },
+        },
+        &[],
+        Resource(released),
+    );
+    assert!(
+        matches!(result, Err(SessionError::Failure(message)) if message.contains("launch PTY command"))
+    );
+    let worker = observation
+        .try_recv()
+        .expect("failed startup returned before resource cleanup");
+    assert_ne!(
+        worker, caller,
+        "startup cleanup ran on the launching caller"
+    );
+}
+
+#[test]
 fn write_receipt_confirms_full_pty_acceptance_in_the_existing_input_order() {
     let mut session = launch("stty raw -echo; printf READY; cat");
     wait_for(&session, |s| s.viewport.contents.contains("READY"));
