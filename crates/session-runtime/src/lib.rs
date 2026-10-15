@@ -106,8 +106,8 @@ pub struct EngineOptions {
 pub enum State {
     Running,
     Exited,
-    /// The cancellation loop ended; physical cleanup requires a completed join
-    /// or is_finished. Exit can be nonzero; this is not a semantic detach receipt.
+    /// The cancellation loop ended; successful shutdown must confirm cleanup.
+    /// Worker termination alone is insufficient. Exit can be nonzero.
     Closed,
     Failed,
 }
@@ -267,6 +267,7 @@ struct Shared {
     stop: AtomicBool,
     close_deadline: Mutex<Option<Instant>>,
     exited: AtomicBool,
+    cleanup_failed: AtomicBool,
     resize: Mutex<Option<Size>>,
     snapshot: Mutex<Arc<Snapshot>>,
 }
@@ -326,9 +327,23 @@ impl ProcessGuard {
                 // Retain the failed signal and independent owned-child state.
                 // Observation errors grant no authority or successful cleanup.
                 let group = nix::unistd::getpgid(Some(Pid::from_raw(self.pid as i32)));
+                let mut reap = None;
+                if error == Errno::EPERM && matches!(group, Err(Errno::ESRCH)) {
+                    match self.child.try_wait() {
+                        Ok(Some(status)) => {
+                            self.reaped = true;
+                            eprintln!(
+                                "zmux PTY cleanup confirmed direct-child reap: pid={}; group_signal=EPERM; getpgid=ESRCH; status={status:?}",
+                                self.pid
+                            );
+                            return Ok(());
+                        }
+                        result => reap = Some(result),
+                    }
+                }
                 let status = child::observe_child(self.pid, true);
                 Err(SessionError::Failure(format!(
-                    "terminate PTY process group: {error}; signal={signal:?}; owned_child_pid={}; observed_group={group:?}; owned_child_status={status:?}",
+                    "terminate PTY process group: {error}; signal={signal:?}; owned_child_pid={}; observed_group={group:?}; owned_child_status={status:?}; owned_child_reap={reap:?}",
                     self.pid
                 )))
             }
@@ -524,7 +539,8 @@ impl Session {
         }
     }
 
-    /// Lets an owning coordinator reap completed workers without blocking its command loop.
+    /// Reports worker termination without blocking the coordinator's command loop.
+    /// Call shutdown to join and check cleanup; this alone is not cleanup proof.
     pub fn is_finished(&self) -> bool {
         self.worker.as_ref().is_none_or(JoinHandle::is_finished)
     }
@@ -649,7 +665,8 @@ impl Session {
 
     /// Tighten cancellation to a shared shutdown deadline without renewing it.
     /// The existing post-exit PTY drain is reserved within that deadline. A final
-    /// OS reap can still remain pending; only join/is_finished confirms cleanup.
+    /// OS reap can remain pending. is_finished reports worker termination only;
+    /// successful shutdown joins the worker and confirms cleanup.
     pub fn request_close_until(&self, deadline: Instant) -> Result<(), SessionError> {
         let mut current = self
             .shared
@@ -677,6 +694,17 @@ impl Session {
             worker
                 .join()
                 .map_err(|_| SessionError::Failure("session worker panicked".into()))?;
+        }
+        if self.shared.cleanup_failed.load(Ordering::Acquire) {
+            let failure = self
+                .shared
+                .snapshot
+                .lock()
+                .map_err(|_| SessionError::Failure("cleanup failure snapshot poisoned".into()))?
+                .failure
+                .clone()
+                .unwrap_or_else(|| "PTY cleanup failed without a retained diagnostic".into());
+            return Err(SessionError::Failure(failure));
         }
         if matches!(self.shutdown_policy, ShutdownPolicy::Graceful { .. })
             && let Some(failure) = &self
@@ -856,6 +884,7 @@ impl Worker {
             stop: AtomicBool::new(false),
             close_deadline: Mutex::new(None),
             exited: AtomicBool::new(false),
+            cleanup_failed: AtomicBool::new(false),
             resize: Mutex::new(None),
             snapshot: Mutex::new(Arc::new(Snapshot {
                 state: State::Running,
@@ -955,6 +984,7 @@ impl Worker {
         drop(io);
         drop(master);
         if let Err(error) = process.stop() {
+            shared.cleanup_failed.store(true, Ordering::Release);
             match shared.snapshot.lock() {
                 Ok(mut slot) => {
                     let mut last = (**slot).clone();

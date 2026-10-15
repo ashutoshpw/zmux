@@ -35,7 +35,8 @@ Input receipts finish once with known accepted prefixes; incomplete/unknown resu
 never authorize replay. Cancellation aborts any staged generation before the
 existing Kill or Graceful flow. Graceful output drain remains read-only, and the
 shared earliest close deadline still reserves the existing2s post-exit drain;
-cleanup is proved only by completed join/is_finished. No engine budget renews that
+successful shutdown must confirm cleanup; join/is_finished alone report worker
+termination. No engine budget renews that
 root deadline. Failed worker/resize/constructor paths retain their existing owned
 resource and physical child cleanup boundaries.
 
@@ -181,3 +182,34 @@ Session case explicitly rejects cleanup failure after shutdown, so retaining the
 deadline text cannot turn a cleanup failure into acceptance. Local default
 Session18 and linked4 cases pass; the actual Darwin cleanup cause remains pending
 the retained primary/error-state evidence.
+
+Diagnostic run `38813623938` at `b831facf4bf30838705944d4813a81a7445ca948`
+preserved the primary causal deadline and correctly failed its explicit physical
+cleanup assertion. The unexpected `SIGKILL` group error was `EPERM`, while
+`getpgid` for the physically retained child returned `ESRCH` and the nonreaping
+owned-child observation returned `None`. Three cases passed, including the exact
+4096-byte release prefix. Artifact `12010016250`, ZIP SHA256
+`bf2ccdca16de95cc42db3026d69a481b8f01dffd1ecceb2c9d717fa171e9affc`, retains
+this evidence; it does not establish successful cleanup.
+
+The scoped repair handles only that `EPERM` plus `getpgid=ESRCH` combination by
+asking the actual retained child handle to `try_wait`. Only `Some` (actual reap)
+sets the guard's `reaped` flag immediately and succeeds; `None` or error retains
+the original signal failure. No later signal can target the released PID. The
+rare actual-reap event records the child status. This proves direct-child reap,
+not extinction of every descendant/group member; it does not authorize signalling
+unrelated processes or broad permission-error suppression.
+
+A sticky private cleanup-failure flag is set before fallible snapshot publication.
+Both shutdown policies check it after joining, and repeated shutdown calls retain
+the error. `is_finished` documents worker termination only. A new public regression
+uses a separately owned subprocess whose Python launcher sets `SIGCHLD=SIG_IGN`
+before exec; its actual PTY child is auto-reaped by the kernel, inducing real
+`ECHILD` cleanup failure without changing the test runner's signals or adding a
+production seam. Exact old `b831fac` source returns false `Ok(())` for Kill and
+fails this regression. The repair returns the retained cleanup error for both
+policies and repeated calls. Red evidence is retained under
+`target/agent-validation/session-cleanup-outcome-negative-control/old-false-success-red.log`.
+The focused regression and full linked Session23 cases pass locally, including
+strict all-targets Clippy. Actual Darwin reap and optional Session acceptance
+remain pending the repaired lane.
