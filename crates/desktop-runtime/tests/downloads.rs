@@ -426,15 +426,22 @@ fn completed_metadata_cannot_succeed_after_deadline_even_with_stale_poll_instant
         )
         .unwrap();
     std::thread::sleep(Duration::from_millis(100));
-    runtime.poll(&model.snapshot(), now);
-    assert_eq!(
-        runtime
-            .status(receipt.epoch, receipt.ticket_id)
-            .unwrap()
-            .error
-            .as_deref(),
-        Some("timeout")
-    );
+    let observation_deadline = Instant::now() + Duration::from_secs(5);
+    let completed = loop {
+        // The worker may not have posted its completion yet. Keep passing the
+        // original stale instant so the completion owner's real clock is tested.
+        runtime.poll(&model.snapshot(), now);
+        let observed = runtime.status(receipt.epoch, receipt.ticket_id).unwrap();
+        if observed.state != "pending" {
+            break observed;
+        }
+        assert!(
+            Instant::now() < observation_deadline,
+            "path observer never completed the expired ticket"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(completed.error.as_deref(), Some("timeout"));
     runtime
         .shutdown(Instant::now() + Duration::from_secs(1))
         .unwrap();
