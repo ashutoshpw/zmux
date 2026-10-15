@@ -28,6 +28,24 @@ See `docs/cloud-deployment.md` for operation and certificate renewal.
 
 ## Open gates
 
-Public tunnel/auth callbacks, restore rehearsal, off-host backups, expired-token cleanup,
+Public tunnel/auth callbacks, restore rehearsal, off-host backups, scheduled credential maintenance,
 VM/relay/email behavior and broader cloud parity remain open. Local readiness is not
 full cloud parity.
+
+## H01 expired credential maintenance
+
+The operator-invoked cleanup command removes expired native authorization codes
+and access tokens. One transaction deletes at most 1,000 expired rows per table with
+row locking that skips concurrent consumers; live credentials and device/account records
+remain untouched. No background scheduler or live database cleanup is part of this slice.
+The command publishes deletion counts only.
+
+Implementation adds `bun run cleanup` and an access-token expiry index. Typecheck and
+all 12 real PostgreSQL integration tests pass against a fresh disposable database,
+dropped afterward. The cleanup test inserts 1,002 expired credentials per table, holds
+one row lock in each, verifies 1,000/1/0 batches, releases the locks, and verifies 1/0.
+The retained live access token authenticates and the retained code exchanges normally.
+No migration or cleanup was run against the persistent local service database.
+
+Fresh independent review accepted the transaction, skip-locked admission, counts-only
+operator output and retained-live-credential coverage. Broader H01/V01 remain open.

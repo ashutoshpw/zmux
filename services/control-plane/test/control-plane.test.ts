@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { createApp } from "../src/app";
 import { createAuth } from "../src/auth";
+import { cleanupExpiredNativeCredentials } from "../src/maintenance";
 import type { ControlPlaneConfig } from "../src/config";
 
 const origin = process.env.ZMUX_TEST_ORIGIN ?? "http://127.0.0.1:41992";
@@ -302,4 +303,41 @@ test("reports unavailable when PostgreSQL is reachable but migrations are absent
     await unmigratedPool.end();
     await pool.query(`DROP SCHEMA ${schema} CASCADE`);
   }
+});
+
+test("expired credential cleanup bounds batches, skips locked rows and retains usable tokens", async () => {
+  const session = await signUp("cleanup@example.com");
+  const liveToken = await nativeToken(session.cookie);
+  const { code } = await authorize(session.cookie, "c".repeat(64));
+  const liveCodeHash = createHash("sha256").update(code).digest();
+  await pool.query(`INSERT INTO native_authorization_code
+    (code_hash, user_id, auth_session_id, client_id, redirect_uri, code_challenge, expires_at)
+    SELECT decode(md5('expired-code-' || n), 'hex'), user_id, auth_session_id,
+      client_id, redirect_uri, code_challenge, now() - interval '1 hour'
+    FROM native_authorization_code CROSS JOIN generate_series(1, 1002) n
+    WHERE code_hash = $1`, [liveCodeHash]);
+  await pool.query(`INSERT INTO native_access_token
+    (id, token_hash, user_id, auth_session_id, expires_at)
+    SELECT md5('expired-token-' || n)::uuid, decode(md5('expired-token-' || n), 'hex'),
+      user_id, auth_session_id, now() - interval '1 hour'
+    FROM native_access_token CROSS JOIN generate_series(1, 1002) n`);
+  const locked = await pool.connect();
+  try {
+    await locked.query("BEGIN");
+    await locked.query("SELECT code_hash FROM native_authorization_code WHERE expires_at <= now() ORDER BY code_hash LIMIT 1 FOR UPDATE");
+    await locked.query("SELECT id FROM native_access_token WHERE expires_at <= now() ORDER BY id LIMIT 1 FOR UPDATE");
+    expect(await cleanupExpiredNativeCredentials(pool)).toEqual({ codes: 1000, tokens: 1000 });
+    expect(await cleanupExpiredNativeCredentials(pool)).toEqual({ codes: 1, tokens: 1 });
+    expect(await cleanupExpiredNativeCredentials(pool)).toEqual({ codes: 0, tokens: 0 });
+  } finally {
+    await locked.query("ROLLBACK");
+    locked.release();
+  }
+  expect(await cleanupExpiredNativeCredentials(pool)).toEqual({ codes: 1, tokens: 1 });
+  expect(await cleanupExpiredNativeCredentials(pool)).toEqual({ codes: 0, tokens: 0 });
+  expect((await pool.query("SELECT count(*)::int AS count FROM native_authorization_code")).rows[0].count).toBe(1);
+  expect((await pool.query("SELECT count(*)::int AS count FROM native_access_token")).rows[0].count).toBe(1);
+  const identity = await fetch(`${origin}/v1/me`, { headers: { authorization: `Bearer ${liveToken}` } });
+  expect(identity.status).toBe(200);
+  expect((await exchange(code, "c".repeat(64))).status).toBe(200);
 });

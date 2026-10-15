@@ -7,6 +7,14 @@
 
 - Full V01 and its GitHub Actions macOS artifact remain the objective. Intermediate
   archives are diagnostic/acceptance evidence, not full-parity delivery.
+- B01 explicit profiles committed94725f1 after207 portable tests, strict Clippy,
+  notices/C ABI and independent review. Native profile isolation/reopen and relaunch
+  remain open. R02b app attachment/restore is implementing against the new schema.
+- Native948e922 passed universal build/packaged smoke in38759082621; archive checksum
+  and exact source metadata verified. It predates B01 and file-backed key setup7035ee8.
+  The intermittent multiline setup corruption remains open despite this pass.
+- New cloud expired-credential cleanup passes12 PostgreSQL integration tests and fresh
+  review in a disposable database. Persistent service database was not migrated/cleaned.
 - Native5f5005e passes universal build and packaged smoke in38753451286: replies,
   sidebar pointer/keyboard resizing, metadata inspector, browser live title, special
   terminal keys and managed file-URL/refusal cases all executed successfully.
