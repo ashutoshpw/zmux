@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "state": "complete",
+  "scope": "single pinned reconstruction for publication boundary regression and retained exact reuse, no engine selection",
+  "phases": [
+    {
+      "label": "isolate-patch-root",
+      "command": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.005,
+      "log": "isolate-patch-root.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "resource.patch-isolated-check",
+      "command": [
+        "git",
+        "apply",
+        "--check",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/resource.patch"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.012,
+      "log": "resource.patch-isolated-check.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "resource.patch-isolated-apply",
+      "command": [
+        "git",
+        "apply",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/resource.patch"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.015,
+      "log": "resource.patch-isolated-apply.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "metadata.patch-isolated-check",
+      "command": [
+        "git",
+        "apply",
+        "--check",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/metadata.patch"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.008,
+      "log": "metadata.patch-isolated-check.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "metadata.patch-isolated-apply",
+      "command": [
+        "git",
+        "apply",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/metadata.patch"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.009,
+      "log": "metadata.patch-isolated-apply.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "engine-build-patched",
+      "command": [
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/inputs/zig-x86_64-linux-0.16.0/zig",
+        "build",
+        "-Demit-lib-vt=true",
+        "-Demit-xcframework=false",
+        "-Dapp-runtime=none",
+        "-Doptimize=ReleaseSafe",
+        "-Dsimd=false",
+        "-Dvt-features=-all,+render-state,+grid-introspection,+formatter,+input-encode",
+        "-j2",
+        "--prefix",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/install"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 46.671,
+      "log": "engine-build-patched.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "probe-patched-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Werror",
+        "-DGHOSTTY_STATIC",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/inputs/ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be/include",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility",
+        "-c",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/probe.c",
+        "-o",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/probe.o"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.054,
+      "log": "probe-patched-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "resource-patched-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Werror",
+        "-DGHOSTTY_STATIC",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/inputs/ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be/include",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility",
+        "-c",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/resource.c",
+        "-o",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/resource.o"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.047,
+      "log": "resource-patched-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "collector-patched-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Werror",
+        "-DGHOSTTY_STATIC",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/inputs/ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be/include",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility",
+        "-c",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/collector.c",
+        "-o",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/collector.o"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.048,
+      "log": "collector-patched-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "integrated-patched-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Werror",
+        "-DGHOSTTY_STATIC",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/inputs/ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be/include",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility",
+        "-c",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/integrated.c",
+        "-o",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/integrated.o"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.062,
+      "log": "integrated-patched-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    },
+    {
+      "label": "metadata-patched-c",
+      "command": [
+        "cc",
+        "-std=c11",
+        "-Werror",
+        "-DGHOSTTY_STATIC",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/inputs/ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be/include",
+        "-I",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility",
+        "-c",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/source/tools/terminal-feasibility/metadata.c",
+        "-o",
+        "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/metadata.o"
+      ],
+      "exit_code": 0,
+      "timed_out": false,
+      "wall_seconds": 0.05,
+      "log": "metadata-patched-c.log",
+      "log_bytes_seen": 0,
+      "log_bytes_retained": 0,
+      "confirmed_zombie_group": null
+    }
+  ],
+  "source_sha256": {
+    "scripts/process_group.py": "09fb1373399df79581ae4368eaaea09c4ebc042b2ca67b567bfdb2b0348ebe06",
+    "tools/terminal-feasibility/owner.rs": "218a924f7a05d07aab31e225e1cf8f00a4fa3676da1d828b10779bc80d0075ec",
+    "tools/terminal-feasibility/test_runner.py": "f4ca3a96adcd68852cbc1af997d30b00fe30ab16ac58d805c309d6de8cad4d96",
+    "tools/terminal-feasibility/RESOURCE_CONTRACT.md": "05ba32701af2aa4d49d546a3b82b6d8724eefa80be8c807fd0b674910561928e",
+    "tools/terminal-feasibility/collector.c": "0cedd95c24bf2ec731ec69118040db84a81f424fd2afbd19b74de293296d20f9",
+    "tools/terminal-feasibility/integrated.c": "1a5885cb31b59e9248d8be138c8b0a7856aeda169fb264bbf2d0a4e55d38d411",
+    "tools/terminal-feasibility/effects.h": "15d879c3291aab2f21b5a2039c58a7da837af0db6e29cf78eae9c6b7d40a4ebf",
+    "tools/terminal-feasibility/metadata.patch": "a97eb547dd8d7b3c31db1bb6773dc94719f0b59357a1d0b9ad684e67280cede7",
+    "tools/terminal-feasibility/resource.patch": "0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02",
+    "tools/terminal-feasibility/effects.rs": "2705c1668ae0fa73ad5fd2ce4e8a5c0bcad22eae7116a102d180987224655ef0",
+    "tools/terminal-feasibility/metadata.rs": "9d9f64b18cc400362e684d2e8abd96eee44a5457ed5674393287475c7caf7b3b",
+    "tools/terminal-feasibility/resource.rs": "0b4223de28e01a3469fc85f26b012c8345f2f653f8e9908b88ce4fa6afd306d4",
+    "tools/terminal-feasibility/README.md": "27498332924c527c3f90687bd840d910af7b3a0709f9375c8ce2b0ae2c988b80",
+    "tools/terminal-feasibility/current-adapter.rs": "ac7f78251ab60c8aee36e0c94bc11b8a5e4349557261b2bb4ccca92931110180",
+    "tools/terminal-feasibility/NOTICE.md": "78f17b4b76097045940454b6c5acc6a7fdce6b988006169df408bd296e6c58d3",
+    "tools/terminal-feasibility/metadata.h": "cc9d2b5fe115b8c2912d675ebea17b11d3ba89fa517b300aa5febc71dec31ce9",
+    "tools/terminal-feasibility/metadata.c": "2aecb5464b8dd3c818051459b99cd650e0d9129aeda73021da71e81a88fd747e",
+    "tools/terminal-feasibility/collector.h": "8ffcd98be2080e5bc761972f533b86312f59587ef64ea9113e3bc135dcdba842",
+    "tools/terminal-feasibility/pins.json": "d3d4dc2fa3a68ab7f2d8b9c6ca816f66c818c225137604e53549380a9367ba71",
+    "tools/terminal-feasibility/integrated.rs": "c115496beb3e5de74f84d21c23b34455aaa575fdf9dda57fe5c168677822a140",
+    "tools/terminal-feasibility/probe.rs": "cee63ce66d9bee2b1cf93ceebe4b096a339746f6fb1c4ddad98c1a2b2dbcce14",
+    "tools/terminal-feasibility/integrated.h": "c7feb9d0e8f96259ebbfcc1f3955b3a50acaafe4f3746f6b2e368de4aaaaf3f1",
+    "tools/terminal-feasibility/frame.h": "8231f0f4f66a8c9f9b937b13aa8a93cfbc16b10448cb706c8ae4e85b05cfa6f7",
+    "tools/terminal-feasibility/probe.c": "11c6d127d264d8cfbd326fa3c630d08dcf10589808ab3a6b4bf99925c0c4eaac",
+    "tools/terminal-feasibility/compatibility.rs": "8a8af877507ab867d4950ad36504d122252e5caf5162644705140c4820cceb81",
+    "tools/terminal-feasibility/METADATA_CONTRACT.md": "7bac4f427a4eec76b2e6176ad2901df7b497ef56e8982949a58b78295d45c30c",
+    "tools/terminal-feasibility/resource-internal.h": "fdd872054abe433dc4bb2932241e60cec5f059516c4d18d1b6b71c8d6a8b0e54",
+    "tools/terminal-feasibility/resource.c": "1acb646ac30a77f792218bb0ae5aeaa02607008aafd6600e4a8f21b1ec7397ff",
+    "tools/terminal-feasibility/metadata-owner.rs": "8abf975e8737f093062452f71b006dd5f39927cdfd3402a133026176e4c395d1",
+    "tools/terminal-feasibility/effects.c": "184e801e93da2beae5fd8c3fac05949de80338fa8b6ce149c856168e993d027a",
+    "tools/terminal-feasibility/run.py": "8c2f70b650b72c58764081ac764bd5fea04a5a015ffc2407db73a2b29433ea2f",
+    "tools/terminal-feasibility/resource.h": "ff3cdb28662bc65669a51a79b027728d4cb86bd2bc669cc9792e38a13dac72ca",
+    "tools/terminal-pty-feasibility/base-lock.json": "9361e9672a02384bfedc1f3d24237779ea562b6c5de83fc9f61987d9b16a319a",
+    "tools/terminal-pty-feasibility/cleanup.c": "71b2dfef79eda2ecdbdead7d67f53b51c44c537cf09e69026a401b13befac0ac",
+    "tools/terminal-pty-feasibility/pty.rs": "b1777991296eb24520d59b36599aae01e6155a3a4dbb20b4889fd87ecf0ea6f8",
+    "tools/terminal-pty-feasibility/README.md": "804be5070a56a6bf617504680c015d01c333aa8a3ec46b32fe0d48c5f555ff43",
+    "tools/terminal-pty-feasibility/NOTICE.md": "bb959f04a460756d90fa1c9d2178e607e0418e86f7d93d2469113cd44c3683ef",
+    "tools/terminal-pty-feasibility/construction.c": "2573eb41626e27bd9682e188680d7320ee7f0c689036f5a352c932abdee98f27",
+    "tools/terminal-pty-feasibility/transport.c": "243a3178d51dd30572a7b33f7d7a25777b38109c762139ddb351fdd2928c044f",
+    "tools/terminal-pty-feasibility/child.py": "97bd96c08fd2be40b0fb002b65c4446fdc7074050f162ca2501850c8264ba985",
+    "tools/terminal-pty-feasibility/pty-owner.rs": "443b8176134b907082732394a8da221f4303ba207c85e9a79bf11370331b962f",
+    "tools/terminal-pty-feasibility/run.py": "6bb4c6f06400e282ffdd7d8b8e82230eecc248cc2a53c934dd98773d13bb9020",
+    "tools/terminal-pty-feasibility/PTY_CONTRACT.md": "8500f2f75a713cd1398059b985881ea41fff6916678366e78cab23032005cc34",
+    "tools/terminal-feasibility/licenses/Ghostty-LICENSE": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1"
+  },
+  "downloads": [
+    {
+      "url": "https://codeload.github.com/ghostty-org/ghostty/tar.gz/22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+      "sha256": "a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f",
+      "verified": true
+    },
+    {
+      "url": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+      "sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+      "verified": true
+    }
+  ],
+  "pins": {
+    "schema_version": 1,
+    "rust_version": "1.95.0",
+    "ghostty": {
+      "version": "1.3.2-dev",
+      "commit": "22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+      "url": "https://codeload.github.com/ghostty-org/ghostty/tar.gz/22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+      "sha256": "a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f",
+      "root": "ghostty-22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+      "license": "MIT"
+    },
+    "zig": {
+      "version": "0.16.0",
+      "license": "MIT root; bundled components have separate licenses",
+      "index_url": "https://ziglang.org/download/index.json",
+      "hosts": {
+        "Linux-x86_64": {
+          "url": "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz",
+          "sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+          "root": "zig-x86_64-linux-0.16.0"
+        },
+        "Darwin-x86_64": {
+          "url": "https://ziglang.org/download/0.16.0/zig-x86_64-macos-0.16.0.tar.xz",
+          "sha256": "0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7",
+          "root": "zig-x86_64-macos-0.16.0"
+        },
+        "Darwin-arm64": {
+          "url": "https://ziglang.org/download/0.16.0/zig-aarch64-macos-0.16.0.tar.xz",
+          "sha256": "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489",
+          "root": "zig-aarch64-macos-0.16.0"
+        }
+      }
+    }
+  },
+  "failed_attempt_receipt_sha256": "a2e18bb5beeecafcaa220e3e2d5e402d29dad3f411c684e75f0f15d5cae98bee",
+  "patch_postconditions_verified": true,
+  "library": {
+    "path": "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/install/lib/libghostty-vt.a",
+    "sha256": "bdc3fc3c6ec69875fed19c220082412b2299bb2fce75cc4e1f49b7fc8673d891"
+  },
+  "objects_sha256": {
+    "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/probe.o": "2102bd3fba3f5aa1b370460ca8429d6911d36e2d57402cdb5fbe05be9adf17ed",
+    "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/resource.o": "e0e9d28dfae2232356d57215c9c0be9ac2253fd253885eb05b1b9e042cf3c912",
+    "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/collector.o": "14983783682039e08696a9fde34d84caa6c9a16149b987e31a0bfa6d1a8642f0",
+    "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/integrated.o": "fddfbd7611f4ea9625e72199f77be894ea9f07a6c6c33c11d0cbf7779156e957",
+    "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/metadata.o": "3745d381aeeba2b0ad21924bf80e927268839f5667265da8b7d767f22985998c"
+  },
+  "patched_header_sha256": {
+    "include/ghostty.h": "0d87da6fbde0f40f83793e012d13c82705cf960b34c34bd73b8598fd1c8f229a",
+    "include/ghostty/vt.h": "014813d7dba136ae6faecb515d23e7d7dc675672094174f91e2d84ab2bb55732",
+    "include/ghostty/vt/mouse.h": "271fc3af121eb323f28d3e467b6d9cde1075b3ac3c400f7e25cc05dd5af03663",
+    "include/ghostty/vt/selection.h": "839b495f8e24ed678fd71b6eeb75a7cebd9d634334a3303ec31d05d468f2c520",
+    "include/ghostty/vt/formatter.h": "9945b7aff284597d8801eb9201abc95609b3cf71360e14f2db6b8a527838a8cd",
+    "include/ghostty/vt/snapshot.h": "da28242bd1cebfa2e313cbbaee160c06573c7990119c8e021b4433d9b3d90b40",
+    "include/ghostty/vt/unicode.h": "d5533c9abcebc9284033eb9c6acc0ed707a3a68a98f0d2e3d8c9b28a2beae796",
+    "include/ghostty/vt/device.h": "79c61cd5d54fc15c60d0ce87c69adf89c85b7b748b912c41b91230979f4319fe",
+    "include/ghostty/vt/osc.h": "c535e8e67bc5030e6881a77463567017201b2ae3b218a17b53725c56786a45ae",
+    "include/ghostty/vt/build_info.h": "535e44c29b5fd9c8df172605f58616df735432f7786ca24e3cc58d7cb3ba8361",
+    "include/ghostty/vt/wasm.h": "0136093c504af9fb2a33b7e50a70cb6b4cee0c2375beed3d73b579c092195fee",
+    "include/ghostty/vt/size_report.h": "7f7a77311ab155ad13e934ed6a94274e2b02207dba529a951c8f8319b0ac9ab7",
+    "include/ghostty/vt/sgr.h": "8292084973e64ce61555c6721591411dba9cf968ea9ae2d9820b4f6c381f1ce5",
+    "include/ghostty/vt/sys.h": "8f83a9f4e7132d917559b3ceb9dc8145c318e2ce419c2948cbab7cc6faafd69b",
+    "include/ghostty/vt/point.h": "1ed7b2cda14904814727b93d406f39284e8392af706f938cf0fa1dbeaa42e774",
+    "include/ghostty/vt/render.h": "9918257a2862fa1fce3e4e22a63da70a98a0883ffb6894a3094057d8721aa2a2",
+    "include/ghostty/vt/grid_ref_tracked.h": "78c65cf69c1a6ee439849175221084366ca4392455503cc44e93cfdf9ddbc021",
+    "include/ghostty/vt/style.h": "ebb50a1821952dd954dd51d5897f9881c6927abd73b909e2e2f1deb3a52f31a9",
+    "include/ghostty/vt/modes.h": "bd40aa01f76e4351e09a1825693b27c1e4a53539411968432fc3e59e0f890f66",
+    "include/ghostty/vt/io.h": "2d79995aadc23ce175b519e3ff401ca20664da9068177aac117e0b490f45daee",
+    "include/ghostty/vt/zmux_metadata.h": "127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c",
+    "include/ghostty/vt/types.h": "6c30315aa292971c5863b90ace46d241682f8baac2fe9244acb785b0c883020e",
+    "include/ghostty/vt/focus.h": "ddc28ead578ca9f683a4140420807ec9988a45f669d719e28cdf840913ea56b4",
+    "include/ghostty/vt/allocator.h": "77ab59b7be308454ca31fedd203bc43c219869e2ef869a8001549958906b4fd1",
+    "include/ghostty/vt/color.h": "73e0db10e4b324122be1a8a46bb6619fe5ab264bf6713543336c3e5deb7035f3",
+    "include/ghostty/vt/search.h": "0a7ff9bd9079f351ff2d255f8d60d33638a5ebc79c1c8076b47b332b47e40c21",
+    "include/ghostty/vt/kitty_graphics.h": "a7e1f37191684e66835b54339fe714b14eaa882b5c1d3459fb6fc8b4a32ec8eb",
+    "include/ghostty/vt/color_scheme.h": "eab0dc56e057dfc03334cba109da6e7ae118513cb2be9dc4f3b0bffc7bdad465",
+    "include/ghostty/vt/terminal.h": "e5e4a44c842a04036df0b2026cb395297022d56ff3cb2867859f9c64ed5f8ff4",
+    "include/ghostty/vt/key.h": "2de93a84da8e9c1c1f6ac8d1d281ba054869225858a5d88ec8ec5f0d091b5eac",
+    "include/ghostty/vt/paste.h": "d82f8fd498a296220caf39b2aeeedf195fa287b020955c27613b6c55cf80eeba",
+    "include/ghostty/vt/screen.h": "d9a3ab36f8410184fd0af4a20de1c1d3a0f09e8bd28ec2de89cb243dbd008fa3",
+    "include/ghostty/vt/grid_ref.h": "80cc49f02d63025605d605c86f1207638ad9534ce74e9a14766299e0518d4987",
+    "include/ghostty/vt/key/encoder.h": "6963a275e2ba154a647382c462c416840dcdc2beb6d59aa200d80f37f9a5e196",
+    "include/ghostty/vt/key/event.h": "0eb11bfab67b887f4b409557b396a5da6ea17e9e62d92b97a38e723b46db635d",
+    "include/ghostty/vt/mouse/encoder.h": "2e409c50fcd06806dd1a86cf66751ff35362c65e14ff588e2592e8a09141c017",
+    "include/ghostty/vt/mouse/event.h": "68f14cd03109919cb8da36b17f70670334a3369af5c685496118c913c3049abf"
+  }
+}

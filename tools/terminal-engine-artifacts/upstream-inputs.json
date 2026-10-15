@@ -1,0 +1,479 @@
+{
+  "schema_version": 1,
+  "ghostty_commit": "22fa134a07f5749edd9e92c6bc17d8aaf61843be",
+  "ghostty_archive_sha256": "a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f",
+  "unpatched_archive_members": {
+    "src/build/GhosttyZig.zig": {
+      "sha256": "447c5e414458a29d38e260621e584118e77e02e692e05ffab08107e5ab4f03da"
+    },
+    "src/build/GhosttyLibVt.zig": {
+      "sha256": "cfaa8ecc23407128fab02c87ef67d9d36ec4c0e43274b359600014a38eb8c89f"
+    },
+    "src/build/UnicodeTables.zig": {
+      "sha256": "6b5bd041bc11ace2ed9e69c6574ca28c431c70edee57e8496aa1dd76ec90a142"
+    },
+    "src/build/SharedDeps.zig": {
+      "sha256": "3133400219aef1aeaba4100d768d9c59c2e22ef52caecc6dab2066909db9b124"
+    },
+    "build.zig.zon": {
+      "sha256": "b878e4fc36f9c2b6c9ad82e5ceba58c91905fde89f0ac3d3cb7ab413ea029e39"
+    },
+    "include/ghostty.h": {
+      "sha256": "0d87da6fbde0f40f83793e012d13c82705cf960b34c34bd73b8598fd1c8f229a"
+    },
+    "include/ghostty/vt.h": {
+      "sha256": "014813d7dba136ae6faecb515d23e7d7dc675672094174f91e2d84ab2bb55732"
+    },
+    "include/ghostty/vt/allocator.h": {
+      "sha256": "77ab59b7be308454ca31fedd203bc43c219869e2ef869a8001549958906b4fd1"
+    },
+    "include/ghostty/vt/build_info.h": {
+      "sha256": "535e44c29b5fd9c8df172605f58616df735432f7786ca24e3cc58d7cb3ba8361"
+    },
+    "include/ghostty/vt/color.h": {
+      "sha256": "73e0db10e4b324122be1a8a46bb6619fe5ab264bf6713543336c3e5deb7035f3"
+    },
+    "include/ghostty/vt/color_scheme.h": {
+      "sha256": "eab0dc56e057dfc03334cba109da6e7ae118513cb2be9dc4f3b0bffc7bdad465"
+    },
+    "include/ghostty/vt/device.h": {
+      "sha256": "79c61cd5d54fc15c60d0ce87c69adf89c85b7b748b912c41b91230979f4319fe"
+    },
+    "include/ghostty/vt/focus.h": {
+      "sha256": "ddc28ead578ca9f683a4140420807ec9988a45f669d719e28cdf840913ea56b4"
+    },
+    "include/ghostty/vt/formatter.h": {
+      "sha256": "9945b7aff284597d8801eb9201abc95609b3cf71360e14f2db6b8a527838a8cd"
+    },
+    "include/ghostty/vt/grid_ref.h": {
+      "sha256": "80cc49f02d63025605d605c86f1207638ad9534ce74e9a14766299e0518d4987"
+    },
+    "include/ghostty/vt/grid_ref_tracked.h": {
+      "sha256": "78c65cf69c1a6ee439849175221084366ca4392455503cc44e93cfdf9ddbc021"
+    },
+    "include/ghostty/vt/io.h": {
+      "sha256": "2d79995aadc23ce175b519e3ff401ca20664da9068177aac117e0b490f45daee"
+    },
+    "include/ghostty/vt/key.h": {
+      "sha256": "2de93a84da8e9c1c1f6ac8d1d281ba054869225858a5d88ec8ec5f0d091b5eac"
+    },
+    "include/ghostty/vt/key/encoder.h": {
+      "sha256": "6963a275e2ba154a647382c462c416840dcdc2beb6d59aa200d80f37f9a5e196"
+    },
+    "include/ghostty/vt/key/event.h": {
+      "sha256": "0eb11bfab67b887f4b409557b396a5da6ea17e9e62d92b97a38e723b46db635d"
+    },
+    "include/ghostty/vt/kitty_graphics.h": {
+      "sha256": "a7e1f37191684e66835b54339fe714b14eaa882b5c1d3459fb6fc8b4a32ec8eb"
+    },
+    "include/ghostty/vt/modes.h": {
+      "sha256": "bd40aa01f76e4351e09a1825693b27c1e4a53539411968432fc3e59e0f890f66"
+    },
+    "include/ghostty/vt/mouse.h": {
+      "sha256": "271fc3af121eb323f28d3e467b6d9cde1075b3ac3c400f7e25cc05dd5af03663"
+    },
+    "include/ghostty/vt/mouse/encoder.h": {
+      "sha256": "2e409c50fcd06806dd1a86cf66751ff35362c65e14ff588e2592e8a09141c017"
+    },
+    "include/ghostty/vt/mouse/event.h": {
+      "sha256": "68f14cd03109919cb8da36b17f70670334a3369af5c685496118c913c3049abf"
+    },
+    "include/ghostty/vt/osc.h": {
+      "sha256": "bc47daeb2c5c1ebc32aca0946be01e26d70fa2677e56f933c7a0b45083e50918"
+    },
+    "include/ghostty/vt/paste.h": {
+      "sha256": "d82f8fd498a296220caf39b2aeeedf195fa287b020955c27613b6c55cf80eeba"
+    },
+    "include/ghostty/vt/point.h": {
+      "sha256": "1ed7b2cda14904814727b93d406f39284e8392af706f938cf0fa1dbeaa42e774"
+    },
+    "include/ghostty/vt/render.h": {
+      "sha256": "9918257a2862fa1fce3e4e22a63da70a98a0883ffb6894a3094057d8721aa2a2"
+    },
+    "include/ghostty/vt/screen.h": {
+      "sha256": "d9a3ab36f8410184fd0af4a20de1c1d3a0f09e8bd28ec2de89cb243dbd008fa3"
+    },
+    "include/ghostty/vt/search.h": {
+      "sha256": "0a7ff9bd9079f351ff2d255f8d60d33638a5ebc79c1c8076b47b332b47e40c21"
+    },
+    "include/ghostty/vt/selection.h": {
+      "sha256": "839b495f8e24ed678fd71b6eeb75a7cebd9d634334a3303ec31d05d468f2c520"
+    },
+    "include/ghostty/vt/sgr.h": {
+      "sha256": "8292084973e64ce61555c6721591411dba9cf968ea9ae2d9820b4f6c381f1ce5"
+    },
+    "include/ghostty/vt/size_report.h": {
+      "sha256": "7f7a77311ab155ad13e934ed6a94274e2b02207dba529a951c8f8319b0ac9ab7"
+    },
+    "include/ghostty/vt/snapshot.h": {
+      "sha256": "da28242bd1cebfa2e313cbbaee160c06573c7990119c8e021b4433d9b3d90b40"
+    },
+    "include/ghostty/vt/style.h": {
+      "sha256": "ebb50a1821952dd954dd51d5897f9881c6927abd73b909e2e2f1deb3a52f31a9"
+    },
+    "include/ghostty/vt/sys.h": {
+      "sha256": "8f83a9f4e7132d917559b3ceb9dc8145c318e2ce419c2948cbab7cc6faafd69b"
+    },
+    "include/ghostty/vt/terminal.h": {
+      "sha256": "e5e4a44c842a04036df0b2026cb395297022d56ff3cb2867859f9c64ed5f8ff4"
+    },
+    "include/ghostty/vt/types.h": {
+      "sha256": "6c30315aa292971c5863b90ace46d241682f8baac2fe9244acb785b0c883020e"
+    },
+    "include/ghostty/vt/unicode.h": {
+      "sha256": "d5533c9abcebc9284033eb9c6acc0ed707a3a68a98f0d2e3d8c9b28a2beae796"
+    },
+    "include/ghostty/vt/wasm.h": {
+      "sha256": "0136093c504af9fb2a33b7e50a70cb6b4cee0c2375beed3d73b579c092195fee"
+    }
+  },
+  "patch_application_order": [
+    "tools/terminal-feasibility/resource.patch",
+    "tools/terminal-feasibility/metadata.patch"
+  ],
+  "patched_header_sha256": {
+    "include/ghostty.h": "0d87da6fbde0f40f83793e012d13c82705cf960b34c34bd73b8598fd1c8f229a",
+    "include/ghostty/vt.h": "014813d7dba136ae6faecb515d23e7d7dc675672094174f91e2d84ab2bb55732",
+    "include/ghostty/vt/mouse.h": "271fc3af121eb323f28d3e467b6d9cde1075b3ac3c400f7e25cc05dd5af03663",
+    "include/ghostty/vt/selection.h": "839b495f8e24ed678fd71b6eeb75a7cebd9d634334a3303ec31d05d468f2c520",
+    "include/ghostty/vt/formatter.h": "9945b7aff284597d8801eb9201abc95609b3cf71360e14f2db6b8a527838a8cd",
+    "include/ghostty/vt/snapshot.h": "da28242bd1cebfa2e313cbbaee160c06573c7990119c8e021b4433d9b3d90b40",
+    "include/ghostty/vt/unicode.h": "d5533c9abcebc9284033eb9c6acc0ed707a3a68a98f0d2e3d8c9b28a2beae796",
+    "include/ghostty/vt/device.h": "79c61cd5d54fc15c60d0ce87c69adf89c85b7b748b912c41b91230979f4319fe",
+    "include/ghostty/vt/osc.h": "c535e8e67bc5030e6881a77463567017201b2ae3b218a17b53725c56786a45ae",
+    "include/ghostty/vt/build_info.h": "535e44c29b5fd9c8df172605f58616df735432f7786ca24e3cc58d7cb3ba8361",
+    "include/ghostty/vt/wasm.h": "0136093c504af9fb2a33b7e50a70cb6b4cee0c2375beed3d73b579c092195fee",
+    "include/ghostty/vt/size_report.h": "7f7a77311ab155ad13e934ed6a94274e2b02207dba529a951c8f8319b0ac9ab7",
+    "include/ghostty/vt/sgr.h": "8292084973e64ce61555c6721591411dba9cf968ea9ae2d9820b4f6c381f1ce5",
+    "include/ghostty/vt/sys.h": "8f83a9f4e7132d917559b3ceb9dc8145c318e2ce419c2948cbab7cc6faafd69b",
+    "include/ghostty/vt/point.h": "1ed7b2cda14904814727b93d406f39284e8392af706f938cf0fa1dbeaa42e774",
+    "include/ghostty/vt/render.h": "9918257a2862fa1fce3e4e22a63da70a98a0883ffb6894a3094057d8721aa2a2",
+    "include/ghostty/vt/grid_ref_tracked.h": "78c65cf69c1a6ee439849175221084366ca4392455503cc44e93cfdf9ddbc021",
+    "include/ghostty/vt/style.h": "ebb50a1821952dd954dd51d5897f9881c6927abd73b909e2e2f1deb3a52f31a9",
+    "include/ghostty/vt/modes.h": "bd40aa01f76e4351e09a1825693b27c1e4a53539411968432fc3e59e0f890f66",
+    "include/ghostty/vt/io.h": "2d79995aadc23ce175b519e3ff401ca20664da9068177aac117e0b490f45daee",
+    "include/ghostty/vt/zmux_metadata.h": "127555a4e60dec63714e68066eee8725d288ef17b1b53cdc6d89fd0df7ecde6c",
+    "include/ghostty/vt/types.h": "6c30315aa292971c5863b90ace46d241682f8baac2fe9244acb785b0c883020e",
+    "include/ghostty/vt/focus.h": "ddc28ead578ca9f683a4140420807ec9988a45f669d719e28cdf840913ea56b4",
+    "include/ghostty/vt/allocator.h": "77ab59b7be308454ca31fedd203bc43c219869e2ef869a8001549958906b4fd1",
+    "include/ghostty/vt/color.h": "73e0db10e4b324122be1a8a46bb6619fe5ab264bf6713543336c3e5deb7035f3",
+    "include/ghostty/vt/search.h": "0a7ff9bd9079f351ff2d255f8d60d33638a5ebc79c1c8076b47b332b47e40c21",
+    "include/ghostty/vt/kitty_graphics.h": "a7e1f37191684e66835b54339fe714b14eaa882b5c1d3459fb6fc8b4a32ec8eb",
+    "include/ghostty/vt/color_scheme.h": "eab0dc56e057dfc03334cba109da6e7ae118513cb2be9dc4f3b0bffc7bdad465",
+    "include/ghostty/vt/terminal.h": "e5e4a44c842a04036df0b2026cb395297022d56ff3cb2867859f9c64ed5f8ff4",
+    "include/ghostty/vt/key.h": "2de93a84da8e9c1c1f6ac8d1d281ba054869225858a5d88ec8ec5f0d091b5eac",
+    "include/ghostty/vt/paste.h": "d82f8fd498a296220caf39b2aeeedf195fa287b020955c27613b6c55cf80eeba",
+    "include/ghostty/vt/screen.h": "d9a3ab36f8410184fd0af4a20de1c1d3a0f09e8bd28ec2de89cb243dbd008fa3",
+    "include/ghostty/vt/grid_ref.h": "80cc49f02d63025605d605c86f1207638ad9534ce74e9a14766299e0518d4987",
+    "include/ghostty/vt/key/encoder.h": "6963a275e2ba154a647382c462c416840dcdc2beb6d59aa200d80f37f9a5e196",
+    "include/ghostty/vt/key/event.h": "0eb11bfab67b887f4b409557b396a5da6ea17e9e62d92b97a38e723b46db635d",
+    "include/ghostty/vt/mouse/encoder.h": "2e409c50fcd06806dd1a86cf66751ff35362c65e14ff588e2592e8a09141c017",
+    "include/ghostty/vt/mouse/event.h": "68f14cd03109919cb8da36b17f70670334a3369af5c685496118c913c3049abf"
+  },
+  "zig": {
+    "version": "0.16.0",
+    "host": "Linux-x86_64",
+    "archive_sha256": "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00",
+    "referenced_runtime_source": {
+      "lib/compiler_rt/aarch64_outline_atomics.zig": {
+        "sha256": "a8d624dd44ecf0e035d762001a50b3706027b5cc2685eb8484458fa401aade2b",
+        "source_reference_comments": [
+          "/// It is intentionally not exported in order to make the machine code that"
+        ]
+      },
+      "lib/compiler_rt/addf3.zig": {
+        "sha256": "21c91cf72cb255e6ec7c41e257682669ffb213cf4a704dafdb1ea34ad96598b6",
+        "source_reference_comments": [
+          "/// Ported from:",
+          "/// https://github.com/llvm/llvm-project/blob/02d85149a05cb1f6dc49f0ba7a2ceca53718ae17/compiler-rt/lib/builtins/fp_add_impl.inc"
+        ]
+      },
+      "lib/compiler_rt/clear_cache.zig": {
+        "sha256": "00288f2769adc529b55333616a290bb651a5cb70690f47e2a05d7744a8083ae3",
+        "source_reference_comments": [
+          "// Ported from llvm-project d32170dbd5b0d54436537b6b75beaf44324e0c28",
+          "        // Replace with https://github.com/ziglang/zig/issues/23904 in the future.",
+          "        // See: https://github.com/llvm/llvm-project/blob/cf54cae26b65fc3201eff7200ffb9b0c9e8f9a13/compiler-rt/lib/builtins/clear_cache.c#L94-L95"
+        ]
+      },
+      "lib/compiler_rt/cmpdf2.zig": {
+        "sha256": "729fb788836bfe5dc88b0a65145d2aafa50f035282673cecf9c9a17d3eabf022",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/cmptf2.zig": {
+        "sha256": "89d308a81881837d416243db1c85393223308e7bd87e5f8a64ff50ec89a9f854",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/cmpxf2.zig": {
+        "sha256": "941e5ff6e4acb8d34322c458d8dd8d35177c5e9b4826db0f959b091e9acc7f74",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/cos.zig": {
+        "sha256": "390d99cbbef36e84db6ba193a8fc06185fdefce89503746dd20f074e82ff7d63",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/cosf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/cos.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/cosl.c"
+        ]
+      },
+      "lib/compiler_rt/divdf3.zig": {
+        "sha256": "62e7578f18dc2cf8023019b2016d1015481b7e5dbb69639159a7b9247da1f37f",
+        "source_reference_comments": [
+          "//! Ported from:",
+          "//! https://github.com/llvm/llvm-project/commit/d674d96bc56c0f377879d01c9d8dfdaaa7859cdb/compiler-rt/lib/builtins/divdf3.c"
+        ]
+      },
+      "lib/compiler_rt/divsf3.zig": {
+        "sha256": "f62093617b9c69b2e10495387afe9b523fb7c496566b85434866cb3a520571be",
+        "source_reference_comments": [
+          "//! Ported from:",
+          "//! https://github.com/llvm/llvm-project/commit/d674d96bc56c0f377879d01c9d8dfdaaa7859cdb/compiler-rt/lib/builtins/divsf3.c"
+        ]
+      },
+      "lib/compiler_rt/emutls.zig": {
+        "sha256": "dfd01e86f93cb6eca9f45398f6bd15136cb9f2818c5c3f6b64513c0fd123f6ed",
+        "source_reference_comments": [
+          "//! https://github.com/llvm-mirror/compiler-rt/blob/release_80/lib/builtins/emutls.c"
+        ]
+      },
+      "lib/compiler_rt/exp.zig": {
+        "sha256": "d1d1b0f564531fc1c7d845493e3ab412a58e5ca0fd3d629baca3aa18fec510cd",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/expf.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/exp.c"
+        ]
+      },
+      "lib/compiler_rt/exp2.zig": {
+        "sha256": "9dcb2c06afbf9d76812b08e51874e27bc67b0426ef1484d4cae69ca9bc0ce300",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/exp2f.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/exp2.c"
+        ]
+      },
+      "lib/compiler_rt/floor_ceil.zig": {
+        "sha256": "310f6c336eb1fba5b05c607f73b1be0b60c7ce7217e5ddf0c732b68106e45114",
+        "source_reference_comments": [
+          "//! Ported from musl, which is MIT licensed.",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/ceilf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/ceil.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/ceill.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/floorf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/floor.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/floorl.c"
+        ]
+      },
+      "lib/compiler_rt/fma.zig": {
+        "sha256": "d1a541207efc31f4f073138be3698679941bcc541e54c103c38505fd095559eb",
+        "source_reference_comments": [
+          "//! Ported from musl, which is MIT licensed:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/fmal.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/fmaf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/fma.c"
+        ]
+      },
+      "lib/compiler_rt/gedf2.zig": {
+        "sha256": "4445ee2b25f5a8f26146d6848ed1a65cba65f479f2b343c011fa00519eadf39e",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/gehf2.zig": {
+        "sha256": "69e5a2723f9377b6f6cb8531707605e0ff914e6da91641595e35447cebd5e4a7",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/gesf2.zig": {
+        "sha256": "326ac262bb039a5233bc6c33002e4c44e85d9f4cca8be6533b3d3df4ed0fc09c",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/getf2.zig": {
+        "sha256": "853184e3d9b0ed085a7e87b3fdfa0d98e96248b941bf793aaef6f81ee21f2056",
+        "source_reference_comments": [
+          "///! https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gccint/Soft-float-library-routines.html#Soft-float-library-routines"
+        ]
+      },
+      "lib/compiler_rt/log.zig": {
+        "sha256": "ae3d6e4700a583a76e9a089555e1b8d6e7f86e50a11028aa24995f882b31065d",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/logf.c?h=2d7d05f031e014068a61d3076c6178513395d2ae",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/log.c?h=1b76ff0767d01df72f692806ee5adee13c67ef88"
+        ]
+      },
+      "lib/compiler_rt/log10.zig": {
+        "sha256": "0a3caf3f75af2ea4afc4a19908b5101a77f5bd9f5dbc1d84b1376c9c88212915",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/log10f.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/log10.c"
+        ]
+      },
+      "lib/compiler_rt/log2.zig": {
+        "sha256": "f63274b36b3ac26df42b6ec5fc9b5842153b1d0ccf6714ef27576e6aa7fa6091",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/log2f.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/log2.c"
+        ]
+      },
+      "lib/compiler_rt/mulf3.zig": {
+        "sha256": "eeec703926a227c02cf3918c1f242110faf7b04bbf7c4d967b6eeeeb569b51cd",
+        "source_reference_comments": [
+          "/// Ported from:",
+          "/// https://github.com/llvm/llvm-project/blob/2ffb1b0413efa9a24eb3c49e710e36f92e2cb50b/compiler-rt/lib/builtins/fp_mul_impl.inc"
+        ]
+      },
+      "lib/compiler_rt/os_version_check.zig": {
+        "sha256": "8b17b5b97ce5330b68c8dcbe073686f1f4dcf633079b1caabd70fb9403b1d78a",
+        "source_reference_comments": [
+          "// Ported from llvm-project 13.0.0 d7b669b3a30345cfcdb2fde2af6f48aa4b94845d",
+          "// https://github.com/llvm/llvm-project/blob/llvmorg-13.0.0/compiler-rt/lib/builtins/os_version_check.c",
+          "// supported in clang's compiler-rt implementation today in case anyone tries to link an object file"
+        ]
+      },
+      "lib/compiler_rt/powiXf2.zig": {
+        "sha256": "78b1c851be56d580a59672574afc0f9cb776183b0325d98130206a4a18d7ba05",
+        "source_reference_comments": [
+          "//! ported from https://github.com/llvm-mirror/compiler-rt/blob/release_80/lib/builtins/powisf2.c"
+        ]
+      },
+      "lib/compiler_rt/rem_pio2.zig": {
+        "sha256": "908c7ee93fc246ce3405fa3a4303b8dbbc9a6c527f5e792fd59d6ab3cff79f27",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2.c"
+        ]
+      },
+      "lib/compiler_rt/rem_pio2_large.zig": {
+        "sha256": "30251d81ce0fd09130d359cd92f03ef2cbe1247ca6ead4a1b41b047745bdef0a",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2_large.c"
+        ]
+      },
+      "lib/compiler_rt/rem_pio2f.zig": {
+        "sha256": "a41741ff67bf8def1d237d62ef07bb0ec7d5198459958eb1420028052727a17a",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2f.c"
+        ]
+      },
+      "lib/compiler_rt/rem_pio2l.zig": {
+        "sha256": "67a3a31c123d46e5acd123e60b88cb151003958bb8a5fcdd588c45bd9f25783c",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__rem_pio2l.c"
+        ]
+      },
+      "lib/compiler_rt/round.zig": {
+        "sha256": "55accd7beb890ffc5ea90e28202821016a7c764f12b9cc193129fb2bd4cf0dee",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/roundf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/round.c"
+        ]
+      },
+      "lib/compiler_rt/sin.zig": {
+        "sha256": "94ec0ce3490b4cabbc7b51eefe9213c0e1d6a8a4341d23d4bd7de683bd441912",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/sinf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/sin.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/sinl.c"
+        ]
+      },
+      "lib/compiler_rt/sqrt.zig": {
+        "sha256": "1ba7e39f8583d552257b9d37362e9653d4f8f772df5ef4303d91a7f11959de28",
+        "source_reference_comments": [
+          "//! Ported from musl, which is MIT licensed.",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/sqrtf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/sqrt.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/sqrtl.c"
+        ]
+      },
+      "lib/compiler_rt/stack_probe.zig": {
+        "sha256": "8d45e440647f649ef9f7afde40607ff0f57fb012a22e36ccf7381bf120e4345e",
+        "source_reference_comments": [
+          "            // This symbols are otherwise exported by MSVCRT.lib"
+        ]
+      },
+      "lib/compiler_rt/tan.zig": {
+        "sha256": "4ff8b0eafbd8a71e498368159c03f85bf9d8d275a1811c359dc95af6b7aa0a53",
+        "source_reference_comments": [
+          "//! Ported from musl, which is licensed under the MIT license:",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/tanf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/tan.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/tanl.c",
+          "//! https://golang.org/src/math/tan.go"
+        ]
+      },
+      "lib/compiler_rt/trig.zig": {
+        "sha256": "1380cd41d9fa7a5ecd7d213f01ed007c98db2e7ab894ec87e552e2b2f0edb9dc",
+        "source_reference_comments": [
+          "// Ported from musl, which is licensed under the MIT license:",
+          "// https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__cos.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__cosdf.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__sin.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__sindf.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__tand.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__tandf.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__sinl.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__cosl.c",
+          "// https://git.musl-libc.org/cgit/musl/tree/src/math/__tanl.c"
+        ]
+      },
+      "lib/compiler_rt/trunc.zig": {
+        "sha256": "557ab370715a8d42e5f11bd732c8a29394a7f317ff9e353d196ca20f3b0920ff",
+        "source_reference_comments": [
+          "//! Ported from musl, which is MIT licensed.",
+          "//! https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/truncf.c",
+          "//! https://git.musl-libc.org/cgit/musl/tree/src/math/trunc.c"
+        ]
+      },
+      "lib/compiler_rt.zig": {
+        "sha256": "8f518ff1a2d8de659d847c1e366d301d52fbc07cb60c4fb20129cb45a9c6a15e",
+        "source_reference_comments": [
+          "/// per-symbol, per-target basis: https://github.com/ziglang/zig/issues/11883",
+          "    // Temporarily used for uefi until https://github.com/ziglang/zig/issues/21630 is addressed.",
+          "/// Temporarily used for thumb-uefi until https://github.com/ziglang/zig/issues/21630 is addressed."
+        ]
+      },
+      "lib/ubsan_rt.zig": {
+        "sha256": "eb264da5bb3de29c5ada63f3e4ed239df4f3753175fd4f1eb48faa951fabe79b",
+        "source_reference_comments": [
+          "    // See: https://github.com/llvm/llvm-project/blob/release/19.x/compiler-rt/lib/ubsan/ubsan_handlers.cpp#L463"
+        ]
+      }
+    }
+  }
+}

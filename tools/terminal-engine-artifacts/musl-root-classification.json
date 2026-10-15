@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "reference": "src/math/ceil.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "f616b50efc61eb35f946308b222f5f83ca707b4efaf7ea175969a5b62d2d6637",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/ceilf.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "691d3a8e183ebe5f09a68120766877872e10f9267fe6e2bba0341b93d2863cc8",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/ceill.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "fd18da5d5f7ee0dc80b8fd6570ebd108572ae310c20dd9ab273514742479ed53",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/cosl.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "35e7b531fb8d836960bcd41cd5d8f6dbfce9a35c050828c4fe171c2e0816ec15",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/floor.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "b9ccb9363719a84be218d60c56717f4fb0234e170c305e36ce21c30e1f42f8e1",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/floorf.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "55a62f12a4bcd151ca3a82e9ec98b1744c15017f1b6cdea56b33220ffdb166f3",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/floorl.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "2e8587117da3b71b111e899b9a9372926e1656d06a228b027d0cb733cd445c20",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/fma.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "f15e2db8c727f6cb3886dbc8817bebfcd7afff155b284be409fb961e0b985894",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/round.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "2349e599e99052603794087193725d28180b5d3466d43d6e6e1b254627bf37ae",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/roundf.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "3f8cc14771a866a06184a3d9d654f63de9a077316a4905aae19884cc9b292d2e",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/sinl.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "ef6c9704017e2af353a27fd1e57db1864704fb9f9e92badc2753c1c2961b2424",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/sqrt.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "688908f94c3edf7a439cb64094034a596a1fbff08445b9158a22874cb52ead4f",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/sqrtf.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "bd7c19c2c4efdbd1259f04a919c88f7119d9402cdd41584c7b0f854acb203b42",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/sqrtl.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "55d20e817e8b685f0f18618dd30390842c3a074b249b0b6da3f4edabd3d15f3d",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/tanl.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "aa2fa3676c4a8754982e5da9308aa9f14dfc268ef9f709e7ef7792d523d2c3a0",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/trunc.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "2f2941542db65a5c3a8a6fa952b978a5ff757f8b14ffdaef8ad28e0cafead644",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    },
+    {
+      "reference": "src/math/truncf.c",
+      "musl_release": "1.2.5",
+      "source_sha256": "dd67c4d71894da6c93bc41ec6a141de45124d3d3f4d012bc95aac4fc792abccb",
+      "notice": "licenses/musl-COPYRIGHT",
+      "reason": "no file-level copyright/license comment; musl COPYRIGHT assigns its root MIT terms to these original files"
+    }
+  ]
+}

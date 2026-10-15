@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "sha256": "bdc3fc3c6ec69875fed19c220082412b2299bb2fce75cc4e1f49b7fc8673d891",
+    "bytes": 13889816,
+    "target": "linux-x86_64",
+    "members": [
+      {
+        "name": "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/20261015-publication-boundary/zig-local-cache/o/63ae09e5389295b2d1f7cbd169aba071/libghostty-vt-static_zcu.o",
+        "bytes": 12095824,
+        "sha256": "7acfcf31f1f4de4fb1c5823854d47c3c224a7f85971503ddece68179fea42d70",
+        "format": "ELF",
+        "architecture": "x86_64"
+      },
+      {
+        "name": "/data/PROJECTS/ashutoshpw/zmux/target/terminal-engine-artifacts/zig-global-cache/o/7ad851481999374aec91f2d7052f27c1/compiler_rt.o",
+        "bytes": 1780872,
+        "sha256": "3d044dbcddf4a5470e3d1c6a60b7d1090452bc251a4ac351ec10646e6a3cba5c",
+        "format": "ELF",
+        "architecture": "x86_64"
+      }
+    ],
+    "scope": "object format and architecture only; no ABI or deployment claim"
+  }
+}

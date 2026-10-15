@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "source": "https://musl.libc.org/releases/musl-1.1.24.tar.gz",
+  "source_archive_sha256": "1370c9a812b2cf2a7d92802510cca0058cc37e66a7bedd70051f0a34015022a3",
+  "entries": [
+    {
+      "reference": "src/math/ceil.c",
+      "source_sha256": "f616b50efc61eb35f946308b222f5f83ca707b4efaf7ea175969a5b62d2d6637",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/ceilf.c",
+      "source_sha256": "691d3a8e183ebe5f09a68120766877872e10f9267fe6e2bba0341b93d2863cc8",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/ceill.c",
+      "source_sha256": "fd18da5d5f7ee0dc80b8fd6570ebd108572ae310c20dd9ab273514742479ed53",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/cosl.c",
+      "source_sha256": "35e7b531fb8d836960bcd41cd5d8f6dbfce9a35c050828c4fe171c2e0816ec15",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/floor.c",
+      "source_sha256": "b9ccb9363719a84be218d60c56717f4fb0234e170c305e36ce21c30e1f42f8e1",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/floorf.c",
+      "source_sha256": "55a62f12a4bcd151ca3a82e9ec98b1744c15017f1b6cdea56b33220ffdb166f3",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/floorl.c",
+      "source_sha256": "2e8587117da3b71b111e899b9a9372926e1656d06a228b027d0cb733cd445c20",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/fma.c",
+      "source_sha256": "f15e2db8c727f6cb3886dbc8817bebfcd7afff155b284be409fb961e0b985894",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/round.c",
+      "source_sha256": "2349e599e99052603794087193725d28180b5d3466d43d6e6e1b254627bf37ae",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/roundf.c",
+      "source_sha256": "3f8cc14771a866a06184a3d9d654f63de9a077316a4905aae19884cc9b292d2e",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/sinl.c",
+      "source_sha256": "ef6c9704017e2af353a27fd1e57db1864704fb9f9e92badc2753c1c2961b2424",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/sqrtl.c",
+      "source_sha256": "10cb33d2b5d5deef5914fd0b3a7ccc5ed47b70e56118daf4519ec2bfd5be1f4f",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/tanl.c",
+      "source_sha256": "aa2fa3676c4a8754982e5da9308aa9f14dfc268ef9f709e7ef7792d523d2c3a0",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/trunc.c",
+      "source_sha256": "2f2941542db65a5c3a8a6fa952b978a5ff757f8b14ffdaef8ad28e0cafead644",
+      "status": "no file-level notice; root MIT terms"
+    },
+    {
+      "reference": "src/math/truncf.c",
+      "source_sha256": "dd67c4d71894da6c93bc41ec6a141de45124d3d3f4d012bc95aac4fc792abccb",
+      "status": "no file-level notice; root MIT terms"
+    }
+  ]
+}
