@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zmux_desktop_runtime::{
-    Command, Desktop, Request, Shell, Snapshot,
+    Command, Desktop, DesktopError, Request, Shell, Snapshot,
     attention::{
         AttentionCommand, NativeAttentionAction, NativeNotificationEvent,
         NotificationAuthorization, NotificationDestination,
@@ -61,10 +61,10 @@ impl Drop for Fixture {
 fn wait(desktop: &Desktop, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(snapshot) = desktop.snapshot()
-            && predicate(&snapshot)
-        {
-            return snapshot;
+        match desktop.snapshot() {
+            Ok(snapshot) if predicate(&snapshot) => return snapshot,
+            Ok(_) | Err(DesktopError::Busy) => {}
+            Err(error) => panic!("desktop snapshot failed: {error}"),
         }
         assert!(Instant::now() < deadline, "desktop state did not settle");
         thread::sleep(Duration::from_millis(5));
@@ -127,7 +127,7 @@ fn native_reply_confirms_full_write_without_focus_change_and_never_replays_a_con
     let desktop = reply_desktop(
         "stty -echo; printf REPLY_READY; i=0; while IFS= read -r line; do i=$((i+1)); printf '\\nREPLY_%s:%s\\n' \"$i\" \"$line\"; done",
     );
-    let initial = desktop.snapshot().unwrap();
+    let initial = wait(&desktop, |_| true);
     let first = initial.model.workspaces[0].clone();
     let surface = first.root.panes()[0].selected();
     let session_id = surface.session_id.unwrap();
@@ -158,7 +158,7 @@ fn native_reply_confirms_full_write_without_focus_change_and_never_replays_a_con
             .is_err()
     );
     assert_eq!(
-        serde_json::to_value(desktop.snapshot().unwrap().notifications.last().unwrap()).unwrap()["reply_state"],
+        serde_json::to_value(wait(&desktop, |_| true).notifications.last().unwrap()).unwrap()["reply_state"],
         "ready"
     );
     let result = desktop
@@ -229,7 +229,7 @@ fn empty_and_definite_zero_byte_reply_failures_open_only_the_exact_owner_with_tr
         ("printf REPLY_READY; exit 0", "not written", "not_written"),
     ] {
         let desktop = reply_desktop(script);
-        let initial = desktop.snapshot().unwrap();
+        let initial = wait(&desktop, |_| true);
         let first = initial.model.workspaces[0].clone();
         let surface = first.root.panes()[0].selected().id;
         if expected == "not_written" {
@@ -278,7 +278,7 @@ fn pending_reply_keeps_the_executor_responsive_and_expires_without_writing_or_re
     let desktop = Arc::new(reply_desktop(
         "stty raw -echo; printf REPLY_READY; kill -STOP $$; cat",
     ));
-    let initial = desktop.snapshot().unwrap();
+    let initial = wait(&desktop, |_| true);
     let first = initial.model.workspaces[0].clone();
     let surface = first.root.panes()[0].selected();
     let session_id = surface.session_id.unwrap();
@@ -545,7 +545,7 @@ fn a_pre_restore_notification_cannot_open_a_new_shell_reusing_its_surface_id() {
         },
     ] {
         assert!(desktop.native_notification_action(action).is_err());
-        let rejected = desktop.snapshot().unwrap();
+        let rejected = wait(&desktop, |_| true);
         assert_eq!(
             rejected.model.focused_workspace,
             restored.model.focused_workspace
@@ -622,11 +622,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         })
         .unwrap();
     assert_eq!(
-        desktop
-            .snapshot()
-            .unwrap()
-            .native_notifications
-            .authorization,
+        wait(&desktop, |_| true).native_notifications.authorization,
         NotificationAuthorization::Authorized
     );
 
@@ -645,7 +641,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
             })
             .is_err()
     );
-    let rejected = desktop.snapshot().unwrap();
+    let rejected = wait(&desktop, |_| true);
     assert_eq!(rejected.model.focused_workspace, second_workspace);
     assert!(
         !rejected
@@ -668,7 +664,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         })
         .unwrap();
     assert_eq!(receipt.focused_surface_id, Some(first_surface.id));
-    let opened = desktop.snapshot().unwrap();
+    let opened = wait(&desktop, |_| true);
     assert!(opened.revision >= receipt.revision);
     assert_eq!(opened.model.focused_workspace, Some(first.id));
     assert_eq!(
@@ -718,7 +714,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         })
         .unwrap();
     assert_eq!(dismissed.focused_surface_id, None);
-    let after = desktop.snapshot().unwrap();
+    let after = wait(&desktop, |_| true);
     assert_eq!(after.model, to_dismiss.model);
     assert!(
         after
@@ -765,7 +761,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
         })
         .unwrap();
     assert_eq!(receipt.focused_surface_id, Some(second_surface.id));
-    let after = desktop.snapshot().unwrap();
+    let after = wait(&desktop, |_| true);
     assert_eq!(after.model.focused_workspace, second_workspace);
     assert!(
         after
@@ -777,7 +773,7 @@ fn native_actions_confirm_exact_selection_and_read_before_returning() {
     );
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();
-    let closed = desktop.snapshot().unwrap();
+    let closed = wait(&desktop, |_| true);
     assert!(closed.native_notifications.desired.is_empty());
     assert_ne!(
         closed.native_notifications.epoch,
@@ -847,7 +843,7 @@ fn native_inbox_callbacks_reject_coalesced_and_closed_targets_without_acknowledg
             })
             .is_err()
     );
-    let rejected = desktop.snapshot().unwrap();
+    let rejected = wait(&desktop, |_| true);
     assert_eq!(
         rejected.model.focused_workspace,
         second.model.focused_workspace
@@ -877,7 +873,7 @@ fn native_inbox_callbacks_reject_coalesced_and_closed_targets_without_acknowledg
             })
             .is_err()
     );
-    let rejected = desktop.snapshot().unwrap();
+    let rejected = wait(&desktop, |_| true);
     assert_eq!(
         rejected.model.focused_workspace,
         second.model.focused_workspace
@@ -931,7 +927,7 @@ fn socket_and_generic_json_cannot_forge_native_notification_callbacks() {
         let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(response["ok"], false);
     }
-    let after = desktop.snapshot().unwrap();
+    let after = wait(&desktop, |_| true);
     assert_eq!(
         after.native_notifications.authorization,
         NotificationAuthorization::Unknown
