@@ -83,19 +83,25 @@
     {
       "id": "F04",
       "title": "Terminal engine decision and performance baseline",
-      "status": "planned",
+      "status": "implementing",
       "owner": "terminal-adapter, session-runtime, native harness",
       "depends_on": [],
       "commit_slices": [
         "Measure current native idle/output/hidden-tab/browser workloads and reproduce reported hangs under controlled remote stalls",
         "Evaluate current parser and permissively licensed alternatives against protocol/render/input fixtures; record architecture, license and numeric-budget decision"
       ],
-      "exit_gate": "No engine choice from language preference alone; pinned license/provenance review and named Mac results; explicit gaps for graphics/keyboard/Unicode/reflow; bounded memory and latency budgets recorded before expanding limits."
+      "exit_gate": "No engine choice from language preference alone; pinned license/provenance review and named Mac results; explicit gaps for graphics/keyboard/Unicode/reflow; bounded memory and latency budgets recorded before expanding limits.",
+      "implemented_slices": [
+        "Bounded native resource sampler executed at5f5005e; controlled budgets/engine decision remain open"
+      ],
+      "verification_receipts": [
+        "f04-native-resource-sampler.md"
+      ]
     },
     {
       "id": "T01",
       "title": "Terminal input, rendering and everyday interactions",
-      "status": "planned",
+      "status": "implementing",
       "owner": "terminal-adapter, session-runtime, TerminalView",
       "depends_on": [
         "F02",
@@ -106,7 +112,13 @@
         "Complete selection/copy/paste, IME/key/mouse/scroll/find/clear/link behavior",
         "Complete graphics/styles/font behavior and accessible terminal text with overload/error recovery"
       ],
-      "exit_gate": "Production-owner protocol fixtures plus packaged Mac input/selection/scroll/IME/VoiceOver journeys pass; output floods and exited sessions remain inspectable without starving UI."
+      "exit_gate": "Production-owner protocol fixtures plus packaged Mac input/selection/scroll/IME/VoiceOver journeys pass; output floods and exited sessions remain inspectable without starving UI.",
+      "implemented_slices": [
+        "T01a function/navigation-key encoding with real native PTY byte acceptance at5f5005e"
+      ],
+      "verification_receipts": [
+        "t01-terminal-input.md"
+      ]
     },
     {
       "id": "T02",
@@ -289,7 +301,7 @@
     {
       "id": "B02",
       "title": "Full browser automation and developer workflows",
-      "status": "in_progress",
+      "status": "implementing",
       "evidence": [
         "b02-browser-automation.md"
       ],
@@ -303,7 +315,13 @@
         "Add frames/dialogs/files/screenshots/cookies/storage/state/scripts/console and REPL ownership",
         "Add developer/focus/design/React Grab workflows and exact supported/unsupported capability outcomes"
       ],
-      "exit_gate": "All audited browser leaves/aliases/options route to shared owners; close/navigation cancel pending work; cross-origin and public API limitations are explicit. Match deliberate unsupported outcomes at pinned cmux baseline; new unsupported gaps stay open."
+      "exit_gate": "All audited browser leaves/aliases/options route to shared owners; close/navigation cancel pending work; cross-origin and public API limitations are explicit. Match deliberate unsupported outcomes at pinned cmux baseline; new unsupported gaps stay open.",
+      "implemented_slices": [
+        "B02b main-document find/is/wait controls committed6af571f; native acceptance pending"
+      ],
+      "verification_receipts": [
+        "b02-browser-automation.md"
+      ]
     },
     {
       "id": "C01",

@@ -50,4 +50,11 @@ defer for nested events. NSWindow now owns the complete event-dispatch path with
 no `makeFirstResponder` override. No retained responder is restored and no other
 control's eligibility changes; keyboard traversal and explicit AX focus outside
 pointer dispatch retain normal behavior. The same strict NSWindow-event smoke
-remains unchanged. Hosted compilation and packaged execution remain pending.
+remains unchanged.
+
+macOS 38753451286 at 5f5005e passed Rust/ABI verification, universal native
+compilation and packaged execution. The executed smoke receipt reports
+`sidebar_resize: true`, `sidebar_toggle: true` and `success: true`, establishing
+the strict native event, key-view, AX-action, preference, collapse and window-size
+checks described above. Physical pointer/keyboard and VoiceOver acceptance remain
+separate; the hosted smoke does not claim those manual OS interactions.

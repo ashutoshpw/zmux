@@ -163,3 +163,8 @@ Fresh source review found no blocker. The file-URL upload is small and has no AC
 hold, so it can complete before the workspace-selection CLI command: this case does
 not establish hidden-terminal completion. The separately gated image journey covers
 that shared delivery race. File-URL native execution remains pending.
+
+Hosted receipt: Native symlink file-URL and directory-refusal acceptance executed successfully at5f5005e in
+macOS38753451286 (universal build and packaged smoke). Parent downloaded and checked
+archive/source/required flags. This closes that subset native gate only; full package
+parity and applicable physical/external-host gates remain open.

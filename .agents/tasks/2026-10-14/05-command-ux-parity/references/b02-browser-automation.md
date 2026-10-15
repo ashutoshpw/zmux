@@ -260,3 +260,8 @@ Parent integrated validation passes 193 Rust tests, strict Clippy, formatting, n
 the C ABI in a private build directory. The parent also ran all35 Chromium DOM cases.
 Linux Foundation CI now executes this DOM suite; packaged native acceptance requires
 `browser_locators_waits`. Hosted results remain pending.
+
+Hosted receipt: Browser live-title observation repair executed successfully at5f5005e in
+macOS38753451286 (universal build and packaged smoke). Parent downloaded and checked
+archive/source/required flags. This closes that subset native gate only; full package
+parity and applicable physical/external-host gates remain open.

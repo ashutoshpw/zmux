@@ -26,3 +26,8 @@ and the pre-fix/post-fix byte comparison remain hosted macOS gates.
 The attempted hosted pre-fix run (38746667499, da33cea) stopped at an unrelated
 sidebar Swift API spelling error before executing the key-byte journey. It does
 not establish the intended native red result; that evidence remains absent.
+
+Hosted receipt: Terminal special-key byte acceptance executed successfully at5f5005e in
+macOS38753451286 (universal build and packaged smoke). Parent downloaded and checked
+archive/source/required flags. This closes that subset native gate only; full package
+parity and applicable physical/external-host gates remain open.

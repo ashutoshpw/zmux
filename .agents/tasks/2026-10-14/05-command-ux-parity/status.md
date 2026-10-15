@@ -5,29 +5,22 @@
 
 ## Active implementation
 
-- Full V01 and its GitHub Actions macOS artifact remain the objective; subset builds
-  are diagnostic only. Delegation uses the requested gpt-6.1-sol model.
-- N01a-d notification integration and the callback-isolation crash repair passed
-  real macOS packaged checks at c9db69c. Session write receipts also pass Linux/Darwin
-  checks and native packaging at6cea10a.
-- N01e reply journey executed successfully at3a9ab8e in macOS38745262578;
-  that run failed later on live browser titles. Actual OS text-action interaction remains open.
-- Browser owner fencing and bounded live-title KVO repair are committed; native title
-  regression was observed before repair. Rerun is blocked earlier by sidebar acceptance.
-- Sidebar resizing compiles universally but macOS38747700382 failed the compound
-  drag/focus check. Diagnostic-only df3f8ff adds width, event-hit and responder evidence;
-  macOS38749608349 stopped earlier on a scheduler-dependent CLI test assertion.
-  That assertion is repaired without changing runtime/timing; macOS38750257118 at13504c3
-  is the next diagnostic run. No speculative sidebar production repair is claimed.
-- T01a F1–F12/modified navigation encoder is committed; native PTY-byte acceptance
-  has not yet executed because of the earlier sidebar failure.
-- F04 bounded external resource sampler committed at2095b5b and pushed with df3f8ff;
-  portable review/checks pass, first Darwin measurements pending.
-- A01 workspace status/progress/log plus native rows/inspector committed at035a285;
-  icon spacing repaired at13504c3. Full local checks (189 tests) and independent source
-  reviews pass. Native compilation and execution remain pending.
-- Local Docker cloud is healthy on3530; `bunx path-to-port` confirmed3530 after
-  health checks. Public tunnel is unverified; VM/relay/email remain unavailable.
+- Full V01 and its GitHub Actions macOS artifact remain the objective. Intermediate
+  archives are diagnostic/acceptance evidence, not full-parity delivery.
+- Native5f5005e passes universal build and packaged smoke in38753451286: replies,
+  sidebar pointer/keyboard resizing, metadata inspector, browser live title, special
+  terminal keys and managed file-URL/refusal cases all executed successfully.
+- Downloaded5f5005e ZIP checksum/integrity/source verified; AppKit and WebKit images
+  inspected. Full-window compositor capture remains unavailable on hosted runner.
+- B02b document locators/readiness committed/pushed6af571f. Parent full193 Rust tests,
+  strict Clippy/notices/ABI plus35 real Chromium DOM cases pass. Native38754684779
+  and Foundation38754685035 are running; no native B02b result claimed yet.
+- F04 upstream engine feasibility passes an isolated Linux development-API fixture;
+  reproducible harness review is repairing process cleanup and build-job limits before
+  publication. No production engine replacement, Mac candidate execution or budget claim.
+- R02 local tmux lifecycle and B01 explicit persistent profile binding are in progress.
+- Local Docker cloud healthy at3530, confirmed with path-to-port after health checks.
+  Public tunnel unverified; VM/relay/email unavailable. Hosted deployment remains deferred.
 
 ## Delivered slices
 
@@ -309,3 +302,12 @@ and visual gates, and commit cohesive validated slices. Full parity is still the
   not a performance budget; see F04 resource reference.
 - R01 native file-URL/refusal acceptance committed004c05a after fresh review and full
   scripts/check in an isolated index snapshot. Native execution pending; not pushed yet.
+
+## 5f5005e native acceptance
+
+Run38753451286 produced a valid universal archive with SHA256
+637944de020a31c9f337a28f2fb3125a6c928069512a305f8e4e17c1710081a6.
+The parent verified archive integrity, source metadata, all required smoke flags and
+both captured images.15 resource/CLI samples cover18.50 seconds of this mixed smoke;
+these are instrumentation receipts, not controlled workload performance budgets.
+Full-window screencapture status1 remains explicit. No subset artifact was handed off.

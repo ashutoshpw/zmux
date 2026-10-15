@@ -121,3 +121,8 @@ rendered row and open inspector, appends logs, and clears metadata while the ins
 is open. It checks existing workspace/tab identities and focus after dismissal. This
 covers native decoding, ownership, and presentation that portable runtime tests cannot
 reach. The required `workspace_metadata` receipt is not yet a passing native result.
+
+Hosted receipt: Workspace metadata native row/inspector acceptance executed successfully at5f5005e in
+macOS38753451286 (universal build and packaged smoke). Parent downloaded and checked
+archive/source/required flags. This closes that subset native gate only; full package
+parity and applicable physical/external-host gates remain open.
