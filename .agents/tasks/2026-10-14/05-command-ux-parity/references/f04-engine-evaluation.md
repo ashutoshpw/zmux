@@ -335,3 +335,108 @@ stall phases, CPU/RSS and send-once marker latency, followed by explicit numeric
 The external sampler's mixed packaged journey is not those isolated measurements.
 Complete the actual notice closure, Mac packaging, native selection/IME/rendering and
 resource gates before selecting an engine or increasing current capacity limits.
+
+
+### Hosted compatibility exporter at the exact delivered SHA (pre-patch)
+
+Workflow [38761104404](https://github.com/ashutoshpw/zmux/actions/runs/38761104404)
+completed Linux and Mac jobs at `3ac6fa410b693c1978dd61d9649295b6bc93326f`.
+Downloaded receipts under `/tmp/zmux-f04-export-hosted-38761104404/` confirm fresh
+Zig dependency caches and successful original/baseline/compatibility fixtures on
+Linux x86_64 and macOS 15.7.9 arm64. Mac arm64/x86_64 raw-library/executable universal
+compilation and verification pass; Mac x86_64 is not executed and compatibility is
+host-only. Mac reports `RLIMIT_AS` unavailable (`ValueError`), CPU/core configured.
+Receipt SHA-256: Linux
+`e0d119a8e562a68bcc24b02a8212efae232a07eb64ef4321813f18da71ef1864`, Mac
+`7949fa4259be2251eaf2e70147a71aa7e5f16e192db4727bb713b9def6fcfbc7`.
+
+This clears the hosted compatibility-exporter subset only. It predates the
+resource patch, so it establishes no allocator/exact-retention or Mac resource
+acceptance. The previously listed unsupported effects and production gates remain.
+
+
+### Original MIT allocator and exact-history experiment
+
+The opt-in `--resource-experiment` remains confined to
+`tools/terminal-feasibility/`: no application engine/dependency, upstream pin,
+120×240 geometry, eight-terminal capacity, 1,000-row retention or 16-KiB production
+control-string policy changed. The frozen
+[resource contract](../../../../../tools/terminal-feasibility/RESOURCE_CONTRACT.md)
+records creation/clone/reflow/primary/alternate ownership, guarantees and exclusions.
+The original patch SHA-256 is
+`0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02` against
+Ghostty `22fa134a07f5749edd9e92c6bc17d8aaf61843be`. Before application the runner
+checks the patch cleanly against a fresh verified extraction and compares the
+retained upstream MIT license byte-for-byte with that extraction.
+
+Both the supplied general allocator and dedicated page allocator use zeroed,
+page-aligned, page-rounded mappings under one checked quota. Free/preheated pools
+and retained shrink mappings remain charged, as do simultaneous old/new clone or
+reflow allocations. No live allocator swapping, process-wide allocation interpose
+or private opaque-handle layout cast is used. Default constructors remain unchanged.
+Exact physical-history pruning uses `Screen.eraseHistory` after Screen-owned growth
+and resize transitions, rather than trimming exported rows or once per feed.
+
+The unchanged original constructor succeeds despite a zero page quota and thus
+fails the construction assertion; it retains two rows with a one-row limit in the
+second control. Both exit 101 for the named assertions and are marked `expected_failure`
+in the runner, not counted as repaired-green phases. The experimental constructor
+passes the same contracts. Independent real-engine fixtures additionally exercise:
+
+- exact zero/one/1,000 history limits, byte-fragmented input, exact oldest-prefix
+  removal at the next two rows and independently specified newest-row contents;
+- real Screen clone storage and allocation peaks, successful three-column reflow
+  with exact wrapped newest rows, widening/height changes and continued output;
+- lazy alternate construction, alternate resizing, primary return and reset;
+- all 15 observed constructor allocation denial positions; ordinary history-growth,
+  lazy-alternate, clone and reflow page-quota failure; general and aggregate failure;
+- quota refusal on subsequent input and zero reserved/general/page/live mappings,
+  with no invalid ownership operations, after every successful or failed teardown.
+
+Observed mapping peak in the lifecycle fixture is 3,313,664 bytes under an
+**experimental 16-MiB engine mapping limit**. Fixed C owner/ledger storage has a
+139,464-byte upper bound on this Linux host, and copied fixture snapshots are
+separately capped at 512 KiB each. None of these values is total process/app memory,
+measured physical footprint, a production budget or Mac resource proof.
+
+Quota denial becomes sticky at the return from an atomic call; upstream can still
+process the rest of that at-most-4,096-byte feed. The fixture supplies no
+instruction-level interrupt, consumed-byte receipt, replay-safe recovery or
+last-good-frame publisher. Alternate replacement after failed in-place resize and
+partial-top-region scroll rotation are source-reviewed but not separately forced
+by these fixtures. Compression strict-decommit/restore, bounded snapshot import,
+optional formatter/search/selection and effect semantics remain unexecuted resource
+gates. Ordinary pool zero-decommit/recommit is indirectly exercised; no separate
+syscall-success or physical-reclaim measurement is claimed.
+
+The independent resource review found no remaining blocking source or evidence
+issue after adding ordinary history-growth denial, forcing successful wrap reflow
+and narrowing the alternate/compression/sticky-failure claims. Nine real-process
+runner checks pass; the browser runner test file is unchanged by this slice.
+
+
+The final reviewed local Linux receipt is
+`/tmp/zmux-f04-resource-repro-final-reviewed-20261015/receipt.json`, SHA-256
+`4c88318afa08e9afaf59e3363be3c20457897584f75672d7400ad4188a526b46`.
+It records Git base `f4f99d384fd1db206af443d10c0d6e80489bbec3` and 14 separately
+hashed harness inputs from the working tree; all input hashes were rechecked after
+completion. The explicit existing Zig dependency cache is labeled accordingly; both
+source/toolchain archives were downloaded and checksum-verified again. Ghostty
+build took 67.835 seconds, raw fixture 0.254 seconds, compatibility 0.097 seconds
+and resource fixture 0.076 seconds. Original adapter builds use a private temporary
+Cargo target. Every normal phase passes; the two original-constructor controls are
+the intentional assertion failures described above. Linux configures CPU/core/AS
+containment separately from the allocator quota. Earlier local receipt directories
+are predecessor attempts, not the final current-hash evidence.
+
+Reproduce with a fresh output directory:
+
+```sh
+python3 -B tools/terminal-feasibility/run.py --resource-experiment \
+  --dependency-cache /tmp/zmux-f04-evaluation-20261015/zig-global-cache \
+  --output /tmp/zmux-f04-resource-results-new
+```
+
+Omit `--dependency-cache` for fresh dependency availability testing. No hosted or Mac
+resource-patch run is included in this local receipt; the earlier green hosted
+exporter workflow must not be substituted for that gate.

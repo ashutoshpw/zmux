@@ -56,6 +56,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.
 - [F04 engine evaluation](references/f04-engine-evaluation.md) — pinned permissive sources, isolated C/Rust snapshot/reflow evidence and remaining engine/native decision gates.
 - [F04 candidate adapter](references/f04-adapter-candidate-design.md) — Viewport/input/effect ownership, page-allocation/history blockers, static packaging and executable fidelity/Mac workload gates.
+- [F04 resource options](references/f04-resource-options.md) — native allocator/exact-prefix experiment, helper/Wasm tradeoffs and remaining resource gates.
 - [A01 workspace metadata](references/a01-workspace-metadata.md) — scoped status/progress/log commands, aggregate bounds and native presentation gates.
 - [F04 resource telemetry](references/f04-native-resource-sampler.md) — bounded external Mac measurements and remaining workload/budget gates.
 - [T01 terminal input](references/t01-terminal-input.md) — legacy special-key encoding and real PTY acceptance.
