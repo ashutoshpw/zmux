@@ -258,6 +258,58 @@ Independent source review finds no blocking issue. Current fixed storage remains
 296 C bytes, 12,096 inline coordinator bytes and the same 24,576-byte reply/input
 subset. Exact-source hosted Darwin acceptance of this ordering repair remains open.
 
+## Darwin normal acceptance and negative-control specificity
+
+Workflow [38787910315](https://github.com/ashutoshpw/zmux/actions/runs/38787910315)
+at `11258fead00c71dc24652280504b82def45307b9` passes Linux. Darwin arm64 now
+passes construction, all three cleanup probes and **all seven normal PTY modes**,
+including stalled-reader timeout/reaping. Flood observes one actual EAGAIN and one
+kernel short write; stalled input observes 38 EAGAIN and one kernel short write.
+The master-close ordering repair therefore has actual Darwin normal-path evidence.
+Darwin receipt SHA-256 `c197160da8972d1bb8cc823422b5dfc5d8e4614c97e5f39494f55e2c714e86af`
+matches all nine frozen inputs and the complete 31-input base lock.
+
+The overall Darwin job still fails: the intentionally broken early-publication
+control reaches a later `mode == "stall"` assertion in the flood path instead of
+its required publication-invariant assertion. This is a negative-control coverage
+gap, not a repeated transport cleanup failure. A successful kernel short write
+could publish the broken candidate before the next EAGAIN or commit; the fixture
+only checked at those later boundaries.
+
+The strengthened fixture checks unchanged publication whenever a pump leaves a
+staged reply suffix, including after a positive partial write. The basic journey
+uses a three-byte syscall cap and requires observed partial reply writes so the
+control cannot depend on a particular kernel's buffer segmentation. That cap is
+physical syscall fragmentation, not a claim of a kernel-returned short write.
+The flood journey retains its actual kernel short-write/EAGAIN observation. Basic
+resize waits until staged/pending input is empty, preserving admission rules even
+when the duplicate control appends an extra byte after the child's cursor receipt.
+No transport, engine, lifetime, cleanup deadline or negative assertion was relaxed.
+
+The previous accepted binary/C objects were no longer present, so one pinned
+reconstruction was needed for this actual regression. Reusable source, toolchain,
+patched library, objects and receipts are now retained in ignored
+`target/terminal-engine-artifacts/20261015-publication-boundary/`. A nested Git root
+isolates patch application from the parent checkout, and header/symbol postconditions
+are checked. Producer receipt SHA-256:
+`cefd9ea053b59abf33ddc6433ba759be3e374ece27fa7b6f5dad2924a9e73aaf`.
+Actual library SHA-256:
+`bdc3fc3c6ec69875fed19c220082412b2299bb2fce75cc4e1f49b7fc8673d891`.
+This is a new concrete build, not a claim that equal source pins reproduce the
+lost binary's path-dependent archive bytes.
+
+Focused red/green receipt is `focused-v2/receipt.json` in that retained directory,
+SHA-256 `383607bed1de7b1fe69ac5457743999dd55381b5d771ae60daaa6ca61d190a44`.
+The pre-invariant cap-three early control fails at the later basic-transport
+assertion (red specificity check). The strengthened normal journey passes with
+four physical partial reply writes; both controls fail their exact named assertions
+with exit 101/no timeout. Construction and all three cleanup cases pass. All 31
+base inputs remain fixed. Final nine-input freeze:
+`/tmp/zmux-f04-pty-partial-publication-frozen-manifest-20261015.json`, SHA-256
+`a8715b5e615d6b13ee601a37f0c8d26c63840231a3ed12a91196e93d58c9a27b`.
+Independent review and hosted Darwin execution of this strengthened fixture remain
+required; the preceding normal Darwin success does not prove the new control.
+
 ## Capacity ledger and remaining boundary
 
 These are allocated/reserved capacities or configured limits, separately from
@@ -279,8 +331,9 @@ child heap/threads, runtime/allocator overhead and kernel PTY/pipe buffers are
 separate and excluded from a total-RSS claim. No per-operation coordinator payload
 allocation is needed for prepare/validate/exact commit/slot swap.
 
-Hosted execution of the new nine-input master-close follow-up remains separate from
-local acceptance. The diagnosed Darwin reaping failure remains an open hosted gate;
-the accepted metadata workflow cannot prove the new kernel transport.
+Hosted execution of the strengthened nine-input publication follow-up remains
+separate from focused local acceptance. Darwin normal PTY/cleanup passes at the
+preceding master-close revision; exact negative-control specificity remains open
+on the strengthened fixture. The metadata workflow alone cannot prove transport.
 Native input/shell/job-control, production adapter integration and
 representative workloads remain open gates; the application engine is unchanged.

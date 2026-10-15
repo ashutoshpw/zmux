@@ -30,7 +30,11 @@ the lock.
   literal cursor/status bytes between actual PRE and POST input, and separately
   confirms a consumed three-byte prefix before close/cancel. Real kernel EAGAIN
   and short-write counters are reported; a deterministic syscall cap exercises
-  partial progress even when the kernel never returns a short write.
+  partial progress even when the kernel never returns a short write. The basic
+  journey requires positive partial reply writes with a three-byte syscall cap
+  and checks unchanged publication after each incomplete write. The flood path
+  checks the same invariant after a successful kernel short write, before later
+  EAGAIN/commit/failure can obscure the negative control's first violation.
 - Idle resize stages/validates engine state, performs TIOCSWINSZ, then commits.
   Pending replies make resize Busy; retry is explicit after progress. A real
   ioctl error quarantines without rollback claims. The child checks kernel size.
