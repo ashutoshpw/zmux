@@ -117,6 +117,11 @@ static const GhosttyAllocatorVtable vtable = {
 
 Resource *resource_new(uint16_t cols, uint16_t rows, size_t history,
   size_t total, size_t general, size_t pages, size_t deny_at, uint8_t bounded) {
+  return resource_new_factory(cols, rows, history, total, general, pages, deny_at, bounded, NULL, NULL);
+}
+Resource *resource_new_factory(uint16_t cols, uint16_t rows, size_t history,
+  size_t total, size_t general, size_t pages, size_t deny_at, uint8_t bounded,
+  ResourceCreateFn create, void *context) {
   if (!cols || cols > 240 || !rows || rows > 120 || history > 1000
       || general > total || pages > total || total > 64 * 1024 * 1024) return NULL;
   Resource *r = calloc(1, sizeof(*r));
@@ -130,7 +135,8 @@ Resource *resource_new(uint16_t cols, uint16_t rows, size_t history,
   r->page_allocator = (GhosttyAllocator){.ctx = &r->contexts[1], .vtable = &vtable};
   // Compare the unchanged public constructor with the experimental constructor.
   // This is real engine execution; no allocator or terminal behavior is emulated.
-  GhosttyResult result = bounded ?
+  GhosttyResult result = create ? create(&r->general_allocator, &r->page_allocator,
+                                       &r->terminal, cols, rows, history, context) : bounded ?
     zmux_ghostty_terminal_new_bounded(&r->general_allocator, &r->page_allocator,
                                     &r->terminal, cols, rows, history) :
     ghostty_terminal_new(&r->general_allocator, &r->terminal, cols, rows);

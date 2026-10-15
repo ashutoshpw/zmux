@@ -17,4 +17,5 @@ int collector_finish(EffectCollector *, int);
 int collector_copy(EffectCollector *, ZmuxEffectEvent *, size_t, size_t, size_t *, uint8_t *, size_t, size_t *);
 int collector_drain(EffectCollector *, ZmuxEffectEvent *, size_t, size_t, size_t *, uint8_t *, size_t, size_t *);
 void collector_clear(EffectCollector *);
+int collector_append(EffectCollector *, ZmuxEffectEvent);
 #endif
