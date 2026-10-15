@@ -78,6 +78,13 @@ actor NativeBridge {
         revision = snapshot.revision
         return snapshot
     }
+    func reorderWorkspace(_ workspace: UUID, window: UUID, index: Int, revision: UInt64) async throws {
+        try await send(["command":"workspace_order", "request":[
+            "window":window.uuidString.lowercased(), "expected_model_revision":revision,
+            "order":["operation":"single", "workspace":workspace.uuidString.lowercased(),
+                     "placement":["placement":"index", "index":index]]
+        ]])
+    }
     func moveWorkspace(_ workspace: UUID, destination: UUID, focus: Bool) async throws {
         try await send(["command":"targeted", "request":[
             "scope":["workspace":workspace.uuidString.lowercased()],

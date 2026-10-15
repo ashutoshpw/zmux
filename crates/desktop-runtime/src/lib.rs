@@ -15,6 +15,7 @@ pub mod sessions;
 pub mod targets;
 pub mod transfers;
 pub mod windows;
+pub mod workspace_order;
 use attention::{
     Attention, AttentionCommand, DismissSelection, NativeAttentionAction, NativeNotificationEvent,
     NativeNotificationSnapshot, Notification, NotificationAction, NotificationAddress,
@@ -90,6 +91,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    WorkspaceOrder {
+        request: workspace_order::OrderRequest,
+    },
     Windows {
         request: windows::WindowRequest,
     },
@@ -272,6 +276,7 @@ pub(crate) struct Execution {
     pub browser_dispatch: Option<BrowserDispatchBatch>,
     pub download_result: Option<serde_json::Value>,
     pub window_result: Option<serde_json::Value>,
+    pub workspace_order_result: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -404,6 +409,7 @@ impl Desktop {
                     downloads,
                     windows,
                     window_result: None,
+                    workspace_order_result: None,
                     download_result: None,
                     profiles,
                     profile_operation_id: None,
@@ -894,6 +900,7 @@ struct Worker {
     downloads: downloads::DownloadRuntime,
     windows: windows::WindowRuntime,
     window_result: Option<serde_json::Value>,
+    workspace_order_result: Option<serde_json::Value>,
     download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
     browser_dispatch: Option<BrowserDispatchBatch>,
@@ -1137,6 +1144,7 @@ impl Worker {
         self.browser_dispatch = None;
         self.download_result = None;
         self.window_result = None;
+        self.workspace_order_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if acknowledgement.is_some()
@@ -1222,6 +1230,7 @@ impl Worker {
                 browser_dispatch: self.browser_dispatch.take(),
                 download_result: self.download_result.take(),
                 window_result: self.window_result.take(),
+                workspace_order_result: self.workspace_order_result.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -1278,6 +1287,7 @@ impl Worker {
             command @ (Command::Windows { .. } | Command::NativeWindow { .. }) => {
                 self.execute_window_command(command)
             }
+            Command::WorkspaceOrder { request } => self.workspace_order(request),
             Command::LocalTmux { request } => self.local_tmux_command(request),
             Command::Downloads { request } => {
                 let model = self.model.snapshot();

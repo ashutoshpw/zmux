@@ -958,12 +958,14 @@ fn observed_shell_cwd_is_captured_by_explicit_save_and_final_flush_without_a_top
     let restarted = directory.desktop();
     let restored = wait(&restarted, ready);
     let session_id = restored.control_frames[0].session_id;
+    // Deliberately use a real interactive prompt with tty echo disabled. Bare
+    // pwd output then shares its line with the prompt, as in the aggregate run.
     send(
         &restarted,
         4,
         Command::Input {
             session_id,
-            text: "pwd\n".into(),
+            text: "stty -echo; PS1='ZMUX_RESTORE> '; printf '\\n'\n".into(),
         },
     );
     wait(&restarted, |s| {
@@ -971,7 +973,26 @@ fn observed_shell_cwd_is_captured_by_explicit_save_and_final_flush_without_a_top
             v.viewport
                 .contents
                 .lines()
-                .any(|line| Some(line) == final_cwd.to_str())
+                .any(|line| line.trim_end() == "ZMUX_RESTORE>")
+        })
+    });
+    send(
+        &restarted,
+        5,
+        Command::Input {
+            session_id,
+            // Frame actual pwd output independently of prompt/echo timing.
+            text: "printf '\\nZMUX_CWD_BEGIN\\n'; pwd; printf 'ZMUX_CWD_END\\n'\n".into(),
+        },
+    );
+    wait(&restarted, |s| {
+        s.control_frames[0].snapshot.as_ref().is_some_and(|v| {
+            let lines: Vec<_> = v.viewport.contents.lines().collect();
+            lines.windows(3).any(|output| {
+                output[0] == "ZMUX_CWD_BEGIN"
+                    && Some(output[1]) == final_cwd.to_str()
+                    && output[2] == "ZMUX_CWD_END"
+            })
         })
     });
     restarted.shutdown(Duration::from_secs(5)).unwrap();
@@ -1037,4 +1058,93 @@ fn unknown_browser_profile_restore_fails_before_any_pty_launch_or_topology_publi
     assert_eq!(fs::read(&path).unwrap(), source);
     desktop.shutdown(Duration::from_secs(3)).unwrap();
     assert_eq!(fs::read(&path).unwrap(), source);
+}
+
+#[test]
+fn reordered_membership_survives_real_save_restart_without_replacing_live_ptys() {
+    use zmux_desktop_runtime::workspace_order::{OrderCommand, OrderPlacement, OrderRequest};
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    wait(&desktop, ready);
+    for (id, name) in [(1, "B"), (2, "C")] {
+        send(
+            &desktop,
+            id,
+            Command::Action {
+                action: Action::CreateWorkspace { name: name.into() },
+            },
+        );
+        wait(&desktop, |s| {
+            s.last_request_id == id
+                && ready(s)
+                && s.control_frames.len() == (id + 1) as usize
+                && s.control_frames.iter().all(|f| f.process_id.is_some())
+        });
+    }
+    let before = desktop.snapshot().unwrap();
+    let ids = before.model.windows[0].workspace_ids.clone();
+    let request = |dry_run| Command::WorkspaceOrder {
+        request: OrderRequest {
+            window: None,
+            caller: Default::default(),
+            expected_model_revision: Some(before.model.revision),
+            dry_run,
+            order: OrderCommand::Single {
+                workspace: ids[0].0.to_string().parse().unwrap(),
+                placement: OrderPlacement::Index { index: 99 },
+            },
+        },
+    };
+    send(&desktop, 3, request(true));
+    let preview = wait(&desktop, |s| s.last_request_id == 3);
+    assert_eq!(preview.model, before.model);
+    assert!(preview.last_error.is_none());
+    send(&desktop, 4, request(false));
+    let ordered = wait(&desktop, |s| s.last_request_id == 4);
+    assert!(ordered.last_error.is_none(), "{:?}", ordered.last_error);
+    assert_eq!(
+        ordered.model.windows[0].workspace_ids,
+        vec![ids[1], ids[2], ids[0]]
+    );
+    assert_eq!(
+        ordered.model.focused_workspace,
+        before.model.focused_workspace
+    );
+    assert_eq!(
+        ordered
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect::<Vec<_>>(),
+        before
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect::<Vec<_>>()
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let document: zmux_workspace_core::SessionDocument =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    assert_eq!(
+        document.window_layout.unwrap().windows,
+        ordered.model.windows
+    );
+    let restarted = directory.desktop();
+    let restored = wait(&restarted, |s| {
+        ready(s)
+            && s.control_frames.len() == 3
+            && s.control_frames.iter().all(|f| f.process_id.is_some())
+    });
+    assert_eq!(restored.model.windows, ordered.model.windows);
+    assert_eq!(
+        restored.model.focused_workspace,
+        ordered.model.focused_workspace
+    );
+    assert!(restored.control_frames.iter().all(|f| {
+        !before
+            .control_frames
+            .iter()
+            .any(|old| old.session_id == f.session_id)
+    }));
+    restarted.shutdown(Duration::from_secs(5)).unwrap();
 }

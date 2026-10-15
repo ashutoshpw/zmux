@@ -563,3 +563,100 @@ inputs match the working source after verification; log
 execution remain separate hosted gates. The preceding `16cf61a` universal app
 compiled but its window close fixture timed out; new bounded phase traces retain
 evidence without another app launch or extending the timeout.
+
+## Canonical workspace ordering slice (2026-10-15)
+
+CMD-058 (`reorder-workspace`) and CMD-059 (`reorder-workspaces`) now have bounded
+local counterparts. This is original MIT Zmux code. The read-only behavioral
+reference is cmux `3ba653b9e5afb11d0bc578031142950d6136697e`: CLI help/parser in
+`CLI/cmux.swift` around 11974–12094 and 21943–21983; workspace reorder routing in
+`Sources/TerminalController+ControlWorkspaceContext.swift` around 145–235;
+placement behavior in `Packages/macOS/CmuxWorkspaces/Sources/CmuxWorkspaces/Coordinators/WorkspaceReorderCoordinator.swift`
+around 220–243; bulk behavior in that package's `Reorder/WorkspaceReorderPlanner.swift`;
+preview/result behavior in `Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Coordinator/Workspace/ControlCommandCoordinator+Workspace.swift`
+around 359–549. No reference implementation, tests or assets were imported or translated.
+
+The local CLI accepts a subject through `--workspace HANDLE` or one positional
+handle, exactly one of signed `--index`, `--before`/`--before-workspace`, or
+`--after`/`--after-workspace`, optional hard `--window`, `--dry-run`, and the local
+optimistic revision guard `--expect-revision`. Placement indices are final,
+zero-based and clamp to the legal window range. Relative placement accounts for
+removing the source from the original order. The observed reference edge is
+intentional: before-self stays in place, while after-self advances one final
+position, clamped at the end. The primary behavioral table fixes these independent
+examples explicitly.
+
+Bulk `--order HANDLE,HANDLE,...` trims entries and rejects empty lists/entries,
+duplicate resolved workspaces, unknown targets and cross-window membership before
+commit. Requested IDs form a leading prefix; unmentioned IDs retain their relative
+order. Zmux currently has only the ungrouped/unpinned partition. Pin/group ordering,
+full reference text/errors and complete wire/output compatibility remain unresolved;
+the frozen mapping explicitly says compatibility unverified.
+
+Rust owns one pure order planner, shared by executor preview and the core mutation.
+The action updates only `Window.workspace_ids` and model revision, with no effects
+or identifier allocation. Workspace/pane/surface selections, focused window,
+existing sessions, metadata, histories and split geometry remain intact. Both
+symbolic resolution and commit occur on the workspace executor at one model
+revision. Plan rows include requested unchanged entries; applied events include
+only requested changed rows and remain empty for dry-run. Dry-run leaves model
+revision/allocator/history/persistence unchanged and is admitted by read-only
+socket policy; apply requires mutation access. No native focus/materialization
+receipt is fabricated by this logical ordering operation.
+
+Reorder-specific `index:N` targets remain one-based, but resolve from the chosen
+window's canonical membership order, including after earlier moves/reorders.
+Other legacy commands retain their existing selector behavior. An explicit window
+fences every subject/anchor/batch item. Without it, the first stable subject derives
+its owning window; an index subject uses the surviving caller's objects, then
+its window context or focused window. Conflicting or stale caller object claims
+reject rather than borrowing another window. Live caller objects override a stale
+inherited window hint after movement.
+
+Native row menus expose Move Up/Down/Top/Bottom with stable workspace/window UUIDs
+and the menu's observed model revision. They enter the same order executor and
+planner as CLI. Boundary items disable, and a stale menu rejects visibly. The
+separate `WorkspaceOrderSmoke` fixture drives the actual row menu and bundled CLI,
+then checks real sidebar order, unchanged key window/content responder, live PTY
+PIDs/native terminal objects, and WebKit objects/host IDs/document generations. It
+restores the original order before continuing the broad smoke. Its required report
+key is `workspace_order`. This native journey is authored but unexecuted locally;
+Linux has no Swift/macOS SDK. Window lifecycle diagnostics and the two-window cap
+were not changed.
+
+Test authoring gate: the core tests protect order/identity/atomicity against wrong
+relative-index math, unstable unlisted order and partial invalid commits; existing
+move tests do not execute reorder. Socket tests uniquely protect parser routing,
+read-only admission, executor revision guards, canonical scoped indices, stale
+caller ownership and preview/apply receipts. The real filesystem/PTY test protects
+save/restart order and session continuity, which a core-only snapshot cannot prove.
+The native journey reaches real AppKit/WebKit presentation that portable Rust
+cannot establish. None adds a test-only production seam.
+
+Scoped verification (private Cargo target `/tmp/zmux-t03-order-target`):
+
+- New core behavior first failed on unknown `reorder_workspaces` before production
+  implementation (`/tmp/zmux-t03-order-red.log`); the same focused command now
+  passes both tests (`/tmp/zmux-t03-order-green.log`), including after-self and
+  cross-window/unknown/duplicate/empty rejection with unchanged full model/allocator.
+- `cargo test -p zmux --test windows reorder_cli --locked`: 2 actual CLI/socket
+  journeys passed (`/tmp/zmux-t03-order-cli-tests.log`).
+- `cargo test -p zmux-desktop-runtime --test session_persistence reordered_membership`:
+  actual save/restart and three real PTYs passed
+  (`/tmp/zmux-t03-order-persistence.log`). Restored sessions are fresh; logical
+  membership and selection remain exact.
+- `cargo clippy -p zmux-workspace-core -p zmux-desktop-runtime -p zmux --all-targets --locked -- -D warnings`
+  passed (`/tmp/zmux-t03-order-clippy.log`). Owned Rust files were formatted;
+  `git diff --check` and native runner Python syntax passed.
+- Executable `zmux commands --check` passed with compatibility still false
+  (`/tmp/zmux-t03-order-catalog.log`). The parent owns final integrated checks and
+  hosted/native validation; no predecessor full suite was rerun for this slice.
+
+Integrated verification exposed an existing cwd-output fixture assumption: a
+correct restored `pwd` could share a terminal line with its interactive prompt.
+The fixture now deliberately sets a real prompt with tty echo disabled, waits for
+that prompt, then frames actual `pwd` output between separate begin/end lines.
+It still requires the exact expected cwd as the complete middle line. This setup
+reproduced the old predicate's timeout (`/tmp/zmux-t03-order-cwd-red.log`); the
+repaired full 12-test persistence suite passes
+(`/tmp/zmux-t03-order-persistence-final.log`). No persistence behavior changed.

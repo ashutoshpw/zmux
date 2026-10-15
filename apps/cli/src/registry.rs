@@ -40,6 +40,22 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "reorder-workspace",
+        "navigate",
+        false,
+        true,
+        "reorder-workspace [--workspace HANDLE | HANDLE] <--index INTEGER | --before HANDLE | --after HANDLE> [--window HANDLE] [--dry-run] [--expect-revision N]",
+        "Reorder one workspace without changing focus. Final placement indices are zero-based and signed values clamp; target index:N is one-based within the chosen window. Before/after use the original order; after-self advances one place, clamped at the end. --before-workspace and --after-workspace are aliases. --window is a hard constraint. Dry-run returns the exact plan without mutation."
+    ),
+    command!(
+        "reorder-workspaces",
+        "navigate",
+        false,
+        true,
+        "reorder-workspaces --order HANDLE,HANDLE,... [--window HANDLE] [--dry-run] [--expect-revision N]",
+        "Place listed workspaces first within one window, preserving the relative order of unlisted workspaces and all focus. Empty, duplicate and cross-window entries reject atomically. Dry-run is read-only. Current workspaces are ungrouped; pinned/group partition compatibility is unresolved."
+    ),
+    command!(
         "move-workspace-to-window",
         "navigate",
         false,

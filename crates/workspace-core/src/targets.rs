@@ -66,7 +66,7 @@ impl TargetRef {
         }
         Ok(Selector::Id(None, positive(&self.0)?))
     }
-    fn is_index(&self) -> Result<bool, TargetError> {
+    pub fn is_index(&self) -> Result<bool, TargetError> {
         Ok(matches!(self.selector()?, Selector::Index(_)))
     }
 }
@@ -155,6 +155,47 @@ impl Snapshot {
                 kind: TargetKind::Window,
                 target: handle.to_string(),
             })
+    }
+    /// Workspace position selectors for ordering use canonical window membership,
+    /// never the flat object catalog. Other commands retain their existing grammar.
+    pub fn resolve_order_workspace(
+        &self,
+        handle: &TargetRef,
+        window: Option<WindowId>,
+    ) -> Result<(WindowId, WorkspaceId), TargetError> {
+        let workspace = if let Selector::Index(index) = handle.selector()? {
+            let window = window.ok_or(TargetError::NoFocus(TargetKind::Window))?;
+            self.windows
+                .iter()
+                .find(|w| w.id == window)
+                .and_then(|w| {
+                    w.workspace_ids
+                        .get(usize::try_from(index - 1).unwrap_or(usize::MAX))
+                })
+                .copied()
+                .ok_or_else(|| TargetError::NotFound {
+                    kind: TargetKind::Workspace,
+                    target: handle.to_string(),
+                })?
+        } else {
+            self.resolve_handle(handle, TargetKind::Workspace, None, None)?
+                .workspace_id
+        };
+        let owner = self
+            .windows
+            .iter()
+            .find(|w| w.workspace_ids.contains(&workspace))
+            .ok_or_else(|| TargetError::NotFound {
+                kind: TargetKind::Workspace,
+                target: handle.to_string(),
+            })?
+            .id;
+        if window.is_some_and(|window| window != owner) {
+            return Err(TargetError::ScopeMismatch {
+                kind: TargetKind::Window,
+            });
+        }
+        Ok((owner, workspace))
     }
     pub fn object_uuid(&self, kind: TargetKind, id: u64) -> Uuid {
         Uuid::new_v5(&self.identity_namespace, format!("{kind}:{id}").as_bytes())

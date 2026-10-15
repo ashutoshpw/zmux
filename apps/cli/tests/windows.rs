@@ -662,3 +662,206 @@ fn window_grammar_and_help_fail_offline_before_connecting() {
         );
     }
 }
+
+#[test]
+fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection() {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
+    let fixture = Fixture::new();
+    for name in ["B", "C", "D"] {
+        fixture.value(&["new-workspace", name]);
+    }
+    let before = fixture.desktop.snapshot().unwrap();
+    let window = before.model.windows[0].id;
+    let ids = before.model.windows[0].workspace_ids.clone();
+    let subject = format!("workspace:{}", ids[0].0);
+    let handle = format!("window:{}", window.0);
+    fixture
+        .server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let preview = fixture.value(&[
+        "reorder-workspace",
+        &subject,
+        "--after-workspace",
+        "index:3",
+        "--window",
+        &handle,
+        "--dry-run",
+    ]);
+    assert_eq!(preview["from_index"], 0);
+    assert_eq!(preview["to_index"], 2);
+    assert_eq!(preview["events"], serde_json::json!([]));
+    assert_eq!(fixture.desktop.snapshot().unwrap().model, before.model);
+    let denied = fixture
+        .command(&["reorder-workspace", &subject, "--index", "2"])
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    fixture.server.set_policy(ControlPolicy::default()).unwrap();
+    let applied = fixture.value(&[
+        "reorder-workspace",
+        &subject,
+        "--after",
+        "index:3",
+        "--window",
+        &handle,
+    ]);
+    assert_eq!(preview["plan"], applied["plan"]);
+    assert_eq!(applied["events"].as_array().unwrap().len(), 1);
+    let reordered = fixture.desktop.snapshot().unwrap();
+    assert_eq!(
+        reordered.model.windows[0].workspace_ids,
+        vec![ids[1], ids[2], ids[0], ids[3]]
+    );
+    assert_eq!(
+        reordered.model.focused_workspace,
+        before.model.focused_workspace
+    );
+    assert_eq!(
+        reordered.model.windows[0].selected_workspace,
+        before.model.windows[0].selected_workspace
+    );
+    assert_eq!(reordered.model.workspaces, before.model.workspaces);
+    let scoped = fixture.value(&[
+        "reorder-workspace",
+        "index:1",
+        "--index",
+        "-10",
+        "--window",
+        &handle,
+        "--dry-run",
+    ]);
+    assert_eq!(
+        scoped["workspace_id"], ids[1].0,
+        "index:N must follow canonical order after reorder"
+    );
+    let order = format!(" {}, {} ", ids[3].0, ids[2].0);
+    let bulk_preview = fixture.value(&["reorder-workspaces", "--order", &order, "--dry-run"]);
+    let bulk = fixture.value(&["reorder-workspaces", "--order", &order]);
+    assert_eq!(bulk["plan"], bulk_preview["plan"]);
+    assert_eq!(
+        fixture.desktop.snapshot().unwrap().model.windows[0].workspace_ids,
+        vec![ids[3], ids[2], ids[1], ids[0]]
+    );
+    let stable = fixture.desktop.snapshot().unwrap().model.clone();
+    for arguments in [
+        vec![
+            "reorder-workspace",
+            &subject,
+            "--index",
+            "1",
+            "--before",
+            &subject,
+        ],
+        vec![
+            "reorder-workspace",
+            &subject,
+            "--workspace",
+            &subject,
+            "--index",
+            "1",
+        ],
+        vec!["reorder-workspaces", "--order", ""],
+        vec!["reorder-workspaces", "--order", "1,,2"],
+        vec![
+            "reorder-workspaces",
+            "--order",
+            &format!("{},{}", ids[0].0, ids[0].0),
+        ],
+        vec![
+            "reorder-workspace",
+            &subject,
+            "--index",
+            "0",
+            "--expect-revision",
+            "0",
+        ],
+    ] {
+        assert!(
+            !fixture
+                .command(&arguments)
+                .output()
+                .unwrap()
+                .status
+                .success(),
+            "{arguments:?}"
+        );
+        assert_eq!(fixture.desktop.snapshot().unwrap().model, stable);
+    }
+}
+
+#[test]
+fn reorder_cli_resolves_caller_objects_and_never_borrows_another_window() {
+    let fixture = Fixture::new();
+    fixture.value(&["new-workspace", "source B"]);
+    let original = fixture.desktop.snapshot().unwrap();
+    let source = original.model.windows[0].id;
+    let moving = original.model.workspaces[0].id;
+    let surface = original.model.workspaces[0].root.panes()[0].selected_surface;
+    let child = fixture.spawn(&["new-window", "--no-focus"]);
+    let open = fixture.pending(WindowKind::Open);
+    fixture.acknowledge(&open);
+    value(finish(child));
+    let destination = format!("window:{}", open.window_id.0);
+    fixture.value(&[
+        "move-workspace-to-window",
+        "--workspace",
+        &moving.0.to_string(),
+        "--window",
+        &destination,
+    ]);
+    let current = fixture.desktop.snapshot().unwrap().model.clone();
+    let mut command = fixture.command(&[
+        "reorder-workspace",
+        "index:1",
+        "--index",
+        "100",
+        "--dry-run",
+    ]);
+    command
+        .env("ZMUX_SURFACE_ID", surface.0.to_string())
+        .env("ZMUX_WORKSPACE_ID", moving.0.to_string())
+        .env("ZMUX_WINDOW_ID", source.0.to_string());
+    let resolved = value(command.output().unwrap());
+    assert_eq!(resolved["window_id"], open.window_id.0);
+    assert_eq!(
+        resolved["workspace_id"],
+        current.windows[1].workspace_ids[0].0
+    );
+    let mut stale = fixture.command(&["reorder-workspace", "index:1", "--index", "0", "--dry-run"]);
+    stale.env("ZMUX_SURFACE_ID", "surface:999999");
+    assert!(!stale.output().unwrap().status.success());
+    let mut ambiguous =
+        fixture.command(&["reorder-workspace", "index:1", "--index", "0", "--dry-run"]);
+    ambiguous.env("ZMUX_SURFACE_ID", surface.0.to_string()).env(
+        "ZMUX_WORKSPACE_ID",
+        original.model.workspaces[1].id.0.to_string(),
+    );
+    assert!(!ambiguous.output().unwrap().status.success());
+    assert!(
+        !fixture
+            .command(&[
+                "reorder-workspace",
+                &moving.0.to_string(),
+                "--index",
+                "0",
+                "--window",
+                &source.0.to_string()
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let cross = format!("{},{}", moving.0, original.model.workspaces[1].id.0);
+    assert!(
+        !fixture
+            .command(&["reorder-workspaces", "--order", &cross])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    assert_eq!(fixture.desktop.snapshot().unwrap().model, current);
+}

@@ -413,15 +413,15 @@
       "inventory_id": "CMD-058",
       "reference_command": "reorder-workspace",
       "review_owner": "audit-terminal-ux.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "reorder-workspace"
     },
     {
       "inventory_id": "CMD-059",
       "reference_command": "reorder-workspaces",
       "review_owner": "audit-terminal-ux.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "reorder-workspaces"
     },
     {
       "inventory_id": "CMD-060",

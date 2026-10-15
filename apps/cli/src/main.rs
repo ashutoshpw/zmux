@@ -29,6 +29,7 @@ mod ssh;
 mod targets;
 mod windows;
 mod workspace_move;
+mod workspace_order;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -231,6 +232,14 @@ fn parse(
     if let Some(command @ ("local-tmux" | "tmux")) = command {
         return Ok((
             local_multiplexer::parse(command, tail)?,
+            socket,
+            timeout,
+            password,
+        ));
+    }
+    if let Some(command @ ("reorder-workspace" | "reorder-workspaces")) = command {
+        return Ok((
+            workspace_order::parse(command, tail)?,
             socket,
             timeout,
             password,
