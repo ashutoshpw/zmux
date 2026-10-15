@@ -378,6 +378,7 @@ class Broker:
 
     def relay(self, client):
         backend = None
+        record, pending = None, None
         try:
             require(self.published.wait(2), "Owned child identity was not published")
             peer = self.api.peer(client)
@@ -394,6 +395,8 @@ class Broker:
             server = {**self.api.process(credentials["pid"]), **credentials}
             require(same_process(server, self.server), "Backend peer identity changed")
             record = {"client": peer, "server": server, "to_client": 0, "to_server": 0,
+                      "forwarded_to_client": 0, "forwarded_to_server": 0,
+                      "discarded_to_client": 0, "discarded_to_server": 0,
                       "peak_buffer_bytes": 0, "owned_child_unreaped": True}
             with self.record_lock:
                 require(len(self.records) < 32, "Connection receipt bound exceeded")
@@ -402,9 +405,12 @@ class Broker:
             other = {client: backend, backend: client}
             pending = {client: bytearray(), backend: bytearray()}
             eof, closed = set(), set()
+            drain_deadline = None
             for stream in streams:
                 stream.setblocking(False)
             while not self.stop.is_set():
+                require(drain_deadline is None or time.monotonic() < drain_deadline,
+                        "Client read-side close did not drain upstream before deadline")
                 readable = [stream for stream in streams if stream not in eof and len(pending[other[stream]]) < LIMIT]
                 writable = [stream for stream in streams if pending[stream]]
                 if len(eof) == 2 and not writable:
@@ -414,6 +420,10 @@ class Broker:
                     try:
                         data = stream.recv(min(16384, LIMIT - len(pending[other[stream]])))
                     except BlockingIOError:
+                        continue
+                    except ConnectionResetError:
+                        self.normal_close("read_" + ("client" if stream is client else "server") + ":ECONNRESET")
+                        eof.add(stream)
                         continue
                     if data:
                         pending[other[stream]].extend(data)
@@ -426,22 +436,42 @@ class Broker:
                         sent = stream.send(pending[stream])
                     except BlockingIOError:
                         continue
+                    except OSError as error:
+                        if error.errno not in (errno.EPIPE, errno.ECONNRESET, errno.ENOTCONN):
+                            raise
+                        destination = "client" if stream is client else "server"
+                        record["discarded_to_" + destination] += len(pending[stream])
+                        require(stream is client, "Backend rejected queued client bytes: " + str(len(pending[stream])))
+                        # The client's read half may close while its write half
+                        # still supplies input. Keep that input flowing in order.
+                        self.normal_close("write_client:" + errno.errorcode[error.errno])
+                        pending[client].clear()
+                        closed.add(client)
+                        eof.add(backend)
+                        drain_deadline = time.monotonic() + 2
+                        continue
                     require(sent > 0, "Zero-byte socket write")
+                    record["forwarded_to_client" if stream is client else "forwarded_to_server"] += sent
                     del pending[stream][:sent]
                 for stream in streams:
                     if stream in eof and not pending[other[stream]] and other[stream] not in closed:
-                        other[stream].shutdown(socket.SHUT_WR)
+                        try:
+                            other[stream].shutdown(socket.SHUT_WR)
+                        except OSError as error:
+                            if error.errno not in (errno.ENOTCONN, errno.EPIPE, errno.ECONNRESET):
+                                raise
+                            self.normal_close("shutdown_" + ("server" if stream is client else "client")
+                                              + ":" + errno.errorcode[error.errno])
                         closed.add(other[stream])
-        except (ConnectionResetError, BrokenPipeError) as error:
-            self.normal_close(type(error).__name__)
         except OSError as error:
-            if error.errno == errno.ENOTCONN:
-                self.normal_close("ENOTCONN")
-            elif not self.stop.is_set():
+            if not self.stop.is_set():
                 self.fail("relay: " + repr(error))
         except Exception as error:
             self.fail("relay: " + repr(error))
         finally:
+            if record is not None and pending is not None:
+                record["pending_to_server_on_close"] = len(pending[backend])
+                record["pending_to_client_on_close"] = len(pending[client])
             client.close()
             if backend is not None:
                 backend.close()
@@ -539,6 +569,63 @@ class TerminalClient:
                         self.master = None
 
 
+def relay_half_close_fixture(api, root, environment, observations):
+    """Real opaque transport: a closed read half must not discard upstream input."""
+    backend = root / "raw-transport.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    broker, child = None, None
+    received, digest = 0, hashlib.sha256()
+    try:
+        listener.bind(str(backend))
+        listener.listen(1)
+        listener.settimeout(5)
+        proxy = Path(tempfile.mkdtemp(prefix="zjr-", dir="/tmp")).resolve()
+        broker = Broker(api, proxy, backend, api.process(os.getpid()), environment)
+        # This is raw socket traffic, not a substitute zellij implementation.
+        code = ("import socket,sys; s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM); "
+                "s.connect(sys.argv[1]); s.shutdown(socket.SHUT_RD); "
+                "s.sendall(bytes(range(256))*1024); s.shutdown(socket.SHUT_WR); s.close()")
+        interpreter = api.process(os.getpid())["executable"]
+        child = subprocess.Popen([interpreter, "-c", code, str(broker.path)], env=broker.environment,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        broker.bind_child(child)
+        connection, _ = listener.accept()
+        with connection:
+            connection.settimeout(5)
+            connection.sendall(b"R")
+            while data := connection.recv(16384):
+                received += len(data)
+                require(received <= 4 * LIMIT, "Raw transport input exceeded its bound")
+                digest.update(data)
+        wait_until(lambda: child_exited(child), "raw transport child exit", 5)
+    finally:
+        try:
+            if broker is not None:
+                broker.close()
+        finally:
+            try:
+                if child is not None:
+                    if not child_exited(child):
+                        child.kill()
+                    child.wait(timeout=3)
+            finally:
+                listener.close()
+                observations.update(received_bytes=received, received_sha256=digest.hexdigest(),
+                                    child_exit_code=child.returncode if child is not None else None,
+                                    records=broker.records if broker is not None else [],
+                                    normal_closes=broker.closes if broker is not None else [],
+                                    errors=broker.errors if broker is not None else [])
+    require(child.returncode == 0, "Raw transport child failed")
+    require(received == 4 * LIMIT and digest.digest() == hashlib.sha256(bytes(range(256)) * 1024).digest(),
+            "Read-side close lost or reordered upstream input: " + str(received))
+    require(len(broker.records) == 1 and broker.records[0]["forwarded_to_server"] == received
+            and broker.records[0]["discarded_to_server"] == 0
+            and broker.records[0]["pending_to_server_on_close"] == 0,
+            "Raw transport did not account for all upstream input")
+    observations["workers_joined"] = True
+
+
 def download_binary(pin, root):
     archive = root / "upstream.tar.gz"
     digest, count, began = hashlib.sha256(), 0, time.monotonic()
@@ -579,6 +666,7 @@ def open_descriptors():
 def failed_exec_fixture(api, binary, wrapper, config, name, backend, server, environment):
     observations = []
     for stage in ("popen", "exec"):
+        exec_status, diagnostic = None, None
         before = open_descriptors()
         root = Path(tempfile.mkdtemp(prefix="zjf-", dir="/tmp")).resolve()
         broker = Broker(api, root, backend, server, environment)
@@ -597,12 +685,17 @@ def failed_exec_fixture(api, binary, wrapper, config, name, backend, server, env
                 client = TerminalClient(wrapper, missing, config, name, broker)
                 wait_until(lambda: child_exited(client.process), "real exec failure", 5)
                 client.pump()
-                require(b"exec fixture:" in client.output,
-                        "PTY wrapper did not reach the failed exec: " + repr(bytes(client.output))
-                        + "; status=" + repr(os.waitid(os.P_PID, client.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)))
+                status = os.waitid(os.P_PID, client.process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                exec_status = {"code": status.si_code, "status": status.si_status} if status is not None else None
+                diagnostic = bytes(client.output).decode(errors="replace")
+                # The original C wrapper reserves 127 specifically for exec ENOENT;
+                # arguments, terminal acquisition and other exec failures differ.
+                require(status is not None and status.si_code == os.CLD_EXITED and status.si_status == 127,
+                        "PTY wrapper did not reach exec ENOENT: " + repr(status)
+                        + "; diagnostic=" + repr(bytes(client.output)))
                 require(client.process.returncode is None, "Failed exec child was reaped before broker cleanup")
                 client.close()
-                require(client.process.returncode == 111, "PTY wrapper failed for an unrelated reason")
+                require(client.process.returncode == 127, "PTY wrapper failed for an unrelated reason")
             require(not broker.records, "Failed executable opened a backend connection")
             require(broker.closed and not broker.acceptor.is_alive()
                     and not any(worker.is_alive() for worker in broker.workers), "Failed exec retained broker workers")
@@ -615,7 +708,8 @@ def failed_exec_fixture(api, binary, wrapper, config, name, backend, server, env
             finally:
                 broker.close()
         observations.append({"stage": stage, "workers_joined": True, "parent_descriptors_unchanged": True,
-                             "namespace_removed": True, "child_reaped": stage == "exec"})
+                             "namespace_removed": True, "child_reaped": stage == "exec",
+                             "unreaped_exec_observation": exec_status, "pty_diagnostic": diagnostic})
     return observations
 
 
@@ -819,6 +913,8 @@ def main():
         receipt["credential_fixture"] = []
         credential_fixture(api, scratch, environment, receipt["credential_fixture"], output)
         receipt["process_containment"] = containment_fixture(api, scratch, environment)
+        receipt["relay_half_close"] = {}
+        relay_half_close_fixture(api, scratch, environment, receipt["relay_half_close"])
         binary, receipt["download"] = download_binary(pins["assets"][key], scratch)
         receipt["version"] = command([binary, "--version"], environment)["output"].strip()
         require(receipt["version"] == "zellij " + pins["version"], "Pinned version mismatch")
