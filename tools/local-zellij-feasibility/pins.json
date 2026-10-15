@@ -1,0 +1,22 @@
+{
+  "version": "0.43.0",
+  "source_commit": "23bb542548d517f7f20a7fdd14a943f1a610df37",
+  "release": "https://github.com/zellij-org/zellij/releases/tag/v0.43.0",
+  "assets": {
+    "Darwin-arm64": {
+      "name": "zellij-no-web-aarch64-apple-darwin.tar.gz",
+      "archive_sha256": "d9824ab511e4fc65fc1adf82837433349ccbdf54743b5035df126c0db0a6c3cb",
+      "binary_sha256": "7d41c1fe41e7f0462aff2bc1c93e73dbf7bcf19371210275db58941b0a50ff13"
+    },
+    "Darwin-x86_64": {
+      "name": "zellij-no-web-x86_64-apple-darwin.tar.gz",
+      "archive_sha256": "4fa7689f98936a3b2acfd81d6d59b2adf7e706ffbd84a8b515ddc945907a0605",
+      "binary_sha256": "22efeabd2e79c4f6839e5d66d3bbb7c176027a0e78f2a983e9970cc95932ac2e"
+    },
+    "Linux-x86_64": {
+      "name": "zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+      "archive_sha256": "a677d0a318ff01e0ee4a1c34315f1cb5731075ea3b40b587cb18c571723b2794",
+      "binary_sha256": "dec1863d0141a3971d52cfcd6d7cfab8ab7e94aed74773c09b8339c6660be446"
+    }
+  }
+}
