@@ -5,12 +5,17 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Output},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
 use zmux_desktop_runtime::{Desktop, Shell, control::ControlServer};
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -20,7 +25,9 @@ impl Fixture {
             .unwrap()
             .as_nanos();
         // Keep sockaddr_un paths short on macOS as well as Linux.
-        let root = PathBuf::from("/tmp").join(format!("zp{}-{nonce:x}", std::process::id()));
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root =
+            PathBuf::from("/tmp").join(format!("zp{}-{nonce:x}-{sequence:x}", std::process::id()));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         Self(root.canonicalize().unwrap())
