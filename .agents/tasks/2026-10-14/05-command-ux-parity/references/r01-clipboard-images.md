@@ -48,5 +48,11 @@ existing real SSH binary-transfer fixture rather than replaying its transport as
 Parent `scripts/check` passes: 79 Rust tests, fmt, Clippy with warnings denied,
 dependency notices and C ABI. Fresh read-only review returned `ship` with no findings.
 Native/hosted SDK checks remain pending after push.
+At `c260185`, Foundation run `38719421495` passed on Linux and macOS. Native run
+`38719421412` failed Swift compilation before smoke execution: POSIX-wrapper failure
+literals inferred `Int`, while Darwin returns `Int32`. The same pattern was found in
+preparation cleanup and smoke helpers; all six failure literals now use `Int32(-1)`.
+This compiler repair is awaiting fresh hosted verification; the failed run proves no
+native runtime behavior.
 No macOS SDK is available on the Linux workstation. Physical clipboard/drag, remote image delivery on a
 second machine, cache/resource stress, directory/custom transfers and full parity remain open.

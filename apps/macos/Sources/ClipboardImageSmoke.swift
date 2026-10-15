@@ -491,7 +491,7 @@ enum ClipboardImageSmoke {
     private static func createSymbolicLink(at link: URL, pointingTo target: URL) throws {
         let result = link.withUnsafeFileSystemRepresentation { linkPath in
             target.withUnsafeFileSystemRepresentation { targetPath in
-                guard let linkPath, let targetPath else { errno = EINVAL; return -1 }
+                guard let linkPath, let targetPath else { errno = EINVAL; return Int32(-1) }
                 return Darwin.symlink(targetPath, linkPath)
             }
         }
@@ -530,7 +530,7 @@ enum ClipboardImageSmoke {
     private static func fileInformationIfPresent(at url: URL) throws -> stat? {
         var information = stat()
         let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else { errno = EINVAL; return -1 }
+            guard let path else { errno = EINVAL; return Int32(-1) }
             return Darwin.lstat(path, &information)
         }
         if result != 0, errno == ENOENT { return nil }
@@ -540,7 +540,7 @@ enum ClipboardImageSmoke {
 
     private static func exactUnlinkIfPresent(_ url: URL) throws {
         let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else { errno = EINVAL; return -1 }
+            guard let path else { errno = EINVAL; return Int32(-1) }
             return Darwin.unlink(path)
         }
         guard result == 0 || errno == ENOENT else { throw posixFailure("remove \(url.path)") }
@@ -548,7 +548,7 @@ enum ClipboardImageSmoke {
 
     private static func exactRmdirIfPresent(_ url: URL) throws {
         let result = url.withUnsafeFileSystemRepresentation { path in
-            guard let path else { errno = EINVAL; return -1 }
+            guard let path else { errno = EINVAL; return Int32(-1) }
             return Darwin.rmdir(path)
         }
         guard result == 0 || errno == ENOENT else { throw posixFailure("remove \(url.path)") }

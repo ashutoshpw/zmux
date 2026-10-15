@@ -109,6 +109,9 @@ transfer receipts and safe remote-source cleanup. Local insertion retains its ca
 remote cleanup waits for the upload worker, not merely cancelled delivery. Orientation is
 normalized into PNG pixels. Native ImageIO/cache/pasteboard and real view-to-shell smoke
 are wired. Fresh read-only review passed; hosted compilation/runtime remain pending.
+`c260185` Foundation checks pass on Linux/macOS (`38719421495`). Native run
+`38719421412` exposed Swift POSIX closure `Int`/`Int32` inference; the six matching
+failure literals are being repaired before rerunning native compilation/smoke.
 
 Parent `scripts/check` passes (79 Rust tests plus fmt/Clippy/notices/C ABI). This reviewed slice is being committed for hosted checks; it is not a delivered artifact
 or full R01/V01 acceptance.

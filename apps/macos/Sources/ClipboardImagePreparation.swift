@@ -628,7 +628,7 @@ actor ClipboardImagePreparation {
             )
         }
         let unlinkResult = fileURL.withUnsafeFileSystemRepresentation { path in
-            guard let path else { errno = EINVAL; return -1 }
+            guard let path else { errno = EINVAL; return Int32(-1) }
             return Darwin.unlink(path)
         }
         guard unlinkResult == 0 else {
@@ -651,7 +651,7 @@ actor ClipboardImagePreparation {
             operation: "inspect an empty clipboard image directory"
         )
         let removeResult = directory.withUnsafeFileSystemRepresentation { path in
-            guard let path else { errno = EINVAL; return -1 }
+            guard let path else { errno = EINVAL; return Int32(-1) }
             return Darwin.rmdir(path)
         }
         guard removeResult == 0 else {
