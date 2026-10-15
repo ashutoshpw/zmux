@@ -409,7 +409,13 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     fs::write(&cache, b"resurrection must never be adopted").unwrap();
     reject("unsafe resurrection cache entry");
     fs::remove_file(cache).unwrap();
-    let shadow = runtime.join("s/0.43.0").join(format!("zmux-{id}-shadow"));
+    // /tmp canonicalizes to /private/tmp on Darwin. Keep the real prefix
+    // shadow inside the same portable socket budget as production endpoints.
+    let shadow = runtime.join("s/0.43.0").join(format!("zmux-{id}x"));
+    assert!(
+        shadow.as_os_str().len() < 100,
+        "prefix-shadow fixture exceeds portable socket budget"
+    );
     let shadow_listener = std::os::unix::net::UnixListener::bind(&shadow).unwrap();
     reject("unexpected backend socket or prefix shadow");
     drop(shadow_listener);

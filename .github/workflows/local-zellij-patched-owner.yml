@@ -56,5 +56,6 @@ jobs:
             vendor/darwin-libproc/UPSTREAM.md
             vendor/darwin-libproc/LICENSE*
             THIRD_PARTY_NOTICES.md
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
