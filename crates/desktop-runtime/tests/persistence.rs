@@ -341,6 +341,37 @@ fn symlink_components_and_unsafe_state_never_redirect_or_overwrite_files() {
         .unwrap();
     assert!(wait(&worker, id).result.is_err());
     assert_eq!(fs::read(&source).unwrap(), source_bytes);
+    // The bounded open retry must not follow an existing or dangling lock symlink,
+    // create its target, or reach ledger mutation before descriptor ownership.
+    let lock = directory.0.join("state/session-generations.lock");
+    for existing in [false, true] {
+        let target = directory.0.join(format!("lock-target-{existing}"));
+        if existing {
+            write_private(&target, &[]);
+        }
+        symlink(&target, &lock).unwrap();
+        let id = worker.submit_load(source.clone()).unwrap();
+        assert!(matches!(
+            wait(&worker, id).result,
+            Err(PersistenceError::Io {
+                operation: "open persistence generation lock",
+                ..
+            })
+        ));
+        assert!(
+            fs::symlink_metadata(&lock)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!directory.0.join("state/session-generations.json").exists());
+        if existing {
+            assert!(fs::read(&target).unwrap().is_empty());
+        } else {
+            assert!(!target.exists());
+        }
+        fs::remove_file(&lock).unwrap();
+    }
     close(worker);
     fs::set_permissions(directory.0.join("state"), fs::Permissions::from_mode(0o755)).unwrap();
     let worker = directory.worker();

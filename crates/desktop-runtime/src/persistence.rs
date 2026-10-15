@@ -515,15 +515,25 @@ fn lock_ledger(directory: &File) -> Result<File, PersistenceError> {
     lock_named(directory, LOCK_NAME)
 }
 fn lock_named(directory: &File, name: &str) -> Result<File, PersistenceError> {
-    let lock = File::from(
-        fs::openat(
+    // A concurrent first creation has returned ENOENT on a supported host.
+    // Retry only this anchored open; persistent disappearance still fails closed.
+    // No ledger access occurs until the opened descriptor passes validation and locks.
+    let mut attempts = 0;
+    let lock = loop {
+        attempts += 1;
+        match fs::openat(
             directory,
             name,
             OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
             Mode::from_raw_mode(0o600),
-        )
-        .map_err(|e| io_error("open persistence generation lock", e))?,
-    );
+        ) {
+            Ok(descriptor) => break File::from(descriptor),
+            Err(error) if error == rustix::io::Errno::NOENT && attempts < 3 => {
+                thread::yield_now();
+            }
+            Err(error) => return Err(io_error("open persistence generation lock", error)),
+        }
+    };
     check_file(&lock, 0, "generation lock")?;
     lock.try_lock().map_err(|error| match error {
         std::fs::TryLockError::WouldBlock => PersistenceError::LedgerBusy,
