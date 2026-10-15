@@ -113,3 +113,26 @@ rejects duplicate iconv loads, alternate iconv paths, adapter iconv loads and
 runtime search paths. The focused command is `python3 -B -m unittest discover -s
 tools/terminal-engine-artifacts -p test_linkage.py -v`:8 tests, red on the missing
 iconv allowance, then green after repair. No dependency pin or default changed.
+
+Run `38809909034` at `94667fba5f60440836efb7f52bbe254891e4d100` passed ARM
+Session compile/link/minOS/SDK/runtime closure inspection and executed the fixture.
+The child reply/resize/raw-input case and constructor-failure case passed. Both
+backpressure cases failed in setup: no complete4096-byte input receipt was observed
+before the unchanged3s quiescence bound. This does not distinguish an initial
+partial write from zero accepted bytes. Intel was not reached; no complete Darwin
+Session acceptance follows. Artifact `12008600494`, ZIP SHA256
+`0d51b8dab0c2cb9cf84a304dd5ae104a3f18fc9a8136161b4feeb9c8146fc4ac`, now
+retains the actual candidate Session binary as well as the failure log.
+
+The next diagnostic attempt preserves the fixture's existing acceptance condition
+and deadlines. A separate bounded raw `openpty` probe records each4096-byte write
+return, exact accepted-byte readback, EAGAIN and zero-write evidence. Its finite
+stop reason is `would_block`, `zero_write` or `attempt_limit`; these observations
+do not gate Session execution or establish backpressure acceptance. Unexpected
+OS errors or readback corruption still fail. On fixture
+quiescence failure, explicit Session cancellation collects public input receipts
+with confirmed bytes/status before retaining the same failure. This establishes
+native capacity and first partial/zero-write evidence before any fixture repair;
+it changes no Session production source. All4 linked Session cases still pass on
+Linux; the29-test policy suite retains its1 native-linker skip and193-entry source
+gate passes. Native diagnostic results remain pending.

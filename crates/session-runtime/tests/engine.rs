@@ -224,10 +224,43 @@ fn block_input(session: &Session) -> Vec<InputReceipt> {
         if count > 0 && unchanged.elapsed() >= Duration::from_millis(100) {
             break;
         }
-        assert!(
-            Instant::now() < deadline,
-            "PTY acceptance never reached blocked quiescence"
-        );
+        if Instant::now() >= deadline {
+            // Failure evidence distinguishes a first partial write from zero
+            // accepted bytes without weakening the blocked-fixture contract.
+            let diagnostic_deadline = Instant::now() + Duration::from_secs(3);
+            eprintln!(
+                "blocked fixture close request: {:?}",
+                session.request_close_until(diagnostic_deadline)
+            );
+            eprintln!("blocked fixture completed receipts before close: {count}");
+            let mut observations: Vec<_> = finished
+                .iter()
+                .map(|done| done.then(|| "completed before close".to_owned()))
+                .collect();
+            while Instant::now() < diagnostic_deadline && observations.iter().any(Option::is_none) {
+                for (input, observation) in receipts.iter_mut().zip(&mut observations) {
+                    if observation.is_none() {
+                        match input.try_recv() {
+                            Ok(result) => *observation = Some(format!("{result:?}")),
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                *observation = Some("disconnected before result".to_owned());
+                            }
+                            Err(mpsc::TryRecvError::Empty) => {}
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            for (index, observation) in observations.iter().enumerate() {
+                eprintln!(
+                    "blocked fixture receipt {index}: {}",
+                    observation
+                        .as_deref()
+                        .unwrap_or("pending at shared diagnostic deadline")
+                );
+            }
+            panic!("PTY acceptance never reached blocked quiescence");
+        }
         thread::sleep(Duration::from_millis(2));
     }
     // Already-received receipts have been independently verified. Retain only

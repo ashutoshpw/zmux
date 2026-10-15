@@ -312,6 +312,9 @@ def main():
                 inventory["dynamic_libraries"] = dynamic_libraries(data, SESSION_OPTIONAL_DYLIBS)
                 session["executable"].update(inventory)
                 if architecture == "arm64":
+                    session["raw_pty_capacity"] = json.loads(run(
+                        [sys.executable, str(HERE / "probe-pty-capacity.py")], "probe-pty-capacity", timeout=10))
+                    session["execution"] = "attempted_on_arm64_host"
                     stdout = run([str(retained / "session-engine"), "--test-threads=1", "--nocapture"], "execute-session-arm64", timeout=60)
                     if "test result: ok. 4 passed; 0 failed; 0 ignored;" not in stdout or any("test " + name + " ... ok" not in stdout for name in SESSION_TEST_NAMES):
                         raise Rejected("ARM64 Session did not execute all four required PTY cases")
