@@ -51,7 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
-- [R01d clipboard images](references/r01-clipboard-images.md) — bounded native image preparation, exact-session receipts and upload-source lifetime; verification in progress.
+- [R01d clipboard images](references/r01-clipboard-images.md) — bounded native image preparation, exact-session receipts and upload-source lifetime; universal/native smoke passed, broader remote gates open.
 - [R01c authenticated file transfer](references/r01-file-transfers.md) — private terminal channels, bounded upload/cancel, native file drop/paste and remaining image/directory gates.
 - [R01b SSH workspaces](references/r01-ssh-workspaces.md) — real OpenSSH launch, remote tab lifecycle, no-focus results and remaining upload gates.
 - [R01a SSH descriptor](references/r01-ssh-descriptor.md) — validated connection arguments, shared endpoint renderer and required managed-session/transfer integration.

@@ -47,12 +47,32 @@ existing real SSH binary-transfer fixture rather than replaying its transport as
 
 Parent `scripts/check` passes: 79 Rust tests, fmt, Clippy with warnings denied,
 dependency notices and C ABI. Fresh read-only review returned `ship` with no findings.
-Native/hosted SDK checks remain pending after push.
+Hosted outcomes and the initial compiler failure are recorded below.
 At `c260185`, Foundation run `38719421495` passed on Linux and macOS. Native run
 `38719421412` failed Swift compilation before smoke execution: POSIX-wrapper failure
 literals inferred `Int`, while Darwin returns `Int32`. The same pattern was found in
 preparation cleanup and smoke helpers; all six failure literals now use `Int32(-1)`.
-This compiler repair is awaiting fresh hosted verification; the failed run proves no
-native runtime behavior.
+The failed run proves no native runtime behavior; its repair passed the fresh run below.
 No macOS SDK is available on the Linux workstation. Physical clipboard/drag, remote image delivery on a
 second machine, cache/resource stress, directory/custom transfers and full parity remain open.
+
+
+## Hosted acceptance receipt
+
+Runtime `ee8952f37dfe3dbe145e7423a66a7a1558da6dd4` passed run `38720024342`.
+Inspected executed steps: Rust core/C ABI validation, universal arm64/x86_64 Swift 6
+compilation with warnings as errors, and packaged application/native rendering smoke.
+Native smoke independently exercised orientation and pixel preservation, cache permissions,
+symlink cleanup refusal, exact release, pasteboard precedence and real view-to-shell local
+image insertion. All three new image evidence flags are true. The window capture status
+remains 1; the inspected PNG is a native view render, not physical screen-capture acceptance.
+
+Downloaded diagnostic ZIP source metadata and smoke SHA both match the runtime commit;
+ZIP integrity and SHA-256 were verified:
+`019f785ad699804ac7311b1c891860e9cfb25555fcecec0ccaf8c15928ccbed3`.
+Foundation run `38719421495` passed on Linux/macOS at `c260185`; the subsequent repair
+only changes Swift failure literals and task notes. Parent checks also pass on the repair.
+Fresh substantial and compiler-repair reviews both returned `ship`.
+
+This is not direct remote image-coordinator/physical drag/two-host/resource evidence.
+R01 and V01 remain incomplete, and no new user-facing build download was shared.

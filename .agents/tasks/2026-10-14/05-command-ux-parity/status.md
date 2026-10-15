@@ -5,6 +5,16 @@
 
 ## Delivered slices
 
+- R01d committed/pushed (`c260185`, compiler repair `ee8952f`): raw image paste/drop
+  classification, bounded off-main PNG preparation with orientation, exact-session
+  executor receipts and worker-finish source cleanup. Fresh reviews passed. Parent
+  checks pass (79 Rust tests plus C ABI); universal compile and packaged native
+  ImageIO/cache/pasteboard/view-to-shell smoke pass at `ee8952f` (`38720024342`).
+  Diagnostic archive SHA/checksum and native render were inspected. Physical/remote
+  image coordinator, directory/custom-transfer, stress and full R01/V01 remain open.
+  See [receipt](references/r01-clipboard-images.md).
+
+
 - R01c committed/pushed (`d7db8fe`), final fresh review passed: private authenticated terminal channels; bounded regular
   file uploads, progress/cancel and origin-bound insertion; native file drop/Finder paste.
   Local checks passed with 78 Rust tests plus C ABI. Hosted macOS exposed a Darwin poll
@@ -67,6 +77,13 @@
 
 ## Verification and download
 
+Current native runtime `ee8952f37dfe3dbe145e7423a66a7a1558da6dd4` passes universal
+arm64/x86_64 compilation and packaged native rendering/image smoke (`38720024342`),
+including 79 Rust tests plus C ABI in that job. Foundation Linux/macOS passed at
+`c260185` (`38719421495`); the intervening repair changes only Swift failure literals
+and task notes. Downloaded diagnostic ZIP passed SHA-256/integrity and source matching;
+its native render was inspected. These are subset receipts; V01 remains false.
+
 R01c runtime `c9cd45ca41ac256356329f7b7c2b668d3938ce48` passes all 78 Rust tests,
 fmt/Clippy/notices/C ABI on Linux and macOS (`38716147517`), plus universal native
 compilation and packaged rendering smoke (`38716147327`). The workflow archive is
@@ -101,26 +118,10 @@ See [delivery receipt](references/native-delivery.md) for checksum, evidence bou
 - Cloud is not deployed. Origin is https://zmux.w3dev.app; provider/database selection is deferred.
   All deployments must use GitHub Actions.
 
-## R01d working slice
-
-The former clipboard-image draft is integrated with native paste/drop classification,
-bounded asynchronous preparation, captured surface/session guards, attributable C ABI
-transfer receipts and safe remote-source cleanup. Local insertion retains its cached PNG;
-remote cleanup waits for the upload worker, not merely cancelled delivery. Orientation is
-normalized into PNG pixels. Native ImageIO/cache/pasteboard and real view-to-shell smoke
-are wired. Fresh read-only review passed; hosted compilation/runtime remain pending.
-`c260185` Foundation checks pass on Linux/macOS (`38719421495`). Native run
-`38719421412` exposed Swift POSIX closure `Int`/`Int32` inference; the six matching
-failure literals are being repaired before rerunning native compilation/smoke.
-
-Parent `scripts/check` passes (79 Rust tests plus fmt/Clippy/notices/C ABI). This reviewed slice is being committed for hosted checks; it is not a delivered artifact
-or full R01/V01 acceptance.
-See [R01d receipt](references/r01-clipboard-images.md).
-
 ## Next action
 
-Finish R01d fresh review and GitHub Actions native ImageIO/cache/pasteboard and
-view-to-shell smoke validation. Continue directory/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
+Validate the remote image paste coordinator and physical provider behavior, then
+continue directory/symlink/custom-upload contracts and real two-host/native transfer acceptance. Continue remaining F02/F01/F03 contracts and the
 F04 terminal-engine/Mac-budget evaluation alongside it. Preserve all working subsets.
 
 User correction on 2026-10-15: incremental builds must not substitute for full source-based
