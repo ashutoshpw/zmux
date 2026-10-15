@@ -45,7 +45,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y openssh-server
+          sudo apt-get install -y openssh-server tmux
+      - name: Install isolated tmux fixture dependency on macOS
+        if: runner.os == 'macOS'
+        run: |
+          if ! command -v tmux >/dev/null; then brew install tmux; fi
+          tmux -V
       - name: Check existing Rust modules and foreign C ABI
         run: scripts/check
       - name: Check browser locator and readiness DOM behavior

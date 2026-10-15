@@ -9,13 +9,12 @@ description = "Validated remote connection descriptors for zmux"
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 thiserror.workspace = true
 filedescriptor.workspace = true
-nix.workspace = true
+nix = { workspace = true, features = ["user"] }
 socket2.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

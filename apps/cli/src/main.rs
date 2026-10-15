@@ -21,6 +21,7 @@ use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod browser;
+mod local_multiplexer;
 mod registry;
 mod session;
 mod ssh;
@@ -54,6 +55,7 @@ struct ClientOptions {
 
 enum Parsed {
     Offline(Offline),
+    LocalMultiplexer(local_multiplexer::Invocation),
     App(ControlCommand),
     Browser(ControlCommand, Option<Duration>),
 }
@@ -108,6 +110,7 @@ fn run() -> Result<u8, Box<dyn Error>> {
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(0)
         }
+        Parsed::LocalMultiplexer(invocation) => local_multiplexer::run(invocation),
         Parsed::Browser(command, wait_timeout) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(
@@ -167,6 +170,14 @@ fn parse(
         .and_then(|value| value.to_str())
         .map(|name| registry::find(name).map_or(name, |spec| spec.name));
     let tail = &args[(index + 1).min(args.len())..];
+    if let Some(command @ ("local-tmux" | "tmux")) = command {
+        return Ok((
+            local_multiplexer::parse(command, tail)?,
+            socket,
+            timeout,
+            password,
+        ));
+    }
     if command == Some("browser") {
         let parsed = browser::parse(tail)?;
         if !explicit_timeout && let Parsed::Browser(_, Some(wait)) = &parsed {

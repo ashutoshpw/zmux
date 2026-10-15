@@ -32,6 +32,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install pinned Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Install isolated tmux fixture dependency
+        run: |
+          if ! command -v tmux >/dev/null; then brew install tmux; fi
+          tmux -V
       - name: Validate Rust core and foreign ABI
         run: scripts/check
       - name: Build universal native development app
