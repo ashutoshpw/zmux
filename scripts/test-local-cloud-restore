@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Exercise rejected-archive cleanup against the existing local PostgreSQL service."""
+import contextlib
+import fcntl
+import io
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import tempfile
+
+os.umask(0o077)
+root = Path(__file__).resolve().parent.parent
+owner = runpy.run_path(str(root / "scripts/local-cloud"))
+owner["initialize"]()
+state = owner["STATE"]
+compose = owner["compose"]
+connection = ["--no-password", "-U", "zmux", "-p", str(owner["port_number"]() + 1)]
+
+
+def databases():
+    return compose("exec", "-T", "postgres", "psql", *connection,
+                   "-X", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align",
+                   "--dbname", "postgres", "--command",
+                   "SELECT datname FROM pg_database ORDER BY datname").stdout
+
+
+with (state / "operation.lock").open("w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    before = databases()
+    receipt = state / "restore-check.json"
+    prior_receipt = receipt.read_bytes() if receipt.exists() else None
+    with tempfile.TemporaryDirectory(prefix="restore-rejection-", dir=state) as directory:
+        archive = Path(directory) / "invalid.dump"
+        archive.write_bytes(b"not a PostgreSQL archive\n")
+        real_docker = shutil.which("docker")
+        assert real_docker, "Docker CLI is required"
+        shim = Path(directory) / "docker"
+        # A real database is created, then the transport reports failure. This
+        # exercises ambiguous client completion without mocking PostgreSQL.
+        shim.write_text("#!/usr/bin/env python3\nimport subprocess, sys\n"
+                        + f"result = subprocess.run([{real_docker!r}, *sys.argv[1:]])\n"
+                        + "sys.exit(73 if 'createdb' in sys.argv and result.returncode == 0 else result.returncode)\n")
+        shim.chmod(0o700)
+        original_path = os.environ.get("PATH", "")
+        for failed_creation in (False, True):
+            with (Path(directory) / "private.log").open("w") as log:
+                captured = io.StringIO()
+                try:
+                    if failed_creation:
+                        os.environ["PATH"] = str(directory) + os.pathsep + original_path
+                    with contextlib.redirect_stdout(captured):
+                        owner["rehearse_restore"](archive, log)
+                except subprocess.CalledProcessError as error:
+                    if failed_creation:
+                        assert error.returncode == 73, "Must reach the real successful database creation"
+                    else:
+                        assert "pg_restore" in error.cmd, "Must reach archive restoration, not fail during setup"
+                else:
+                    raise AssertionError("Invalid archive or uncertain creation must fail rehearsal")
+                finally:
+                    os.environ["PATH"] = original_path
+                assert not captured.getvalue(), "Rejected restore must not publish success"
+            assert databases() == before, "Rejected restore left a temporary database behind"
+    assert databases() == before, "Rejected restore left a temporary database behind"
+    assert (receipt.read_bytes() if receipt.exists() else None) == prior_receipt
+print("Invalid archive and post-create transport failure rejected; disposable databases removed; prior receipt unchanged.")

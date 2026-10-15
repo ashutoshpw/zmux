@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,13 +22,13 @@ STATE = Path(os.environ.get("ZMUX_LOCAL_STATE", str(Path.home() / ".local/state/
 PROJECT = "zmux-local-cloud"
 
 
-def run(command, *, output=None, error=subprocess.STDOUT, cwd=ROOT, timeout=180, environment=None):
+def run(command, *, output=None, error=subprocess.STDOUT, cwd=ROOT, timeout=180, environment=None, source=None):
     return subprocess.run(command, cwd=cwd, check=True, text=True,
                           stdout=output if output else subprocess.PIPE,
-                          stderr=error, timeout=timeout, env=environment)
+                          stderr=error, timeout=timeout, env=environment, stdin=source)
 
 
-def compose(*arguments, output=None, error=subprocess.STDOUT, timeout=180):
+def compose(*arguments, output=None, error=subprocess.STDOUT, timeout=180, source=None):
     # Compose gives the process environment priority over --env-file. Remove every
     # private-file key so an unrelated exported DATABASE_URL cannot redirect migrations.
     private_keys = {
@@ -38,7 +39,7 @@ def compose(*arguments, output=None, error=subprocess.STDOUT, timeout=180):
     return run(["docker", "compose", "--project-name", PROJECT,
                 "--env-file", str(STATE / "local.env"),
                 "--file", str(SERVICE / "deploy/compose.yaml"), *arguments],
-               output=output, error=error, timeout=timeout, environment=environment)
+               output=output, error=error, timeout=timeout, environment=environment, source=source)
 
 
 def initialize(create=False):
@@ -127,13 +128,89 @@ def check():
     print(json.dumps(receipt, indent=2))
 
 
-def operate(args):
+def assert_project_owner():
     # Never adopt a same-named Compose project from another checkout.
     existing = run(["docker", "ps", "-a", "--filter", f"label=com.docker.compose.project={PROJECT}",
                     "--format", '{{.Label "com.docker.compose.project.config_files"}}'])
     expected = str(SERVICE / "deploy/compose.yaml")
     if any(line != expected for line in existing.stdout.splitlines()):
         raise RuntimeError("A same-named Docker project belongs to another checkout")
+
+
+def rehearse_restore(backup, log):
+    """Restore only into a fresh owned database; never replace the serving database."""
+    assert_project_owner()
+    database = "zmux_restore_" + secrets.token_hex(16)
+    connection = ["--no-password", "-U", "zmux", "-p", str(port_number() + 1)]
+    log.write(f"Restore rehearsal temporary database: {database}\n")
+    log.flush()
+    # Establish absence before acquiring ownership of this unguessable name. A failed
+    # createdb may have committed on the server even when its client times out.
+    exists = compose("exec", "-T", "postgres", "psql", *connection,
+                     "-X", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align",
+                     "--dbname", "postgres", "--command",
+                     f"SELECT count(*) FROM pg_database WHERE datname = '{database}'", error=log)
+    if exists.stdout.strip() != "0":
+        raise RuntimeError("Restore database name is already present; refusing to adopt it")
+    primary_error = None
+    creation_confirmed = False
+    try:
+        compose("exec", "-T", "-e", "PGOPTIONS=-c statement_timeout=60000",
+                "postgres", "createdb", *connection,
+                "--template=template0", database, output=log)
+        creation_confirmed = True
+        with backup.open("rb") as source:
+            compose("exec", "-T", "-e", "PGOPTIONS=-c statement_timeout=60000",
+                    "postgres", "pg_restore", *connection, "--dbname", database,
+                    "--single-transaction", "--exit-on-error", "--no-owner",
+                    source=source, output=log, timeout=180)
+        query = """SELECT json_build_object(
+            'tables', (SELECT json_agg(tablename ORDER BY tablename) FROM pg_tables
+                       WHERE schemaname = 'public'),
+            'migrations', (SELECT json_agg(name ORDER BY name) FROM zmux_schema_migration),
+            'invalid_constraints', (SELECT count(*) FROM pg_constraint
+                WHERE connamespace = 'public'::regnamespace AND NOT convalidated))"""
+        result = compose("exec", "-T", "postgres", "psql", *connection,
+                         "-X", "--set=ON_ERROR_STOP=1", "--tuples-only", "--no-align",
+                         "--dbname", database, "--command", query, error=log)
+        restored = json.loads(result.stdout)
+        required = {"user", "session", "account", "verification", "organization", "member",
+                    "invitation", "native_authorization_code", "native_access_token", "device",
+                    "zmux_schema_migration"}
+        migrations = sorted(path.name for path in (SERVICE / "migrations").glob("*.sql"))
+        if not required.issubset(restored["tables"] or []) or restored["migrations"] != migrations:
+            raise RuntimeError("Restored database does not have the expected migrated schema")
+        if restored["invalid_constraints"] != 0:
+            raise RuntimeError("Restored database contains unvalidated constraints")
+    except Exception as error:
+        primary_error = error
+        raise
+    finally:
+        if not creation_confirmed:
+            log.write("Creation was not confirmed; attempting cleanup, but an interrupted server operation may still be in flight. Inspect this database name after the statement timeout.\n")
+            log.flush()
+        try:
+            compose("exec", "-T", "postgres", "dropdb", *connection,
+                    "--if-exists", "--force", database, output=log)
+        except Exception as cleanup_error:
+            # Keep both failures in the exception chain; no success receipt if cleanup fails.
+            if primary_error is not None:
+                raise ExceptionGroup("Restore rehearsal and temporary database cleanup failed",
+                                     [primary_error, cleanup_error]) from None
+            raise
+    with backup.open("rb") as source:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    receipt = {"checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+               "backup_sha256": digest, "backup_bytes": backup.stat().st_size,
+               "restored": restored, "temporary_database_removed": True,
+               "serving_database_replaced": False,
+               "scope": "local PostgreSQL archive/schema/constraint restore; not off-host or public auth recovery"}
+    (STATE / "restore-check.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    print(json.dumps(receipt, indent=2))
+
+
+def operate(args):
+    assert_project_owner()
     if args.action == "check":
         check()
         return
@@ -167,6 +244,9 @@ def operate(args):
         except Exception:
             backup.unlink(missing_ok=True)
             raise
+        if args.action == "restore-check":
+            rehearse_restore(backup, log)
+            return
         if args.action == "backup":
             print(f"Backup saved privately: {backup}")
             return
@@ -185,7 +265,7 @@ def operate(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["start", "check", "stop", "status", "backup"])
+    parser.add_argument("action", choices=["start", "check", "stop", "status", "backup", "restore-check"])
     args = parser.parse_args()
     os.umask(0o077)
     initialize(create=args.action == "start")
