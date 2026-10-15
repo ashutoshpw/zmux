@@ -16,6 +16,7 @@ pub mod sessions;
 pub mod shutdown;
 pub mod surface_order;
 pub mod targets;
+pub mod terminal_engine;
 pub mod transfers;
 pub mod windows;
 pub mod workspace_order;
@@ -149,6 +150,14 @@ pub enum Command {
         action: Action,
     },
     Input {
+        session_id: SessionId,
+        text: String,
+    },
+    Key {
+        session_id: SessionId,
+        event: zmux_terminal_adapter::KeyEvent,
+    },
+    Paste {
         session_id: SessionId,
         text: String,
     },
@@ -323,6 +332,7 @@ pub struct NativeNotificationExecution {
 pub struct DesktopOptions {
     pub state_directory: Option<PathBuf>,
     pub local_tmux_profile: local_tmux::Profile,
+    pub terminal_engine: terminal_engine::TerminalEngineConfig,
 }
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
@@ -338,6 +348,7 @@ impl Desktop {
         )
     }
     pub fn with_options(shell: Shell, options: DesktopOptions) -> Result<Self, DesktopError> {
+        let terminal_engine = options.terminal_engine.session_options()?;
         let persistence = options
             .state_directory
             .clone()
@@ -348,6 +359,7 @@ impl Desktop {
             persistence,
             options.state_directory,
             options.local_tmux_profile,
+            terminal_engine,
         )
     }
     fn start(
@@ -355,6 +367,7 @@ impl Desktop {
         persistence: Option<sessions::SessionPersistence>,
         profile_directory: Option<PathBuf>,
         tmux_profile: local_tmux::Profile,
+        terminal_engine: Option<zmux_session_runtime::EngineOptions>,
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
@@ -441,6 +454,7 @@ impl Desktop {
                     slots: HashMap::new(),
                     retired: Vec::new(),
                     shell,
+                    terminal_engine,
                     shared: worker_shared,
                     completion_tx,
                     completion_rx,
@@ -750,6 +764,20 @@ impl Desktop {
                 "input must contain 1–4096 bytes".into(),
             ));
         }
+        if let Command::Paste { text, .. } = &request.payload
+            && (text.is_empty() || text.len() > zmux_session_runtime::PASTE_BYTES)
+        {
+            return Err(DesktopError::Failure(
+                "text paste must contain 1–16384 UTF-8 bytes".into(),
+            ));
+        }
+        if let Command::Key { event, .. } = &request.payload
+            && !event.valid()
+        {
+            return Err(DesktopError::Failure(
+                "invalid semantic key modifiers".into(),
+            ));
+        }
         if let Command::Resize { rows, cols, .. } = &request.payload {
             Size {
                 rows: *rows,
@@ -919,6 +947,7 @@ struct Worker {
     slots: HashMap<SessionId, Slot>,
     retired: Vec<Session>,
     shell: Shell,
+    terminal_engine: Option<zmux_session_runtime::EngineOptions>,
     shared: Arc<Shared>,
     completion_tx: SyncSender<Completion>,
     completion_rx: Receiver<Completion>,
@@ -1378,39 +1407,26 @@ impl Worker {
                 }
                 result
             }
-            Command::Wheel { session_id, event } => self
-                .slots
-                .get(&session_id)
-                .and_then(|s| s.session.as_ref())
-                .ok_or_else(|| {
-                    DesktopError::Failure("terminal is starting or no longer exists".into())
-                })
-                .and_then(|s| {
-                    s.wheel(event)
-                        .map_err(|e| DesktopError::Failure(e.to_string()))
-                }),
-            Command::Scroll { session_id, lines } => self
-                .slots
-                .get(&session_id)
-                .and_then(|s| s.session.as_ref())
-                .ok_or_else(|| {
-                    DesktopError::Failure("terminal is starting or no longer exists".into())
-                })
-                .and_then(|s| {
-                    s.scroll(lines)
-                        .map_err(|e| DesktopError::Failure(e.to_string()))
-                }),
-            Command::Input { session_id, text } => self
-                .slots
-                .get(&session_id)
-                .and_then(|s| s.session.as_ref())
-                .ok_or_else(|| {
-                    DesktopError::Failure("terminal is starting or no longer exists".into())
-                })
-                .and_then(|s| {
-                    s.send_input(text.as_bytes())
-                        .map_err(|e| DesktopError::Failure(e.to_string()))
-                }),
+            Command::Wheel { session_id, event } => self.live_session(session_id).and_then(|s| {
+                s.wheel(event)
+                    .map_err(|e| DesktopError::Failure(e.to_string()))
+            }),
+            Command::Scroll { session_id, lines } => self.live_session(session_id).and_then(|s| {
+                s.scroll(lines)
+                    .map_err(|e| DesktopError::Failure(e.to_string()))
+            }),
+            Command::Input { session_id, text } => self.live_session(session_id).and_then(|s| {
+                s.send_input(text.as_bytes())
+                    .map_err(|e| DesktopError::Failure(e.to_string()))
+            }),
+            Command::Key { session_id, event } => self.live_session(session_id).and_then(|s| {
+                s.send_key(event)
+                    .map_err(|e| DesktopError::Failure(e.to_string()))
+            }),
+            Command::Paste { session_id, text } => self.live_session(session_id).and_then(|s| {
+                s.send_paste(&text)
+                    .map_err(|e| DesktopError::Failure(e.to_string()))
+            }),
             Command::Resize {
                 session_id,
                 rows,
@@ -1423,6 +1439,12 @@ impl Worker {
                 None => Err(DesktopError::Failure("terminal no longer exists".into())),
             },
         }
+    }
+    fn live_session(&self, id: SessionId) -> Result<&Session, DesktopError> {
+        self.slots
+            .get(&id)
+            .and_then(|slot| slot.session.as_ref())
+            .ok_or_else(|| DesktopError::Failure("terminal is starting or no longer exists".into()))
     }
     fn targeted(&mut self, mut request: TargetRequest) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
@@ -2065,6 +2087,7 @@ impl Worker {
                         })
                     }).expect("live terminal has an owning surface");
                     let tmux_profile = self.local_tmux.profile.clone();
+                    let terminal_engine = self.terminal_engine;
                     let binding = model
                         .workspaces
                         .iter()
@@ -2105,6 +2128,7 @@ impl Worker {
                                         &context,
                                         binding,
                                         cancellation,
+                                        terminal_engine,
                                     ) {
                                         Ok(session) => Ok((session, None)),
                                         Err(failure) => {
@@ -2140,7 +2164,7 @@ impl Worker {
                                     "ZMUX_LOCAL_TMUX_PROFILE",
                                 ]
                                 .map(std::ffi::OsString::from);
-                                let session = Session::spawn_with_resource_and_removals(
+                                let session = terminal_engine::spawn(
                                     Launch {
                                         program: shell.program,
                                         args: shell.args,
@@ -2149,6 +2173,7 @@ impl Worker {
                                     },
                                     &context,
                                     &removals,
+                                    terminal_engine,
                                     connection.clone(),
                                 )?;
                                 Ok((session, connection))

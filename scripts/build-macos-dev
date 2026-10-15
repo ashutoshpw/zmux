@@ -13,13 +13,22 @@ import subprocess
 root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument("--architecture", choices=["universal", "host"], default="universal")
+parser.add_argument("--with-ghostty", action="store_true", help="Link the optional engine; runtime selection remains explicit")
+parser.add_argument("--ghostty-artifact-root", type=Path, help="Explicit retained engine artifact root; never rebuilt or downloaded")
 args = parser.parse_args()
+if args.with_ghostty != (args.ghostty_artifact_root is not None):
+    parser.error("--with-ghostty and --ghostty-artifact-root must be supplied together")
 if platform.system() != "Darwin":
     raise SystemExit("Native development builds require macOS; use GitHub's macOS development build workflow.")
 def run(argv, **kwargs):
     return subprocess.run(argv, cwd=root, check=True, **kwargs)
 sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 architectures = ["arm64", "x86_64"] if args.architecture == "universal" else ["arm64" if platform.machine() == "arm64" else "x86_64"]
+artifact_root = args.ghostty_artifact_root.resolve(strict=True) if args.with_ghostty else None
+if artifact_root:
+    for arch in architectures:
+        target = "aarch64-apple-darwin" if arch == "arm64" else "x86_64-apple-darwin"
+        run(["python3", "tools/terminal-engine-artifacts/accept-linkage.py", "--target", target, "--root", str(artifact_root)])
 dist = root / "dist"
 bundle = dist / "zmux.app"
 if bundle.is_symlink():
@@ -33,12 +42,17 @@ for path in [macos, frameworks, resources]:
     path.mkdir(parents=True, exist_ok=True)
 targetdir = Path(json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1"], cwd=root, text=True))["target_directory"])
 env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET="14.0")
+if artifact_root:
+    env["ZMUX_GHOSTTY_ARTIFACT_ROOT"] = str(artifact_root)
+else:
+    env.pop("ZMUX_GHOSTTY_ARTIFACT_ROOT", None)
 libraries = []
 cli_binaries = []
 for arch in architectures:
     target = "aarch64-apple-darwin" if arch == "arm64" else "x86_64-apple-darwin"
     run(["rustup", "target", "add", target])
-    run(["cargo", "build", "--locked", "--release", "--target", target, "-p", "zmux-native-bridge", "-p", "zmux"], env=env)
+    features = ["--features", "zmux-native-bridge/ghostty"] if artifact_root else []
+    run(["cargo", "build", "--locked", "--release", "--target", target, "-p", "zmux-native-bridge", "-p", "zmux", *features], env=env)
     libraries.append(targetdir / target / "release/libzmux_native_bridge.dylib")
     cli_binaries.append(targetdir / target / "release/zmux")
 library = frameworks / "libzmux_native_bridge.dylib"
@@ -88,7 +102,7 @@ with (bundle / "Contents/Info.plist").open("wb") as file:
     plistlib.dump(info,file)
 for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"]:
     shutil.copy2(root / name, resources / name)
-metadata = {"source_sha":sha,"architectures":architectures,"minimum_macos":"14.0","bundle_id":info["CFBundleIdentifier"],"signing":"ad-hoc","notarized":False,"cloud_origin":deployment["cloud_origin"]}
+metadata = {"source_sha":sha,"architectures":architectures,"minimum_macos":"14.0","bundle_id":info["CFBundleIdentifier"],"signing":"ad-hoc","notarized":False,"cloud_origin":deployment["cloud_origin"],"optional_ghostty_linked":bool(artifact_root),"default_terminal_engine":"vt100"}
 (resources / "build-info.json").write_text(json.dumps(metadata,indent=2)+"\n")
 run(["codesign","--force","--sign","-",str(library)])
 run(["codesign","--force","--sign","-",str(cli)])

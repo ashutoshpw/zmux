@@ -65,6 +65,23 @@ pub(crate) struct Event {
 }
 
 unsafe extern "C" {
+    pub(crate) fn zmux_vt_encode_key(
+        p: *mut c_void,
+        key: u32,
+        modifiers: u8,
+        action: u8,
+        out: *mut u8,
+        capacity: usize,
+        length: *mut usize,
+    ) -> i32;
+    pub(crate) fn zmux_vt_encode_paste(
+        p: *mut c_void,
+        text: *mut u8,
+        length: usize,
+        out: *mut u8,
+        capacity: usize,
+        written: *mut usize,
+    ) -> i32;
     pub(crate) fn zmux_vt_new(
         cols: u16,
         rows: u16,

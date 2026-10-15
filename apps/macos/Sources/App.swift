@@ -689,6 +689,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 }
                 terminal.onPasteError = { [weak self] message in self?.showError(message) }
                 terminal.onInput = { [weak self] text in self?.enqueue(.input(session, text)) }
+                terminal.onKey = { [weak self] event in self?.enqueue(.key(session, event)) }
+                terminal.onPaste = { [weak self] text in self?.enqueue(.paste(session, text)) }
                 terminal.onWheel = { [weak self] lines, row, col, modifiers, history in self?.enqueue(.wheel(session, lines, row, col, modifiers, history)) }
                 terminal.onScroll = { [weak self] lines in self?.enqueue(.scroll(session, lines)) }
                 terminal.onResize = { [weak self] rows, cols in self?.enqueue(.resize(session, rows, cols)) }
@@ -2497,15 +2499,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try await NotificationPermissionSmoke.validate()
                 }
                 let storage: NativeDesktopStorage
-                if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
+                if CommandLine.arguments.contains("--terminal-engine-smoke") {
+                    storage = .transient
+                } else if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
                 } else { storage = .applicationSupport }
                 WindowLifecycleSmoke.trace("before coordinator.start")
-                try await coordinator.start(storage: storage)
+                try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--terminal-engine-smoke"), CommandLine.arguments.count > index + 1 {
+                    do {
+                        try await TerminalEngineSmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+                        try await coordinator.shutdown()
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native terminal engine smoke failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch { FileHandle.standardError.write(Data("Terminal engine cleanup failed: \(error)\n".utf8)) }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
@@ -2539,7 +2554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") {
+                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }

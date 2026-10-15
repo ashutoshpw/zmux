@@ -76,6 +76,65 @@ impl Drop for Engine {
 }
 
 impl Engine {
+    /// Encode a bounded host special-key event against the actual idle terminal.
+    /// Host IDs are explicit in the C shim; caller never supplies an upstream enum.
+    pub fn encode_key(&mut self, key: u32, modifiers: u8, action: u8) -> Result<Vec<u8>, Error> {
+        self.ready()?;
+        if !(1..=26).contains(&key) || modifiers & !7 != 0 || action > 2 {
+            return Err(Error::Invalid);
+        }
+        let mut output = buffer::<u8>(128)?;
+        let mut length = 0;
+        // SAFETY: this unique worker owns the live metadata and initialized bounded
+        // destination. C borrows neither buffer nor encoder beyond the call.
+        let result = unsafe {
+            zmux_vt_encode_key(
+                self.metadata.as_ptr(),
+                key,
+                modifiers,
+                action,
+                output.as_mut_ptr(),
+                output.len(),
+                &mut length,
+            )
+        };
+        if result != 0 || length > output.len() {
+            self.abort();
+            return Err(Error::Failed);
+        }
+        output.truncate(length);
+        Ok(output)
+    }
+    /// A single bounded text paste; pinned encoding strips unsafe control bytes,
+    /// preserves bracketed newlines and converts each unbracketed LF to CR.
+    pub fn encode_paste(&mut self, text: &[u8]) -> Result<Vec<u8>, Error> {
+        self.ready()?;
+        if text.is_empty() || text.len() > 16384 {
+            return Err(Error::Invalid);
+        }
+        let mut input = buffer::<u8>(text.len())?;
+        input.copy_from_slice(text);
+        let mut output = buffer::<u8>(16396)?;
+        let mut length = 0;
+        // SAFETY: owned disjoint initialized buffers satisfy exact C capacities;
+        // input mutation and terminal-mode observation finish synchronously.
+        let result = unsafe {
+            zmux_vt_encode_paste(
+                self.metadata.as_ptr(),
+                input.as_mut_ptr(),
+                input.len(),
+                output.as_mut_ptr(),
+                output.len(),
+                &mut length,
+            )
+        };
+        if result != 0 || length > output.len() {
+            self.abort();
+            return Err(Error::Failed);
+        }
+        output.truncate(length);
+        Ok(output)
+    }
     pub fn new(cols: u16, rows: u16, history: usize, limits: Limits) -> Result<Self, Error> {
         if cols == 0
             || cols > 240

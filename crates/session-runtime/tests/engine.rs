@@ -59,7 +59,11 @@ impl Fixture {
             if let Ok(value) = fs::read_to_string(self.0.join(name)) {
                 return value;
             }
-            assert!(Instant::now() < deadline, "missing client marker {name}");
+            assert!(
+                Instant::now() < deadline,
+                "missing client marker {name}; actual ordering={:?}",
+                fs::read_to_string(self.0.join("ordering-observation"))
+            );
             thread::sleep(Duration::from_millis(5));
         }
     }
@@ -169,7 +173,7 @@ def mark(name,value):
     p=root/(name+'.tmp');p.write_text(value);p.replace(root/name)
 os.write(1,b'GOOD\x1b]2;published\x07')
 while not (root/'query').exists():time.sleep(.002)
-os.write(1,b'\x1b[6n\x1b]2;candidate\x07');mark('query-sent','sent')
+os.write(1,b'\x1b[?1h\x1b[?2004h\x1b[6n\x1b]2;candidate\x07');mark('query-sent','sent')
 while not (root/'release').exists():
     if (root/'check-size').exists() and not (root/'old-size').exists():
         size=struct.unpack('HHHH',fcntl.ioctl(0,0x5413 if sys.platform!='darwin' else 0x40087468,b'\0'*8))[:2]
@@ -182,15 +186,17 @@ expected_prefix=int((root/'expected-prefix').read_text())
 assert len(prefix)==expected_prefix and set(prefix)=={ord('p')},repr((expected_prefix,len(prefix),prefix[-40:]))
 while b'POST' not in suffix:suffix+=os.read(0,4096)
 prior,after=suffix.split(b'POST',1)
-assert set(prior)<={ord('p')} and not after,repr((prior[-40:],after))
+semantic=b'\x1bOA\x1b[200~P Q\n\x1b[201~'
+mark('ordering-observation',json.dumps({'prior_tail':prior[-64:].hex(),'reply':reply.hex(),'after_tail':after[-64:].hex()}))
+assert prior.endswith(semantic) and set(prior[:-len(semantic)])<={ord('p')} and not after,repr((prior[-40:],after))
 mark('received',json.dumps({'prefix':len(prefix),'reply':reply.hex()}))
 os.write(1,b'\r\nDONE')
 while True:time.sleep(1)
 "#;
-fn block_input(session: &Session) -> (usize, Vec<InputReceipt>) {
+fn block_input(session: &Session, reserved_events: usize) -> (usize, Vec<InputReceipt>) {
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut receipts = Vec::new();
-    while receipts.len() < 16 {
+    while receipts.len() < 16 - reserved_events {
         match session
             .send_input_with_receipt(&[b'p'; 4096], Instant::now() + Duration::from_secs(20))
         {
@@ -285,7 +291,9 @@ fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suf
     let fixture = Fixture::new();
     let mut session = fixture.session(BLOCKED, Duration::from_secs(4));
     let before = wait(&session, |s| s.viewport.title == "published");
-    let (completed, mut receipts) = block_input(&session);
+    // Reserve three queue slots for semantic key, whole paste and trailing raw
+    // bytes. Real physical PTY backpressure is still independently required.
+    let (completed, mut receipts) = block_input(&session, 3);
     fs::write(
         fixture.0.join("expected-prefix"),
         ((completed + 1) * 4096).to_string(),
@@ -296,9 +304,19 @@ fn blocked_reply_keeps_publication_and_resize_old_then_finishes_current_user_suf
     let staged = wait(&session, |s| s.bytes_read >= before.bytes_read + 4);
     assert_eq!(staged.viewport.title, "published");
     assert_eq!(staged.viewport.contents, "GOOD");
+    assert!(!staged.viewport.application_cursor && !staged.viewport.bracketed_paste);
     session.resize(Size { rows: 5, cols: 20 }).unwrap();
     fixture.mark("check-size");
     assert_eq!(fixture.wait_file("old-size"), "(8, 60)");
+    session
+        .send_key(zmux_session_runtime::KeyEvent {
+            key: zmux_session_runtime::Key::ArrowUp,
+            action: zmux_session_runtime::KeyAction::Press,
+            modifiers: 0,
+            legacy_control: None,
+        })
+        .unwrap();
+    session.send_paste("P\x1bQ\n").unwrap();
     let mut post = session
         .send_input_with_receipt(b"POST", Instant::now() + Duration::from_secs(4))
         .unwrap();
@@ -333,7 +351,7 @@ fn blocked_reply_deadline_or_close_aborts_without_publishing_or_replaying_queued
             },
         );
         let before = wait(&session, |s| s.viewport.title == "published");
-        let (completed, mut receipts) = block_input(&session);
+        let (completed, mut receipts) = block_input(&session, 0);
         fixture.mark("query");
         fixture.wait_file("query-sent");
         let staged = wait(&session, |s| s.bytes_read >= before.bytes_read + 4);

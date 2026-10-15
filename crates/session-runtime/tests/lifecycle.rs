@@ -51,6 +51,96 @@ fn write_result(receipt: &mut InputReceipt) -> InputWriteResult {
 }
 
 #[test]
+fn default_worker_encodes_semantic_keys_and_whole_paste_from_live_modes() {
+    use zmux_session_runtime::{Key, KeyAction, KeyEvent};
+    let script = r#"import os,tty
+tty.setraw(0)
+def read(expected):
+    actual=b''
+    while len(actual)<len(expected):actual+=os.read(0,len(expected)-len(actual))
+    assert actual==expected,repr((actual,expected))
+os.write(1,b'\x1b[?1h\x1b[?2004hREADY')
+read(b'\x1bOA\x1b[1;6D\x1f\t\x1b[200~one\r\ntwo\x1b[201~'+b'\x1b[200~'+b'L'*16384+b'\x1b[201~END')
+os.write(1,b'\x1b[?1l\x1b[?2004lNEXT')
+read(b'\x1b[Aone\rtwoEND')
+os.write(1,b'\r\nSEMANTIC_OK')
+"#;
+    let mut session = Session::spawn(Launch {
+        program: "python3".into(),
+        args: vec!["-u".into(), "-c".into(), script.into()],
+        cwd: None,
+        size: Size { rows: 8, cols: 60 },
+    })
+    .unwrap();
+    wait_for(&session, |s| {
+        s.viewport.application_cursor
+            && s.viewport.bracketed_paste
+            && s.viewport.contents.contains("READY")
+    });
+    session
+        .send_key(KeyEvent {
+            key: Key::ArrowUp,
+            action: KeyAction::Press,
+            modifiers: 0,
+            legacy_control: None,
+        })
+        .unwrap();
+    session
+        .send_key(KeyEvent {
+            key: Key::ArrowLeft,
+            action: KeyAction::Repeat,
+            modifiers: 5,
+            legacy_control: None,
+        })
+        .unwrap();
+    session
+        .send_key(KeyEvent {
+            key: Key::ArrowUp,
+            action: KeyAction::Release,
+            modifiers: 0,
+            legacy_control: None,
+        })
+        .unwrap();
+    for (key, modifiers, byte) in [(Key::Backspace, 4, 31), (Key::Tab, 5, 9)] {
+        session
+            .send_key(KeyEvent {
+                key,
+                action: KeyAction::Press,
+                modifiers,
+                legacy_control: Some(byte),
+            })
+            .unwrap();
+    }
+    session.send_paste("one\r\ntwo").unwrap();
+    session
+        .send_paste(&"L".repeat(zmux_session_runtime::PASTE_BYTES))
+        .unwrap();
+    session.send_input(b"END").unwrap();
+    wait_for(&session, |s| {
+        !s.viewport.application_cursor
+            && !s.viewport.bracketed_paste
+            && s.viewport.contents.contains("NEXT")
+    });
+    session
+        .send_key(KeyEvent {
+            key: Key::ArrowUp,
+            action: KeyAction::Press,
+            modifiers: 0,
+            legacy_control: None,
+        })
+        .unwrap();
+    session.send_paste("one\r\ntwo").unwrap();
+    session.send_input(b"END").unwrap();
+    let done = wait_for(&session, |s| s.state == State::Exited);
+    assert!(
+        done.viewport.contents.contains("SEMANTIC_OK"),
+        "{}",
+        done.viewport.contents
+    );
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+#[test]
 fn failed_start_releases_its_owned_resource_on_the_session_worker() {
     struct Resource(std::sync::mpsc::SyncSender<thread::ThreadId>);
     impl Drop for Resource {

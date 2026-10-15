@@ -397,8 +397,9 @@ pub(crate) fn launch_client(
     environment: &[(String, String)],
     binding: zmux_remote_runtime::local_multiplexer::GuiBinding,
     cancel: Arc<AtomicBool>,
+    terminal_engine: Option<zmux_session_runtime::EngineOptions>,
 ) -> Result<crate::Session, ClientLaunchFailure> {
-    use crate::{Session, SessionError};
+    use crate::SessionError;
     let failure = |e: String| {
         SessionError::Failure(format!(
             "local tmux client: {e}; durable owner was not terminated"
@@ -418,7 +419,7 @@ pub(crate) fn launch_client(
         .collect();
     let mut context = environment.to_vec();
     context.push(("ZMUX_LOCAL_TMUX".into(), "1".into()));
-    let session = Session::spawn_with_resource_and_removals(
+    let session = crate::terminal_engine::spawn(
         zmux_session_runtime::Launch {
             program: process.program,
             args: process.args,
@@ -427,6 +428,7 @@ pub(crate) fn launch_client(
         },
         &context,
         &removals,
+        terminal_engine,
         (),
     )?;
     let confirmation = (|| -> Result<(), SessionError> {

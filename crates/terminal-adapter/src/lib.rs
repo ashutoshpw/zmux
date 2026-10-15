@@ -1,7 +1,9 @@
 //! Headless parser feasibility adapter, not a production renderer or full terminal engine.
 
 mod engine;
+mod input;
 pub use engine::{Engine, EngineBatch, EngineError, EngineKind};
+pub use input::{ENCODED_PASTE_BYTES, Key, KeyAction, KeyEvent, PASTE_BYTES};
 #[cfg(feature = "ghostty")]
 pub use zmux_ghostty_vt::Limits as GhosttyLimits;
 

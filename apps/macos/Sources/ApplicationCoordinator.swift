@@ -21,6 +21,8 @@ enum UICommand: Sendable {
     case pasteFiles(UInt64, [String])
     case cancelUpload(UInt64)
     case input(UInt64, String)
+    case key(UInt64, TerminalKeyEvent)
+    case paste(UInt64, String)
     case resize(UInt64, Int, Int)
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
@@ -96,14 +98,14 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
     }
 
-    func start(storage: NativeDesktopStorage = .applicationSupport) async throws {
+    func start(storage: NativeDesktopStorage = .applicationSupport, terminalEngine: String? = nil) async throws {
         guard !startRequested, shutdownTask == nil else {
             throw BridgeFailure(message: "The application desktop cannot be started more than once or after shutdown.")
         }
         startRequested = true
         _ = mainWindowHost
         WindowLifecycleSmoke.trace("coordinator before bridge.start")
-        try await bridge.start(storage: storage)
+        try await bridge.start(storage: storage, terminalEngine: terminalEngine)
         WindowLifecycleSmoke.trace("coordinator after bridge.start")
         guard shutdownTask == nil else {
             throw BridgeFailure(message: "Application shutdown interrupted desktop startup.")
@@ -158,6 +160,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         try await self.bridge.cancelUpload(id: id)
                     case .input(let session, let text):
                         try await self.bridge.input(session: session, text: text)
+                    case .key(let session, let event):
+                        try await self.bridge.key(session: session, event: event)
+                    case .paste(let session, let text):
+                        try await self.bridge.paste(session: session, text: text)
                     case .wheel(let session, let lines, let row, let col, let modifiers, let history):
                         try await self.bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
                     case .scroll(let session, let lines):
@@ -319,6 +325,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
 
     func enqueue(_ command: UICommand) {
         mainWindowHost.clearErrorForCommand()
+        if case .paste(_, let text) = command, text.isEmpty || text.utf8.count > 16_384 {
+            reportError("Development build pastes must contain 1–16 KiB of text")
+            return
+        }
         switch continuation.yield(command) {
         case .enqueued: break
         case .dropped:

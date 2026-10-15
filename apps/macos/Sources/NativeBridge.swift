@@ -59,11 +59,11 @@ actor NativeBridge {
     private var requestId: UInt64 = 0
     private var revision: UInt64 = 0
 
-    func start(storage: NativeDesktopStorage = .transient) throws {
+    func start(storage: NativeDesktopStorage = .transient, terminalEngine: String? = nil) throws {
         guard zmux_abi_version() == 1 else { throw BridgeFailure(message: "Unsupported native bridge version") }
-        let result: ZmuxResult
+        let stateDirectory: String?
         switch storage {
-        case .transient: result = zmux_desktop_create()
+        case .transient: stateDirectory = nil
         case .applicationSupport, .persistentDirectory:
             let directory: URL
             switch storage {
@@ -74,10 +74,25 @@ actor NativeBridge {
                 directory = support.appendingPathComponent("app.w3dev.zmux.dev", isDirectory: true)
             }
             guard directory.isFileURL else { throw NativeStoragePathFailure.invalidPath }
-            let path = Data(try NativeStoragePath.resolve(directory.path).utf8)
+            stateDirectory = try NativeStoragePath.resolve(directory.path)
+        }
+        let result: ZmuxResult
+        if let terminalEngine {
+            guard terminalEngine.utf8.count <= 2048 else { throw BridgeFailure(message: "Terminal engine configuration exceeds its bound") }
+            let engine = try JSONSerialization.jsonObject(with: Data(terminalEngine.utf8))
+            var configuration: [String: Any] = ["terminal_engine": engine]
+            if let stateDirectory { configuration["state_directory"] = stateDirectory }
+            let data = try JSONSerialization.data(withJSONObject: configuration)
+            result = data.withUnsafeBytes { storage in
+                zmux_desktop_create_configured(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
+            }
+        } else if let stateDirectory {
+            let path = Data(stateDirectory.utf8)
             result = path.withUnsafeBytes { storage in
                 zmux_desktop_create_persistent(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
             }
+        } else {
+            result = zmux_desktop_create()
         }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
@@ -327,6 +342,15 @@ actor NativeBridge {
             chunk += piece
         }
         if !chunk.isEmpty { try await send(["command": "input", "session_id": session, "text": chunk]) }
+    }
+    func key(session: UInt64, event: TerminalKeyEvent) async throws {
+        var payload: [String: Any] = ["key": event.key, "action": event.action.rawValue, "modifiers": event.modifiers]
+        if let control = event.legacyControl { payload["legacy_control"] = control }
+        try await send(["command": "key", "session_id": session, "event": payload])
+    }
+    func paste(session: UInt64, text: String) async throws {
+        guard text.utf8.count <= 16_384 else { throw BridgeFailure(message: "Development build pastes are limited to 16 KiB") }
+        if !text.isEmpty { try await send(["command": "paste", "session_id": session, "text": text]) }
     }
     func wheel(session: UInt64, lines: Int, row: Int, col: Int, modifiers: Int, history: Bool) async throws {
         try await send(["command": "wheel", "session_id": session, "event": ["lines": lines, "row": row, "col": col, "modifiers": modifiers, "history": history]])

@@ -10,6 +10,9 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var onPasteError: ((String) -> Void)?
     private var receivingFiles = false
     var onInput: ((String) -> Void)?
+    var onKey: ((TerminalKeyEvent) -> Void)?
+    var onPaste: ((String) -> Void)?
+    private var semanticKeysDown: Set<UInt16> = []
     var onScroll: ((Int) -> Void)?
     var onWheel: ((Int, Int, Int, Int, Bool) -> Void)?
     private var wheelRemainder: CGFloat = 0
@@ -45,7 +48,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         if lastSize != (rows, cols) { lastSize = (rows, cols); onResize?(rows, cols) }
     }
     override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
-    override func resignFirstResponder() -> Bool { needsDisplay = true; return true }
+    override func resignFirstResponder() -> Bool { semanticKeysDown.removeAll(); needsDisplay = true; return true }
     var requestedSize: (Int, Int) { lastSize }
     func update(_ frame: Frame) {
         let oldState = frameState
@@ -185,11 +188,9 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
                 return true
             case .image(let data):
                 return onImage?(data) ?? false
-            case .text(var text):
-                guard let onInput else { return false }
-                if viewport?.bracketedPaste == true { text = "\u{1b}[200~" + text + "\u{1b}[201~" }
-                else { text = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r") }
-                onInput(text)
+            case .text(let text):
+                guard let onPaste else { return false }
+                onPaste(text)
                 return true
             case .empty:
                 return false
@@ -212,18 +213,24 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
         if hasMarkedText() { interpretKeyEvents([event]); return }
         selection = nil
-        if let sequence = TerminalKeyEncoder.sequence(keyCode: event.keyCode, modifiers: event.modifierFlags,
-                                                      applicationCursor: viewport?.applicationCursor == true) {
-            onInput?(sequence)
+        if let semantic = TerminalKeyEncoder.event(keyCode: event.keyCode, modifiers: event.modifierFlags,
+                                                   action: event.isARepeat ? .repeated : .press,
+                                                   charactersIgnoringModifiers: event.charactersIgnoringModifiers) {
+            if let onKey { onKey(semantic); semanticKeysDown.insert(event.keyCode) }
             return
         }
         if event.modifierFlags.contains(.control), let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first, scalar.value < 128 {
             onInput?(String(UnicodeScalar(scalar.value & 31)!)); return
         }
-        let sequences: [UInt16:String] = [36:"\r",76:"\r",51:"\u{7f}",53:"\u{1b}"]
-        if event.keyCode == 48 { onInput?(event.modifierFlags.contains(.shift) ? "\u{1b}[Z" : "\t"); return }
-        if let sequence = sequences[event.keyCode] { onInput?(sequence); return }
         interpretKeyEvents([event])
+    }
+    override func keyUp(with event: NSEvent) {
+        if semanticKeysDown.remove(event.keyCode) != nil,
+           let semantic = TerminalKeyEncoder.event(keyCode: event.keyCode, modifiers: event.modifierFlags, action: .release) {
+            onKey?(semantic)
+            return
+        }
+        super.keyUp(with: event)
     }
     func insertText(_ string: Any, replacementRange: NSRange) {
         MainActor.preconditionIsolated()

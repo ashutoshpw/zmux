@@ -385,10 +385,12 @@ enum ClipboardImageSmoke {
         var files: [[String]] = []
         var images: [Data] = []
         var inputs: [String] = []
+        var rawInputs: [String] = []
         var errors: [String] = []
         terminal.onFiles = { files.append($0) }
         terminal.onImage = { images.append($0); return true }
-        terminal.onInput = { inputs.append($0) }
+        terminal.onPaste = { inputs.append($0) }
+        terminal.onInput = { rawInputs.append($0) }
         terminal.onPasteError = { errors.append($0) }
 
         pasteboard.clearContents()
@@ -415,8 +417,8 @@ enum ClipboardImageSmoke {
         pasteboard.declareTypes([.string], owner: nil)
         guard pasteboard.setString("first\r\nsecond\nthird", forType: .string),
               terminal.paste(from: pasteboard),
-              inputs == ["first\rsecond\rthird"], files.isEmpty, images.isEmpty, errors.isEmpty else {
-            throw ClipboardImageSmokeFailure(message: "Terminal text paste did not normalize line endings")
+              inputs == ["first\r\nsecond\nthird"], files.isEmpty, images.isEmpty, errors.isEmpty else {
+            throw ClipboardImageSmokeFailure(message: "Terminal text paste did not preserve original text for worker encoding")
         }
 
         inputs.removeAll()
@@ -435,6 +437,9 @@ enum ClipboardImageSmoke {
               terminal.paste(from: pasteboard),
               images == [corrupt], files.isEmpty, inputs.isEmpty, errors.isEmpty else {
             throw ClipboardImageSmokeFailure(message: "The pasteboard classifier decoded or rejected advertised raw image bytes")
+        }
+        guard rawInputs.isEmpty else {
+            throw ClipboardImageSmokeFailure(message: "Clipboard paste bypassed semantic worker admission through raw input")
         }
     }
 
