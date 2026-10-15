@@ -65,8 +65,15 @@ select the fresh object/executable, both Apple targets receive raw Mach-O and
 runtime-load inspection, and only the ARM executable runs all4 behavioral tests.
 Intel remains compile/link/inspection only. Original input provenance and new
 object/executable/log receipts are retained separately in the linkage artifact.
-The workflow never invokes Zig or the engine producer. Native linkage remains
-unexecuted until the committed lane is dispatched and its actual bytes reviewed;
-no worker/default/native-app/input/performance acceptance follows from this lane.
+The workflow never invokes Zig or the engine producer. Adapter-only run38806117440
+atbe52324 passed; independent byte/source/raw Mach-O review accepts both new shim
+objects and executables at minOS14/SDK15.5, libSystem-only executable loads and all4
+ARM adapter cases, with Intel compile/link only. The unchanged original engines
+still declare minOS13. Producer receipt SHA256 is
+0dbb5fbed7bfc7dfa5f9b1d7efe80fb6a1d953754deceff56052e5ae2fa0d23c;
+independent review SHA256 is
+f46cd0d19ffd72edb89c8fbb198caabad63253e878250cd557d616b20a2d80db.
+This accepts adapter linkage, not Session/native-app/default/typed-input/performance
+behavior. The optional Session extension is recorded in the linked worker slice.
 
 The next production worker slice is tracked in [F04 Session engine integration](f04-session-engine.md).

@@ -55,7 +55,7 @@ product: the selected engine owns production protocol replies.
 
 ## Scoped evidence
 
-Four real public Session/PTTY tests exercise literal child-observed DSR replies,
+Four real public Session/PTY tests exercise literal child-observed DSR replies,
 raw PRE/POST bytes, actual kernel resize, stalled causal publication with deferred
 kernel resize, full worker-admitted input suffix before reply and queued POST after
 it, deadline/cancellation last-frame retention and one-time receipts, and initial
@@ -66,3 +66,29 @@ valid worker-admission/backpressure precondition. No production test injection o
 fixture VT responder is used. Default Session tests and strict default/linked
 Clippy pass locally. Independent review/full repository and hosted native evidence
 are recorded separately before landing/acceptance; none is implied by source alone.
+
+## Optional Session Darwin acceptance lane
+
+The retained-linkage workflow now offers `include_session_runtime` (defaulttrue)
+without changing any product engine default. Its `--session-runtime` driver mode
+retains the original adapter checks, freezes Session and vendored Darwin wrapper
+sources, and compiles the actual public Session engine fixture for both Apple
+targets. Exact Cargo package/test messages select each executable; each Session
+must reuse the same hash-checked host shim object already inspected for its target.
+Raw Mach-O architecture/minOS14/SDK15.5 and runtime-load inspection happen before
+only the ARM executable runs all4 real PTY cases, serialized with a60s owned phase
+limit. Intel is compile/link/inspection only. Original engine binaries and producer
+receipts remain unchanged, and Zig is never invoked.
+
+Session requires libSystem and may additionally load only `/usr/lib/libproc.dylib`:
+the Cargo.lock-pinned `darwin-libproc-sys0.2.0` build script explicitly links `proc`,
+which the linker may strip if unused. The adapter remains libSystem-only. Unknown
+libraries, duplicate/missing required loads and runtime search paths refuse.
+Receipts separate adapter from Session execution and preserve hashes and logs.
+
+Local policy tests pass29 with1 native-only skip, including exact Session artifact
+selection and the narrow dynamic-load policy. A real Linux Cargo no-run build
+selects the expected Session executable and host shim through the same message
+parser. YAML and shell syntax checks plus the Session source/input gate pass.
+These are tooling checks; actual Darwin Session execution remains unaccepted until
+the committed lane is dispatched and its artifact receives independent review.
