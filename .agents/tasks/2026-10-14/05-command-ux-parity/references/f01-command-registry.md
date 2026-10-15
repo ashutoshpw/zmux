@@ -45,3 +45,14 @@ All 35 catalog leaves and aliases were checked offline; native acceptance remain
 Hosted native evidence: macOS Actions run `38706071891` at `c572484` passed Rust
 checks, universal compilation and packaged native smoke. Its archive is diagnostic,
 not a full-parity delivery; it was not downloaded/reverified as a final artifact.
+
+## Deadline fixture repair after hosted528be92
+
+Foundation38764217074 failed the external550ms wall bound after reporting the correct
+300ms request timeout with no retry; measured whole-process duration was571ms. This
+bound also includes startup, scheduling and exit collection outside socket ownership.
+Removing that bound retains all fragmented response, deadline error, no-output and
+no-replay assertions. An isolated400ms pre-main-work delay reproduces the old failure
+(703ms) and passes the revised test. A separate deliberate body/acceptance deadline
+reset still fails: split-stage response succeeds at363ms. Neither injected change
+is part of production code. Actual cause of the hosted scheduling delay is unknown.

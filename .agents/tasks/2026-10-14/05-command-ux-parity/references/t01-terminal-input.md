@@ -75,3 +75,8 @@ that exact SHA, and the archive SHA-256 matches its published checksum. Its
 raw per-key hex is not separately archived. This intermittent baseline pass does
 not close the earlier observed corruption or validate the later file-backed setup.
 The latter remains a separate native gate at its own source SHA.
+
+Native528be92 run38764217483 failed Swift warnings-as-errors in the nested fixture
+cleanup's inferred detached-task expression. The repair explicitly types the task as
+Task<Void, Error> and awaits its value separately. Removal still runs off MainActor
+and cleanup is awaited; hosted compile remains required before accepting this fix.
