@@ -346,10 +346,12 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
             let item = workspaceMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = self
         }
-        let next = workspaceMenu.addItem(withTitle: "Next Tab", action: #selector(nextTab), keyEquivalent: "]")
-        next.keyEquivalentModifierMask = [.command, .shift]; next.target = self
-        let previous = workspaceMenu.addItem(withTitle: "Previous Tab", action: #selector(previousTab), keyEquivalent: "[")
-        previous.keyEquivalentModifierMask = [.command, .shift]; previous.target = self
+        // AppKit matches the resulting character, as it does for uppercase T/W.
+        // Shift-brackets produce braces on the standard keyboard layout.
+        let next = workspaceMenu.addItem(withTitle: "Next Tab", action: #selector(nextTab), keyEquivalent: "}")
+        next.keyEquivalentModifierMask = [.command]; next.target = self
+        let previous = workspaceMenu.addItem(withTitle: "Previous Tab", action: #selector(previousTab), keyEquivalent: "{")
+        previous.keyEquivalentModifierMask = [.command]; previous.target = self
         let navigationItems: [(String, Selector, String, NSEvent.ModifierFlags)] = [
             ("Last Tab", #selector(lastTab), "", NSEvent.ModifierFlags.command),
             ("Next Workspace", #selector(nextWorkspace), "]", [.command, .control]),
