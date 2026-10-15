@@ -1,0 +1,70 @@
+name: Persistence concurrency diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      CARGO_TARGET_DIR: ${{ runner.temp }}/persistence-concurrency-target
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install pinned Rust
+        run: rustup show active-toolchain
+      - name: Repeat the real persistence concurrency contract
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'persistence-concurrency'
+          root.mkdir()
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          receipt = {'source_sha': sha, 'attempts': [], 'state': 'building', 'max_attempts': 128}
+          (root / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          test = 'concurrent_instances_reserve_disjoint_ids_or_report_a_retryable_lock_conflict'
+          try:
+              build = subprocess.run(['cargo', 'test', '--locked', '-p', 'zmux-desktop-runtime',
+                  '--test', 'persistence', '--no-run', '--message-format=json'],
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600)
+              (root / 'build.log').write_text(build.stderr[-262144:])
+              build.check_returncode()
+              artifacts = [json.loads(line) for line in build.stdout.splitlines() if line.startswith('{')]
+              binaries = [row['executable'] for row in artifacts
+                  if row.get('reason') == 'compiler-artifact' and row.get('executable')
+                  and row.get('target', {}).get('name') == 'persistence']
+              if len(binaries) != 1:
+                  raise RuntimeError('expected one persistence integration binary')
+              for attempt in range(1, 129):
+                  result = subprocess.run([binaries[0], '--exact', test, '--nocapture'],
+                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+                  receipt['attempts'].append({'attempt': attempt, 'exit_code': result.returncode})
+                  receipt['state'] = 'running'
+                  (root / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+                  if result.returncode:
+                      (root / 'failure.log').write_text(result.stdout[-262144:])
+                      receipt['state'] = 'reproduced_failure'
+                      raise RuntimeError(f'concurrency contract failed on attempt {attempt}')
+                  if '1 passed; 0 failed' not in result.stdout:
+                      raise RuntimeError('the named test did not execute')
+              receipt['state'] = 'no_failure_observed'
+          except Exception as error:
+              receipt['error'] = str(error)
+              if receipt['state'] != 'reproduced_failure':
+                  receipt['state'] = 'diagnostic_failed'
+          finally:
+              (root / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          print(json.dumps(receipt))
+          sys.exit(0 if receipt['state'] == 'no_failure_observed' else 1)
+          PY
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: persistence-concurrency-${{ github.sha }}
+          path: ${{ runner.temp }}/persistence-concurrency/
+          if-no-files-found: error
+          retention-days: 7
