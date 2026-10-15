@@ -179,3 +179,17 @@ The author review run also passed, and removing constructor cleanup failed the
 expected worker-lifetime assertion. The manual-only macOS public-peer workflow
 remains unexecuted. This does not establish GUI attachment, production ownership,
 job control, saturation behavior or Darwin support.
+
+### First Darwin run and cleanup repair candidate
+
+Run `38775157527` failed before SDK compilation: SIGKILL to the first completed
+git command process group returned EPERM. The precise OS cause is not established.
+The fixture now accepts this only on Darwin with the owned leader still unreaped
+and WNOWAIT reporting exit, followed by a bounded public ps snapshot containing
+that leader and exclusively zombie group members. Live, absent, malformed or
+uninspectable groups still fail; other permission errors propagate. Final wait
+reaps the child, and the source-command receipt retains the observed group.
+Independent source review prompted explicit EPERM and unreaped-identity guards.
+The complete Linux fixture still passes at
+`/tmp/zmux-zellij-darwin-cleanup-reviewed-20261015/receipt.json`. Linux does not
+execute this Darwin-only branch; hosted rerun is required.
