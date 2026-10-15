@@ -18,6 +18,12 @@ production Docker image build. Evidence is retained in
 separate disposable container; the serving database was not touched. Public
 Cloudflare/browser acceptance and local service promotion remain separate gates.
 
+Local promotion of `1507939` completed with the owned Docker workflow, including
+the pre-migration backup. Health and readiness both returned200 at
+`http://127.0.0.1:3530`; `bunx path-to-port` independently returned3530 after
+startup. `https://zmux.w3dev.app/health` still failed DNS resolution from this
+host. No public tunnel or browser acceptance is claimed.
+
 Implement TOTP enrollment, confirmation, challenge and recovery using the pinned
 Better Auth owner, including the web UI. Native authorization must remain denied
 for a password-only challenge until a valid second factor creates a session.

@@ -95,7 +95,8 @@
         "Bounded native resource sampler executed at5f5005e; controlled budgets/engine decision remain open",
         "Isolated pinned Ghostty C/Rust feasibility and Viewport exporter committed3ac6fa4; Linux x86_64 and Mac arm64 exporter execution passes in38761104404; production engine unchanged",
         "7f125f2 explicit opt-in native engine configuration and worker-owned semantic key/paste encoding; default vt100 retained",
-        "9594b98 observed Darwin pending-to-reaped cleanup and actual optional ARM native semantic input/shared shutdown pass in38823543450; full workflow schema gate pending"
+        "9594b98 observed Darwin pending-to-reaped cleanup and actual optional ARM native semantic input/shared shutdown pass in38823543450; full workflow schema gate pending",
+        "525f6b9 complete optional Darwin workflow38824380757 accepted with357 exact source entries, actual ARM native semantic input and observed pending-to-reaped cleanup; default remains vt100"
       ],
       "verification_receipts": [
         "f04-native-resource-sampler.md",
@@ -108,7 +109,7 @@
         "Exact history and enforceable memory policy",
         "Named controlled Mac workload budgets",
         "Production engine decision and complete terminal fidelity",
-        "Whole optional native workflow schema repair rerun; physical keyboard/full IME and default native acceptance remain separate"
+        "Physical keyboard/full IME, remaining protocol/render fidelity and default native acceptance"
       ]
     },
     {

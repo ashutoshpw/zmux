@@ -194,3 +194,20 @@ schema_version1 without loosening the reader. Existing29 policy tests pass
 (one native-only skip), and both helper/child Python sources parse. The committed
 whole-lane rerun remains required. Physical input/full IME, mouse, styling,
 VoiceOver, performance budgets and default-engine migration remain open.
+
+## Whole optional lane accepted at525f6b9
+
+Run38824380757 succeeds after the schema repair. Independent review verifies
+all357 current-source entries against exact commit525f6b9, both retained engine
+libraries and original provenance, Apple object/executable metadata, four ARM
+adapter cases and four ARM Session cases. The actual ARM native app child5775
+again receives exactly16,405 expected bytes with one clipboard frame; native
+startup and shared shutdown exit0. No engine library was rebuilt and the default
+engine remains vt100. Intel execution is not claimed.
+
+The same run observes the cleanup transition again: child2396 is reaped on
+attempt2 after7.067792ms, reporting SIGHUP exit status1. Whole-lane independent
+review SHA256: `8c509f7940c3cfe8f47827c3b53cba7f89245ea066fdd796d2cb720c8dd263b1`.
+Outer receipt SHA256: `a38e0b87833f98dfe0fa0684a14ca85df9c26c48fed9658f58f95e81f7ea9905`.
+Default native regression, full terminal fidelity, physical input/IME, named
+performance budgets and V01 remain open; no full-parity artifact was shared.

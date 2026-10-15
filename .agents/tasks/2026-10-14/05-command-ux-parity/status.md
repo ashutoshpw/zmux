@@ -5,6 +5,26 @@
 
 ## Active implementation
 
+- Published PR metadata `76618a0`: repository-verified URL/number handoff,
+  exact workspace/window ownership, bounded child cleanup and native row/inspector
+  projection. Final 297-test check and independent source reviews pass. Required
+  native PR receipt is enforced; macOS38825900209 is running. Full PR flags,
+  automatic refresh and broader A01 remain open.
+- Published HTTPS cookie repair `1507939`: real auth/PG regression reproduced
+  non-Secure cookies for HTTPS development origins; repaired table and all18
+  service integration tests, typecheck, Docker build and source review pass.
+- Default native38823748479 at52736fc confirms native browser key delivery but
+  fails because its snapshot overtakes dispatch completion. Bounded trusted-event
+  acknowledgment is implementing; no keyboard or overall browser closure claimed.
+
+- Optional engine38824380757 at `525f6b9` is green and independently accepted:
+  357 exact source entries, ARM adapter/Session execution, real native semantic
+  input and shared shutdown. The Darwin fallback is observed a second time
+  (attempt2, 7.067792ms). Default native/full fidelity/performance remain open.
+- Both-host Zellij packaging38823056442 at986600f passes; downloaded source,
+  notices, binaries, rebuilt modules and all negative/owner checks are verified.
+  Opt-in native bundling is now implementing; no default or GUI integration claim.
+
 - Optional native38823543450 at9594b98 executes the repaired pending-to-reaped
   Darwin transition and actual ARM app semantic input/shared shutdown successfully.
   Parent verifies357 exact source entries and complete child-input digest. The
