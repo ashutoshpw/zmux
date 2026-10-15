@@ -726,6 +726,36 @@ impl DownloadRuntime {
                 .all(|r| serde_json::to_vec(&r.record).is_ok_and(|v| v.len() <= MAX_RECORD_BYTES))
         );
     }
+    pub(crate) fn begin_shutdown(&mut self) {
+        for entry in self.records.iter_mut().filter(|r| {
+            r.physical
+                && matches!(
+                    r.record.status,
+                    DownloadState::AwaitingDestination | DownloadState::Downloading
+                )
+        }) {
+            entry.record.status = DownloadState::Cancelling;
+        }
+        if let Some(paths) = &self.paths {
+            paths.request_shutdown();
+        }
+    }
+    pub(crate) fn physical_count(&self) -> usize {
+        self.records.iter().filter(|r| r.physical).count()
+    }
+    pub(crate) fn poll_shutdown(&mut self) -> Result<(bool, usize), String> {
+        let done = if let Some(paths) = &mut self.paths {
+            if paths.is_finished() {
+                paths.shutdown(Instant::now())?;
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        };
+        Ok((done, self.physical_count()))
+    }
     pub fn shutdown(&mut self, deadline: Instant) -> Result<(), String> {
         if let Some(paths) = &mut self.paths {
             paths.shutdown(deadline)?;

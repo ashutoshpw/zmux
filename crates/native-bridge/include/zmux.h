@@ -70,6 +70,22 @@ int32_t zmux_desktop_browser_event(uint64_t desktop, const uint8_t *request, siz
 int32_t zmux_desktop_notification_event(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_notification_action(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_snapshot(uint64_t desktop, uint64_t revision);
+/* One process-local shutdown ticket per desktop. begin installs its deadline once;
+   repeated calls never renew it or add barriers. budget_ms/wait_ms <=30000.
+   Native cleanup is opt-in only when a real native owner must acknowledge completion.
+   begin/status/wait return owned JSON reports, including Pending after deadline expiry.
+   runtime_cleanup_complete excludes the native barrier; physical_cleanup_complete also
+   requires native downloads, native acknowledgment, control and coordinator final joins.
+   Only trusted completion/download-drain callbacks remain admitted after begin.
+   wait runs off the UI thread; it is clamped to the existing root deadline.
+   native_complete is idempotent and must follow actual physical native cleanup.
+   release returns BUSY and retains the handle until physical cleanup is complete. */
+ZmuxResult zmux_desktop_shutdown_begin(uint64_t desktop, uint64_t budget_ms, uint8_t native_cleanup_required);
+ZmuxResult zmux_desktop_shutdown_status(uint64_t desktop, uint64_t ticket);
+ZmuxResult zmux_desktop_shutdown_wait(uint64_t desktop, uint64_t ticket, uint64_t wait_ms);
+int32_t zmux_desktop_shutdown_native_complete(uint64_t desktop, uint64_t ticket);
+int32_t zmux_desktop_shutdown_release(uint64_t desktop, uint64_t ticket);
+/* Compatibility bounded wait. Also refuses release while physical cleanup is pending. */
 int32_t zmux_desktop_destroy(uint64_t desktop);
 
 #ifdef __cplusplus

@@ -169,23 +169,21 @@ final class BrowserDownloads: NSObject, WKDownloadDelegate {
             }
         }
     }
-    /// MainActor stays responsive while physical WebKit callbacks, background file
-    /// cleanup and authoritative snapshots drain. A timeout is an explicit failure.
-    func shutdown() async throws {
+    /// Starts cancellation without inventing a second deadline. The shared
+    /// desktop shutdown ticket owns the deadline and retains pending ownership.
+    func beginShutdown() {
+        guard !stopping else { return }
         stopping = true
         downloadsWindow?.close()
         for job in Array(jobs.values) { cancel(job) }
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !jobs.isEmpty, ContinuousClock.now < deadline {
-            if let snapshot = try await bridge.poll() { update(snapshot) }
-            tick()
-            if jobs.values.contains(where: { $0.phase == .cleanupFailed }) {
-                throw BridgeFailure(message: "A download's private staging cleanup failed; native ownership remains charged.")
-            }
-            try await Task.sleep(for: .milliseconds(25))
-        }
-        guard jobs.isEmpty else { throw BridgeFailure(message: "Download shutdown could not confirm physical cancellation and cleanup before its deadline.") }
-        timer?.cancel(); timer = nil
+    }
+    func shutdownProgress() async throws -> (complete: Bool, issue: String?) {
+        if let snapshot = try await bridge.poll() { update(snapshot) }
+        tick()
+        if jobs.isEmpty { timer?.cancel(); timer = nil }
+        let issue = jobs.values.contains(where: { $0.phase == .cleanupFailed })
+            ? "A download's staging cleanup failed. Its resources are still retained." : nil
+        return (jobs.isEmpty, issue)
     }
     func showWindow(_ sender: Any?) {
         if downloadsWindow == nil {

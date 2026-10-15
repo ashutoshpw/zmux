@@ -12,6 +12,7 @@ pub mod persistence;
 pub mod profiles;
 mod replies;
 pub mod sessions;
+pub mod shutdown;
 pub mod surface_order;
 pub mod targets;
 pub mod transfers;
@@ -247,6 +248,7 @@ pub struct Snapshot {
 }
 struct Shared {
     stop: AtomicBool,
+    shutdown: Mutex<Option<shutdown::Operation>>,
     snapshot: Mutex<Arc<Snapshot>>,
 }
 pub struct Desktop {
@@ -366,6 +368,7 @@ impl Desktop {
             .unwrap_or_default();
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            shutdown: Mutex::new(None),
             snapshot: Mutex::new(Arc::new(Snapshot {
                 revision: 0,
                 model: model.snapshot(),
@@ -441,6 +444,7 @@ impl Desktop {
                     completion_tx,
                     completion_rx,
                     pending_launches: 0,
+                    launch_workers: Vec::new(),
                     next_launch_id: 1,
                     last_request_id: 0,
                     last_error: None,
@@ -734,7 +738,8 @@ impl Desktop {
     }
 
     fn validate(&self, request: &Request) -> Result<(), DesktopError> {
-        if self.shared.stop.load(Ordering::Acquire) {
+        if self.shared.stop.load(Ordering::Acquire) && !shutdown::cleanup_command(&request.payload)
+        {
             return Err(DesktopError::Closed);
         }
         if let Command::Input { text, .. } = &request.payload
@@ -773,30 +778,16 @@ impl Desktop {
                 }
             })
     }
-    /// Run explicit shutdown off the native main thread. Cancellation itself is immediate.
+    /// Compatibility wait. Pending physical owners retain the desktop and capacity.
     pub fn shutdown(&self, timeout: Duration) -> Result<(), DesktopError> {
-        self.shared.stop.store(true, Ordering::Release);
-        let deadline = Instant::now() + timeout;
-        let mut handle = self
-            .worker
-            .lock()
-            .map_err(|_| DesktopError::Failure("desktop worker lock poisoned".into()))?;
-        if let Some(worker) = handle.as_ref() {
-            while !worker.is_finished() {
-                if Instant::now() >= deadline {
-                    return Err(DesktopError::Failure(
-                        "desktop shutdown exceeded deadline".into(),
-                    ));
-                }
-                thread::sleep(Duration::from_millis(2));
-            }
+        let report = self.begin_shutdown(timeout, false)?;
+        let report = self.wait_shutdown(report.ticket, timeout)?;
+        if !report.physical_cleanup_complete {
+            return Err(DesktopError::Failure(
+                "desktop shutdown pending physical cleanup".into(),
+            ));
         }
-        if let Some(worker) = handle.take() {
-            worker
-                .join()
-                .map_err(|_| DesktopError::Failure("desktop worker panicked".into()))?;
-        }
-        if let Some(error) = &self.snapshot()?.cleanup_error {
+        if let Some(error) = report.issues.first() {
             return Err(DesktopError::Failure(error.clone()));
         }
         Ok(())
@@ -931,6 +922,7 @@ struct Worker {
     completion_tx: SyncSender<Completion>,
     completion_rx: Receiver<Completion>,
     pending_launches: usize,
+    launch_workers: Vec<JoinHandle<()>>,
     next_launch_id: u64,
     last_request_id: u64,
     last_error: Option<String>,
@@ -946,6 +938,7 @@ impl Worker {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            self.reap_launch_workers();
             for _ in 1..MAX_COMMANDS {
                 match receiver.try_recv() {
                     Ok(envelope) => self.command(envelope),
@@ -1057,78 +1050,9 @@ impl Worker {
                 self.publish(false);
             }
         }
-        self.browser
-            .reset("desktop shutdown cancelled browser operations");
-        self.cancel_replies();
-        self.local_tmux.cancel_all();
-        self.attention
-            .reset_native("desktop shutdown cancelled native notifications");
-        for slot in self.slots.values() {
-            slot.cancellation.store(true, Ordering::Release);
-        }
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while self.local_tmux.worker_count() != 0 && Instant::now() < deadline {
-            self.local_tmux.drain();
-            thread::sleep(Duration::from_millis(10));
-        }
-        if self.local_tmux.worker_count() != 0 {
-            self.cleanup_error=Some("local tmux workers exceeded shutdown deadline; owner creation outcome may be unknown".into());
-        }
-        if let Err(error) = self.profiles.shutdown(deadline) {
-            self.cleanup_error = Some(error.to_string());
-        }
-        self.shutdown_persistence(deadline);
-        self.cancel_transfers();
-        let sessions: Vec<_> = self
-            .slots
-            .values_mut()
-            .filter_map(|s| s.session.take())
-            .collect();
-        for session in sessions {
-            self.retire(session);
-        }
-        while self.pending_launches != 0 && Instant::now() < deadline {
-            match self.completion_rx.recv_timeout(Duration::from_millis(20)) {
-                Ok(mut completion) => {
-                    if let Some(session) = completion.cleanup.take() {
-                        self.retire(session);
-                    }
-                    self.pending_launches -= 1;
-                    if let Ok(session) = completion.result {
-                        self.retire(session);
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-        if self.pending_launches != 0 {
-            self.cleanup_error = Some("launch workers exceeded the shutdown deadline".into());
-        }
-        for session in &mut self.retired {
-            if let Err(error) = session.shutdown(deadline.saturating_duration_since(Instant::now()))
-            {
-                self.cleanup_error = Some(error.to_string());
-            }
-        }
-        while !self.transfers_finished() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        if !self.transfers_finished() {
-            self.cleanup_error = Some("upload workers exceeded the shutdown deadline".into());
-        }
-        self.retired.clear();
-        self.slots.clear();
-        if let Err(error) = zmux_remote_runtime::connection::drain_cleanup(
-            deadline.saturating_duration_since(Instant::now()),
-        ) {
-            self.cleanup_error = Some(error.to_string());
-        }
-        if let Err(error) = self.downloads.shutdown(deadline) {
-            self.cleanup_error = Some(error);
-        }
-        self.publish(true);
+        self.run_shutdown(receiver);
     }
+
     fn retire(&mut self, session: Session) {
         if let Err(error) = session.request_close() {
             eprintln!("zmux terminal cancellation wake: {error}");
@@ -1170,6 +1094,11 @@ impl Worker {
             .map(|admission| admission.check())
             .transpose();
         let result = match guard {
+            _ if self.shared.stop.load(Ordering::Acquire)
+                && !shutdown::cleanup_command(&request.payload) =>
+            {
+                Err(DesktopError::Closed)
+            }
             Err(error) => Err(error.into()),
             Ok(_guard) => match request.payload {
                 Command::NativeAttention {
@@ -2238,7 +2167,9 @@ impl Worker {
                                 drop(error.0);
                             }
                         });
-                    if let Err(error) = result {
+                    if let Ok(handle) = result {
+                        self.launch_workers.push(handle);
+                    } else if let Err(error) = result {
                         self.pending_launches -= 1;
                         let slot = self.slots.get_mut(&session_id).expect("new slot");
                         slot.starting = false;

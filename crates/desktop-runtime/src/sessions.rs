@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    thread,
     time::{Duration, Instant},
 };
 use zmux_workspace_core::{Action, RestoreLimits, SessionDocument};
@@ -606,8 +605,7 @@ impl Worker {
         }
         self.last_error = Some(error);
     }
-    pub(crate) fn shutdown_persistence(&mut self, deadline: Instant) {
-        // The command loop has ended; bounded filesystem waits are cleanup work.
+    pub(crate) fn prepare_shutdown_persistence(&mut self) {
         if self.restoring.is_some() {
             self.fail_session_restore("session restore cancelled by shutdown".into());
         }
@@ -616,101 +614,102 @@ impl Worker {
         {
             p.committed = Some((revision, document));
         }
-        let Some(p) = &mut self.persistence else {
-            return;
-        };
-        // Finish older writes before the final snapshot, including explicit exports
-        // while recovery autosaving is latched off after a corrupt startup file.
-        if let Err(error) = p.drain_shutdown(deadline) {
-            self.cleanup_error = Some(error);
-        }
-        if p.snapshot.autosave_enabled
-            && Instant::now() < deadline
-            && let Some((revision, document)) = p.committed.clone()
-        {
-            match p.io.submit_save(p.path.clone(), document, true) {
-                Ok(id) => {
-                    p.pending.insert(
-                        id.0,
-                        IoOperation {
-                            receipt: None,
-                            startup: false,
-                            save_revision: Some(revision),
-                            authoritative: true,
-                            ..Default::default()
-                        },
-                    );
-                    if let Err(error) = p.drain_shutdown(deadline) {
-                        self.cleanup_error = Some(error);
-                    }
-                }
-                Err(error) => {
-                    let message = format!("session final save was not accepted: {error}");
-                    p.latch(message.clone());
-                    self.cleanup_error = Some(message);
-                }
-            }
-        } else if p.snapshot.autosave_enabled && p.committed.is_some() && Instant::now() >= deadline
-        {
-            let error = "session final flush deadline elapsed before submission".to_string();
-            p.latch(error.clone());
-            self.cleanup_error = Some(error);
-        }
-        if !p.pending.is_empty() {
-            let error = "session shutdown deadline elapsed before completion was confirmed; outcome is unknown".to_string();
-            let receipts: Vec<_> = p.pending.drain().filter_map(|(_, op)| op.receipt).collect();
-            for receipt in receipts {
-                p.finish(Some(receipt), Err(error.clone()));
-            }
-            p.latch(error.clone());
-            self.cleanup_error = Some(error);
-        }
-        if let Err(error) = p.io.join_until(deadline) {
-            self.cleanup_error = Some(error.to_string());
-        }
-        p.snapshot.startup_pending = false;
-        p.snapshot.restoring = false;
-        p.reservation_pending = false;
     }
-}
-impl SessionPersistence {
-    fn drain_shutdown(&mut self, deadline: Instant) -> Result<(), String> {
-        let mut authoritative_failure = None;
-        while !self.pending.is_empty() && Instant::now() < deadline {
-            match self.io.try_completion() {
+    pub(crate) fn poll_shutdown_persistence(
+        &mut self,
+        submitted: &mut bool,
+        deadline: Instant,
+    ) -> bool {
+        let Some(p) = &mut self.persistence else {
+            return true;
+        };
+        // Drain only ready receipts, leaving the executor available for native
+        // download cleanup acknowledgments during a slow filesystem operation.
+        while !p.pending.is_empty() {
+            match p.io.try_completion() {
                 Ok(Some(completion)) => {
-                    let Some(op) = self.pending.remove(&completion.operation_id.0) else {
+                    let Some(op) = p.pending.remove(&completion.operation_id.0) else {
                         continue;
                     };
                     match completion.result {
                         Ok(PersistenceOutcome::Saved) => {
-                            self.finish(op.receipt, Ok(op.save_revision.unwrap_or(0)));
+                            p.finish(op.receipt, Ok(op.save_revision.unwrap_or(0)));
                             if op.authoritative {
-                                self.snapshot.last_saved_revision = op.save_revision;
+                                p.snapshot.last_saved_revision = op.save_revision;
                             }
                         }
-                        Ok(PersistenceOutcome::Reserved(_) | PersistenceOutcome::Profiles(_)) => {}
+                        Ok(PersistenceOutcome::Reserved(_) | PersistenceOutcome::Profiles(_)) => (),
                         Ok(PersistenceOutcome::Loaded(_)) => {
-                            self.finish(op.receipt, Err("restore cancelled by shutdown".into()))
+                            p.finish(op.receipt, Err("restore cancelled by shutdown".into()))
                         }
                         Err(error) => {
-                            self.finish(op.receipt, Err(error.to_string()));
+                            p.finish(op.receipt, Err(error.to_string()));
                             if op.authoritative {
                                 let message = format!("session shutdown save failed: {error}");
-                                self.latch(message.clone());
-                                authoritative_failure = Some(message);
+                                self.cleanup_error = Some(message.clone());
+                                p.latch(message);
                             }
                         }
                     }
                 }
-                Ok(None) => thread::sleep(Duration::from_millis(2)),
+                Ok(None) => return false,
                 Err(error) => {
                     let message = format!("session shutdown completion unavailable: {error}");
-                    self.latch(message.clone());
-                    return Err(message);
+                    self.cleanup_error = Some(message.clone());
+                    p.latch(message);
+                    let receipts: Vec<_> =
+                        p.pending.drain().filter_map(|(_, op)| op.receipt).collect();
+                    for receipt in receipts {
+                        p.finish(Some(receipt), Err(error.to_string()));
+                    }
+                    break;
                 }
             }
         }
-        authoritative_failure.map_or(Ok(()), Err)
+        if !*submitted {
+            *submitted = true;
+            if Instant::now() >= deadline && p.snapshot.autosave_enabled {
+                let message =
+                    "session final flush deadline elapsed before submission; outcome is unknown"
+                        .to_string();
+                self.cleanup_error = Some(message.clone());
+                p.latch(message);
+            }
+            if p.snapshot.autosave_enabled
+                && let Some((revision, document)) = p.committed.clone()
+            {
+                match p.io.submit_save(p.path.clone(), document, true) {
+                    Ok(id) => {
+                        p.pending.insert(
+                            id.0,
+                            IoOperation {
+                                receipt: None,
+                                save_revision: Some(revision),
+                                authoritative: true,
+                                ..Default::default()
+                            },
+                        );
+                        return false;
+                    }
+                    Err(error) => {
+                        let message = format!("session final save was not accepted: {error}");
+                        self.cleanup_error = Some(message.clone());
+                        p.latch(message);
+                    }
+                }
+            }
+        }
+        p.io.request_shutdown();
+        if !p.io.is_finished() {
+            return false;
+        }
+        if let Err(error) = p.io.join_until(Instant::now()) {
+            self.cleanup_error = Some(error.to_string());
+            p.latch(error.to_string());
+        }
+        p.snapshot.startup_pending = false;
+        p.snapshot.restoring = false;
+        p.reservation_pending = false;
+        true
     }
 }

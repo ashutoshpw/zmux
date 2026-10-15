@@ -5,6 +5,23 @@ struct BridgeFailure: Error, LocalizedError, Sendable {
     var errorDescription: String? { message }
 }
 
+struct DesktopShutdownReport: Decodable, Sendable {
+    struct Pending: Decodable, Sendable {
+        let sessions, launches, tmux, transfers, profiles, persistence, downloads: UInt64
+        let nativeDownloads, connections, control: UInt64
+        let nativeCleanup: Bool
+    }
+    let ticket: UInt64
+    let phase: String
+    let deadlineExpired: Bool
+    let remainingMs: UInt64
+    let runtimeCleanupComplete: Bool
+    let physicalCleanupComplete: Bool
+    let pending: Pending
+    let issues: [String]
+    let issuesDropped: UInt64
+}
+
 struct ImageTransferAdmission: Sendable {
     let revision: UInt64
     let uploadId: UInt64?
@@ -392,6 +409,39 @@ actor NativeBridge {
         try await send(["command": "browser", "request": [
             "scope": ["surface": "surface:\(surface)"], "action": encoded
         ]])
+    }
+    func beginShutdown() async throws -> DesktopShutdownReport {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let desktop = handle
+        return try await Task.detached {
+            try Self.decodeShutdown(zmux_desktop_shutdown_begin(desktop, 10_000, 1))
+        }.value
+    }
+    func shutdownStatus(ticket: UInt64) async throws -> DesktopShutdownReport {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let desktop = handle
+        return try await Task.detached {
+            try Self.decodeShutdown(zmux_desktop_shutdown_status(desktop, ticket))
+        }.value
+    }
+    func nativeCleanupComplete(ticket: UInt64) async throws {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let desktop = handle
+        let status = await Task.detached { zmux_desktop_shutdown_native_complete(desktop, ticket) }.value
+        guard status == 0 else { throw Self.failure(status) }
+    }
+    func releaseShutdown(ticket: UInt64) async throws {
+        guard handle != 0 else { return }
+        let desktop = handle
+        let status = await Task.detached { zmux_desktop_shutdown_release(desktop, ticket) }.value
+        guard status == 0 else { throw Self.failure(status) }
+        handle = 0
+    }
+    private nonisolated static func decodeShutdown(_ result: ZmuxResult) throws -> DesktopShutdownReport {
+        guard result.status == 0 else { throw failure(result.status) }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(DesktopShutdownReport.self, from: consume(result.value))
     }
     func close() throws {
         guard handle != 0 else { return }

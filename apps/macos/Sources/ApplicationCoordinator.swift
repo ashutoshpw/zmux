@@ -44,6 +44,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     }
     private var startRequested = false
     private var shutdownTask: Task<Void, Error>?
+    private let shutdownPresentation = ShutdownPresentation()
+    private var shutdownPreparationStopped = false
+    private var shutdownImagesReleased = false
+    private var shutdownNativeIssues: [String] = []
     let bridge = NativeBridge()
     let splitLayouts = WorkspaceSplitPreferences()
     lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
@@ -107,11 +111,13 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         browserEventTask = Task { [weak self] in
             guard let self else { return }
             for await (generation, event) in self.browserEvents.stream {
-                if Task.isCancelled { break }
+                if Task.isCancelled || self.shutdownTask != nil { break }
                 if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
+                guard !Task.isCancelled, self.shutdownTask == nil else { break }
                 guard generation == self.browserEventGeneration, let event else { continue }
                 do { try await self.bridge.browserEvent(event) }
                 catch {
+                    guard !Task.isCancelled, self.shutdownTask == nil else { break }
                     self.browserEventsNeedRecovery = true
                     self.reportError("Browser host synchronization failed: " + error.localizedDescription)
                 }
@@ -120,7 +126,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         commandTask = Task { [weak self, stream] in
             for await command in stream {
-                guard let self, !Task.isCancelled else { break }
+                guard let self, !Task.isCancelled, self.shutdownTask == nil else { break }
                 do {
                     switch command {
                     case .window(let operation, let window, let focus): try await self.bridge.window(operation, window: window, focus: focus)
@@ -160,13 +166,14 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         try await self.bridge.resize(session: session, rows: rows, cols: cols)
                     }
                 } catch {
+                    guard !Task.isCancelled, self.shutdownTask == nil else { break }
                     self.reportError(error.localizedDescription)
                 }
             }
         }
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self else { break }
+                guard let self, self.shutdownTask == nil else { break }
                 do {
                     if self.browserEventsNeedRecovery {
                         // A wakeup, not a second sender: recovery must progress even
@@ -174,8 +181,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         _ = self.browserEvents.continuation.yield((self.browserEventGeneration, nil))
                     }
                     if let snapshot = try await self.bridge.poll() { try self.reconcile(snapshot) }
+                    guard !Task.isCancelled, self.shutdownTask == nil else { break }
                     if (self.snapshot?.browserPendingRequests ?? 0) > 0 {
                         let batch = try await self.bridge.drainBrowserRequests()
+                        guard !Task.isCancelled, self.shutdownTask == nil else { break }
                         if batch.epoch == self.browserEpoch {
                             for request in batch.requests {
                                 self.browsers[request.owner.surfaceId]?.executeAutomation(request)
@@ -186,6 +195,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 } catch is CancellationError {
                     break
                 } catch {
+                    guard !Task.isCancelled, self.shutdownTask == nil else { break }
                     self.reportError(error.localizedDescription)
                     do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
                 }
@@ -210,23 +220,86 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         windowTasks.removeAll()
         browsers.values.forEach { $0.close() }
         browsers.removeAll()
-        WindowLifecycleSmoke.trace("shutdown before native download cleanup")
-        var cleanupFailure: (any Error)?
-        do { try await browserDownloads.shutdown() } catch { cleanupFailure = error }
-        WindowLifecycleSmoke.trace("shutdown after native download cleanup")
+        browserDownloads.beginShutdown()
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
         for host in mainWindowHosts.values { host.finishPresentation() }
-        await imagePastes.stopAccepting()
-        // Native download cleanup must not prevent the sole Desktop from saving
-        // and stopping its sessions. Preserve the first error after every owner
-        // has received its bounded cleanup opportunity.
-        WindowLifecycleSmoke.trace("shutdown before Desktop close/save")
-        do { try await bridge.close() } catch { if cleanupFailure == nil { cleanupFailure = error } }
-        WindowLifecycleSmoke.trace("shutdown after Desktop close/save")
-        await imagePastes.desktopClosed()
-        if let cleanupFailure { throw cleanupFailure }
+        Task {
+            await imagePastes.stopAccepting()
+            shutdownPreparationStopped = true
+        }
+        var ticket: UInt64?
+        var downloadsComplete = false
+        var releasingImages = false
+        var nativeAcknowledged = false
+        var lastObservationError: String?
+        var lastPendingState: String?
+        WindowLifecycleSmoke.trace("shutdown before shared Desktop ticket")
+        while true {
+            var completedIssues: [String]?
+            do {
+                let report: DesktopShutdownReport
+                if let ticket { report = try await bridge.shutdownStatus(ticket: ticket) }
+                else {
+                    report = try await bridge.beginShutdown()
+                    ticket = report.ticket
+                }
+                let pending = report.pending
+                let pendingState = "phase=\(report.phase) sessions=\(pending.sessions) launches=\(pending.launches) tmux=\(pending.tmux) transfers=\(pending.transfers) connections=\(pending.connections) profiles=\(pending.profiles) persistence=\(pending.persistence) downloads=\(pending.downloads) nativeDownloads=\(pending.nativeDownloads) native=\(pending.nativeCleanup) control=\(pending.control)"
+                if lastPendingState != pendingState {
+                    WindowLifecycleSmoke.trace("shutdown " + pendingState)
+                    lastPendingState = pendingState
+                }
+                if !downloadsComplete {
+                    let progress = try await browserDownloads.shutdownProgress()
+                    downloadsComplete = progress.complete
+                    if let issue = progress.issue { shutdownPresentation.show(issue) }
+                }
+                // Image source files can still be read by Rust transfer workers.
+                // Release them only after those workers have physically joined.
+                if report.runtimeCleanupComplete, shutdownPreparationStopped, !releasingImages {
+                    releasingImages = true
+                    Task {
+                        await imagePastes.desktopClosed()
+                        shutdownImagesReleased = true
+                    }
+                }
+                if downloadsComplete, shutdownImagesReleased, !nativeAcknowledged {
+                    try await bridge.nativeCleanupComplete(ticket: report.ticket)
+                    nativeAcknowledged = true
+                }
+                if report.physicalCleanupComplete, report.phase == "complete", nativeAcknowledged {
+                    try await bridge.releaseShutdown(ticket: report.ticket)
+                    completedIssues = report.issues + shutdownNativeIssues
+                    if report.issuesDropped > 0 { completedIssues?.append("Additional cleanup issues were recorded.") }
+                } else if report.deadlineExpired {
+                    shutdownPresentation.show("Cleanup is taking longer than expected. zmux is still waiting for its sessions and file operations to finish. zmux will close when cleanup finishes.")
+                }
+            } catch {
+                // A missing observation cannot authorize process termination.
+                // begin/ack/release are idempotent; polling never renews the ticket.
+                let message = String(error.localizedDescription.prefix(512))
+                shutdownPresentation.show("Cleanup is still pending: " + message)
+                if lastObservationError != message {
+                    WindowLifecycleSmoke.trace("shutdown observation: " + message)
+                    lastObservationError = message
+                }
+            }
+            if let completedIssues {
+                shutdownPresentation.close()
+                WindowLifecycleSmoke.trace("shutdown after all physical owners joined")
+                if !completedIssues.isEmpty {
+                    throw BridgeFailure(message: completedIssues.joined(separator: "\n"))
+                }
+                return
+            }
+            // Cleanup must continue even if a caller cancels its awaiting task.
+            // A bounded timer keeps retries responsive without a cancellation spin.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { @Sendable in continuation.resume() }
+            }
+        }
     }
 
     func requestApplicationTermination() {
@@ -257,10 +330,14 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
     }
     func reportError(_ message: String) {
+        if shutdownTask != nil, shutdownNativeIssues.count < 16 {
+            shutdownNativeIssues.append(String(message.prefix(512)))
+        }
         WindowLifecycleSmoke.trace("coordinator error: " + message)
         mainWindowHost.showError(message)
     }
     func appActive(_ active: Bool) {
+        guard shutdownTask == nil else { return }
         enqueue(.attention("app_active", nil, nil, active))
         if active { notificationDelivery.refreshPermission() }
     }
@@ -423,6 +500,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     }
 
     private func recoverBrowserHostEvents() async {
+        guard !Task.isCancelled, shutdownTask == nil else { return }
         browserEventsNeedRecovery = false
         browserEventGeneration &+= 1
         // Discard queued incremental events captured before this full-owner snapshot.

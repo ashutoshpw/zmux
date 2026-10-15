@@ -304,6 +304,11 @@ impl PersistenceWorker {
             Err(TryRecvError::Disconnected) => Err(PersistenceError::Closed),
         }
     }
+    pub(crate) fn is_finished(&self) -> bool {
+        self.thread
+            .as_ref()
+            .is_none_or(|worker| worker.is_finished())
+    }
     pub fn request_shutdown(&self) {
         self.stop.store(true, Ordering::Release);
     }

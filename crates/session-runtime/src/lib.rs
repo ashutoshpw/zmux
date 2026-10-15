@@ -241,6 +241,7 @@ enum Input {
 
 struct Shared {
     stop: AtomicBool,
+    close_deadline: Mutex<Option<Instant>>,
     exited: AtomicBool,
     resize: Mutex<Option<Size>>,
     snapshot: Mutex<Arc<Snapshot>>,
@@ -552,6 +553,20 @@ impl Session {
         self.wake()
     }
 
+    /// Tighten cancellation to a shared shutdown deadline without renewing it.
+    /// The existing post-exit PTY drain is reserved within that deadline. A final
+    /// OS reap can still remain pending; only join/is_finished confirms cleanup.
+    pub fn request_close_until(&self, deadline: Instant) -> Result<(), SessionError> {
+        let mut current = self
+            .shared
+            .close_deadline
+            .lock()
+            .map_err(|_| SessionError::Failure("close deadline poisoned".into()))?;
+        *current = Some(current.map_or(deadline, |previous| previous.min(deadline)));
+        drop(current);
+        self.request_close()
+    }
+
     /// Explicit joining is for CLI/worker owners, never the AppKit main thread.
     pub fn shutdown(&mut self, timeout: Duration) -> Result<(), SessionError> {
         self.request_close()?;
@@ -737,6 +752,7 @@ impl Worker {
         drop(pair.slave);
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
+            close_deadline: Mutex::new(None),
             exited: AtomicBool::new(false),
             resize: Mutex::new(None),
             snapshot: Mutex::new(Arc::new(Snapshot {
@@ -862,6 +878,18 @@ impl Worker {
                             self.finish_inputs(InputWriteFailure::SessionClosed);
                             self.process.send_signal(Signal::SIGTERM)?;
                             self.close_deadline = Some(Instant::now() + timeout);
+                        }
+                        if let Some(deadline) =
+                            *self.shared.close_deadline.lock().map_err(|_| {
+                                SessionError::Failure("close deadline poisoned".into())
+                            })?
+                        {
+                            let graceful_deadline = deadline
+                                .checked_sub(DRAIN_TIMEOUT)
+                                .unwrap_or_else(Instant::now);
+                            self.close_deadline = self
+                                .close_deadline
+                                .map(|current| current.min(graceful_deadline));
                         }
                         if self
                             .close_deadline
