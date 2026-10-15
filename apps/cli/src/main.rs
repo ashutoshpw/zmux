@@ -1,9 +1,11 @@
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use std::{
     env,
     error::Error,
     ffi::OsString,
     fmt,
     io::{self, Read, Write},
+    os::fd::AsFd,
     os::unix::net::UnixStream,
     path::PathBuf,
     process::ExitCode,
@@ -243,33 +245,15 @@ fn parse(
             tail,
             ControlCommand::ListNotifications,
         )?,
-        Some(
-            "mark-notification-read"
-            | "open-notification"
-            | "dismiss-notification"
-            | "clear-notifications",
-        ) => {
-            let name = command.unwrap();
-            help_or_exact(name, tail, 2, |v| {
-                let flag = if name == "clear-notifications" {
-                    "--through"
-                } else {
-                    "--id"
-                };
-                if v[0] != flag {
-                    return Err(CliError(format!("{name} requires {flag} ID")));
-                }
-                let id = parse_id(&v[1], "notification")?;
-                Ok(ControlCommand::Attention {
-                    action: match name {
-                        "mark-notification-read" => AttentionCommand::Read { id },
-                        "open-notification" => AttentionCommand::Open { id },
-                        "dismiss-notification" => AttentionCommand::Dismiss { id },
-                        _ => AttentionCommand::Clear { through_id: id },
-                    },
-                })
-            })?
-        }
+        Some("open-notification") => help_or_exact("open-notification", tail, 2, |values| {
+            if values[0] != "--id" {
+                return Err(CliError("open-notification requires --id ID".into()));
+            }
+            let id = parse_id(&values[1], "notification")?;
+            Ok(ControlCommand::Attention {
+                action: AttentionCommand::Open { id },
+            })
+        })?,
         Some("recently-closed") => {
             app_no_args("recently-closed", tail, ControlCommand::RecentlyClosed)?
         }
@@ -462,6 +446,7 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
         let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
         let address = socket2::SockAddr::unix(&options.socket)?;
         socket.connect_timeout(&address, socket_budget(deadline)?)?;
+        socket.set_nonblocking(true)?;
         Ok(socket.into())
     };
     let mut stream = connect().map_err(|error| {
@@ -538,12 +523,28 @@ fn socket_budget(deadline: Instant) -> io::Result<Duration> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "request deadline elapsed"))
 }
 
-// Recompute the remaining total budget for each partial transfer. read_exact and
-// write_all with a single SO_RCVTIMEO/SO_SNDTIMEO restart that timeout after each
-// successful partial I/O, allowing a trickling peer to extend the request forever.
+// A disconnected Darwin Unix socket rejects setsockopt with EINVAL even when
+// reply bytes remain buffered. Use nonblocking I/O and poll rather than changing
+// SO_RCVTIMEO/SO_SNDTIMEO between partial transfers. A hangup is readiness: drain
+// buffered bytes before accepting EOF, and retain one deadline across all waits.
+fn wait_socket_ready(stream: &UnixStream, events: PollFlags, deadline: Instant) -> io::Result<()> {
+    loop {
+        let remaining = socket_budget(deadline)?;
+        let timeout = PollTimeout::try_from(remaining.as_nanos().div_ceil(1_000_000))
+            .unwrap_or(PollTimeout::MAX);
+        let mut descriptors = [PollFd::new(stream.as_fd(), events)];
+        match poll(&mut descriptors, timeout) {
+            Ok(0) => continue,
+            Ok(_) => return socket_budget(deadline).map(|_| ()),
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
+        }
+    }
+}
+
 fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) -> io::Result<()> {
     while !bytes.is_empty() {
-        stream.set_read_timeout(Some(socket_budget(deadline)?))?;
+        socket_budget(deadline)?;
         match stream.read(bytes) {
             Ok(0) => {
                 return Err(io::Error::new(
@@ -552,6 +553,9 @@ fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant)
                 ));
             }
             Ok(count) => bytes = &mut bytes[count..],
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_socket_ready(stream, PollFlags::POLLIN, deadline)?;
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
         }
@@ -561,7 +565,7 @@ fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant)
 
 fn write_before(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
     while !bytes.is_empty() {
-        stream.set_write_timeout(Some(socket_budget(deadline)?))?;
+        socket_budget(deadline)?;
         match stream.write(bytes) {
             Ok(0) => {
                 return Err(io::Error::new(
@@ -570,6 +574,9 @@ fn write_before(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant) ->
                 ));
             }
             Ok(count) => bytes = &bytes[count..],
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_socket_ready(stream, PollFlags::POLLOUT, deadline)?;
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error),
         }

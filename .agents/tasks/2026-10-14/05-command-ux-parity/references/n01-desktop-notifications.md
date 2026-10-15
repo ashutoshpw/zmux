@@ -47,3 +47,20 @@ remain separate N01 gates. N01 and V01 stay open.
   restriction barrier accepted on re-review. The permission smoke uses the production
   observation owner and actual Rust event API; hosted execution remains pending.
 - Swift/UN compilation and visible OS permission/banner acceptance remain open.
+
+## N01b metadata and scoped operations
+
+- `notify` accepts default title, subtitle/body and explicit desktop preference; inbox
+  presentation includes subtitle. A native CLI journey checks subtitle rendering and
+  confirms desktop=false creates no native delivery desire.
+- Shared executor handles scoped mark-read, dismiss/all-read and clear, including
+  caller-workspace defaults and focus-independent global operations on empty desktops.
+- Each row captures namespace/workspace identity; same-live-session moves update its
+  workspace before closure. Scoped mutations return affected IDs/count and a captured
+  cutoff. Listing exposes monotonic cursor and epoch; stale epoch guards are available
+  on the typed mutation protocol.
+- Real CLI/socket and runtime tests cover malformed grammar, cross-workspace safety,
+  moved/closed history, empty-desktop operations, cutoff and permission policy.
+- Workspace-level notification destinations, UUID notification selectors and reliable
+  replies remain N01c/followup gates; a workspace selector alone still targets its
+  focused surface. No full N01/V01 claim is made.

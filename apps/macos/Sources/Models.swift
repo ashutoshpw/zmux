@@ -77,7 +77,7 @@ struct Workspace: Decodable, Sendable { let id: UInt64; let name: String; let fo
 struct ClosedItem: Decodable, Sendable { let id: UInt64; let title: String; let workspaceName: String; let restoring: Bool }
 struct Model: Decodable, Sendable { let identityNamespace: UUID; let modelVersion: UInt32; let closedItems: [ClosedItem]; let revision: UInt64; let focusedWorkspace: UInt64?; let workspaces: [Workspace] }
 struct AttentionNotification: Decodable, Sendable {
-    let id: UInt64; let surfaceId: UInt64; let title: String; let body: String; let source: String
+    let id: UInt64; let surfaceId: UInt64; let title: String; let subtitle: String; let body: String; let source: String
     let timestampMs: UInt64; let read: Bool
     let target: NotificationTarget?
 }

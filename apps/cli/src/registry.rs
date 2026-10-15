@@ -374,8 +374,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "automation",
         true,
         true,
-        "notify [--surface TARGET] --title TITLE [--body TEXT]",
-        "Add bounded in-app attention to the exact live surface."
+        "notify [--workspace TARGET] [--surface TARGET] [--title TITLE] [--subtitle TEXT] [--body TEXT] [--desktop true|false]\n       zmux notify --clear [--workspace TARGET] [--surface TARGET]",
+        "Add bounded attention to an exact live surface. The title defaults to Notification; subtitle and body default to empty. --desktop false suppresses OS delivery; true requests delivery subject to permissions and suppression policy. OS success is not implied by the inbox receipt. --clear removes notifications for the explicit workspace/surface or inherited caller surface, then caller workspace, then focused surface. Surface clear requires workspace context. Workspace-only creation still resolves a surface; workspace-level notification destinations remain unavailable. Content and --desktop conflict with --clear."
     ),
     command!(
         "list-notifications",
@@ -383,15 +383,15 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         false,
         true,
         "list-notifications",
-        "List notification IDs, targets, unread state and dropped-event count."
+        "List notification IDs, content, targets, read/delivery state, dropped-event count, epoch and cursor. Use an observed cursor with clear-notifications --through to preserve newer arrivals."
     ),
     command!(
         "mark-notification-read",
         "automation",
-        false,
         true,
-        "mark-notification-read --id ID",
-        "Mark one notification generation read."
+        true,
+        "mark-notification-read <--id ID | --workspace TARGET [--surface TARGET] | --all>",
+        "Mark exactly one notification, a workspace (optionally limited to one surface), or all notifications read. --surface requires an explicit workspace or ZMUX_WORKSPACE_ID. ID and global selectors accept no target scope. This operation preserves focus."
     ),
     command!(
         "open-notification",
@@ -404,18 +404,18 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
         "dismiss-notification",
         "automation",
-        false,
         true,
-        "dismiss-notification --id ID",
-        "Remove one notification."
+        true,
+        "dismiss-notification <--id ID | --all-read>",
+        "Remove exactly one notification or every read notification. Unread rows survive --all-read. Target selectors are not accepted and focus is preserved."
     ),
     command!(
         "clear-notifications",
         "automation",
-        false,
         true,
-        "clear-notifications --through ID",
-        "Clear history through an observed ID, preserving newer arrivals."
+        true,
+        "clear-notifications [--workspace TARGET [--surface TARGET]] [--through CURSOR]",
+        "Clear notifications for an explicit workspace or surface. Without selectors, ZMUX_WORKSPACE_ID scopes the clear to that workspace, ignoring the caller surface; without workspace context it clears all notifications. Surface scope requires workspace context. --through accepts an observed list-notifications cursor (including zero) and preserves newer arrivals. Receipts report epoch, cursor and affected_ids. Focus is preserved."
     ),
     command!(
         "browser",
@@ -494,7 +494,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
 ];
 
-const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client deadline (50–30000 milliseconds)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
+const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix socket path\n  --password <TEXT>    Authenticate to a password-protected local socket\n  --timeout <MILLIS>   Client response deadline (50–30000 ms; checked after decoding; output rendering may finish later)\n  -h, --help           Read offline help\n  -V, --version        Print version\n";
 const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --workspace only.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  Explicit selectors override inherited caller defaults. Without them,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Surface caller identity follows tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
 pub(super) fn find(name: &str) -> Option<&'static CommandSpec> {
     COMMANDS

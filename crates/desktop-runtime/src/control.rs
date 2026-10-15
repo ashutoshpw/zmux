@@ -645,7 +645,7 @@ fn dispatch(
         ControlCommand::ListNotifications => {
             let snapshot = current_snapshot(desktop)?;
             Ok(
-                json!({"revision": snapshot.revision, "notifications": snapshot.notifications,
+                json!({"revision": snapshot.revision, "epoch": snapshot.native_notifications.epoch, "cursor": snapshot.notification_cursor, "notifications": snapshot.notifications,
                 "dropped": snapshot.notifications_dropped, "unread": snapshot.notifications.iter().filter(|n| !n.read).count()}),
             )
         }
@@ -823,10 +823,14 @@ fn mutate(
         DesktopError::Policy(error) => (error.code(), error.to_string()),
         DesktopError::Target(error) => (error.code(), error.to_string()),
         DesktopError::Browser(error) => (error.code(), error.to_string()),
+        DesktopError::Attention(error) => (error.code(), error.to_string()),
         DesktopError::NotTerminal => ("not_terminal", error.to_string()),
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(mutation) = execution.notification_mutation {
+        return Ok(json!(mutation));
+    }
     if let Some(operation_id) = execution.browser_operation_id {
         return execution
             .snapshot

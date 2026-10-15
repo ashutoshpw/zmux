@@ -392,7 +392,14 @@ fn coalescing_and_cursor_clear_remove_obsolete_native_jobs_without_consuming_new
         Err(AttentionError::StaleTarget)
     ));
     let later = create(&mut attention, &store, surface, "Later arrival");
-    attention.clear(replacement.notification_id);
+    attention
+        .apply_mutation(
+            &NotificationFilter::All,
+            NotificationMutationKind::Clear,
+            Some(replacement.notification_id),
+            None,
+        )
+        .unwrap();
     let desired = attention.native_snapshot(&store.snapshot()).desired;
     assert_eq!(desired.len(), 1);
     assert_eq!(desired[0].target, later);

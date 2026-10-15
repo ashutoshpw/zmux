@@ -1175,6 +1175,18 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read && $0.body == "Second review" } }
         showNotifications()
         guard sidebarModes?.selectedSegment == 1, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
+        _ = try await nativeCLI(["notify", "--surface", String(originalPane.selectedSurface), "--title", "CLI review", "--subtitle", "CLI follow up", "--body", "Review queued", "--desktop", "false"])
+        try await waitUntil { value in
+            value.notifications.contains { $0.surfaceId == originalPane.selectedSurface && $0.title == "CLI review" && $0.subtitle == "CLI follow up" && !$0.read }
+        }
+        guard let metadata = snapshot?.notifications.last(where: { $0.title == "CLI review" }),
+              snapshot?.nativeNotifications.desired.contains(where: { $0.target.notificationId == metadata.id }) == false,
+              notificationList?.arrangedSubviews.contains(where: { row in
+                  row.subviews.compactMap { $0 as? NSStackView }.flatMap { $0.arrangedSubviews }
+                      .compactMap { $0 as? NSTextField }.contains { $0.stringValue == "CLI follow up" }
+              }) == true else {
+            throw BridgeFailure(message: "Notification metadata did not reach the inbox or disabled desktop delivery")
+        }
         if let item = snapshot?.notifications.last(where: { $0.surfaceId == originalPane.selectedSurface }) {
             openNotification(item.id)
             try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface && $0.notifications.first(where: { $0.id == item.id })?.read == true }
@@ -1332,6 +1344,7 @@ final class AppController: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWin
         let evidence: [String: Any] = [
             "success": true,
             "notification_permission_ordering": true,
+            "notification_cli_metadata": true,
             "browser_cli_automation": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,

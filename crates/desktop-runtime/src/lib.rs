@@ -9,8 +9,10 @@ pub mod sessions;
 pub mod targets;
 pub mod transfers;
 use attention::{
-    Attention, AttentionCommand, NativeAttentionAction, NativeNotificationEvent,
-    NativeNotificationSnapshot, Notification, NotificationContent,
+    Attention, AttentionCommand, DismissSelection, NativeAttentionAction, NativeNotificationEvent,
+    NativeNotificationSnapshot, Notification, NotificationAction, NotificationContent,
+    NotificationFilter, NotificationMutation, NotificationMutationKind, NotificationScope,
+    NotificationSelection,
 };
 use browser::{
     BrowserDispatchBatch, BrowserHostEvent, BrowserReceipt, BrowserRequest, BrowserRuntime,
@@ -175,6 +177,7 @@ pub struct Snapshot {
     pub frames: Vec<Frame>,
     pub notifications: Vec<Notification>,
     pub notifications_dropped: u64,
+    pub notification_cursor: u64,
     pub native_notifications: NativeNotificationSnapshot,
     pub uploads: Vec<TransferSnapshot>,
     pub persistence: sessions::PersistenceSnapshot,
@@ -214,6 +217,7 @@ pub(crate) struct Execution {
     pub created_surfaces: Vec<SurfaceId>,
     pub created_uploads: Vec<u64>,
     pub session_operation_id: Option<u64>,
+    pub notification_mutation: Option<NotificationMutation>,
     pub browser_operation_id: Option<u64>,
     pub browser_dispatch: Option<BrowserDispatchBatch>,
 }
@@ -267,6 +271,7 @@ impl Desktop {
                 frames: Vec::new(),
                 notifications: Vec::new(),
                 notifications_dropped: 0,
+                notification_cursor: 0,
                 native_notifications: attention.native_snapshot(&model.snapshot()),
                 uploads: Vec::new(),
                 persistence: persistence_snapshot,
@@ -296,6 +301,7 @@ impl Desktop {
                     restoring: None,
                     session_operation_id: None,
                     attention,
+                    notification_mutation: None,
                     transfers: Vec::new(),
                     next_transfer_id: 1,
                     app_active: false,
@@ -587,6 +593,71 @@ struct Completion {
     result: Result<Session, SessionError>,
     connection: Option<Arc<ManagedConnection>>,
 }
+fn notification_filter(
+    model: &Model,
+    scope: &zmux_workspace_core::targets::TargetScope,
+    caller: &zmux_workspace_core::targets::CallerContext,
+    selection: NotificationScope,
+) -> Result<NotificationFilter, DesktopError> {
+    use attention::AttentionError;
+    use zmux_workspace_core::targets::{CallerContext, TargetScope};
+    if scope.pane.is_some() {
+        return Err(AttentionError::InvalidSelector(
+            "notification bulk operations accept workspace/surface selectors, not pane selectors",
+        )
+        .into());
+    }
+    if matches!(selection, NotificationScope::Caller)
+        && scope.workspace.is_none()
+        && scope.surface.is_none()
+    {
+        let resolved = scope.resolve(model, caller)?;
+        return Ok(if caller.surface.is_some() || caller.workspace.is_none() {
+            NotificationFilter::Surface {
+                identity_namespace: model.identity_namespace,
+                surface_id: resolved.surface,
+            }
+        } else {
+            NotificationFilter::Workspace {
+                identity_namespace: model.identity_namespace,
+                workspace_id: resolved.workspace,
+            }
+        });
+    }
+    let mut resolved_scope = TargetScope {
+        workspace: scope.workspace.clone().or_else(|| caller.workspace.clone()),
+        surface: scope.surface.clone(),
+        ..Default::default()
+    };
+    if resolved_scope.workspace.is_none() {
+        return Err(AttentionError::InvalidSelector(
+            "workspace context is required for scoped notification operations",
+        )
+        .into());
+    }
+    if matches!(selection, NotificationScope::Surface) {
+        resolved_scope.surface = resolved_scope.surface.or_else(|| caller.surface.clone());
+        if resolved_scope.surface.is_none() {
+            return Err(AttentionError::InvalidSelector(
+                "surface selection requires a surface target",
+            )
+            .into());
+        }
+    }
+    let target = resolved_scope.resolve(model, &CallerContext::default())?;
+    Ok(if resolved_scope.surface.is_some() {
+        NotificationFilter::Surface {
+            identity_namespace: model.identity_namespace,
+            surface_id: target.surface,
+        }
+    } else {
+        NotificationFilter::Workspace {
+            identity_namespace: model.identity_namespace,
+            workspace_id: target.workspace,
+        }
+    })
+}
+
 struct Worker {
     model: WorkspaceStore,
     browser: BrowserRuntime,
@@ -596,6 +667,7 @@ struct Worker {
     restoring: Option<sessions::PendingRestore>,
     session_operation_id: Option<u64>,
     attention: Attention,
+    notification_mutation: Option<NotificationMutation>,
     transfers: Vec<TransferSlot>,
     next_transfer_id: u64,
     app_active: bool,
@@ -784,6 +856,7 @@ impl Worker {
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
         self.session_operation_id = None;
+        self.notification_mutation = None;
         self.browser_operation_id = None;
         self.browser_dispatch = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
@@ -856,6 +929,7 @@ impl Worker {
             let _ = sender.try_send(Execution {
                 result,
                 session_operation_id: self.session_operation_id,
+                notification_mutation: self.notification_mutation.take(),
                 browser_operation_id: self.browser_operation_id,
                 browser_dispatch: self.browser_dispatch.take(),
                 created_uploads: snapshot
@@ -992,13 +1066,23 @@ impl Worker {
                     paths,
                 })
             }
-            TargetOperation::Notify { title, body } => {
+            TargetOperation::Notify {
+                title,
+                subtitle,
+                body,
+                desktop,
+            } => {
                 let target = request.scope.resolve(&model, &request.caller)?;
                 self.attention_action(AttentionCommand::Notify {
                     surface_id: target.surface,
                     title,
+                    subtitle,
                     body,
+                    desktop,
                 })
+            }
+            TargetOperation::Notifications { action } => {
+                self.scoped_notifications(&model, &request.scope, &request.caller, action)
             }
             TargetOperation::SendText { text } => {
                 let target = request.scope.resolve(&model, &request.caller)?;
@@ -1061,59 +1145,158 @@ impl Worker {
                 .any(|p| p.selected_surface == id)
     }
     fn attention_action(&mut self, command: AttentionCommand) -> Result<(), DesktopError> {
-        let result: Result<(), String> = (|| {
-            match command {
-                AttentionCommand::Notify {
+        match command {
+            AttentionCommand::Notify {
+                surface_id,
+                title,
+                subtitle,
+                body,
+                desktop,
+            } => {
+                let model = self.model.snapshot();
+                let id = self.attention.notify_owned(
+                    &model,
                     surface_id,
-                    title,
-                    body,
-                } => {
-                    let state = self.model.snapshot();
-                    if !state
-                        .workspaces
-                        .iter()
-                        .flat_map(|w| w.root.panes())
-                        .flat_map(|p| &p.surfaces)
-                        .any(|s| s.id == surface_id)
-                    {
-                        return Err(format!("surface {} does not exist", surface_id.0));
-                    }
+                    "cli",
+                    &NotificationContent {
+                        title,
+                        subtitle,
+                        body,
+                        desktop,
+                    },
+                    self.surface_is_visible(surface_id),
+                )?;
+                self.notification_mutation = Some(
                     self.attention
-                        .notify_owned(
-                            &state,
-                            surface_id,
-                            "cli",
-                            &NotificationContent {
-                                title,
-                                body,
-                                ..Default::default()
-                            },
-                            self.surface_is_visible(surface_id),
-                        )
-                        .map_err(|error| error.to_string())?;
-                }
-                AttentionCommand::Read { id } => self.attention.read(id)?,
-                AttentionCommand::Dismiss { id } => self.attention.dismiss(id)?,
-                AttentionCommand::Clear { through_id } => self.attention.clear(through_id),
-                AttentionCommand::AppActive { active } => {
-                    self.app_active = active;
-                    if active {
-                        self.acknowledge_focused();
-                    }
-                }
-                AttentionCommand::Open { id } => {
-                    let surface_id = self
-                        .attention
-                        .open_target(&self.model.snapshot(), id)
-                        .map_err(|error| error.to_string())?;
-                    self.action(Action::SelectSurface { surface_id })
-                        .map_err(|e| e.to_string())?;
-                    self.attention.read(id)?;
+                        .mutation_receipt(vec![id], self.attention.cursor()),
+                );
+            }
+            AttentionCommand::Read { id } => {
+                self.notification_mutation = Some(self.attention.apply_mutation(
+                    &NotificationFilter::Id(id),
+                    NotificationMutationKind::MarkRead,
+                    None,
+                    None,
+                )?);
+            }
+            AttentionCommand::Dismiss { id } => {
+                self.notification_mutation = Some(self.attention.apply_mutation(
+                    &NotificationFilter::Id(id),
+                    NotificationMutationKind::Dismiss,
+                    None,
+                    None,
+                )?);
+            }
+            AttentionCommand::Clear { through_id } => {
+                self.notification_mutation = Some(self.attention.apply_mutation(
+                    &NotificationFilter::All,
+                    NotificationMutationKind::Clear,
+                    Some(through_id),
+                    None,
+                )?);
+            }
+            AttentionCommand::AppActive { active } => {
+                self.app_active = active;
+                if active {
+                    self.acknowledge_focused();
                 }
             }
-            Ok(())
-        })();
-        result.map_err(DesktopError::Failure)
+            AttentionCommand::Open { id } => {
+                let surface_id = self.attention.open_target(&self.model.snapshot(), id)?;
+                self.action(Action::SelectSurface { surface_id })?;
+                self.notification_mutation = Some(self.attention.apply_mutation(
+                    &NotificationFilter::Id(id),
+                    NotificationMutationKind::MarkRead,
+                    None,
+                    None,
+                )?);
+            }
+        }
+        Ok(())
+    }
+    fn scoped_notifications(
+        &mut self,
+        model: &Model,
+        scope: &zmux_workspace_core::targets::TargetScope,
+        caller: &zmux_workspace_core::targets::CallerContext,
+        action: NotificationAction,
+    ) -> Result<(), DesktopError> {
+        use attention::AttentionError;
+        self.attention.reconcile(model);
+        let global = || -> Result<NotificationFilter, AttentionError> {
+            if scope.workspace.is_some() || scope.pane.is_some() || scope.surface.is_some() {
+                return Err(AttentionError::InvalidSelector(
+                    "ID/global notification operations do not accept target selectors",
+                ));
+            }
+            Ok(NotificationFilter::All)
+        };
+        let (filter, kind, through_id, expected_epoch) = match action {
+            NotificationAction::MarkRead { selection } => match selection {
+                NotificationSelection::Id { id } => {
+                    global()?;
+                    (
+                        NotificationFilter::Id(id),
+                        NotificationMutationKind::MarkRead,
+                        None,
+                        None,
+                    )
+                }
+                NotificationSelection::All => {
+                    (global()?, NotificationMutationKind::MarkRead, None, None)
+                }
+                NotificationSelection::Workspace => {
+                    if scope.workspace.is_none() {
+                        return Err(AttentionError::InvalidSelector(
+                            "mark-read workspace selection requires an explicit workspace",
+                        )
+                        .into());
+                    }
+                    (
+                        notification_filter(model, scope, caller, NotificationScope::Workspace)?,
+                        NotificationMutationKind::MarkRead,
+                        None,
+                        None,
+                    )
+                }
+            },
+            NotificationAction::Dismiss { selection } => match selection {
+                DismissSelection::Id { id } => {
+                    global()?;
+                    (
+                        NotificationFilter::Id(id),
+                        NotificationMutationKind::Dismiss,
+                        None,
+                        None,
+                    )
+                }
+                DismissSelection::AllRead => {
+                    (global()?, NotificationMutationKind::DismissRead, None, None)
+                }
+            },
+            NotificationAction::Clear {
+                scope: selection,
+                through_id,
+                expected_epoch,
+            } => {
+                let filter = match selection {
+                    NotificationScope::All => global()?,
+                    _ => notification_filter(model, scope, caller, selection)?,
+                };
+                (
+                    filter,
+                    NotificationMutationKind::Clear,
+                    through_id,
+                    expected_epoch,
+                )
+            }
+        };
+        self.notification_mutation =
+            Some(
+                self.attention
+                    .apply_mutation(&filter, kind, through_id, expected_epoch)?,
+            );
+        Ok(())
     }
     fn native_attention_action(
         &mut self,
@@ -1418,6 +1601,7 @@ impl Worker {
             frames,
             notifications: self.attention.items.clone(),
             notifications_dropped: self.attention.dropped,
+            notification_cursor: self.attention.cursor(),
             native_notifications,
             uploads: self.transfer_snapshots(),
             persistence: self

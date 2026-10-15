@@ -1,6 +1,9 @@
 //! Target grammar for existing public commands. Native and CLI requests converge on shared actions.
 use super::*;
-use zmux_desktop_runtime::targets::{TargetOperation, TargetRequest};
+use zmux_desktop_runtime::{
+    attention::{DismissSelection, NotificationAction, NotificationScope, NotificationSelection},
+    targets::{TargetOperation, TargetRequest},
+};
 use zmux_workspace_core::targets::{CallerContext, TargetAction, TargetRef, TargetScope};
 use zmux_workspace_core::{Direction, Navigation};
 
@@ -9,6 +12,12 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
     }
     let mut args = utf8_args(tail)?;
+    if matches!(
+        command,
+        "notify" | "mark-notification-read" | "dismiss-notification" | "clear-notifications"
+    ) {
+        return parse_notifications(command, &args);
+    }
     if navigation_command(command) {
         return parse_navigation(command, &args);
     }
@@ -67,10 +76,7 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
                 cursor += 2;
                 continue;
             }
-            _ if flag.starts_with("--")
-                && !(command == "notify" && ["--title", "--body"].contains(&flag.as_str()))
-                && !(command == "send-text" && flag == "--stdin") =>
-            {
+            _ if flag.starts_with("--") && !(command == "send-text" && flag == "--stdin") => {
                 return Err(CliError(format!(
                     "unknown {command} option {flag}; use -- before literal option-looking text"
                 )));
@@ -228,40 +234,6 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
                 TargetOperation::SendText { text },
             );
         }
-        "notify" => {
-            let mut title = None;
-            let mut body = None;
-            if values.len() % 2 != 0 {
-                return Err(CliError("notify expects --title TEXT [--body TEXT]".into()));
-            }
-            for pair in values.chunks_exact(2) {
-                match pair[0].as_str() {
-                    "--title" if title.is_none() => title = Some(pair[1].clone()),
-                    "--body" if body.is_none() => body = Some(pair[1].clone()),
-                    // Preserve existing notify argument order as well as leading selector options.
-                    "--surface" if scope.surface.is_none() => {
-                        scope.surface = Some(target(&pair[1])?)
-                    }
-                    "--workspace" if scope.workspace.is_none() => {
-                        scope.workspace = Some(target(&pair[1])?)
-                    }
-                    "--pane" if scope.pane.is_none() => scope.pane = Some(target(&pair[1])?),
-                    other => {
-                        return Err(CliError(format!(
-                            "invalid or repeated notify option {other}"
-                        )));
-                    }
-                }
-            }
-            return request(
-                scope,
-                expected_model_revision,
-                TargetOperation::Notify {
-                    title: title.ok_or_else(|| CliError("notify requires --title".into()))?,
-                    body: body.unwrap_or_default(),
-                },
-            );
-        }
         _ => return Err(CliError("command has no target contract".into())),
     };
     request(
@@ -270,6 +242,201 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         TargetOperation::Action { action },
     )
 }
+/// Notification selectors are parsed independently of text-bearing positional commands.
+/// All scope references remain symbolic until the desktop executor accepts the request.
+fn parse_notifications(command: &str, args: &[String]) -> Result<Parsed, CliError> {
+    let mut scope = TargetScope::default();
+    let mut revision = None;
+    let mut title = None;
+    let mut subtitle = None;
+    let mut body = None;
+    let mut desktop = None;
+    let mut clear = false;
+    let mut all = false;
+    let mut all_read = false;
+    let mut id = None;
+    let mut through_id = None;
+    let mut cursor = 0;
+    while cursor < args.len() {
+        let flag = args[cursor].as_str();
+        let slot = match flag {
+            "--workspace" => Some(&mut scope.workspace),
+            "--surface" | "--tab" => Some(&mut scope.surface),
+            "--pane" if command == "notify" => Some(&mut scope.pane),
+            _ => None,
+        };
+        if let Some(slot) = slot {
+            if slot.is_some() {
+                return Err(CliError(format!(
+                    "invalid or repeated {command} option {flag}"
+                )));
+            }
+            *slot = Some(target(option_value(args, cursor, flag)?)?);
+            cursor += 2;
+            continue;
+        }
+        match flag {
+            "--title" | "--subtitle" | "--body" if command == "notify" => {
+                let slot = match flag {
+                    "--title" => &mut title,
+                    "--subtitle" => &mut subtitle,
+                    _ => &mut body,
+                };
+                if slot.is_some() {
+                    return Err(CliError(format!(
+                        "invalid or repeated notify option {flag}"
+                    )));
+                }
+                *slot = Some(option_value(args, cursor, flag)?.to_owned());
+                cursor += 2;
+            }
+            "--desktop" if command == "notify" && desktop.is_none() => {
+                desktop = Some(match option_value(args, cursor, flag)? {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(CliError("--desktop requires true or false".into())),
+                });
+                cursor += 2;
+            }
+            "--clear" if command == "notify" && !clear => {
+                clear = true;
+                cursor += 1;
+            }
+            "--all" if command == "mark-notification-read" && !all => {
+                all = true;
+                cursor += 1;
+            }
+            "--all-read" if command == "dismiss-notification" && !all_read => {
+                all_read = true;
+                cursor += 1;
+            }
+            "--id"
+                if matches!(command, "mark-notification-read" | "dismiss-notification")
+                    && id.is_none() =>
+            {
+                id = Some(parse_id(option_value(args, cursor, flag)?, "notification")?);
+                cursor += 2;
+            }
+            "--through" if command == "clear-notifications" && through_id.is_none() => {
+                through_id = Some(option_value(args, cursor, flag)?.parse::<u64>().map_err(
+                    |_| CliError("--through requires a nonnegative notification cursor".into()),
+                )?);
+                cursor += 2;
+            }
+            "--expect-revision" if revision.is_none() => {
+                revision = Some(option_value(args, cursor, flag)?.parse::<u64>().map_err(
+                    |_| CliError("model revision must be a nonnegative integer".into()),
+                )?);
+                cursor += 2;
+            }
+            _ => {
+                return Err(CliError(format!(
+                    "invalid or repeated {command} option {flag}"
+                )));
+            }
+        }
+    }
+    let scoped = scope.workspace.is_some() || scope.surface.is_some() || scope.pane.is_some();
+    let action = match command {
+        "notify" if !clear => {
+            return request(
+                scope,
+                revision,
+                TargetOperation::Notify {
+                    title: title.unwrap_or_else(|| "Notification".into()),
+                    subtitle: subtitle.unwrap_or_default(),
+                    body: body.unwrap_or_default(),
+                    desktop,
+                },
+            );
+        }
+        "notify" => {
+            if title.is_some() || subtitle.is_some() || body.is_some() || desktop.is_some() {
+                return Err(CliError(
+                    "notify --clear conflicts with content and --desktop options".into(),
+                ));
+            }
+            if scope.pane.is_some() {
+                return Err(CliError(
+                    "notify --clear accepts workspace and surface scope only".into(),
+                ));
+            }
+            let notification_scope =
+                explicit_notification_scope(&mut scope)?.unwrap_or(NotificationScope::Caller);
+            NotificationAction::Clear {
+                scope: notification_scope,
+                through_id: None,
+                expected_epoch: None,
+            }
+        }
+        "mark-notification-read" => {
+            if usize::from(id.is_some()) + usize::from(all) + usize::from(scoped) != 1 {
+                return Err(CliError("mark-notification-read requires exactly one of --id, --workspace, or --all; --surface further limits a workspace".into()));
+            }
+            let selection = if let Some(id) = id {
+                NotificationSelection::Id { id }
+            } else if all {
+                NotificationSelection::All
+            } else {
+                explicit_notification_scope(&mut scope)?;
+                NotificationSelection::Workspace
+            };
+            NotificationAction::MarkRead { selection }
+        }
+        "dismiss-notification" => {
+            if scoped || usize::from(id.is_some()) + usize::from(all_read) != 1 {
+                return Err(CliError("dismiss-notification requires exactly one of --id or --all-read and accepts no target scope".into()));
+            }
+            NotificationAction::Dismiss {
+                selection: match id {
+                    Some(id) => DismissSelection::Id { id },
+                    None => DismissSelection::AllRead,
+                },
+            }
+        }
+        "clear-notifications" => {
+            let notification_scope = match explicit_notification_scope(&mut scope)? {
+                Some(scope) => scope,
+                None => match environment_target("ZMUX_WORKSPACE_ID")? {
+                    Some(workspace) => {
+                        scope.workspace = Some(workspace);
+                        NotificationScope::Workspace
+                    }
+                    None => NotificationScope::All,
+                },
+            };
+            NotificationAction::Clear {
+                scope: notification_scope,
+                through_id,
+                expected_epoch: None,
+            }
+        }
+        _ => return Err(CliError("command has no notification contract".into())),
+    };
+    request(scope, revision, TargetOperation::Notifications { action })
+}
+
+fn explicit_notification_scope(
+    scope: &mut TargetScope,
+) -> Result<Option<NotificationScope>, CliError> {
+    if scope.surface.is_some() {
+        if scope.workspace.is_none() {
+            scope.workspace = environment_target("ZMUX_WORKSPACE_ID")?;
+        }
+        if scope.workspace.is_none() {
+            return Err(CliError(
+                "--surface requires --workspace or ZMUX_WORKSPACE_ID for notification mutations"
+                    .into(),
+            ));
+        }
+        Ok(Some(NotificationScope::Surface))
+    } else if scope.workspace.is_some() {
+        Ok(Some(NotificationScope::Workspace))
+    } else {
+        Ok(None)
+    }
+}
+
 fn extract_browser_focus(args: &mut Vec<String>) -> Result<bool, CliError> {
     let mut focus = None;
     let mut retained = Vec::new();
@@ -326,7 +493,23 @@ fn request(
     expected_model_revision: Option<u64>,
     operation: TargetOperation,
 ) -> Result<Parsed, CliError> {
-    let caller = caller(&scope)?;
+    // Global and exact-ID attention mutations have no caller/focus fallback.
+    let caller = if matches!(
+        &operation,
+        TargetOperation::Notifications {
+            action: NotificationAction::MarkRead {
+                selection: NotificationSelection::Id { .. } | NotificationSelection::All
+            } | NotificationAction::Dismiss { .. }
+                | NotificationAction::Clear {
+                    scope: NotificationScope::All,
+                    ..
+                }
+        }
+    ) {
+        CallerContext::default()
+    } else {
+        caller(&scope)?
+    };
     Ok(Parsed::App(ControlCommand::Targeted {
         request: TargetRequest {
             scope,
