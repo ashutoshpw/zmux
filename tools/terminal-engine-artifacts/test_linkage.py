@@ -83,7 +83,7 @@ class RetainedLinkageChecks(unittest.TestCase):
 
     def test_cargo_admits_only_exact_package_artifacts_inside_fresh_target(self):
         with tempfile.TemporaryDirectory(prefix="zmux-cargo-output-") as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             executable = root / "staged-engine"
             owner = root / "owner-out"
             messages = [{"reason": "compiler-artifact", "package_id": "adapter-id", "target": {
