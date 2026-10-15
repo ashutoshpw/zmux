@@ -28,3 +28,8 @@ production seams. Existing toggle-only coverage did not exercise resizing or per
 Linux source/diff inspection cannot establish native compilation, event routing or
 VoiceOver behavior; hosted Swift 6 compilation and packaged execution remain required,
 with physical pointer/keyboard/VoiceOver acceptance still separate.
+
+macOS38746667499 atda33cea stopped at compilation: the C spelling
+`NSSetFocusRingStyle` is unavailable to Swift. The repair uses the SDK-designated
+`NSFocusRingPlacement.only.set()` API. No native resizing acceptance is claimed
+from that run; the same packaged journey must execute on the repaired source.

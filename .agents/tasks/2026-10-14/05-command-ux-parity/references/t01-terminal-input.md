@@ -22,3 +22,7 @@ Fresh source review found no blocker. Parent full checks pass181 Rust tests plus
 formatting, strict Clippy, notices and C ABI; these do not compile Swift.
 The real PTY fixture protocol was exercised on Linux, while native event delivery
 and the pre-fix/post-fix byte comparison remain hosted macOS gates.
+
+The attempted hosted pre-fix run (38746667499, da33cea) stopped at an unrelated
+sidebar Swift API spelling error before executing the key-byte journey. It does
+not establish the intended native red result; that evidence remains absent.
