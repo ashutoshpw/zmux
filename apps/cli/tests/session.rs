@@ -179,7 +179,15 @@ fn session_cli_reports_real_export_save_and_restore_completion() {
     let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let snapshot = desktop.snapshot().unwrap();
+        let snapshot = match desktop.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(zmux_desktop_runtime::DesktopError::Busy) => {
+                assert!(Instant::now() < deadline, "startup snapshot remained busy");
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            Err(error) => panic!("startup snapshot failed: {error}"),
+        };
         if !snapshot.persistence.startup_pending
             && snapshot.pending_launches == 0
             && !snapshot.model.workspaces.is_empty()
