@@ -97,6 +97,34 @@ Python syntax, manual two-host workflow YAML and repository notice checks pass.
 The independent manual `local-zellij-patched-owner.yml` workflow builds source and
 executes the unchanged owner gates on Linux and macos-15. It uploads immutable
 source inputs/receipts/logs/notices, excluding executables, and uses its own
-concurrency group so existing native runs are unaffected. Hosted source build and
-actual Darwin suspend/input/detach acceptance are pending. Acquisition pins remain
+concurrency group so existing native runs are unaffected. Hosted source builds passed on Linux and Darwin; complete actual Darwin owner
+acceptance remains pending as detailed below. Acquisition pins remain
 unchanged; complete redistribution notices and native integration remain open.
+
+### First hosted patched-source run
+
+Run 38809114500 at 11671a48ddb484f8730ddf4df43e6a5394d7e886 completed the full
+source producer on Linux X64 and macOS 15.7.9 ARM64. Both hosts establish actual
+EINTR red/green, fatal non-EINTR controls and full patched executable build.
+Uploaded archive, source-input, lock, phase-log, license and WASM hashes were
+independently checked against the published commit. Local read-only verifier:
+`target/agent-validation/r03-hosted-38809114500/verify-artifacts.py`; source-only
+verification receipt `verified-producers-receipt.json` in that directory, SHA256
+`3691c504ce7cf22d628fc71ad2a85eaa3581d040043166ec08a3bd58f4b7d9ff`.
+No compiled executable was downloaded or uploaded.
+
+Linux passed all 27 owner checks. Darwin passed the earlier failed resume/input
+boundary, TERM detach and original owner identity checks, then failed the real
+prefix-shadow fixture's bind at local_zellij_owner.rs:413. Its `-shadow` suffix
+made the canonical `/private/tmp` socket path 104 bytes, beyond Darwin's Unix
+socket capacity; the actual production backend path was 97 bytes. The fixture
+now appends one byte to the same complete backend prefix, yielding 98 bytes,
+and asserts the existing portable socket budget before binding. The same real
+namespace-rejection assertion is retained; production socket policy and lifecycle
+behavior are unchanged. Full Darwin owner acceptance requires a hosted recheck.
+
+The first artifact omitted its explicitly named hidden workflow file because of
+upload-artifact's default hidden-file filter. The upload step now enables hidden
+files within its existing explicit path allowlist, which includes only that
+workflow under a hidden directory and no broad hidden-file glob. This does not
+include compiled executables or alter the running hosted jobs.
