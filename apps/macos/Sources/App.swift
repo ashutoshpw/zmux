@@ -1492,6 +1492,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await waitUntil { [weak self] _ in self?.browsers[browserPane.selectedSurface]?.webView.title == "zmux browser fixture" && self?.browsers[browserPane.selectedSurface]?.webView.isLoading == false }
         let browserResult = try await browser.webView.evaluateJavaScript("document.querySelector('#entry').value = 'native input'; document.querySelector('h1').textContent + ':' + document.querySelector('#entry').value")
         guard browserResult as? String == "Browser ready:native input" else { throw BridgeFailure(message: "Embedded WebKit did not interact with the document") }
+        // A new blank tab initially owns address focus. This journey tests a
+        // document-focus roundtrip, so establish that native intent first.
+        @MainActor func browserFocusDiagnostics() -> String {
+            let responder = window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"
+            return "responder=\(responder), key=\(window.isKeyWindow), browserWindowMatches=\(browser.window === window), browserHidden=\(browser.isHiddenOrHasHiddenAncestor)"
+        }
+        guard window.makeFirstResponder(browser.webView), window.firstResponder === browser.webView else {
+            throw BridgeFailure(message: "Loaded browser fixture could not establish native document focus: " + browserFocusDiagnostics())
+        }
         if let terminalTab = browserPane.surfaces.first(where: { $0.kind == "terminal" }) {
             (canvas.subviews.first as? PaneSplitView)?.setFraction(0.6)
             selectTab(terminalTab.id)
@@ -1516,7 +1525,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard window.firstResponder === focusedTerminal else { throw BridgeFailure(message: "Browser-to-terminal navigation retained browser input ownership") }
         try performShortcut(String(UnicodeScalar(NSRightArrowFunctionKey)!), modifiers: [.command, .option])
         try await waitUntil { $0.workspace?.focusedPane == browserPane.id }
-        guard window.firstResponder === browser.webView else { throw BridgeFailure(message: "Terminal-to-browser navigation did not focus WebKit") }
+        guard window.firstResponder === browser.webView else {
+            throw BridgeFailure(message: "Terminal-to-browser navigation did not focus WebKit: " + browserFocusDiagnostics())
+        }
         try await smokeBrowserAutomation(report: report, surface: browserPane.selectedSurface, pane: browserPane, terminalSession: originalSession)
         let pagePNG: Data = try await withCheckedThrowingContinuation { continuation in
             browser.webView.takeSnapshot(with: nil) { image, error in
