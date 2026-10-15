@@ -98,6 +98,8 @@ pub enum TargetError {
     ScopeMismatch { kind: TargetKind },
     #[error("no focused {0} is available")]
     NoFocus(TargetKind),
+    #[error("local tmux caller {0}; supply an explicit target")]
+    LocalTmuxCaller(&'static str),
 }
 impl TargetError {
     pub fn code(&self) -> &'static str {
@@ -108,6 +110,7 @@ impl TargetError {
             Self::NotFound { .. } => "target_not_found",
             Self::ScopeMismatch { .. } => "target_scope_mismatch",
             Self::NoFocus(_) => "no_focused_target",
+            Self::LocalTmuxCaller(_) => "local_tmux_caller_unavailable",
         }
     }
 }
@@ -233,8 +236,52 @@ pub struct TargetScope {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CallerContext {
+    #[serde(default)]
+    pub local_tmux: Option<zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity>,
     pub workspace: Option<TargetRef>,
     pub surface: Option<TargetRef>,
+}
+impl CallerContext {
+    pub fn bind_local_tmux(&self, model: &Snapshot) -> Result<Self, TargetError> {
+        let Some(identity) = &self.local_tmux else {
+            return Ok(self.clone());
+        };
+        identity
+            .validate()
+            .map_err(|_| TargetError::InvalidTarget)?;
+        if self.workspace.is_some() || self.surface.is_some() {
+            return Err(TargetError::InvalidTarget);
+        }
+        let mut found = model.workspaces.iter().flat_map(|w| {
+            w.root.panes().into_iter().flat_map(move |p| {
+                p.surfaces
+                    .iter()
+                    .filter(move |s| s.local_tmux.as_ref() == Some(identity))
+                    .map(move |s| (w.id, s.id))
+            })
+        });
+        let (workspace, surface) = found
+            .next()
+            .ok_or(TargetError::LocalTmuxCaller("has no live app surface"))?;
+        if found.next().is_some() {
+            return Err(TargetError::LocalTmuxCaller("has multiple app surfaces"));
+        }
+        Ok(Self {
+            local_tmux: None,
+            workspace: Some(
+                model
+                    .object_uuid(TargetKind::Workspace, workspace.0)
+                    .to_string()
+                    .parse()?,
+            ),
+            surface: Some(
+                model
+                    .object_uuid(TargetKind::Surface, surface.0)
+                    .to_string()
+                    .parse()?,
+            ),
+        })
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct ResolvedTarget {
@@ -249,6 +296,11 @@ impl TargetScope {
         caller: &CallerContext,
     ) -> Result<ResolvedTarget, TargetError> {
         let explicit = self.workspace.is_some() || self.pane.is_some() || self.surface.is_some();
+        let caller = if explicit {
+            caller.clone()
+        } else {
+            caller.bind_local_tmux(model)?
+        };
         let workspace_ref = self.workspace.as_ref().or_else(|| {
             (!explicit && caller.surface.is_none())
                 .then_some(caller.workspace.as_ref())

@@ -223,7 +223,8 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
-        ControlCommand::BrowserProfilesStatus { .. }
+        ControlCommand::LocalTmuxStatus { .. }
+        | ControlCommand::BrowserProfilesStatus { .. }
         | ControlCommand::BrowserStatus { .. }
         | ControlCommand::SessionStatus { .. }
         | ControlCommand::ListUploads
@@ -246,7 +247,8 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
                         | crate::metadata::MetadataAction::ListLog { .. }
                 }
         ),
-        ControlCommand::BrowserProfiles { .. }
+        ControlCommand::LocalTmux { .. }
+        | ControlCommand::BrowserProfiles { .. }
         | ControlCommand::Session { .. }
         | ControlCommand::Transfer { .. }
         | ControlCommand::Action { .. }

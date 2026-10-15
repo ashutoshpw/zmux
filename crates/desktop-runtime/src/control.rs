@@ -49,6 +49,13 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    LocalTmux {
+        request: crate::local_tmux::Request,
+    },
+    LocalTmuxStatus {
+        operation_id: u64,
+        epoch: uuid::Uuid,
+    },
     BrowserProfiles {
         action: crate::profiles::ProfileCommand,
     },
@@ -548,6 +555,37 @@ fn dispatch(
     admission: &ControlAdmission,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::LocalTmux {
+            request: tmux_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::LocalTmux {
+                request: tmux_request,
+            },
+        ),
+        ControlCommand::LocalTmuxStatus {
+            operation_id,
+            epoch,
+        } => {
+            let snapshot = current_snapshot(desktop)?;
+            if snapshot.local_tmux_epoch != epoch {
+                return Err((
+                    "local_tmux_operation_not_found",
+                    "local tmux runtime owner changed".into(),
+                ));
+            }
+            snapshot
+                .local_tmux_operations
+                .iter()
+                .find(|r| r.operation_id == operation_id)
+                .map(|r| json!(r))
+                .ok_or((
+                    "local_tmux_operation_not_found",
+                    "local tmux receipt expired or missing".into(),
+                ))
+        }
         ControlCommand::BrowserProfiles { action } => mutate(
             desktop,
             admission,
@@ -642,6 +680,7 @@ fn dispatch(
                     && target_request.scope.surface.is_none()
                     && target_request.caller.workspace.is_none()
                     && target_request.caller.surface.is_none()
+                    && target_request.caller.local_tmux.is_none()
                 {
                     return list_panes(&snapshot, None);
                 }
@@ -892,6 +931,18 @@ fn mutate(
                     "browser admission receipt missing".into(),
                 )
             });
+    }
+    if let Some(id) = execution.tmux_operation_id {
+        return execution
+            .snapshot
+            .local_tmux_operations
+            .iter()
+            .find(|r| r.operation_id == id)
+            .map(|r| json!(r))
+            .ok_or((
+                "local_tmux_operation_not_found",
+                "admitted local tmux receipt missing".into(),
+            ));
     }
     if let Some(operation_id) = execution.profile_operation_id {
         return Ok(

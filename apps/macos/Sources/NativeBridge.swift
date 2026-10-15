@@ -74,7 +74,7 @@ actor NativeBridge {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let snapshot = try decoder.decode(DesktopSnapshot.self, from: data)
-        guard snapshot.model.modelVersion == 4 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        guard snapshot.model.modelVersion == 5 else { throw BridgeFailure(message: "Unsupported workspace model version") }
         revision = snapshot.revision
         return snapshot
     }

@@ -313,3 +313,67 @@ fn duplicate_stale_and_renamed_live_names_require_explicit_id_for_status() {
         "live"
     );
 }
+
+#[test]
+fn saved_identity_pane_routing_and_gui_hints_follow_exact_owned_objects() {
+    use zmux_remote_runtime::local_multiplexer::GuiBinding;
+    let f = Fixture::new();
+    let first = f.start("first");
+    let second = f.start("second");
+    let identity = first.identity();
+    let pane = f.run(&[
+        "display-message",
+        "-p",
+        "-t",
+        &first.tmux_session_id,
+        "#{pane_id}",
+    ]);
+    assert_eq!(
+        f.owner
+            .pane_identity(&f.owner.socket_path(), pane.trim())
+            .unwrap(),
+        identity
+    );
+    assert!(
+        f.owner
+            .pane_identity(&f.root.join("foreign.sock"), pane.trim())
+            .is_err()
+    );
+    let binding = GuiBinding {
+        identity_namespace: Uuid::new_v4(),
+        workspace: Uuid::new_v4(),
+        surface: Uuid::new_v4(),
+    };
+    f.owner.remember_gui(&identity, binding.clone()).unwrap();
+    assert_eq!(
+        f.owner.status_identity(&identity).unwrap().gui_binding,
+        Some(binding)
+    );
+    assert!(f.owner.attach_identity(&identity).is_ok());
+    f.run(&[
+        "move-pane",
+        "-s",
+        pane.trim(),
+        "-t",
+        &second.tmux_session_id,
+    ]);
+    assert_eq!(
+        f.owner
+            .pane_identity(&f.owner.socket_path(), pane.trim())
+            .unwrap(),
+        second.identity()
+    );
+    assert!(f.owner.attach_identity(&identity).is_err());
+    // Logical UUID lookup alone must not accept a saved descriptor with different immutable fields.
+    let mut altered = second.identity();
+    altered.created_at += 1;
+    assert!(f.owner.status_identity(&altered).is_err());
+    assert!(f.owner.attach_identity(&altered).is_err());
+    f.run(&["new-session", "-d", "-s", "outside", "exec sleep 60"]);
+    let outside = f.run(&["display-message", "-p", "-t", "=outside", "#{pane_id}"]);
+    assert!(
+        f.owner
+            .pane_identity(&f.owner.socket_path(), outside.trim())
+            .is_err()
+    );
+}

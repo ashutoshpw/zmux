@@ -329,6 +329,17 @@ impl Session {
         environment: &[(String, String)],
         resource: impl Send + 'static,
     ) -> Result<Self, SessionError> {
+        Self::spawn_with_resource_and_removals(launch, environment, &[], resource)
+    }
+
+    /// Apply removals before owned overrides, without mutating process-global state.
+    /// Native hosts use this to isolate a subprocess from inherited terminal context.
+    pub fn spawn_with_resource_and_removals(
+        launch: Launch,
+        environment: &[(String, String)],
+        removals: &[std::ffi::OsString],
+        resource: impl Send + 'static,
+    ) -> Result<Self, SessionError> {
         // portable-pty may fall back to a home directory on a failed chdir. Restore
         // must fail visibly rather than launching a shell in an unexpected location.
         if let Some(cwd) = &launch.cwd {
@@ -375,6 +386,9 @@ impl Session {
         let mut command = CommandBuilder::new(&launch.program);
         command.args(&launch.args);
         command.env("TERM", "xterm-256color");
+        for name in removals {
+            command.env_remove(name);
+        }
         for (name, value) in environment {
             command.env(name, value);
         }

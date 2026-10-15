@@ -32,7 +32,7 @@ identifier!(PaneId);
 identifier!(SessionId);
 identifier!(SurfaceId);
 
-pub const MODEL_VERSION: u32 = 4;
+pub const MODEL_VERSION: u32 = 5;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
 pub const MAX_CLOSED_ITEMS: usize = 32;
 
@@ -191,6 +191,12 @@ impl Default for Snapshot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    CreateLocalTmuxSurface {
+        pane_id: PaneId,
+        identity: zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity,
+        #[serde(default = "default_focus")]
+        focus: bool,
+    },
     CreateBrowser {
         #[serde(default)]
         profile_id: Option<uuid::Uuid>,
@@ -302,6 +308,7 @@ pub enum Effect {
         session_id: SessionId,
         cwd: Option<String>,
         remote: Option<zmux_remote_runtime::SshConnectionConfig>,
+        local_tmux: Option<Box<zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity>>,
     },
     StopSession {
         session_id: SessionId,
@@ -507,6 +514,7 @@ impl WorkspaceStore {
             session_id: pane.session_id().expect("new terminal pane"),
             cwd,
             remote,
+            local_tmux: None,
         });
         let workspace = &mut self.state.workspaces[index];
         let added_id = pane.id;
@@ -552,6 +560,7 @@ impl WorkspaceStore {
             session_id: SessionId(ids + 2),
             cwd: None,
             remote,
+            local_tmux: None,
         });
         self.state.workspaces.push(Workspace {
             id: workspace_id,

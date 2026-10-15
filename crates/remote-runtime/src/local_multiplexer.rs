@@ -17,6 +17,10 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -56,7 +60,8 @@ fn failure(context: &str, error: impl std::fmt::Display) -> MultiplexerError {
     MultiplexerError::Failure(format!("{context}: {error}"))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SessionSelector {
     Name(String),
     Id(Uuid),
@@ -65,6 +70,47 @@ impl SessionSelector {
     pub fn name(value: &str) -> Result<Self> {
         validate_name(value)?;
         Ok(Self::Name(value.into()))
+    }
+}
+/// Durable identity only: no mutable name, command, executable or socket path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalTmuxIdentity {
+    pub id: Uuid,
+    pub server_incarnation: Uuid,
+    pub tmux_session_id: String,
+    pub created_at: u64,
+}
+impl LocalTmuxIdentity {
+    pub fn validate(&self) -> Result<()> {
+        if self.id.is_nil()
+            || self.server_incarnation.is_nil()
+            || !valid_session_id(&self.tmux_session_id)
+            || self.created_at == 0
+        {
+            return Err(MultiplexerError::Invalid(
+                "invalid immutable local tmux identity".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+/// A routing hint checked against the authenticated desktop's live model.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuiBinding {
+    pub identity_namespace: Uuid,
+    pub workspace: Uuid,
+    pub surface: Uuid,
+}
+impl GuiBinding {
+    fn validate(&self) -> Result<()> {
+        if self.identity_namespace.is_nil() || self.workspace.is_nil() || self.surface.is_nil() {
+            return Err(MultiplexerError::Invalid(
+                "invalid local tmux GUI binding".into(),
+            ));
+        }
+        Ok(())
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,6 +122,8 @@ struct Record {
     tmux_session_id: String,
     created_at: u64,
     cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gui_binding: Option<GuiBinding>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,6 +146,17 @@ pub struct SessionStatus {
     pub created_at: u64,
     pub cwd: String,
     pub clients: Vec<ClientInfo>,
+    pub gui_binding: Option<GuiBinding>,
+}
+impl SessionStatus {
+    pub fn identity(&self) -> LocalTmuxIdentity {
+        LocalTmuxIdentity {
+            id: self.id,
+            server_incarnation: self.server_incarnation,
+            tmux_session_id: self.tmux_session_id.clone(),
+            created_at: self.created_at,
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct UnmanagedSession {
@@ -139,6 +198,7 @@ struct Server {
 pub struct LocalTmux {
     root: PathBuf,
     binary: PathBuf,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 impl LocalTmux {
     pub fn from_environment() -> Result<Self> {
@@ -156,12 +216,17 @@ impl LocalTmux {
         ensure_directory(&config, false)?;
         let product = config.join("zmux");
         ensure_directory(&product, false)?;
-        let binary = if let Some(value) = env::var_os("ZMUX_LOCAL_TMUX_BIN") {
-            PathBuf::from(value)
-        } else {
-            env::split_paths(&env::var_os("PATH").unwrap_or_default()).map(|p|p.join("tmux")).find(|p|p.is_absolute() && fs::metadata(p).is_ok_and(|m|m.is_file() && m.permissions().mode()&0o111!=0)).ok_or_else(||MultiplexerError::Invalid("tmux executable was not found; install tmux or set ZMUX_LOCAL_TMUX_BIN to an absolute executable".into()))?
-        };
+        let binary = selected_binary()?;
         Self::new(product.join("local-tmux"), binary)
+    }
+    /// The durable owner exports only its owned profile path for later caller routing.
+    /// No app surface identity or credential is inherited by its shell.
+    pub fn for_caller_environment() -> Result<Self> {
+        if let Some(root) = env::var_os("ZMUX_LOCAL_TMUX_PROFILE") {
+            Self::new(PathBuf::from(root), selected_binary()?)
+        } else {
+            Self::from_environment()
+        }
     }
     pub fn new(root: PathBuf, binary: PathBuf) -> Result<Self> {
         if !root.is_absolute()
@@ -192,7 +257,28 @@ impl LocalTmux {
                 "tmux socket path exceeds the portable 99-byte bound".into(),
             ));
         }
-        Ok(Self { root, binary })
+        Ok(Self {
+            root,
+            binary,
+            cancellation: None,
+        })
+    }
+    /// Background owners may cancel a queued/active invocation without killing its durable server.
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+    fn check_cancelled(&self) -> Result<()> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Acquire))
+        {
+            return Err(MultiplexerError::Failure(
+                "local tmux operation cancelled; inspect list if owner creation was pending".into(),
+            ));
+        }
+        Ok(())
     }
     pub fn socket_path(&self) -> PathBuf {
         self.root.join("server.sock")
@@ -212,6 +298,75 @@ impl LocalTmux {
             self.save(&registry)?;
         }
         Ok(status(find_record(&registry, selector)?, server.as_ref()))
+    }
+    /// Resolve a saved identity without allowing a registry edit or name reuse to retarget it.
+    pub fn status_identity(&self, identity: &LocalTmuxIdentity) -> Result<SessionStatus> {
+        identity.validate()?;
+        let status = self.status(&SessionSelector::Id(identity.id))?;
+        if status.identity() != *identity {
+            return Err(MultiplexerError::Stale);
+        }
+        Ok(status)
+    }
+    pub fn remember_gui(&self, identity: &LocalTmuxIdentity, binding: GuiBinding) -> Result<()> {
+        identity.validate()?;
+        binding.validate()?;
+        let (_lock, mut registry) = self.lock_registry()?;
+        let server = self.query()?;
+        let record = find_record(&registry, &SessionSelector::Id(identity.id))?;
+        if status(record, server.as_ref()).identity() != *identity
+            || live_record(record, server.as_ref()).is_none()
+        {
+            return Err(MultiplexerError::Stale);
+        }
+        registry
+            .sessions
+            .iter_mut()
+            .find(|r| r.id == identity.id)
+            .expect("validated record")
+            .gui_binding = Some(binding);
+        self.save(&registry)
+    }
+    /// Resolve the caller's actual pane, accepting only this owned profile socket.
+    /// Shell environments survive client surfaces, so saved app surface IDs are not authority.
+    pub fn pane_identity(&self, socket: &Path, pane: &str) -> Result<LocalTmuxIdentity> {
+        if socket != self.socket_path()
+            || !pane.strip_prefix('%').is_some_and(|n| {
+                !n.is_empty() && n.len() <= 20 && n.bytes().all(|b| b.is_ascii_digit())
+            })
+        {
+            return Err(MultiplexerError::Invalid(
+                "caller is not a pane on the owned local tmux profile".into(),
+            ));
+        }
+        let (_lock, registry) = self.lock_registry()?;
+        let server = self.query()?.ok_or(MultiplexerError::Stale)?;
+        let marker = server.marker.ok_or(MultiplexerError::Stale)?;
+        let sid = self.run(&[
+            "-N".into(),
+            "if-shell".into(),
+            "-F".into(),
+            "-t".into(),
+            pane.into(),
+            format!("#{{==:#{{{MARKER}}},{marker}}}"),
+            tmux_command(&[
+                "display-message".into(),
+                "-p".into(),
+                "-t".into(),
+                pane.into(),
+                "#{session_id}".into(),
+            ]),
+            REJECT.into(),
+        ])?;
+        let record = registry
+            .sessions
+            .iter()
+            .find(|r| r.server_incarnation == marker && r.tmux_session_id == sid.trim())
+            .ok_or(MultiplexerError::NotFound)?;
+        if live_record(record, Some(&server)).is_none() {
+            return Err(MultiplexerError::Stale);
+        }
+        Ok(status(record, Some(&server)).identity())
     }
     pub fn start(&self, name: &str, cwd: &Path, command: Option<&str>) -> Result<SessionStatus> {
         validate_name(name)?;
@@ -277,6 +432,7 @@ impl LocalTmux {
             tmux_session_id: "$18446744073709551615".into(),
             created_at: u64::MAX,
             cwd: cwd.to_string_lossy().into_owned(),
+            gui_binding: None,
         });
         if serde_json::to_vec(&reserved)
             .map_err(|e| failure("reserve registry capacity", e))?
@@ -353,6 +509,7 @@ impl LocalTmux {
             tmux_session_id: session.id.clone(),
             created_at: session.created,
             cwd: cwd.to_string_lossy().into_owned(),
+            gui_binding: None,
         };
         registry.sessions.push(record.clone());
         // If a durable write fails, the started session remains discoverable as
@@ -465,6 +622,21 @@ impl LocalTmux {
         if live_record(record, server.as_ref()).is_none() {
             return Err(MultiplexerError::Stale);
         }
+        Ok(self.record_attach_spec(record))
+    }
+    pub fn attach_identity(&self, identity: &LocalTmuxIdentity) -> Result<ProcessSpec> {
+        identity.validate()?;
+        let (_lock, registry) = self.lock_registry()?;
+        let server = self.query()?;
+        let record = find_record(&registry, &SessionSelector::Id(identity.id))?;
+        if status(record, server.as_ref()).identity() != *identity
+            || live_record(record, server.as_ref()).is_none()
+        {
+            return Err(MultiplexerError::Stale);
+        }
+        Ok(self.record_attach_spec(record))
+    }
+    fn record_attach_spec(&self, record: &Record) -> ProcessSpec {
         let mut args = self.base_args();
         args.extend([
             "-N".into(),
@@ -480,10 +652,10 @@ impl LocalTmux {
             ]),
             REJECT.into(),
         ]);
-        Ok(ProcessSpec {
+        ProcessSpec {
             program: self.binary.to_string_lossy().into_owned(),
             args,
-        })
+        }
     }
     fn guarded(&self, record: &Record, condition: &str, command: Vec<String>) -> Result<()> {
         self.guarded_output(record, condition, tmux_command(&command))
@@ -630,6 +802,7 @@ impl LocalTmux {
         Ok(Some(Server { marker, sessions }))
     }
     fn lock_registry(&self) -> Result<(File, Registry)> {
+        self.check_cancelled()?;
         ensure_directory(&self.root, true)?;
         let path = self.root.join("registry.lock");
         let file = OpenOptions::new()
@@ -644,6 +817,7 @@ impl LocalTmux {
         validate_file(&file, "registry lock")?;
         let deadline = Instant::now() + OPERATION_TIMEOUT;
         loop {
+            self.check_cancelled()?;
             match file.try_lock() {
                 Ok(()) => break,
                 Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
@@ -689,8 +863,10 @@ impl LocalTmux {
     }
     fn save(&self, registry: &Registry) -> Result<()> {
         use std::io::Write;
+        let mut saved = registry.clone();
+        saved.version = 2;
         let bytes =
-            serde_json::to_vec(registry).map_err(|e| failure("encode local tmux registry", e))?;
+            serde_json::to_vec(&saved).map_err(|e| failure("encode local tmux registry", e))?;
         if bytes.len() > MAX_REGISTRY_BYTES {
             return Err(MultiplexerError::Unsafe(
                 "registry exceeds its byte bound".into(),
@@ -742,6 +918,7 @@ impl LocalTmux {
         }
     }
     fn run_raw(&self, args: &[String]) -> Result<Output> {
+        self.check_cancelled()?;
         let mut command = Command::new(&self.binary);
         command
             .args(self.base_args())
@@ -751,8 +928,18 @@ impl LocalTmux {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         clear_context(&mut command);
-        run_bounded(command)
+        command.env("ZMUX_LOCAL_TMUX_PROFILE", &self.root);
+        command.env("ZMUX_LOCAL_TMUX_BIN", &self.binary);
+        run_bounded(command, self.cancellation.as_deref())
     }
+}
+
+fn selected_binary() -> Result<PathBuf> {
+    Ok(if let Some(value) = env::var_os("ZMUX_LOCAL_TMUX_BIN") {
+        PathBuf::from(value)
+    } else {
+        env::split_paths(&env::var_os("PATH").unwrap_or_default()).map(|p|p.join("tmux")).find(|p|p.is_absolute() && fs::metadata(p).is_ok_and(|m|m.is_file() && m.permissions().mode()&0o111!=0)).ok_or_else(||MultiplexerError::Invalid("tmux executable was not found; install tmux or set ZMUX_LOCAL_TMUX_BIN to an absolute executable".into()))?
+    })
 }
 
 /// Attach callers use this same environment policy before exec. No ambient app
@@ -787,7 +974,7 @@ fn valid_session_id(id: &str) -> bool {
         .is_some_and(|n| !n.is_empty() && n.len() <= 20 && n.bytes().all(|b| b.is_ascii_digit()))
 }
 fn validate_registry(registry: &Registry) -> Result<()> {
-    if registry.version != 1 || registry.sessions.len() > MAX_SESSIONS {
+    if !matches!(registry.version, 1 | 2) || registry.sessions.len() > MAX_SESSIONS {
         return Err(MultiplexerError::Unsafe(
             "unsupported or oversized registry".into(),
         ));
@@ -795,6 +982,9 @@ fn validate_registry(registry: &Registry) -> Result<()> {
     let mut ids = std::collections::HashSet::new();
     let mut bindings = std::collections::HashSet::new();
     for r in &registry.sessions {
+        if let Some(binding) = &r.gui_binding {
+            binding.validate()?;
+        }
         if r.name.is_empty() || r.name.len() > 128 || r.name.chars().any(char::is_control) {
             return Err(MultiplexerError::Unsafe(
                 "invalid registry session name".into(),
@@ -842,6 +1032,7 @@ fn status(record: &Record, server: Option<&Server>) -> SessionStatus {
         created_at: record.created_at,
         cwd: record.cwd.clone(),
         clients: live.map(|s| s.clients.clone()).unwrap_or_default(),
+        gui_binding: record.gui_binding.clone(),
     }
 }
 fn find_record<'a>(registry: &'a Registry, selector: &SessionSelector) -> Result<&'a Record> {
@@ -961,7 +1152,7 @@ impl Drop for Running {
         }
     }
 }
-fn run_bounded(mut command: Command) -> Result<Output> {
+fn run_bounded(mut command: Command, cancellation: Option<&AtomicBool>) -> Result<Output> {
     let mut child = Running {
         child: command.spawn().map_err(|e| failure("launch tmux", e))?,
     };
@@ -982,6 +1173,11 @@ fn run_bounded(mut command: Command) -> Result<Output> {
     let deadline = Instant::now() + OPERATION_TIMEOUT;
     let mut status = None;
     loop {
+        if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
+            return Err(MultiplexerError::Failure(
+                "local tmux operation cancelled; inspect list if owner creation was pending".into(),
+            ));
+        }
         for (pipe, bytes, eof) in [
             (&mut stdout, &mut out, &mut out_eof),
             (&mut stderr, &mut err, &mut err_eof),
@@ -1087,7 +1283,7 @@ mod tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let started = Instant::now();
-        let result = run_bounded(command);
+        let result = run_bounded(command, None);
         let pid: i32 = fs::read_to_string(&pid_path)
             .unwrap()
             .trim()
