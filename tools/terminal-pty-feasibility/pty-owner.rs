@@ -416,13 +416,18 @@ pub fn pty_main() {
     basic.user(PRE).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     let (mut resized, mut posted) = (false, false);
+    let mut partial_replies = 0;
     loop {
         assert!(Instant::now() < deadline, "basic exact reply deadline");
         basic.reports();
         if basic.report[b'V' as usize] {
             break;
         }
-        if basic.report[b'A' as usize] && !resized {
+        if basic.report[b'A' as usize]
+            && !resized
+            && basic.staged.is_none()
+            && basic.start == basic.end
+        {
             basic.resize(12, 4).unwrap();
             assert_eq!(basic.transport.size(), (4, 12));
             assert_eq!(basic.engine.last.text().lines().count(), 4);
@@ -437,12 +442,24 @@ pub fn pty_main() {
             basic.user(POST).unwrap();
             posted = true;
         }
-        if basic.pump(QUEUE).is_err() {
+        let before = boundary(&mut basic);
+        let written = basic.transport.stats().written_bytes;
+        if basic.pump(3).is_err() {
             basic.reports();
             panic!("basic transport failure");
         }
+        if basic.staged.is_some() && basic.start < basic.end {
+            assert_boundary(&mut basic, &before);
+            if basic.transport.stats().written_bytes > written {
+                partial_replies += 1;
+            }
+        }
         tick();
     }
+    assert!(
+        partial_replies > 0,
+        "actual partial reply writes must be observed"
+    );
     assert!(resized && posted);
     assert_eq!(basic.engine.state.title(), "pty;title");
     assert_eq!(basic.engine.state.cwd(), Some("/pty;path"));
@@ -455,6 +472,9 @@ pub fn pty_main() {
     basic.wait_success();
     println!(
         "pty: actual child validates PRE/cursor/status/POST order, metadata and resized kernel geometry"
+    );
+    println!(
+        "pty: partial_reply_writes={partial_replies} preserve publication before suffix completion"
     );
     drop(basic);
     for mode in ["flood", "stall"] {
@@ -506,6 +526,9 @@ pub fn pty_main() {
                 }
                 Ok(_) => {}
                 Err(error) => panic!("unexpected admission: {error:?}"),
+            }
+            if p.staged.is_some() && p.start < p.end {
+                assert_boundary(&mut p, &before);
             }
             tick();
         }
