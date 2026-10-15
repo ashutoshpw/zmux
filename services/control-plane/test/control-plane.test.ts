@@ -111,6 +111,30 @@ afterAll(async () => {
 });
 
 describe("native OAuth contract", () => {
+  test("session cookies follow the public HTTPS origin even behind a development tunnel", async () => {
+    for (const [publicOrigin, production, secure] of [
+      ["https://zmux.example.test", false, true],
+      ["https://zmux.example.test", true, true],
+      [origin, false, false],
+    ] as const) {
+      const publicConfig = { ...config, origin: publicOrigin, production };
+      const publicApp = createApp(pool, createAuth(pool, publicConfig), publicConfig);
+      const response = await publicApp(new Request(`${publicOrigin}/api/auth/sign-up/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: publicOrigin },
+        body: JSON.stringify({ name: "Cookie User", email: `cookie-${production}-${secure}@example.com`, password: "correct horse battery staple" }),
+      }), { ip: "192.0.2.230" });
+      expect(response.status).toBe(200);
+      const cookies = response.headers.getSetCookie();
+      const sessionCookie = cookies.find((cookie) => cookie.split("=", 1)[0]!.endsWith("better-auth.session_token"));
+      expect(sessionCookie).toBeDefined();
+      expect(/;\s*Secure(?:;|$)/i.test(sessionCookie!)).toBe(secure);
+      expect(sessionCookie!.startsWith("__Secure-")).toBe(secure);
+      expect(sessionCookie).toMatch(/;\s*HttpOnly(?:;|$)/i);
+      expect(sessionCookie).toMatch(/;\s*SameSite=Lax(?:;|$)/i);
+    }
+  });
+
   test("requires browser auth and preserves state through an exact allowlisted callback", async () => {
     const verifier = "p".repeat(64);
     const challenge = createHash("sha256").update(verifier).digest("base64url");

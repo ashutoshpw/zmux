@@ -9,6 +9,8 @@ The service stores only hashes of authorization codes and native bearer tokens. 
 expire after five minutes and are single-use. Native tokens expire after 30 days and are
 bound to the Better Auth browser session that approved them; deleting or revoking that
 session immediately invalidates its native tokens. Device records are owner-scoped.
+Browser session cookies use `Secure` for every configured HTTPS origin, including
+development servers behind a tunnel. Plain HTTP cookies are limited to loopback development.
 
 ## Local setup
 
@@ -125,10 +127,12 @@ zero does not prove that another transaction holds no expired rows. Repeat later
 a backlog. Live credentials, browser sessions, accounts and devices are retained. This
 command has no automatic schedule and does not implement broader audit/device retention.
 
-VM provisioning, relay/tunnel service, transactional email delivery, MFA, invite/recovery
-mail journeys, billing, hosting, DNS, TLS certificates, backups, observability, and a
-production deployment are not implemented by this slice. `/ready` reports VM, relay, and
-email capabilities as unavailable rather than presenting placeholder readiness.
+VM provisioning, relay/tunnel service, transactional email delivery, invite/recovery
+mail journeys, billing, public hosting, DNS, TLS certificates and production observability
+remain open. Authenticator MFA and one-use recovery codes are implemented as described
+above. The local Docker workflow includes database backup and disposable restore
+verification; public deployment and callback acceptance remain separate gates. `/ready`
+reports VM, relay and email capabilities as unavailable.
 
 ### Native credential transactions
 

@@ -18,7 +18,7 @@ export function createAuthOptions(pool: Pool, config: ControlPlaneConfig, valida
       maxPasswordLength: 128,
     },
     advanced: {
-      useSecureCookies: config.production,
+      useSecureCookies: config.production || new URL(config.origin).protocol === "https:",
       database: { validateSchema },
       ipAddress: {
         ipAddressHeaders: ["x-zmux-client-ip"],
