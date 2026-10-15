@@ -141,6 +141,8 @@ def main():
                         help="Explicit Zig content-addressed cache; default is a fresh temporary cache")
     parser.add_argument("--resource-experiment", action="store_true",
                         help="Apply the original hashed allocator/exact-history patch; experiment only")
+    parser.add_argument("--effects-experiment", action="store_true",
+                        help="Exercise original bounded BEL/reply/RESET callback batches; experiment only")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -155,6 +157,8 @@ def main():
     if args.resource_experiment:
         inputs += ["resource.patch", "resource.c", "resource.h", "resource.rs",
                    "RESOURCE_CONTRACT.md", "licenses/Ghostty-LICENSE"]
+    if args.effects_experiment:
+        inputs += ["effects.c", "effects.h", "effects.rs"]
     document = {"schema_version": 1, "state": "starting", "pins": pins,
                 "host": {"system": system, "architecture": machine,
                          "os_release": platform.release(), "macos": platform.mac_ver()[0]},
@@ -172,6 +176,10 @@ def main():
                               if args.resource_experiment else None},
                 "resource_experiment": {"requested": args.resource_experiment,
                     "total_app_memory_bound": False, "scope": "host_architecture_only"},
+                "effects_experiment": {"requested": args.effects_experiment,
+                    "scope": "host_architecture_only", "total_app_memory_bound": False,
+                    "real_pty_round_trip": False, "metadata_osc_notifications_supported": False,
+                    "callback_reply_bytes": 4096, "callback_events": 1024},
                 "claims": {"production_engine_changed": False, "native_app_launched": False,
                            "performance_measured": False, "graphics_tested": False,
                            "cross_architecture_execution": False,
@@ -349,6 +357,65 @@ def main():
                 document["resource_experiment"].update(
                     execution="passed", architecture=machine, negative_controls=controls,
                     observation_stdout=stdout[:16384])
+            if args.effects_experiment:
+                controls = []
+                original = (HERE / "effects.c").read_text()
+                variants = [
+                    ("normal", None, None, None),
+                    ("silent-reply-drop", "e->failure = ZMUX_EFFECT_ERROR_REPLY; return;", "return;",
+                     "reply limit+1 must fail visibly"),
+                    ("reset-order", "(ZmuxEffectEvent){ZMUX_EFFECT_RESET, 0, 0}",
+                     "(ZmuxEffectEvent){ZMUX_EFFECT_BELL, 0, 0}",
+                     "callback order must preserve BEL/reply/RESET"),
+                ]
+                for name, old, new, assertion in variants:
+                    label = "effects" if name == "normal" else "effects-control-" + name
+                    c_source = HERE / "effects.c"
+                    mutation_hash = None
+                    if old is not None:
+                        if original.count(old) != 1:
+                            raise RuntimeError(label + " mutation no longer has one exact source target")
+                        c_source = work / (label + ".c")
+                        c_source.write_text(original.replace(old, new))
+                        mutation_hash = hashlib.sha256(c_source.read_bytes()).hexdigest()
+                    effect_obj = work / (label + ".o")
+                    command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-DGHOSTTY_STATIC",
+                               "-I", str(source / "include"), "-I", str(HERE),
+                               "-c", str(c_source), "-o", str(effect_obj)]
+                    if sdk:
+                        command += ["-arch", machine, "-isysroot", sdk]
+                    run(command, label + "-c-shim", output, phases, env=environment)
+                    effect_binary = work / (label + "-probe")
+                    command = ["rustc", "--edition=2024", str(HERE / "effects.rs"),
+                               "-L", "dependency=" + str(adapter_target / "debug/deps"),
+                               "--extern", "zmux_terminal_adapter=" + str(matches[0]),
+                               "-C", "link-arg=" + str(obj), "-C", "link-arg=" + str(effect_obj),
+                               "-C", "link-arg=" + str(library), "-o", str(effect_binary)]
+                    if sdk:
+                        command += ["-C", "link-arg=-isysroot", "-C", "link-arg=" + sdk]
+                    run(command, label + "-rust-owner", output, phases, env=environment)
+                    command = [sys.executable, str(HERE / "run.py"), "--execute-fixture", str(effect_binary)]
+                    if assertion is None:
+                        stdout = run(command, label + "-fixture", output, phases, timeout=10)
+                        if "effects_success=true" not in stdout:
+                            raise RuntimeError("effects fixture returned no completed assertion receipt")
+                        document["effects_experiment"].update(execution="passed", architecture=machine,
+                                                              observation_stdout=stdout[:16384])
+                    else:
+                        try:
+                            run(command, label + "-fixture", output, phases, timeout=10)
+                        except RuntimeError:
+                            record = phases[-1]
+                            log = (output / record["log"]).read_text(errors="replace")
+                            if record["timed_out"] or record["exit_code"] != 101 or assertion not in log:
+                                raise RuntimeError(label + " did not fail for the intended assertion")
+                            record["expected_failure"] = True
+                            controls.append({"name": name, "execution": "expected_assertion_failure",
+                                             "scope": "temporary_original_shim_mutation",
+                                             "mutated_source_sha256": mutation_hash, "log": record["log"]})
+                        else:
+                            raise RuntimeError(label + " unexpectedly passed")
+                document["effects_experiment"]["negative_controls"] = controls
             document["state"] = "complete"
     except Exception as error:
         document.update(state="failed", error=f"{type(error).__name__}: {error}")

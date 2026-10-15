@@ -34,3 +34,8 @@ root license is retained in [licenses/Ghostty-LICENSE](licenses/Ghostty-LICENSE)
 the runner checks it against the verified archive before applying the patch. Patch
 and fixture SHA-256 hashes are recorded in each opt-in receipt. This license copy
 does not complete linked-component distribution notice review.
+
+
+`effects.c`, `effects.h` and `effects.rs` are original MIT public-C-API fixtures.
+They introduce no additional upstream patch, dependency or distributed engine
+artifact. Negative controls modify only temporary copies of the original shim.

@@ -184,3 +184,65 @@ The six operation-denial paths include ordinary history page growth separately f
 lazy alternate initialization. Sticky denial takes effect for subsequent calls
 after the current at-most-4,096-byte feed returns; there is no consumed-byte or
 last-good-generation receipt. Hosted/Mac resource execution remains a separate gate.
+
+
+## Opt-in callback effects experiment
+
+```sh
+python3 tools/terminal-feasibility/run.py --effects-experiment \
+  --output /tmp/zmux-terminal-effects-results
+```
+
+This mode adds original `effects.c`/`effects.h`/`effects.rs`, using only public
+upstream callbacks and the existing probe wrapper. It can run without the resource
+patch or combine with `--resource-experiment`; neither flag changes the application.
+A fixed 1,024-event batch preserves BEL/reply/RESET order, and reply bytes cap at
+4,096. The single-threaded owner requires successful draining before more input.
+Insufficient drain capacity does not drain or partially copy the batch, and overflow is
+visible and sticky after the current call returns. The Rust owner publishes a new
+owned frame/effect generation only after all checks pass, retaining the last good
+generation on failure. BEL reuses the current public `TerminalNotice` type with a
+32-notice ring and explicit oldest-notice eviction count. RESET is a control event;
+it does not create a notice or restart sequence identity.
+
+The real-engine fixture exercises callback order and owned lifetime, fragmented
+queries, exact byte/event limits and overflows, pending-batch/oversized-input
+refusal before mutation, small drain buffers, failed snapshot publication and 128
+owner lifecycles. Two temporary **original shim** mutations must fail their intended
+assertions: silent reply loss and a reset mislabeled as BEL. Their source hashes and
+intentional exit-101 phase records are separate from the successful normal fixture.
+No upstream code is changed for these controls. Normal effect inputs are hashed in
+the receipt. Execution is host-only; Mac universal slices still cover the original
+raw library/fixture rather than an effects executable.
+
+The C context has a separately stated fixed storage bound; Rust frame/batch copies
+are bounded independently. This is not a total app memory or host-allocation-failure
+proof. Replies are captured only: there is no real PTY round trip, callback into UI,
+clipboard, native notification dispatch or app integration. Title/cwd and OSC9/777
+fidelity remain open because the pin silently truncates raw metadata and its generic
+notification callback omits protocol provenance. See the
+[effect slice design](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/f04-effects-slice.md).
+
+Combined resource/effects runs use separate terminal owners. `effects_new` uses the
+unchanged public default constructor with its default allocator; it does not use the
+resource fixture's mapping quota. The combined run therefore verifies both isolated
+contracts, not a single integrated quota/effect/publication owner. That composition
+and allocation failure during callback publication remain separate acceptance gates.
+
+The shim's engine-error check is the upstream informational `VT_PROCESSING_ERROR`
+bit. That bit excludes gracefully handled failures/configured limits and errors
+limited to external effects or query responses. The fixture's explicit host
+reply/event/snapshot failures are covered; it does not detect every possible engine
+allocation failure or prove that no upstream query was silently lost. Controlled
+allocation denial with this publication owner is still an independent gate.
+
+
+The reviewed local combined run is
+`/tmp/zmux-f04-effects-repro-reviewed-20261015/receipt.json` (SHA-256
+`5f9f75280eeed19843798535b8f0dade799cf802fabbcfe906b07bb59a2cac1e`).
+All 17 current harness hashes match. Every ordinary phase passes, including exact
+4,096-byte reply success; four explicitly labeled controls intentionally exit 101
+(two resource and two effects). The effects fixture passes in 0.332 seconds and
+records 24,632 fixed C host bytes on Linux, separately from Rust frame/batch storage.
+It uses the labeled explicit dependency cache and does not establish fresh dependency
+availability, Mac effects execution, production integration or a performance budget.
