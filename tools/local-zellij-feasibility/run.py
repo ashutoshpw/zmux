@@ -232,24 +232,25 @@ def containment_fixture(api, root, environment):
     return observations
 
 
-def credential_fixture(api, root, environment):
+def credential_fixture(api, root, environment, observations, output):
     path = root / "peer.sock"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     listener.bind(str(path))
     listener.listen(2)
     listener.settimeout(5)
     children = []
-    observations = []
     # Framework Python launchers on Darwin can exec a different interpreter image.
     # Spawn the independently inspected current image and verify that exact inode.
     interpreter = api.process(os.getpid())["executable"]
     try:
         for role in ("owned", "unrelated"):
             began = time.time()
-            child = subprocess.Popen([interpreter, "-B", str(HERE / "run.py"),
-                                      "--peer-child", str(path), role], env=environment,
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL, start_new_session=True)
+            error_path = output / (role + "-peer.log")
+            with error_path.open("wb") as error_log:
+                child = subprocess.Popen([interpreter, "-B", str(HERE / "run.py"),
+                                          "--peer-child", str(path), role], env=environment,
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=error_log, start_new_session=True)
             children.append(child)
             connection, _ = listener.accept()
             with connection:
@@ -276,8 +277,11 @@ def credential_fixture(api, root, environment):
                 observations.append({"role": role, "actual": peer, "expected_pid": expected, "accepted": accepted})
             wait_until(lambda: child_exited(child), "peer child exit", 5)
             status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            observations[-1]["exit_observation"] = repr(status)
+            with error_path.open("rb") as error_log:
+                diagnostic = error_log.read(4096).decode(errors="replace")
             require(status is not None and status.si_code == os.CLD_EXITED and status.si_status == 0,
-                    "Peer child observed incorrect authorization")
+                    "Peer child observed incorrect authorization (" + role + "): " + repr(status) + "; " + diagnostic)
         require(observations[0]["accepted"] and not observations[1]["accepted"], "Unrelated peer was not rejected")
         for child in children:
             child.wait(timeout=1)
@@ -798,7 +802,8 @@ def main():
         command([*compiler, *common, HERE / "pty_exec.c", "-o", wrapper], environment, 30)
         api = PublicAPI(library)
         receipt["public_api"] = api.library.zjfx_api().decode()
-        receipt["credential_fixture"] = credential_fixture(api, scratch, environment)
+        receipt["credential_fixture"] = []
+        credential_fixture(api, scratch, environment, receipt["credential_fixture"], output)
         receipt["process_containment"] = containment_fixture(api, scratch, environment)
         binary, receipt["download"] = download_binary(pins["assets"][key], scratch)
         receipt["version"] = command([binary, "--version"], environment)["output"].strip()
