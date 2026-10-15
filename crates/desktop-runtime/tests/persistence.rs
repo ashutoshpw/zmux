@@ -144,8 +144,12 @@ fn repeated_imports_reserve_durable_generations_without_mutating_source() {
     let second = loaded(&worker, &path);
     assert!(second.session_ids[0].0 > first.session_ids[0].0);
     assert_eq!(fs::read(&path).unwrap(), source);
-    let prepared =
-        WorkspaceStore::prepare_session_restore(second.document, &second.session_ids).unwrap();
+    let prepared = WorkspaceStore::prepare_session_restore(
+        second.document,
+        &second.session_ids,
+        second.window_id,
+    )
+    .unwrap();
     assert_eq!(prepared.store.snapshot().workspaces[0].name, "project");
     assert_eq!(
         fs::metadata(directory.0.join("state")).unwrap().mode() & 0o777,
@@ -158,6 +162,118 @@ fn repeated_imports_reserve_durable_generations_without_mutating_source() {
             & 0o777,
         0o600
     );
+    close(worker);
+}
+
+#[test]
+fn legacy_window_and_sessions_share_durable_generations_even_without_terminals() {
+    for empty in [false, true] {
+        let directory = Directory::new();
+        let path = directory.0.join("legacy.json");
+        let mut original = document();
+        if empty {
+            original.workspaces.clear();
+            original.focused_workspace = None;
+        }
+        let mut wire = serde_json::to_value(&original).unwrap();
+        wire["version"] = serde_json::json!(3);
+        wire.as_object_mut().unwrap().remove("window_layout");
+        let source = serde_json::to_vec(&wire).unwrap();
+        write_private(&path, &source);
+
+        let worker = directory.worker();
+        let first = loaded(&worker, &path);
+        let first_window = first.window_id.expect("legacy window must be reserved");
+        assert_eq!(
+            first_window.0,
+            first.allocation_start + first.session_ids.len() as u64
+        );
+        assert!(first_window.0 < first.allocation_end);
+        let ledger: serde_json::Value = serde_json::from_slice(
+            &fs::read(directory.0.join("state/session-generations.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ledger["next_ids"][original.identity_namespace.to_string()],
+            first.allocation_end
+        );
+        close(worker);
+
+        let worker = directory.worker();
+        let second = loaded(&worker, &path);
+        let second_window = second
+            .window_id
+            .expect("restart must reserve a new legacy window");
+        assert!(second_window.0 >= first.allocation_end);
+        assert!(second_window.0 > original.next_id);
+        assert_eq!(
+            second_window.0,
+            second.allocation_start + second.session_ids.len() as u64
+        );
+        assert_eq!(fs::read(&path).unwrap(), source);
+        let prepared = WorkspaceStore::prepare_session_restore(
+            second.document,
+            &second.session_ids,
+            second.window_id,
+        )
+        .unwrap();
+        assert_eq!(prepared.effects.len(), usize::from(!empty));
+        let snapshot = prepared.store.snapshot();
+        assert_eq!(snapshot.windows.len(), 1);
+        assert_eq!(snapshot.windows[0].id, second_window);
+        assert_eq!(
+            snapshot.windows[0].workspace_ids,
+            original.workspaces.iter().map(|w| w.id).collect::<Vec<_>>()
+        );
+        let exported = prepared.store.session_document().unwrap();
+        let v4_path = directory.0.join("v4.json");
+        let save = worker
+            .submit_save(v4_path.clone(), exported, false)
+            .unwrap();
+        assert!(matches!(
+            wait(&worker, save).result,
+            Ok(PersistenceOutcome::Saved)
+        ));
+        close(worker);
+
+        let worker = directory.worker();
+        let v4 = loaded(&worker, &v4_path);
+        assert!(v4.window_id.is_none());
+        assert!(v4.session_ids.iter().all(|id| id.0 > second_window.0));
+        let restored =
+            WorkspaceStore::prepare_session_restore(v4.document, &v4.session_ids, v4.window_id)
+                .unwrap();
+        assert_eq!(restored.store.snapshot().windows, snapshot.windows);
+        assert_eq!(
+            restored.store.snapshot().identity_namespace,
+            original.identity_namespace
+        );
+        close(worker);
+    }
+}
+
+#[test]
+fn unsupported_window_topology_is_rejected_before_durable_reservation() {
+    let directory = Directory::new();
+    let path = directory.0.join("two-windows.json");
+    let mut wire = serde_json::to_value(document()).unwrap();
+    wire["window_layout"]["windows"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "id": 99, "workspace_ids": [], "selected_workspace": null
+        }));
+    wire["next_id"] = serde_json::json!(100);
+    let source = serde_json::to_vec(&wire).unwrap();
+    write_private(&path, &source);
+    let worker = directory.worker();
+    let id = worker.submit_load(path.clone()).unwrap();
+    assert!(matches!(
+        wait(&worker, id).result,
+        Err(PersistenceError::InvalidDocument(_))
+    ));
+    assert!(!directory.0.join("state/session-generations.json").exists());
+    assert_eq!(fs::read(&path).unwrap(), source);
     close(worker);
 }
 
@@ -512,6 +628,10 @@ fn durable_blocks_burn_unused_runtime_ids_across_restart_and_later_import() {
     let mut empty = document;
     empty.workspaces.clear();
     empty.focused_workspace = None;
+    for window in &mut empty.window_layout.as_mut().unwrap().windows {
+        window.workspace_ids.clear();
+        window.selected_workspace = None;
+    }
     let empty_source = directory.0.join("empty-checkpoint.json");
     write_private(&empty_source, &serde_json::to_vec(&empty).unwrap());
     let empty_restore = loaded(&second, &empty_source);

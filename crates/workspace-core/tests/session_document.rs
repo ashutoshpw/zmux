@@ -61,11 +61,14 @@ fn document_restores_stable_topology_with_new_shells_and_private_browser_urls() 
     let prepared = WorkspaceStore::prepare_session_restore(
         validated,
         &[SessionId(1000), SessionId(1001), SessionId(1002)],
+        None,
     )
     .unwrap();
     let after = prepared.store.snapshot();
     assert_eq!(after.identity_namespace, before.identity_namespace);
     assert_eq!(after.focused_workspace, before.focused_workspace);
+    assert_eq!(after.windows, before.windows);
+    assert_eq!(after.focused_window, before.focused_window);
     assert_eq!(after.workspaces[0].id, before.workspaces[0].id);
     assert_eq!(after.workspaces[0].name, "local");
     assert!(matches!(
@@ -107,6 +110,184 @@ fn document_restores_stable_topology_with_new_shells_and_private_browser_urls() 
 }
 
 #[test]
+fn version_four_requires_one_checked_window_and_canonical_ownership() {
+    let wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
+    let workspace = wire["workspaces"][0]["id"].clone();
+    let mut cases = Vec::new();
+    let mut missing = wire.clone();
+    missing.as_object_mut().unwrap().remove("window_layout");
+    cases.push(missing);
+    let mut null = wire.clone();
+    null["window_layout"] = Value::Null;
+    cases.push(null);
+    let mut absent = wire.clone();
+    absent["workspaces"] = json!([]);
+    absent["focused_workspace"] = Value::Null;
+    absent["window_layout"] = json!({"windows": [], "focused_window": null});
+    cases.push(absent);
+    let mut multiple = wire.clone();
+    multiple["window_layout"]["windows"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": 99, "workspace_ids": [], "selected_workspace": null
+        }));
+    multiple["next_id"] = json!(100);
+    cases.push(multiple);
+    for (membership, selection) in [
+        (json!([]), Value::Null),
+        (json!([workspace.clone(), workspace.clone()]), workspace),
+        (json!([999]), json!(999)),
+    ] {
+        let mut bad = wire.clone();
+        bad["window_layout"]["windows"][0]["workspace_ids"] = membership;
+        bad["window_layout"]["windows"][0]["selected_workspace"] = selection;
+        cases.push(bad);
+    }
+    for (field, value) in [
+        ("id", wire["workspaces"][0]["id"].clone()),
+        ("selected_workspace", Value::Null),
+        ("selected_workspace", json!(999)),
+    ] {
+        let mut bad = wire.clone();
+        bad["window_layout"]["windows"][0][field] = value;
+        cases.push(bad);
+    }
+    for focus in [Value::Null, json!(999)] {
+        let mut bad = wire.clone();
+        bad["window_layout"]["focused_window"] = focus;
+        cases.push(bad);
+    }
+    for (index, bad) in cases.into_iter().enumerate() {
+        assert!(
+            serde_json::from_value::<SessionDocument>(bad)
+                .and_then(|doc| doc.validate(limits()).map_err(serde::de::Error::custom))
+                .is_err(),
+            "malformed ownership case {index} accepted"
+        );
+    }
+    let validated = serde_json::from_value::<SessionDocument>(wire)
+        .unwrap()
+        .validate(limits())
+        .unwrap();
+    assert!(
+        WorkspaceStore::prepare_session_restore(
+            validated,
+            &[SessionId(1000), SessionId(1001), SessionId(1002)],
+            Some(WindowId(2000))
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn legacy_versions_require_fresh_reserved_window_identity_and_keep_logical_ids() {
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    store
+        .apply(Action::CreateWorkspace {
+            name: "legacy".into(),
+        })
+        .unwrap();
+    let before = store.snapshot();
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    for version in [1, 2, 3] {
+        let mut legacy = wire.clone();
+        legacy["version"] = json!(version);
+        // Layouts are versioned data, never silently discarded by an older reader.
+        assert!(
+            serde_json::from_value::<SessionDocument>(legacy.clone())
+                .unwrap()
+                .validate(limits())
+                .is_err()
+        );
+        legacy.as_object_mut().unwrap().remove("window_layout");
+        let validated = serde_json::from_value::<SessionDocument>(legacy)
+            .unwrap()
+            .validate(limits())
+            .unwrap();
+        assert!(validated.requires_window_id());
+        for id in [
+            None,
+            Some(WindowId(1)),
+            Some(WindowId(1000)),
+            Some(WindowId(MAX_NEXT_IDENTIFIER)),
+        ] {
+            assert!(
+                WorkspaceStore::prepare_session_restore(validated.clone(), &[SessionId(1000)], id)
+                    .is_err()
+            );
+        }
+        let prepared = WorkspaceStore::prepare_session_restore(
+            validated,
+            &[SessionId(1000)],
+            Some(WindowId(1001)),
+        )
+        .unwrap();
+        let after = prepared.store.snapshot();
+        assert_eq!(
+            after.windows,
+            vec![Window {
+                id: WindowId(1001),
+                workspace_ids: vec![before.workspaces[0].id],
+                selected_workspace: before.focused_workspace
+            }]
+        );
+        assert_eq!(after.identity_namespace, before.identity_namespace);
+        assert_eq!(after.workspaces[0].id, before.workspaces[0].id);
+        assert_eq!(
+            after.workspaces[0].focused_pane,
+            before.workspaces[0].focused_pane
+        );
+        assert_eq!(
+            after.workspaces[0].root.panes()[0].selected_surface,
+            before.workspaces[0].root.panes()[0].selected_surface
+        );
+        assert_eq!(
+            after.workspaces[0].root.panes()[0].selected().session_id,
+            Some(SessionId(1000))
+        );
+        assert_eq!(prepared.store.next_identifier(), 1002);
+        assert_eq!(prepared.store.session_document().unwrap().version, 4);
+    }
+}
+
+#[test]
+fn saved_window_membership_order_drives_the_singleton_native_catalog() {
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    for name in ["first", "second"] {
+        store
+            .apply(Action::CreateWorkspace { name: name.into() })
+            .unwrap();
+    }
+    let mut document = store.session_document().unwrap();
+    let window = &mut document.window_layout.as_mut().unwrap().windows[0];
+    window.workspace_ids.reverse();
+    window.selected_workspace = Some(window.workspace_ids[1]);
+    document.focused_workspace = window.selected_workspace;
+    let order = window.workspace_ids.clone();
+    let mut conflicting = document.clone();
+    conflicting.focused_workspace = Some(order[0]);
+    assert!(conflicting.validate(limits()).is_err());
+    let prepared = WorkspaceStore::prepare_session_restore(
+        document.validate(limits()).unwrap(),
+        &[SessionId(1000), SessionId(1001)],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        prepared
+            .store
+            .snapshot()
+            .workspaces
+            .iter()
+            .map(|w| w.id)
+            .collect::<Vec<_>>(),
+        order
+    );
+    assert_eq!(prepared.store.snapshot().focused_workspace, Some(order[1]));
+}
+
+#[test]
 fn ssh_export_cannot_replay_startup_commands() {
     let mut store = fixture();
     store
@@ -138,6 +319,7 @@ fn ssh_export_cannot_replay_startup_commands() {
             SessionId(1002),
             SessionId(1003),
         ],
+        None,
     )
     .unwrap();
     let remote = prepared
@@ -230,7 +412,7 @@ fn malformed_documents_and_stale_runtime_ids_are_rejected_before_restore() {
         vec![SessionId(1), SessionId(1001), SessionId(1002)],
         vec![SessionId(u64::MAX), SessionId(1001), SessionId(1002)],
     ] {
-        assert!(WorkspaceStore::prepare_session_restore(validated.clone(), &ids).is_err());
+        assert!(WorkspaceStore::prepare_session_restore(validated.clone(), &ids, None).is_err());
     }
 }
 
@@ -284,8 +466,13 @@ fn structural_limits_reject_oversized_topology_and_accept_an_empty_desktop() {
     let mut empty = document;
     empty.workspaces.clear();
     empty.focused_workspace = None;
+    for window in &mut empty.window_layout.as_mut().unwrap().windows {
+        window.workspace_ids.clear();
+        window.selected_workspace = None;
+    }
     let prepared =
-        WorkspaceStore::prepare_session_restore(empty.validate(limits()).unwrap(), &[]).unwrap();
+        WorkspaceStore::prepare_session_restore(empty.validate(limits()).unwrap(), &[], None)
+            .unwrap();
     assert!(prepared.effects.is_empty());
     assert!(prepared.store.snapshot().workspaces.is_empty());
     assert!(prepared.store.snapshot().focused_workspace.is_none());
@@ -343,7 +530,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
         })
         .unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 3);
+    assert_eq!(wire["version"], 4);
     assert_eq!(
         wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"],
         profile.to_string()
@@ -352,7 +539,8 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
         let validated = serde_json::from_value::<SessionDocument>(wire)?
             .validate(limits())
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
-        WorkspaceStore::prepare_session_restore(validated, &[SessionId(1000)])
+        let window = validated.requires_window_id().then_some(WindowId(2000));
+        WorkspaceStore::prepare_session_restore(validated, &[SessionId(1000)], window)
             .map_err(|e| serde::de::Error::custom(e.to_string()))
     };
     let restored: Result<_, serde_json::Error> = restore(wire.clone());
@@ -363,6 +551,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
     );
     let mut legacy = wire.clone();
     legacy["version"] = json!(1);
+    legacy.as_object_mut().unwrap().remove("window_layout");
     // Even explicit null is a v2 field and must not be accepted then forgotten by v1.
     legacy["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"] = Value::Null;
     assert!(restore(legacy.clone()).is_err());
@@ -430,6 +619,7 @@ fn tmux_session_v3_preserves_only_immutable_identity_and_rejects_older_versions_
             SessionId(1002),
             SessionId(1003),
         ],
+        None,
     )
     .unwrap();
     assert!(
@@ -442,6 +632,7 @@ fn tmux_session_v3_preserves_only_immutable_identity_and_rejects_older_versions_
     for version in [1, 2] {
         let mut old = wire.clone();
         old["version"] = json!(version);
+        old.as_object_mut().unwrap().remove("window_layout");
         assert!(
             serde_json::from_value::<SessionDocument>(old)
                 .unwrap()

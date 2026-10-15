@@ -464,7 +464,7 @@ fn restored_surface_with_a_fresh_session_cannot_receive_an_old_notification_acti
             browsers: 4,
         })
         .unwrap();
-    let restored = WorkspaceStore::prepare_session_restore(document, &[SessionId(10000)])
+    let restored = WorkspaceStore::prepare_session_restore(document, &[SessionId(10000)], None)
         .unwrap()
         .store;
     assert_eq!(

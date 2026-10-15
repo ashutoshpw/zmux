@@ -1,7 +1,7 @@
 //! Versioned topology descriptors. No process state, input, filesystem or network I/O.
 //!
 //! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
-//! descriptors. Earlier versions retain explicit readers.
+//! descriptors; V4 adds canonical window membership. Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
 //! Page state and native split ratios need their own future schema version.
@@ -9,10 +9,10 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 3;
+pub const SESSION_DOCUMENT_VERSION: u32 = 4;
 const FORMAT: &str = "zmux.session";
-// Retain room for an ordinary four-ID create-workspace action after restoration.
-const MAX_NEXT_ID: u64 = u64::MAX - 4;
+// A starter workspace needs its original four IDs and one checked window ID.
+pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +23,26 @@ pub struct SessionDocument {
     pub next_id: u64,
     pub focused_workspace: Option<WorkspaceId>,
     pub workspaces: Vec<SavedWorkspace>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "window_layout"
+    )]
+    pub window_layout: Option<SavedWindowLayout>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedWindowLayout {
+    pub windows: Vec<Window>,
+    pub focused_window: Option<WindowId>,
+}
+
+// An omitted field belongs to legacy versions; an explicit null is not a layout.
+fn window_layout<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<SavedWindowLayout>, D::Error> {
+    SavedWindowLayout::deserialize(decoder).map(Some)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +187,10 @@ pub struct ValidatedSessionDocument {
     browsers: usize,
 }
 impl ValidatedSessionDocument {
+    /// The persistence worker reserves this ID with the fresh runtime IDs.
+    pub fn requires_window_id(&self) -> bool {
+        self.document.version < 4
+    }
     pub fn terminal_count(&self) -> usize {
         self.terminals
     }
@@ -303,13 +327,13 @@ impl Validation {
 impl SessionDocument {
     /// Byte-length and parse-recursion limits belong to the persistence worker before this call.
     pub fn validate(self, limits: RestoreLimits) -> Result<ValidatedSessionDocument, RestoreError> {
-        if self.format != FORMAT || !matches!(self.version, 1 | 2 | SESSION_DOCUMENT_VERSION) {
+        if self.format != FORMAT || !matches!(self.version, 1 | 2 | 3 | SESSION_DOCUMENT_VERSION) {
             return Err(invalid("unsupported format or version"));
         }
         if self.identity_namespace.is_nil() {
             return Err(invalid("identity namespace must be nonzero"));
         }
-        if self.next_id == 0 || self.next_id > MAX_NEXT_ID {
+        if self.next_id == 0 || self.next_id > MAX_NEXT_IDENTIFIER {
             return Err(invalid("allocator space exhausted"));
         }
         if self.workspaces.len() > MAX_WORKSPACES {
@@ -337,6 +361,33 @@ impl SessionDocument {
             validation.tree(&workspace.root, 0, &mut panes)?;
             if !panes.contains(&workspace.focused_pane) {
                 return Err(invalid("focused pane does not belong to workspace"));
+            }
+        }
+        match (&self.window_layout, self.version) {
+            (Some(layout), 4) => {
+                if layout.windows.is_empty() {
+                    return Err(invalid("persisted desktop requires a window"));
+                }
+                let ids: Vec<_> = self
+                    .workspaces
+                    .iter()
+                    .map(|workspace| workspace.id)
+                    .collect();
+                let projection =
+                    windows::validate_layout(&ids, &layout.windows, layout.focused_window)
+                        .map_err(invalid)?;
+                for window in &layout.windows {
+                    validation.id(window.id.0)?;
+                }
+                if projection != self.focused_workspace {
+                    return Err(invalid("legacy focus differs from window selection"));
+                }
+            }
+            (None, 1..=3) => {}
+            _ => {
+                return Err(invalid(
+                    "window layout is required only in session version 4",
+                ));
             }
         }
         Ok(ValidatedSessionDocument {
@@ -488,7 +539,7 @@ impl WorkspaceStore {
     }
 
     pub fn advance_identifier_floor(&mut self, floor: u64) -> Result<(), RestoreError> {
-        if floor == 0 || floor > MAX_NEXT_ID {
+        if floor == 0 || floor > MAX_NEXT_IDENTIFIER {
             return Err(invalid(
                 "allocator floor is outside supported identifier space",
             ));
@@ -516,6 +567,10 @@ impl WorkspaceStore {
             identity_namespace: self.state.identity_namespace,
             next_id: self.next_id,
             focused_workspace: self.state.focused_workspace,
+            window_layout: Some(SavedWindowLayout {
+                windows: self.state.windows.clone(),
+                focused_window: self.state.focused_window,
+            }),
             workspaces: self
                 .state
                 .workspaces
@@ -540,6 +595,7 @@ impl WorkspaceStore {
     pub fn prepare_session_restore(
         document: ValidatedSessionDocument,
         fresh_session_ids: &[SessionId],
+        fresh_window_id: Option<WindowId>,
     ) -> Result<PreparedSessionRestore, RestoreError> {
         if fresh_session_ids.len() != document.terminals {
             return Err(invalid("wrong number of runtime session IDs"));
@@ -547,22 +603,72 @@ impl WorkspaceStore {
         let mut unique = HashSet::new();
         let mut next_id = document.document.next_id;
         for id in fresh_session_ids {
-            if id.0 < document.document.next_id || id.0 >= MAX_NEXT_ID || !unique.insert(*id) {
+            if id.0 < document.document.next_id
+                || id.0 >= MAX_NEXT_IDENTIFIER
+                || !unique.insert(id.0)
+            {
                 return Err(invalid(
                     "runtime session IDs must be fresh, unique and leave allocator capacity",
                 ));
             }
             next_id = next_id.max(id.0 + 1);
         }
+        let layout = if document.requires_window_id() {
+            let id = fresh_window_id
+                .ok_or_else(|| invalid("legacy restore requires a reserved window ID"))?;
+            if id.0 < document.document.next_id
+                || id.0 >= MAX_NEXT_IDENTIFIER
+                || !unique.insert(id.0)
+            {
+                return Err(invalid(
+                    "window ID must be fresh, unique and leave allocator capacity",
+                ));
+            }
+            next_id = next_id.max(id.0 + 1);
+            SavedWindowLayout {
+                windows: vec![Window {
+                    id,
+                    workspace_ids: document
+                        .document
+                        .workspaces
+                        .iter()
+                        .map(|workspace| workspace.id)
+                        .collect(),
+                    selected_workspace: document.document.focused_workspace,
+                }],
+                focused_window: Some(id),
+            }
+        } else {
+            if fresh_window_id.is_some() {
+                return Err(invalid("version 4 restore preserves its saved window IDs"));
+            }
+            document
+                .document
+                .window_layout
+                .clone()
+                .expect("validated version 4 layout")
+        };
         let mut ids = fresh_session_ids.iter().copied();
         let mut effects = Vec::new();
-        let source = document.document;
+        let mut source = document.document;
+        // The singleton native host still presents the flat catalog; project its
+        // order from canonical membership rather than ignoring saved window order.
+        if let Some(window) = layout.windows.first() {
+            source.workspaces.sort_by_key(|workspace| {
+                window
+                    .workspace_ids
+                    .iter()
+                    .position(|id| *id == workspace.id)
+            });
+        }
         let state = Snapshot {
             identity_namespace: source.identity_namespace,
             model_version: MODEL_VERSION,
             revision: 0,
             focused_workspace: source.focused_workspace,
             closed_items: Vec::new(),
+            windows: layout.windows,
+            focused_window: layout.focused_window,
             workspaces: source
                 .workspaces
                 .into_iter()
@@ -574,13 +680,15 @@ impl WorkspaceStore {
                 })
                 .collect(),
         };
-        Ok(PreparedSessionRestore {
-            store: Self {
-                state,
-                next_id,
-                ..Self::default()
-            },
-            effects,
-        })
+        let mut store = Self {
+            state,
+            next_id,
+            ..Self::default()
+        };
+        store.project_window_focus();
+        store
+            .check_window_layout()
+            .map_err(|error| invalid(error.to_string()))?;
+        Ok(PreparedSessionRestore { store, effects })
     }
 }
