@@ -1,4 +1,7 @@
 /* Independent C caller: exercises the actual shared-library boundary and owned buffers. */
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #include "zmux.h"
