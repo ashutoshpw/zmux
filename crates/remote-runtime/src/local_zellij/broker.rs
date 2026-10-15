@@ -670,12 +670,15 @@ mod tests {
     #[test]
     fn rejected_real_socket_input_retains_hash_and_pre_send_cancellation_phase() {
         for canceled in [false, true] {
-            let (mut connection, mut source, target) = connection();
+            let (mut connection, mut source, _target) = connection();
             source.write_all(b"abc").unwrap();
-            // Concurrent process tests can temporarily inherit this endpoint
-            // across fork. Shut down the socket itself, not only our FD ref.
-            target.shutdown(std::net::Shutdown::Both).unwrap();
-            drop(target);
+            // Exercise a real rejected send without depending on peer-close
+            // timing: Darwin can accept writes after the peer shuts down.
+            // SHUT_WR rejects this writer even if concurrent forks inherit it.
+            connection
+                .backend
+                .shutdown(std::net::Shutdown::Write)
+                .unwrap();
             let mut report = TransportReport::default();
             let deadline = Instant::now() + Duration::from_secs(1);
             while !connection

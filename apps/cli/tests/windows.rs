@@ -1,5 +1,7 @@
 //! Public CLI against the real window owner; trusted native acknowledgements are
 //! driven at the production boundary. This does not execute or claim AppKit UI.
+#[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use serde_json::Value;
 use std::{
     fs,
@@ -13,6 +15,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Desktop, Shell,
     control::ControlServer,
@@ -23,7 +26,7 @@ static NEXT: AtomicU64 = AtomicU64::new(1);
 #[test]
 fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_topology() {
     let fixture = Fixture::new();
-    let before = fixture.desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&fixture.desktop);
     let source = before.model.windows[0].id;
     let workspace = before.model.workspaces[0].id;
     let surface = before.model.workspaces[0].root.panes()[0].selected_surface;
@@ -43,7 +46,7 @@ fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_to
     assert_eq!(moved["source_window_id"], source.0);
     assert_eq!(moved["destination_window_id"], open.window_id.0);
     assert_eq!(moved["native_focus"], Value::Null);
-    let snapshot = fixture.desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(&fixture.desktop);
     assert_eq!(snapshot.model.focused_window, Some(source));
     assert_eq!(snapshot.model.focused_workspace, None);
     let current = value(
@@ -81,7 +84,7 @@ fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_to
     let message = String::from_utf8_lossy(&failed.stderr);
     assert!(message.contains("topology already committed"), "{message}");
     assert!(message.contains("not replayed or rolled back"), "{message}");
-    let committed = fixture.desktop.snapshot().unwrap();
+    let committed = desktop_snapshot::read(&fixture.desktop);
     assert!(
         committed.model.windows[0]
             .workspace_ids
@@ -107,7 +110,10 @@ fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_to
         .output()
         .unwrap();
     assert!(!stale.status.success());
-    assert_eq!(fixture.desktop.snapshot().unwrap().model, committed.model);
+    assert_eq!(
+        desktop_snapshot::read(&fixture.desktop).model,
+        committed.model
+    );
     let success = fixture.spawn(&[
         "move-workspace-to-window",
         "--focus",
@@ -126,7 +132,7 @@ fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_to
         completed["native_focus"]["operation_id"],
         native.operation_id.to_string()
     );
-    let selected = fixture.desktop.snapshot().unwrap().model.clone();
+    let selected = desktop_snapshot::read(&fixture.desktop).model.clone();
     let same = fixture.value(&[
         "move-workspace-to-window",
         "--workspace",
@@ -137,7 +143,7 @@ fn workspace_move_destination_is_distinct_from_source_and_focus_failure_keeps_to
     assert_eq!(same["changed_window"], false);
     assert_eq!(same["focus_requested"], false);
     assert_eq!(same["native_focus"], Value::Null);
-    let unchanged = fixture.desktop.snapshot().unwrap().model.clone();
+    let unchanged = desktop_snapshot::read(&fixture.desktop).model.clone();
     assert_eq!(unchanged.windows, selected.windows);
     assert_eq!(unchanged.focused_window, selected.focused_window);
     for args in [
@@ -260,10 +266,7 @@ impl Fixture {
     fn pending(&self, kind: WindowKind) -> NativeWindowRequest {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(request) = self
-                .desktop
-                .snapshot()
-                .unwrap()
+            if let Some(request) = desktop_snapshot::read_until(&self.desktop, deadline)
                 .window_requests
                 .iter()
                 .find(|r| r.kind == kind)
@@ -333,7 +336,7 @@ fn finish(mut child: Child) -> Output {
 #[test]
 fn window_cli_waits_for_native_receipts_and_preserves_no_focus_and_exact_scope() {
     let fixture = Fixture::new();
-    let initial = fixture.desktop.snapshot().unwrap();
+    let initial = desktop_snapshot::read(&fixture.desktop);
     let original = initial.model.focused_window.unwrap();
     let root_surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
     let mut new = fixture.spawn(&["new-window", "--no-focus"]);
@@ -345,11 +348,13 @@ fn window_cli_waits_for_native_receipts_and_preserves_no_focus_and_exact_scope()
         "Logical creation was reported as native completion"
     );
     assert_eq!(
-        fixture.desktop.snapshot().unwrap().model.focused_window,
+        desktop_snapshot::read(&fixture.desktop)
+            .model
+            .focused_window,
         Some(original)
     );
     assert_eq!(
-        fixture.desktop.snapshot().unwrap().observed_key_window,
+        desktop_snapshot::read(&fixture.desktop).observed_key_window,
         Some(original)
     );
     fixture.acknowledge(&open);
@@ -500,7 +505,7 @@ fn window_cli_waits_for_native_receipts_and_preserves_no_focus_and_exact_scope()
     fixture.acknowledge(&terminate);
     assert_eq!(value(finish(close_last))["kind"], "terminate");
     assert_eq!(
-        fixture.desktop.snapshot().unwrap().model.windows.len(),
+        desktop_snapshot::read(&fixture.desktop).model.windows.len(),
         1,
         "A terminate acknowledgement is not proof of saved shutdown"
     );
@@ -523,7 +528,10 @@ fn window_cli_waits_for_native_receipts_and_preserves_no_focus_and_exact_scope()
     let denied = fixture.command(&["new-window"]).output().unwrap();
     assert!(!denied.status.success());
     assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
-    assert_eq!(fixture.desktop.snapshot().unwrap().model.windows.len(), 1);
+    assert_eq!(
+        desktop_snapshot::read(&fixture.desktop).model.windows.len(),
+        1
+    );
 }
 
 #[test]
@@ -533,7 +541,9 @@ fn accepted_window_mutation_times_out_without_replay_or_premature_success() {
     let request = fixture.pending(WindowKind::Open);
     assert!(request.focus, "new-window must request focus by default");
     assert_eq!(
-        fixture.desktop.snapshot().unwrap().model.focused_window,
+        desktop_snapshot::read(&fixture.desktop)
+            .model
+            .focused_window,
         Some(request.window_id)
     );
     let output = finish(create);
@@ -541,7 +551,7 @@ fn accepted_window_mutation_times_out_without_replay_or_premature_success() {
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains(&request.operation_id.to_string()), "{error}");
     assert!(error.contains("not replayed"), "{error}");
-    let snapshot = fixture.desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(&fixture.desktop);
     assert_eq!(snapshot.model.windows.len(), 2);
     assert_eq!(
         snapshot
@@ -590,7 +600,7 @@ fn failed_native_open_is_reported_and_explicit_close_allows_a_new_window() {
     assert_eq!(failed["native_state"], "failed");
     assert_eq!(failed["native_error"], "Native host creation failed");
     assert!(failed["recovery"].as_str().unwrap().contains("Close"));
-    let snapshot = fixture.desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(&fixture.desktop);
     assert_eq!(snapshot.model.windows.len(), 2);
     assert!(
         snapshot
@@ -670,7 +680,7 @@ fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection(
     for name in ["B", "C", "D"] {
         fixture.value(&["new-workspace", name]);
     }
-    let before = fixture.desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&fixture.desktop);
     let window = before.model.windows[0].id;
     let ids = before.model.windows[0].workspace_ids.clone();
     let subject = format!("workspace:{}", ids[0].0);
@@ -691,7 +701,7 @@ fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection(
     assert_eq!(preview["from_index"], 0);
     assert_eq!(preview["to_index"], 2);
     assert_eq!(preview["events"], serde_json::json!([]));
-    assert_eq!(fixture.desktop.snapshot().unwrap().model, before.model);
+    assert_eq!(desktop_snapshot::read(&fixture.desktop).model, before.model);
     let denied = fixture
         .command(&["reorder-workspace", &subject, "--index", "2"])
         .output()
@@ -709,7 +719,7 @@ fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection(
     ]);
     assert_eq!(preview["plan"], applied["plan"]);
     assert_eq!(applied["events"].as_array().unwrap().len(), 1);
-    let reordered = fixture.desktop.snapshot().unwrap();
+    let reordered = desktop_snapshot::read(&fixture.desktop);
     assert_eq!(
         reordered.model.windows[0].workspace_ids,
         vec![ids[1], ids[2], ids[0], ids[3]]
@@ -741,10 +751,10 @@ fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection(
     let bulk = fixture.value(&["reorder-workspaces", "--order", &order]);
     assert_eq!(bulk["plan"], bulk_preview["plan"]);
     assert_eq!(
-        fixture.desktop.snapshot().unwrap().model.windows[0].workspace_ids,
+        desktop_snapshot::read(&fixture.desktop).model.windows[0].workspace_ids,
         vec![ids[3], ids[2], ids[1], ids[0]]
     );
-    let stable = fixture.desktop.snapshot().unwrap().model.clone();
+    let stable = desktop_snapshot::read(&fixture.desktop).model.clone();
     for arguments in [
         vec![
             "reorder-workspace",
@@ -787,7 +797,7 @@ fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection(
                 .success(),
             "{arguments:?}"
         );
-        assert_eq!(fixture.desktop.snapshot().unwrap().model, stable);
+        assert_eq!(desktop_snapshot::read(&fixture.desktop).model, stable);
     }
 }
 
@@ -795,7 +805,7 @@ fn reorder_cli_preview_and_apply_share_window_order_and_preserve_live_selection(
 fn reorder_cli_resolves_caller_objects_and_never_borrows_another_window() {
     let fixture = Fixture::new();
     fixture.value(&["new-workspace", "source B"]);
-    let original = fixture.desktop.snapshot().unwrap();
+    let original = desktop_snapshot::read(&fixture.desktop);
     let source = original.model.windows[0].id;
     let moving = original.model.workspaces[0].id;
     let surface = original.model.workspaces[0].root.panes()[0].selected_surface;
@@ -811,7 +821,7 @@ fn reorder_cli_resolves_caller_objects_and_never_borrows_another_window() {
         "--window",
         &destination,
     ]);
-    let current = fixture.desktop.snapshot().unwrap().model.clone();
+    let current = desktop_snapshot::read(&fixture.desktop).model.clone();
     let mut command = fixture.command(&[
         "reorder-workspace",
         "index:1",
@@ -863,14 +873,14 @@ fn reorder_cli_resolves_caller_objects_and_never_borrows_another_window() {
             .status
             .success()
     );
-    assert_eq!(fixture.desktop.snapshot().unwrap().model, current);
+    assert_eq!(desktop_snapshot::read(&fixture.desktop).model, current);
 }
 
 #[test]
 fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy() {
     use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
     let fixture = Fixture::new();
-    let initial = fixture.desktop.snapshot().unwrap();
+    let initial = desktop_snapshot::read(&fixture.desktop);
     let pane = initial.model.workspaces[0].root.panes()[0].id;
     for _ in 0..2 {
         fixture.value(&["new-surface", &pane.0.to_string()]);
@@ -878,7 +888,7 @@ fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy(
     fixture.value(&["new-workspace", "foreground"]);
     let deadline = Instant::now() + Duration::from_secs(5);
     let before = loop {
-        let s = fixture.desktop.snapshot().unwrap();
+        let s = desktop_snapshot::read_until(&fixture.desktop, deadline);
         if s.control_frames.len() == 4 && s.control_frames.iter().all(|f| f.process_id.is_some()) {
             break s;
         }
@@ -905,7 +915,7 @@ fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy(
     );
     assert_eq!(receipt["focus_requested"], false);
     assert!(receipt["native_focus"].is_null());
-    let after = fixture.desktop.snapshot().unwrap();
+    let after = desktop_snapshot::read(&fixture.desktop);
     assert_eq!(
         after.model.focused_workspace,
         before.model.focused_workspace
@@ -951,7 +961,7 @@ fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy(
     let ambient = value(ambient.output().unwrap());
     assert_eq!(ambient["to_index"], 2);
     assert_eq!(ambient["focus_requested"], false);
-    let model = fixture.desktop.snapshot().unwrap().model.clone();
+    let model = desktop_snapshot::read(&fixture.desktop).model.clone();
     let foreign = model.workspaces[1].root.panes()[0].selected_surface;
     for args in [
         vec![
@@ -977,7 +987,7 @@ fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy(
                 .status
                 .success()
         );
-        assert_eq!(fixture.desktop.snapshot().unwrap().model, model);
+        assert_eq!(desktop_snapshot::read(&fixture.desktop).model, model);
     }
     fixture
         .server
@@ -989,18 +999,18 @@ fn surface_reorder_cli_resolves_one_pane_retains_legacy_and_obeys_socket_policy(
         .unwrap();
     assert!(!denied.status.success());
     assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
-    assert_eq!(fixture.desktop.snapshot().unwrap().model, model);
+    assert_eq!(desktop_snapshot::read(&fixture.desktop).model, model);
 }
 
 #[test]
 fn surface_order_waits_for_exact_native_focus_and_never_replays_committed_order() {
     let fixture = Fixture::new();
-    let pane = fixture.desktop.snapshot().unwrap().model.workspaces[0]
+    let pane = desktop_snapshot::read(&fixture.desktop).model.workspaces[0]
         .root
         .panes()[0]
         .id;
     fixture.value(&["new-surface", &pane.0.to_string()]);
-    let initial = fixture.desktop.snapshot().unwrap();
+    let initial = desktop_snapshot::read(&fixture.desktop);
     let id = initial.model.workspaces[0].root.panes()[0].surfaces[0]
         .id
         .0
@@ -1027,7 +1037,7 @@ fn surface_order_waits_for_exact_native_focus_and_never_replays_committed_order(
         "{error}"
     );
     assert_eq!(
-        fixture.desktop.snapshot().unwrap().model.workspaces[0]
+        desktop_snapshot::read(&fixture.desktop).model.workspaces[0]
             .root
             .panes()[0]
             .surfaces[1]
@@ -1060,7 +1070,7 @@ fn surface_order_waits_for_exact_native_focus_and_never_replays_committed_order(
     let timed = finish(timed);
     assert!(!timed.status.success());
     assert!(String::from_utf8_lossy(&timed.stderr).contains("already committed"));
-    let snapshot = fixture.desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(&fixture.desktop);
     assert_eq!(
         snapshot
             .window_requests

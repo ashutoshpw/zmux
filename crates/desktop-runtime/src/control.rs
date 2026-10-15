@@ -1340,6 +1340,13 @@ fn peer_uid(stream: &UnixStream) -> nix::Result<Uid> {
 
 #[cfg(test)]
 mod tests {
+    use crate as desktop_runtime;
+    mod desktop_snapshot {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/desktop_snapshot.rs"
+        ));
+    }
     use super::*;
     use crate::Shell;
     use std::{
@@ -1414,7 +1421,7 @@ mod tests {
         let response = exchange_raw(&path, body.len() as u32, body);
         assert!(response.ok, "{:?}", response.error);
         assert_eq!(response.version, 1);
-        let before = desktop.snapshot().unwrap().model.clone();
+        let before = desktop_snapshot::read(&desktop).model.clone();
         assert!(before.workspaces.iter().any(|w| w.name == "Legacy client"));
         server
             .set_policy(ControlPolicy::password(
@@ -1426,7 +1433,7 @@ mod tests {
         assert!(!denied.ok);
         assert_eq!(denied.version, 1);
         assert_eq!(denied.error.unwrap().code, "unauthorized");
-        assert_eq!(desktop.snapshot().unwrap().model, before);
+        assert_eq!(desktop_snapshot::read(&desktop).model, before);
         cleanup(&path, server, desktop);
     }
 

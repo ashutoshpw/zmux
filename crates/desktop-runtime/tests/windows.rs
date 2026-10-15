@@ -1,10 +1,13 @@
 //! Physical PTYs and trusted native window acknowledgements at their real owner.
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use std::{
     sync::Arc,
     thread,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Command, Desktop, Request, Shell, Snapshot,
     windows::{NativeWindowEvent, WindowAction, WindowHostToken, WindowKind, WindowRequest},
@@ -16,15 +19,14 @@ use zmux_workspace_core::{
 fn wait(desktop: &Desktop, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        if let Ok(snapshot) = desktop.snapshot()
-            && predicate(&snapshot)
-        {
+        let snapshot = desktop_snapshot::read_until(desktop, deadline);
+        if predicate(&snapshot) {
             return snapshot;
         }
         assert!(
             Instant::now() < deadline,
             "window owner did not settle: {:?}",
-            desktop.snapshot().ok().and_then(|s| s.last_error.clone())
+            snapshot.last_error
         );
         thread::sleep(Duration::from_millis(5));
     }
@@ -234,7 +236,7 @@ fn two_real_pty_windows_render_without_focus_and_close_requires_exact_native_com
         WindowKind::Terminate,
         original_host,
     );
-    assert_eq!(desktop.snapshot().unwrap().model, last.model);
+    assert_eq!(desktop_snapshot::read(&desktop).model, last.model);
     desktop.shutdown(Duration::from_secs(3)).unwrap();
 }
 
@@ -492,7 +494,7 @@ fn workspace_moves_preflight_native_destination_and_preserve_two_real_sessions()
         let focused = wait(&desktop, |s| s.last_request_id == sequence + 5);
         assert!(focused.last_error.is_none(), "{:?}", focused.last_error);
     }
-    let full = desktop.snapshot().unwrap();
+    let full = desktop_snapshot::read(&desktop);
     assert_eq!(full.window_requests.len(), 32);
     send(&desktop, 40, movement(source, true));
     let rejected = wait(&desktop, |s| s.last_request_id == 40);
@@ -535,7 +537,7 @@ fn numbered_workspace_requests_share_selection_action_and_consume_missing_rows_w
                 && s.control_frames.iter().all(|f| f.process_id.is_some())
         });
     }
-    let snapshot = desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(&desktop);
     let window = snapshot.model.windows[0].id;
     let ids = snapshot.model.windows[0].workspace_ids.clone();
     send(
@@ -591,7 +593,7 @@ fn numbered_workspace_requests_share_selection_action_and_consume_missing_rows_w
             native_ids
         );
     }
-    let before = desktop.snapshot().unwrap().model.clone();
+    let before = desktop_snapshot::read(&desktop).model.clone();
     send(&desktop, 7, number(8));
     let missing = wait(&desktop, |s| s.last_request_id == 7);
     assert!(missing.last_error.is_none());
@@ -630,7 +632,7 @@ fn numbered_workspace_requests_share_selection_action_and_consume_missing_rows_w
         );
         wait(&desktop, |s| s.last_request_id == sequence);
     }
-    let empty = desktop.snapshot().unwrap();
+    let empty = desktop_snapshot::read(&desktop);
     assert!(empty.model.windows[0].workspace_ids.is_empty());
     assert_eq!(empty.model.focused_window, Some(foreground));
     send(&desktop, 14, number(1));
@@ -705,7 +707,7 @@ fn surface_order_preflights_host_and_exact_focus_capacity_before_committing() {
         let s = wait(&desktop, |s| s.last_request_id == sequence + 3);
         assert!(s.last_error.is_none(), "{:?}", s.last_error);
     }
-    let full = desktop.snapshot().unwrap();
+    let full = desktop_snapshot::read(&desktop);
     assert_eq!(
         full.window_requests.len(),
         32,

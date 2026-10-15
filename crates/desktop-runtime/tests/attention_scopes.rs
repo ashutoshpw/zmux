@@ -1,3 +1,6 @@
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
+use zmux_desktop_runtime as desktop_runtime;
 #[path = "support/window_host.rs"]
 mod window_host;
 use std::{

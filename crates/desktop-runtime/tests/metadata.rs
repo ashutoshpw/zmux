@@ -1,9 +1,12 @@
 //! Owner-side wire validation, bounded retention and workspace lifecycle contracts.
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use std::{
     sync::Arc,
     thread,
     time::{Duration, Instant},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Command, Desktop, Request, Shell, Snapshot,
     metadata::{LogLevel, MAX_LOG_ENTRIES, MAX_STATUS_ENTRIES, MAX_TEXT_BYTES, MetadataAction},
@@ -34,9 +37,8 @@ impl App {
     fn wait(&self, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(s) = self.desktop.snapshot()
-                && predicate(&s)
-            {
+            let s = desktop_snapshot::read_until(&self.desktop, deadline);
+            if predicate(&s) {
                 return s;
             }
             assert!(
@@ -87,12 +89,12 @@ fn status(key: String, value: &str, priority: i32) -> MetadataAction {
 #[test]
 fn owner_bounds_status_and_log_records_without_losing_existing_keys_or_newest_messages() {
     let mut a = App::new();
-    let w = a.desktop.snapshot().unwrap().model.workspaces[0].id;
+    let w = desktop_snapshot::read(&a.desktop).model.workspaces[0].id;
     for n in 0..MAX_STATUS_ENTRIES {
         let s = a.metadata(w, status(format!("key-{n:02}"), "original", 0));
         assert!(s.last_error.is_none(), "{:?}", s.last_error);
     }
-    let before = a.desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&a.desktop);
     let rejected = a.metadata(w, status("overflow".into(), "rejected", 100));
     assert!(rejected.last_error.as_ref().unwrap().contains("capacity"));
     assert_eq!(
@@ -116,7 +118,7 @@ fn owner_bounds_status_and_log_records_without_losing_existing_keys_or_newest_me
         );
         assert!(s.last_error.is_none());
     }
-    let s = a.desktop.snapshot().unwrap();
+    let s = desktop_snapshot::read(&a.desktop);
     let metadata = &s.workspace_metadata[0];
     assert_eq!(metadata.logs.len(), MAX_LOG_ENTRIES);
     assert_eq!(metadata.logs_dropped, 3);
@@ -148,7 +150,7 @@ fn owner_bounds_status_and_log_records_without_losing_existing_keys_or_newest_me
 #[test]
 fn wire_targets_reject_scope_mismatch_and_stale_revision_and_close_prunes_owned_state() {
     let mut a = App::new();
-    let w = a.desktop.snapshot().unwrap().model.workspaces[0].id;
+    let w = desktop_snapshot::read(&a.desktop).model.workspaces[0].id;
     a.metadata(w, status("build".into(), "retained", 0));
     let other = a.send(Command::Action {
         action: Action::CreateWorkspace {
@@ -286,7 +288,7 @@ fn close_then_restore_does_not_resurrect_transient_metadata() {
 fn process_byte_capacity_is_shared_across_workspaces_and_released_without_cross_owner_eviction() {
     use zmux_desktop_runtime::metadata::{MAX_LOG_MESSAGE_BYTES, MAX_RETAINED_BYTES};
     let mut a = App::new();
-    let first = a.desktop.snapshot().unwrap().model.workspaces[0].id;
+    let first = desktop_snapshot::read(&a.desktop).model.workspaces[0].id;
     let created = a.send(Command::Action {
         action: Action::CreateWorkspace {
             name: "second metadata owner".into(),
@@ -302,7 +304,7 @@ fn process_byte_capacity_is_shared_across_workspaces_and_released_without_cross_
     }
     let mut rejected = false;
     for n in 0..256 {
-        let before = a.desktop.snapshot().unwrap();
+        let before = desktop_snapshot::read(&a.desktop);
         let workspace = if n % 2 == 0 { first } else { second };
         let after = a.metadata(
             workspace,

@@ -1,3 +1,4 @@
+use super::desktop_snapshot;
 use uuid::Uuid;
 use zmux_desktop_runtime::{
     Desktop,
@@ -6,7 +7,7 @@ use zmux_desktop_runtime::{
 /// Establishes the same native host/key observations required by production;
 /// app activation alone is deliberately insufficient to consume attention.
 pub fn observe_key(desktop: &Desktop) {
-    let snapshot = desktop.snapshot().unwrap();
+    let snapshot = desktop_snapshot::read(desktop);
     let window = snapshot.model.focused_window.unwrap();
     let token = if let Some(token) = snapshot
         .window_hosts

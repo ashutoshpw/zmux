@@ -1,4 +1,6 @@
 //! Workspace metadata contracts through the shipped CLI and real control server.
+#[path = "../../../crates/desktop-runtime/tests/support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use serde_json::Value;
 use std::{
     fs,
@@ -11,6 +13,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{Desktop, Shell, control::ControlServer};
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 struct App {
@@ -289,9 +292,8 @@ fn escaped_metadata_budget_rejection_keeps_accepted_records_readable() {
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Ok(s) = a.desktop.snapshot()
-                && s.last_request_id == next
-            {
+            let s = desktop_snapshot::read_until(&a.desktop, deadline);
+            if s.last_request_id == next {
                 break s;
             }
             assert!(Instant::now() < deadline);
@@ -316,7 +318,7 @@ fn escaped_metadata_budget_rejection_keeps_accepted_records_readable() {
     let mut accepted = 0;
     let mut rejected = false;
     for _ in 0..MAX_LOG_ENTRIES {
-        let before = a.desktop.snapshot().unwrap();
+        let before = desktop_snapshot::read(&a.desktop);
         let result = send(MetadataAction::Log {
             message: "\\".repeat(MAX_LOG_MESSAGE_BYTES),
             level: LogLevel::Progress,

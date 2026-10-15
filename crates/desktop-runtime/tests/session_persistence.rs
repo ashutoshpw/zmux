@@ -1,4 +1,6 @@
 //! Real filesystem + PTY lifecycle contracts; pure descriptor validation lives in core.
+#[path = "support/desktop_snapshot.rs"]
+mod desktop_snapshot;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -7,6 +9,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Command, Desktop, DesktopError, Request, Shell, Snapshot,
     sessions::{OperationState, SessionCommand},
@@ -93,7 +96,7 @@ fn wait(desktop: &Desktop, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapsho
         assert!(
             Instant::now() < deadline,
             "session lifecycle timed out: {}",
-            serde_json::to_string(&*desktop.snapshot().unwrap()).unwrap()
+            serde_json::to_string(&*desktop_snapshot::read_until(desktop, deadline)).unwrap()
         );
         thread::sleep(Duration::from_millis(3));
     }
@@ -641,7 +644,7 @@ fn explicit_exports_report_actual_completion_failures_and_preserve_receipts_acro
                     .is_some_and(|op| matches!(op.state, OperationState::Failed))
         });
     }
-    let bounded = desktop.snapshot().unwrap();
+    let bounded = desktop_snapshot::read(&desktop);
     assert_eq!(bounded.persistence.operations.len(), 32);
     assert!(
         !bounded
@@ -875,7 +878,7 @@ fn shutdown_reports_a_failed_final_recovery_write_instead_of_claiming_success() 
         error.to_string().contains("session shutdown save failed"),
         "{error}"
     );
-    let final_state = desktop.snapshot().unwrap();
+    let final_state = desktop_snapshot::read(&desktop);
     assert!(final_state.closed);
     assert!(final_state.cleanup_error.is_some());
     assert!(final_state.persistence.error.is_some());
@@ -1081,7 +1084,7 @@ fn reordered_membership_survives_real_save_restart_without_replacing_live_ptys()
                 && s.control_frames.iter().all(|f| f.process_id.is_some())
         });
     }
-    let before = desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&desktop);
     let ids = before.model.windows[0].workspace_ids.clone();
     let request = |dry_run| Command::WorkspaceOrder {
         request: OrderRequest {
@@ -1172,7 +1175,7 @@ fn surface_order_keeps_live_pty_identity_and_persists_exact_tab_order_with_fresh
                 && s.control_frames.iter().all(|f| f.process_id.is_some())
         });
     }
-    let before = desktop.snapshot().unwrap();
+    let before = desktop_snapshot::read(&desktop);
     let pane_before = before.model.workspaces[0].root.panes()[0];
     let ids: Vec<_> = pane_before.surfaces.iter().map(|s| s.id).collect();
     let order = OrderRequest {
