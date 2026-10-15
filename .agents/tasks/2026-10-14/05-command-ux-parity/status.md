@@ -5,6 +5,49 @@
 
 ## Active implementation
 
+- `313da45` adds the typed Swift fixture repair, bounded process failure receipts,
+  and both-architecture early Swift typechecking. Exact combined isolated
+  validation passes286 Rust tests, formatting, strict Clippy, notices and C ABI.
+  This batch includes `7a81cc4` retained-engine linkage and `15ecbdc` shared
+  shutdown; hosted verification is the next gate. Browser production keyboard
+  and worker-level terminal engine integration remain separate work in progress.
+
+- `f3fc91e` native38804157702 passes Rust/ABI and resolves the selector collision,
+  then Swift rejects an overly complex `SurfaceOrderSmoke.selection` expression.
+  An explicit typed-loop repair is in progress. Foundation macOS38804157739
+  reaches a descendant-process fixture failure; Zellij38804187126 reaches actual
+  terminal input then exits. Both need bounded failure diagnostics before a
+  runtime cause can be claimed. No new reopen acceptance evidence exists.
+
+- Local commits `7a81cc4` and `15ecbdc` add the opt-in retained terminal bridge /
+  Darwin linkage lane and shared shutdown with native cleanup barriers. Parent
+  combined frozen-tree `scripts/check` passes286 Rust tests, strict Clippy,
+  notices and C ABI; independent reviews pass. Push held while the useful
+  `f3fc91e` native run reaches close/save/reopen. Native compile/lifecycle and
+  new Darwin shim execution remain pending; default engine is unchanged.
+
+- `f3fc91e` publishes independently reviewed Darwin accepted-socket mode repairs
+  for production Zellij bootstrap and the CLI browser fixture, plus unambiguous
+  AppKit tab selectors. Combined isolated `scripts/check` passes; targeted actual
+  fragmented-frame regression has red/green evidence. Hosted native38804157702,
+  foundation38804157739 and Zellij38804187126 are running; acceptance pending.
+
+- Latest published `0101763`: foundation Linux passes; macOS exposes inherited
+  nonblocking mode in a CLI browser socket fixture. Native Rust/ABI passes, but
+  Swift compilation stops on ambiguous AppKit `moveLeft` selector before reopen.
+  Narrow repairs are in progress; there is no new restore acceptance evidence.
+- Browser keyboard probe `38802980621` passes all 16 native cases on ARM macOS15,
+  including detached WebKit, trusted defaults and intercepted Command-W resend
+  without changing the unrelated editor. Production integration and cross-request
+  modifier lifecycle remain pending.
+- Shared shutdown is under independent review: one 10s deadline, retained physical
+  owners, native download barrier and responsive pending-cleanup presentation.
+  Review caught SSH barrier ordering and download finalization reservation races;
+  repairs and owner-boundary verification precede native acceptance.
+- Opt-in terminal bridge frozen source passes isolated fullcheck283 and four
+  linked engine tests. Hosted new-shim validation will reuse immutable libraries;
+  default engine migration and complete terminal fidelity remain open.
+
 - `ac28cf2` repairs two Darwin socket-readiness fixture assumptions and twelve
   immediate notification snapshot reads. Hosted `38800293490`/`38800305050`
   expose the former, foundation `38800293474` exposes `Busy` in the latter.
