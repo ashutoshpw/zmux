@@ -80,11 +80,15 @@ only the ARM executable runs all4 real PTY cases, serialized with a60s owned pha
 limit. Intel is compile/link/inspection only. Original engine binaries and producer
 receipts remain unchanged, and Zig is never invoked.
 
-Session requires libSystem and may additionally load only `/usr/lib/libproc.dylib`:
-the Cargo.lock-pinned `darwin-libproc-sys0.2.0` build script explicitly links `proc`,
-which the linker may strip if unused. The adapter remains libSystem-only. Unknown
-libraries, duplicate/missing required loads and runtime search paths refuse.
-Receipts separate adapter from Session execution and preserve hashes and logs.
+Session requires libSystem and may additionally load only `/usr/lib/libproc.dylib`
+and `/usr/lib/libiconv.2.dylib`. The Cargo.lock-pinned `darwin-libproc-sys0.2.0`
+build script explicitly links `proc`; pinned `libc0.2.190` links `iconv` from
+`src/unix/bsd/apple/mod.rs` outside `rustc-dep-of-std`. The linker may omit unused
+dylibs. The adapter remains libSystem-only. Unknown libraries, duplicate/missing
+required loads and runtime search paths refuse. Receipts separate adapter from
+Session execution and preserve hashes and logs. Candidate executables are retained
+with hashes before inspection so a rejected candidate remains inspectable; only
+successful inspection permits execution.
 
 Local policy tests pass29 with1 native-only skip, including exact Session artifact
 selection and the narrow dynamic-load policy. A real Linux Cargo no-run build
@@ -92,3 +96,20 @@ selects the expected Session executable and host shim through the same message
 parser. YAML and shell syntax checks plus the Session source/input gate pass.
 These are tooling checks; actual Darwin Session execution remains unaccepted until
 the committed lane is dispatched and its artifact receives independent review.
+
+The first optional Session attempt, run `38809109753` at
+`11671a48ddb484f8730ddf4df43e6a5394d7e886`, compiled ARM Session successfully but
+refused its runtime closure (`libSystem` plus system `libiconv.2`) before execution.
+ARM adapter4 passed; Intel was not reached. Artifact `12007776524`, ZIP SHA256
+`e4c736b4ccfa1e5e1ab267ea3bf2a8c5313e32adb5c962ae08670e96330ddc0b`, retains
+that failed receipt and compile log; its Session binary was not retained by the
+old driver. No Darwin Session execution is accepted from that attempt.
+
+Source inspection and `cargo tree --locked -p zmux-session-runtime --features
+ghostty --target aarch64-apple-darwin -i libc` establish the pinned Session
+dependency path. The existing load-policy table now reproduces this exact refusal
+on the old policy and passes with only the justified system path added. It also
+rejects duplicate iconv loads, alternate iconv paths, adapter iconv loads and
+runtime search paths. The focused command is `python3 -B -m unittest discover -s
+tools/terminal-engine-artifacts -p test_linkage.py -v`:8 tests, red on the missing
+iconv allowance, then green after repair. No dependency pin or default changed.

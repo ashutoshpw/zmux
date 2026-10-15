@@ -110,7 +110,7 @@ class RetainedLinkageChecks(unittest.TestCase):
             with self.assertRaisesRegex(Rejected, "one exact"):
                 linkage.cargo_outputs(encode(ambiguous), "adapter-id", "bridge-id", root)
 
-    def test_session_runtime_closure_only_adds_the_documented_system_proc_library(self):
+    def test_session_runtime_closure_only_adds_the_documented_system_libraries(self):
         def commands(libraries, rpath=False):
             # Mach-O load command bytes from the published ABI. The production
             # driver separately validates complete executable/version geometry.
@@ -124,11 +124,16 @@ class RetainedLinkageChecks(unittest.TestCase):
             return struct.pack("<8I", 0xfeedfacf, 0x100000C, 0, 2, len(values), sum(map(len, values)), 0, 0) + b"".join(values)
         system = "/usr/lib/libSystem.B.dylib"
         proc = "/usr/lib/libproc.dylib"
-        for libraries in ([system], [system, proc]):
+        iconv = "/usr/lib/libiconv.2.dylib"
+        for libraries in ([system], [system, proc], [system, iconv], [system, proc, iconv]):
             self.assertEqual(linkage.dynamic_libraries(commands(libraries), linkage.SESSION_OPTIONAL_DYLIBS), libraries)
-        with self.assertRaisesRegex(Rejected, "unexplained"):
-            linkage.dynamic_libraries(commands([system, proc]))  # Adapter remains System only.
-        for libraries in ([proc], [system, system], [system, "/opt/homebrew/lib/libssl.dylib"]):
+        for library in (proc, iconv):
+            with self.subTest(adapter_library=library), self.assertRaisesRegex(Rejected, "unexplained"):
+                linkage.dynamic_libraries(commands([system, library]))  # Adapter remains System only.
+        for libraries in ([proc], [system, system], [system, iconv, iconv],
+                          [system, "/usr/lib/libiconv.dylib"],
+                          [system, "/opt/homebrew/lib/libiconv.2.dylib"],
+                          [system, "/opt/homebrew/lib/libssl.dylib"]):
             with self.subTest(libraries=libraries), self.assertRaisesRegex(Rejected, "unexplained"):
                 linkage.dynamic_libraries(commands(libraries), linkage.SESSION_OPTIONAL_DYLIBS)
         with self.assertRaisesRegex(Rejected, "search path"):
