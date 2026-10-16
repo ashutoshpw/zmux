@@ -47,6 +47,12 @@ final class BrowserDownloads: NSObject, WKDownloadDelegate {
 
     init(owner: any BrowserDownloadOwner, bridge: NativeBridge) { self.owner = owner; self.bridge = bridge }
 
+    func isProfileBusy(_ profile: UUID) -> Bool {
+        // Every job remains here through conversion, cancellation and physical
+        // cleanup; hidden/retiring views are still real owners.
+        jobs.values.contains { $0.profile == profile }
+    }
+
     func reserve(origin: BrowserOwner, profile: UUID?, webView: WKWebView, conversionOwner: BrowserView, filename: String) async throws -> BrowserDownloadToken {
         guard !stopping, jobs.count < 4, jobs.values.filter({ $0.origin.surfaceId == origin.surfaceId }).count < 2,
               let epoch = current?.downloadEpoch else { throw BridgeFailure(message: "Download capacity or its runtime is unavailable.") }

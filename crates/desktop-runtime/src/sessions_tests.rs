@@ -71,7 +71,7 @@ fn worker(directory: &Directory) -> Worker {
     let browser = browser::BrowserRuntime::default();
     let downloads = downloads::DownloadRuntime::default();
     let windows = windows::WindowRuntime::default();
-    let profiles = profiles::ProfileRuntime::start(None).unwrap();
+    let profiles = profiles::ProfileRuntime::start(None, None).unwrap();
     let local_tmux = local_tmux::Runtime::new(local_tmux::Profile::default());
     let local_zellij = zellij_coordinator::Runtime::new(None);
     let attention = Attention::default();
@@ -83,6 +83,7 @@ fn worker(directory: &Directory) -> Worker {
     let terminal_engine = None;
     let (completion_tx, completion_rx) = mpsc::sync_channel(MAX_TERMINALS);
     let worker_shared = Arc::new(Shared {
+        profile_native: None,
         stop: AtomicBool::new(false),
         shutdown: Mutex::new(None),
         snapshot: Mutex::new(Arc::new(Snapshot {
