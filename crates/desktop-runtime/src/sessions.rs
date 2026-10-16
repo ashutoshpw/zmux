@@ -437,6 +437,10 @@ impl Worker {
                                 self.load_failed(op, error.to_string());
                                 continue;
                             }
+                            if let Err(error) = self.validate_restored_todos(&prepared.store) {
+                                self.load_failed(op, error.to_string());
+                                continue;
+                            }
                             if let Err(error) = prepared
                                 .store
                                 .advance_identifier_floor(loaded.allocation_start)
@@ -576,6 +580,7 @@ impl Worker {
         }
         let restore = self.restoring.take().expect("ready");
         self.model = restore.store;
+        self.metadata = crate::metadata::MetadataStore::default();
         let p = self.persistence.as_mut().expect("enabled");
         p.snapshot.restoring = false;
         p.snapshot.startup_pending = false;

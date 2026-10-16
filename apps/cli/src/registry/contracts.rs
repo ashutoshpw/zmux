@@ -201,15 +201,14 @@ fn definitions() -> Vec<Contract> {
             .push(("/request/operation/operation", "metadata"));
         c.expected
             .push(("/request/operation/action/action", action));
-        c.defaults =
-            json!({"implicit_focus_target": false, "max_items": 50, "lifetime": "transient"});
+        c.defaults = json!({"implicit_focus_target": false, "max_items": 50, "lifetime": "durable_workspace"});
         if name == "todo add" {
             c.default_pointers
                 .push(("state", "/request/operation/action/state"));
             c.default_pointers
                 .push(("origin", "/request/operation/action/origin"));
         }
-        c.limitations = "Ordered shared metadata records; item UUID or current one-based position resolved within the target workspace. Explicit workspace/proven caller required; no focus fallback. List is read-only. Mutations preserve other metadata. Public caller default does not explicitly specify absent-caller behavior, so local rejection remains a compatibility gap. Persistence, edit/set/reorder/open and historical text/schema/default compatibility remain unresolved.";
+        c.limitations = "Ordered shared metadata records; item UUID or current one-based position resolved within the target workspace. Explicit workspace/proven caller required; no focus fallback. List is read-only. Mutations preserve other metadata. Public caller default does not explicitly specify absent-caller behavior, so local rejection remains a compatibility gap. Workspace todo IDs/order/state/origin persist through S01 version5 save/export/restore; other metadata is transient. Current topology revision does not provide todo-list CAS. Undo-close data is process-local with bounded eviction. Last-surface moves from a workspace with todos are refused; checklist-only archival is a compatibility gap. Edit/set/reorder/open and historical text/schema/default compatibility remain unresolved.";
         result.push(c);
     }
     let mut current = contract(

@@ -111,7 +111,11 @@ fn document_restores_stable_topology_with_new_shells_and_private_browser_urls() 
 
 #[test]
 fn version_four_requires_bounded_checked_windows_and_canonical_ownership() {
-    let wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
+    let mut wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
+    wire["version"] = json!(4);
+    for workspace in wire["workspaces"].as_array_mut().unwrap() {
+        workspace.as_object_mut().unwrap().remove("todos");
+    }
     let workspace = wire["workspaces"][0]["id"].clone();
     let mut cases = Vec::new();
     let mut missing = wire.clone();
@@ -197,6 +201,9 @@ fn legacy_versions_require_fresh_reserved_window_identity_and_keep_logical_ids()
     for version in [1, 2, 3] {
         let mut legacy = wire.clone();
         legacy["version"] = json!(version);
+        for workspace in legacy["workspaces"].as_array_mut().unwrap() {
+            workspace.as_object_mut().unwrap().remove("todos");
+        }
         // Layouts are versioned data, never silently discarded by an older reader.
         assert!(
             serde_json::from_value::<SessionDocument>(legacy.clone())
@@ -251,7 +258,7 @@ fn legacy_versions_require_fresh_reserved_window_identity_and_keep_logical_ids()
             Some(SessionId(1000))
         );
         assert_eq!(prepared.store.next_identifier(), 1002);
-        assert_eq!(prepared.store.session_document().unwrap().version, 4);
+        assert_eq!(prepared.store.session_document().unwrap().version, 5);
     }
 }
 
@@ -534,7 +541,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
         })
         .unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 4);
+    assert_eq!(wire["version"], 5);
     assert_eq!(
         wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"],
         profile.to_string()
@@ -555,6 +562,9 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
     );
     let mut legacy = wire.clone();
     legacy["version"] = json!(1);
+    for workspace in legacy["workspaces"].as_array_mut().unwrap() {
+        workspace.as_object_mut().unwrap().remove("todos");
+    }
     legacy.as_object_mut().unwrap().remove("window_layout");
     // Even explicit null is a v2 field and must not be accepted then forgotten by v1.
     legacy["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"] = Value::Null;
@@ -636,6 +646,9 @@ fn tmux_session_v3_preserves_only_immutable_identity_and_rejects_older_versions_
     for version in [1, 2] {
         let mut old = wire.clone();
         old["version"] = json!(version);
+        for workspace in old["workspaces"].as_array_mut().unwrap() {
+            workspace.as_object_mut().unwrap().remove("todos");
+        }
         old.as_object_mut().unwrap().remove("window_layout");
         assert!(
             serde_json::from_value::<SessionDocument>(old)
@@ -657,4 +670,120 @@ fn tmux_session_v3_preserves_only_immutable_identity_and_rejects_older_versions_
             .validate(limits())
             .is_err()
     );
+}
+
+#[test]
+fn version_five_todos_are_explicit_validated_ordered_and_legacy_readers_never_silently_drop_them() {
+    use todo::{TodoEntry, TodoOrigin, TodoState};
+    let mut store = WorkspaceStore::with_identity_namespace(uuid::Uuid::from_u128(77));
+    store
+        .apply(Action::CreateWorkspace {
+            name: "durable checklist".into(),
+        })
+        .unwrap();
+    let workspace = store.snapshot().workspaces[0].id;
+    let items = vec![
+        TodoEntry {
+            id: uuid::Uuid::from_u128(1),
+            text: "first".into(),
+            state: TodoState::Completed,
+            origin: TodoOrigin::User,
+        },
+        TodoEntry {
+            id: uuid::Uuid::from_u128(2),
+            text: "second".into(),
+            state: TodoState::InProgress,
+            origin: TodoOrigin::Agent,
+        },
+    ];
+    store
+        .replace_workspace_todos(workspace, items.clone())
+        .unwrap();
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    assert_eq!(wire["version"], 5);
+    assert_eq!(
+        wire["workspaces"][0]["todos"],
+        serde_json::to_value(&items).unwrap()
+    );
+    // Generic topology is display-only; durable descriptors explicitly carry the data.
+    assert!(
+        serde_json::to_value(store.snapshot()).unwrap()["workspaces"][0]
+            .get("todos")
+            .is_none()
+    );
+    let decode = |wire: Value| -> Result<ValidatedSessionDocument, String> {
+        serde_json::from_value::<SessionDocument>(wire)
+            .map_err(|e| e.to_string())?
+            .validate(limits())
+            .map_err(|e| e.to_string())
+    };
+    let prepared = WorkspaceStore::prepare_session_restore(
+        decode(wire.clone()).unwrap(),
+        &[SessionId(1000)],
+        None,
+    )
+    .unwrap();
+    assert_eq!(prepared.store.snapshot().workspaces[0].todos, items);
+    let mut malformed = Vec::new();
+    let mut missing = wire.clone();
+    missing["workspaces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("todos");
+    malformed.push(missing);
+    for value in [
+        Value::Null,
+        json!({}),
+        json!([{"id":uuid::Uuid::nil(),"text":"bad","state":"pending","origin":"user"}]),
+        json!([
+            wire["workspaces"][0]["todos"][0].clone(),
+            wire["workspaces"][0]["todos"][0].clone()
+        ]),
+    ] {
+        let mut bad = wire.clone();
+        bad["workspaces"][0]["todos"] = value;
+        malformed.push(bad);
+    }
+    for (field, value) in [
+        ("text", json!(" ")),
+        ("text", json!("bad\u{0007}")),
+        ("text", json!("x".repeat(todo::MAX_TODO_TEXT_BYTES + 1))),
+        ("state", json!("unknown")),
+        ("origin", json!("unknown")),
+        ("extra", json!(true)),
+    ] {
+        let mut bad = wire.clone();
+        bad["workspaces"][0]["todos"][0][field] = value;
+        malformed.push(bad);
+    }
+    let mut too_many = wire.clone();
+    too_many["workspaces"][0]["todos"] = json!((0..=todo::MAX_TODO_ENTRIES).map(|id| json!({"id":uuid::Uuid::from_u128(id as u128+1),"text":"bounded","state":"pending","origin":"user"})).collect::<Vec<_>>());
+    malformed.push(too_many);
+    for bad in malformed {
+        assert!(decode(bad).is_err());
+    }
+    for version in 1..=4 {
+        let mut legacy = wire.clone();
+        legacy["version"] = json!(version);
+        if version < 4 {
+            legacy.as_object_mut().unwrap().remove("window_layout");
+        }
+        // Even an empty v5 field must not be accepted then forgotten by legacy readers.
+        legacy["workspaces"][0]["todos"] = json!([]);
+        assert!(decode(legacy.clone()).is_err());
+        legacy["workspaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("todos");
+        let restored = WorkspaceStore::prepare_session_restore(
+            decode(legacy).unwrap(),
+            &[SessionId(1000)],
+            (version < 4).then_some(WindowId(2000)),
+        )
+        .unwrap();
+        assert!(restored.store.snapshot().workspaces[0].todos.is_empty());
+        let migrated = serde_json::to_value(restored.store.session_document().unwrap()).unwrap();
+        assert_eq!(migrated["version"], 5);
+        assert_eq!(migrated["workspaces"][0]["todos"], json!([]));
+    }
 }

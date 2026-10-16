@@ -13,7 +13,7 @@ import tempfile
 def validate_saved(profile, prepared, prepared_path):
     path = profile / "session.json"
     saved = json.loads(path.read_text())
-    assert saved["version"] == 4, saved
+    assert saved["version"] == 5, saved
     assert saved["identity_namespace"].lower() == prepared["namespace"].lower()
     layout = saved["window_layout"]
     assert layout["focused_window"] == prepared["window"]
@@ -25,6 +25,10 @@ def validate_saved(profile, prepared, prepared_path):
     assert len(saved["workspaces"]) == 1
     workspace = saved["workspaces"][0]
     assert workspace["id"] == prepared["workspace"]
+    assert workspace["todos"] == [
+        {"id": prepared["todoIDs"][0].lower(), "text": "Saved pending checklist item", "state": "pending", "origin": "user"},
+        {"id": prepared["todoIDs"][1].lower(), "text": "Saved completed checklist item", "state": "completed", "origin": "agent"},
+    ], "Saved checklist identity/order/state/origin differs from actual close preparation"
     def leaves(tree):
         if tree["kind"] == "leaf":
             return [tree["pane"]]
@@ -194,7 +198,7 @@ def main():
             )
     reopened = json.loads(Path(str(prepared_path) + ".reopened.json").read_text())
     assert reopened["source_sha"] == metadata["source_sha"]
-    for key in ["success", "fresh_process", "native_input", "workspace_split_ratio_restored"]:
+    for key in ["success", "fresh_process", "native_input", "workspace_split_ratio_restored", "workspace_todos_restored", "transient_metadata_not_restored", "workspace_todo_row_rendered"]:
         assert reopened[key] is True, key
     evidence = {"success": True, "source_sha": metadata["source_sha"], "prepared": prepared,
                 "last_close_saved": True, "reopened": reopened, "fixture_directory": str(directory),

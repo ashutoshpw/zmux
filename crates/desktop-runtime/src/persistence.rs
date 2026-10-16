@@ -697,6 +697,11 @@ impl Write for BoundedBytes {
         Ok(())
     }
 }
+/// Pure bounded serialization preflight; no filesystem access or worker mutation.
+pub(crate) fn validate_document_size(document: &SessionDocument) -> Result<(), PersistenceError> {
+    serialize_bounded(document, MAX_DOCUMENT_BYTES, "session document").map(|_| ())
+}
+
 fn serialize_bounded(
     value: &impl Serialize,
     limit: usize,

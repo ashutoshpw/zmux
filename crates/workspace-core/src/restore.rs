@@ -1,7 +1,8 @@
 //! Versioned topology descriptors. No process state, input, filesystem or network I/O.
 //!
 //! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
-//! descriptors; V4 adds canonical window membership. Earlier versions retain explicit readers.
+//! descriptors; V4 adds canonical window membership; V5 adds workspace todos.
+//! Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
 //! Page state and native split ratios need their own future schema version.
@@ -9,7 +10,7 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 4;
+pub const SESSION_DOCUMENT_VERSION: u32 = 5;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -52,6 +53,41 @@ pub struct SavedWorkspace {
     pub name: String,
     pub focused_pane: PaneId,
     pub root: SavedTree,
+    #[serde(default, skip_serializing_if = "SavedTodos::is_missing")]
+    pub todos: SavedTodos,
+}
+
+/// Omitted in legacy versions; v5 requires an explicit array, never null.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SavedTodos {
+    pub items: Vec<crate::todo::TodoEntry>,
+    present: bool,
+}
+impl SavedTodos {
+    fn is_missing(&self) -> bool {
+        !self.present
+    }
+}
+impl From<Vec<crate::todo::TodoEntry>> for SavedTodos {
+    fn from(items: Vec<crate::todo::TodoEntry>) -> Self {
+        Self {
+            items,
+            present: true,
+        }
+    }
+}
+impl Serialize for SavedTodos {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.items.serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for SavedTodos {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self {
+            items: Vec::<crate::todo::TodoEntry>::deserialize(deserializer)?,
+            present: true,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,7 +363,7 @@ impl Validation {
 impl SessionDocument {
     /// Byte-length and parse-recursion limits belong to the persistence worker before this call.
     pub fn validate(self, limits: RestoreLimits) -> Result<ValidatedSessionDocument, RestoreError> {
-        if self.format != FORMAT || !matches!(self.version, 1 | 2 | 3 | SESSION_DOCUMENT_VERSION) {
+        if self.format != FORMAT || !matches!(self.version, 1..=SESSION_DOCUMENT_VERSION) {
             return Err(invalid("unsupported format or version"));
         }
         if self.identity_namespace.is_nil() {
@@ -346,6 +382,19 @@ impl SessionDocument {
         {
             return Err(invalid("focused workspace does not belong to document"));
         }
+        for workspace in &self.workspaces {
+            if (self.version >= 5) != workspace.todos.present {
+                return Err(invalid(
+                    "todo arrays are required only in session version 5",
+                ));
+            }
+        }
+        crate::todo::validate_lists(
+            self.workspaces
+                .iter()
+                .map(|workspace| workspace.todos.items.as_slice()),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
         let mut validation = Validation {
             ids: HashSet::new(),
             terminals: 0,
@@ -364,7 +413,7 @@ impl SessionDocument {
             }
         }
         match (&self.window_layout, self.version) {
-            (Some(layout), 4) => {
+            (Some(layout), version) if version >= 4 => {
                 if layout.windows.is_empty() {
                     return Err(invalid("persisted desktop requires a window"));
                 }
@@ -386,7 +435,7 @@ impl SessionDocument {
             (None, 1..=3) => {}
             _ => {
                 return Err(invalid(
-                    "window layout is required only in session version 4",
+                    "window layout is required in session version 4 and later",
                 ));
             }
         }
@@ -580,6 +629,7 @@ impl WorkspaceStore {
                     name: workspace.name.clone(),
                     focused_pane: workspace.focused_pane,
                     root: SavedTree::capture(&workspace.root),
+                    todos: workspace.todos.clone().into(),
                 })
                 .collect(),
         };
@@ -640,13 +690,15 @@ impl WorkspaceStore {
             }
         } else {
             if fresh_window_id.is_some() {
-                return Err(invalid("version 4 restore preserves its saved window IDs"));
+                return Err(invalid(
+                    "version 4 and later restore preserves saved window IDs",
+                ));
             }
             document
                 .document
                 .window_layout
                 .clone()
-                .expect("validated version 4 layout")
+                .expect("validated window layout")
         };
         let mut ids = fresh_session_ids.iter().copied();
         let mut effects = Vec::new();
@@ -677,6 +729,7 @@ impl WorkspaceStore {
                     name: workspace.name,
                     focused_pane: workspace.focused_pane,
                     root: workspace.root.restore(&mut ids, &mut effects),
+                    todos: workspace.todos.items,
                 })
                 .collect(),
         };
@@ -688,6 +741,9 @@ impl WorkspaceStore {
         store.project_window_focus();
         store
             .check_window_layout()
+            .map_err(|error| invalid(error.to_string()))?;
+        store
+            .validate_todos()
             .map_err(|error| invalid(error.to_string()))?;
         Ok(PreparedSessionRestore { store, effects })
     }

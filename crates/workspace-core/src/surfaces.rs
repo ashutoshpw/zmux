@@ -66,6 +66,9 @@ pub struct ClosedItem {
     pub workspace_name: String,
     pub restoring: bool,
     pub content: ClosedContent,
+    /// Only the item that actually removed its workspace retains this payload.
+    #[serde(skip_serializing)]
+    pub(crate) workspace_todos: Vec<crate::todo::TodoEntry>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct PendingRestore {
@@ -455,7 +458,7 @@ impl WorkspaceStore {
             .find(|p| p.id == workspace.focused_pane)?;
         Some((workspace.id, pane.id, pane.selected_surface))
     }
-    fn ensure_settled(&self, ids: &[SurfaceId]) -> Result<(), ActionError> {
+    pub(crate) fn ensure_settled(&self, ids: &[SurfaceId]) -> Result<(), ActionError> {
         if self
             .pending_restores
             .iter()
@@ -549,6 +552,15 @@ impl WorkspaceStore {
         if source == destination && limit == 0 {
             return Ok(());
         }
+        let workspace = &self.state.workspaces[wi];
+        if !workspace.todos.is_empty()
+            && workspace.root.panes().len() == 1
+            && workspace.root.panes()[0].surfaces.len() == 1
+        {
+            return Err(ActionError::InvalidOperation(
+                "cannot move the last surface from a workspace with todos; move the workspace or clear its checklist first".into(),
+            ));
+        }
         let surface = self.state.workspaces[wi]
             .root
             .pane_mut(source)
@@ -576,15 +588,22 @@ impl WorkspaceStore {
         let id = self.reserve(1)?;
         let workspace = &self.state.workspaces[wi];
         let mut anchors = Vec::new();
-        match &content {
+        let removes_owner = match &content {
             ClosedContent::Pane { pane } => {
                 workspace.root.close_anchors(pane.id, &mut anchors);
+                workspace.root.panes().len() == 1
             }
-            ClosedContent::Tabs { pane_id, .. } => {
+            ClosedContent::Tabs { pane_id, tabs } => {
                 workspace.root.close_anchors(*pane_id, &mut anchors);
+                workspace.root.panes().iter().all(|pane| {
+                    pane.surfaces
+                        .iter()
+                        .all(|surface| tabs.iter().any(|tab| tab.surface.id == surface.id))
+                })
             }
-            ClosedContent::Workspace { .. } => {}
-        }
+            // The full workspace already carries its canonical checklist.
+            ClosedContent::Workspace { .. } => false,
+        };
         let item = ClosedItem {
             window_id: self
                 .state
@@ -598,6 +617,11 @@ impl WorkspaceStore {
             workspace_id: workspace.id,
             workspace_name: workspace.name.clone(),
             restoring: false,
+            workspace_todos: if removes_owner {
+                workspace.todos.clone()
+            } else {
+                Vec::new()
+            },
             content,
         };
         if self.state.closed_items.len() >= MAX_CLOSED_ITEMS {
@@ -778,7 +802,13 @@ impl WorkspaceStore {
                     .iter()
                     .position(|p| p.id == workspace.focused_pane)
                     .unwrap_or(0);
-                self.restore_workspace(&workspace.name, &workspace.root, selected, effects)?;
+                self.restore_workspace(
+                    &workspace.name,
+                    &workspace.root,
+                    &workspace.todos,
+                    selected,
+                    effects,
+                )?;
             }
         }
         if let Some(id) = self.state.focused_workspace {
@@ -950,6 +980,7 @@ impl WorkspaceStore {
             let id = WorkspaceId(self.reserve(1)?);
             self.state.workspaces.push(Workspace {
                 id,
+                todos: record.saved_todos().to_vec(),
                 name: record.workspace_name.clone(),
                 focused_pane: pane_id,
                 root: PaneTree::Leaf { pane },
@@ -965,6 +996,7 @@ impl WorkspaceStore {
         &mut self,
         name: &str,
         old: &PaneTree,
+        todos: &[crate::todo::TodoEntry],
         selected: usize,
         effects: &mut Vec<Effect>,
     ) -> Result<(), ActionError> {
@@ -974,6 +1006,7 @@ impl WorkspaceStore {
         let focused_pane = root.panes()[selected].id;
         self.state.workspaces.push(Workspace {
             id,
+            todos: todos.to_vec(),
             name: name.into(),
             focused_pane,
             root,
@@ -1046,7 +1079,7 @@ impl WorkspaceStore {
         effects
     }
 
-    fn prune_restore_anchors(&mut self) {
+    pub(crate) fn prune_restore_anchors(&mut self) {
         let workspaces: Vec<_> = self
             .state
             .closed_items
