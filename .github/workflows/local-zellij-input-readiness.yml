@@ -11,6 +11,10 @@ on:
         description: Prepare a separate ephemeral source-built readiness package
         type: boolean
         default: false
+      retain_readiness_package:
+        description: Retain an explicitly reviewed diagnostic readiness package for seven days
+        type: boolean
+        default: false
       reviewed_notice_policy_sha256:
         description: Exact reviewed notice policy SHA256 (required for package preparation)
         type: string
@@ -22,6 +26,9 @@ on:
         type: string
         required: true
       dependency_package:
+        type: boolean
+        default: false
+      retain_readiness_package:
         type: boolean
         default: false
       reviewed_notice_policy_sha256:
@@ -51,10 +58,13 @@ jobs:
           REVIEWED_READINESS_SHA256: ${{ inputs.reviewed_readiness_source_sha256 }}
           DEPENDENCY_PACKAGE: ${{ inputs.dependency_package || false }}
           REVIEWED_NOTICE_POLICY_SHA256: ${{ inputs.reviewed_notice_policy_sha256 }}
+          RETAIN_READINESS_PACKAGE: ${{ inputs.retain_readiness_package || false }}
         run: |
           python3 - <<'PYTHON'
           import hashlib, os, platform
           from pathlib import Path
+          if os.environ["RETAIN_READINESS_PACKAGE"] == "true" and os.environ["DEPENDENCY_PACKAGE"] != "true":
+              raise SystemExit("Diagnostic readiness retention requires package mode")
           if os.environ["DEPENDENCY_PACKAGE"] == "true":
               policy = hashlib.sha256(Path("tools/local-zellij-feasibility/notice-policy.json").read_bytes()).hexdigest()
               if os.environ["REVIEWED_NOTICE_POLICY_SHA256"] != policy:
@@ -79,14 +89,26 @@ jobs:
       - name: Exercise frozen public consumer including observer4 semantics
         if: inputs.dependency_package
         run: python3 -B tools/local-zellij-feasibility/run-patched-owner.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --output "$RUNNER_TEMP/readiness-public-owner"
-      - name: Prepare separate readiness package with complete source and notices
+      - name: Package separate readiness variant with complete source and notices
         if: inputs.dependency_package
         env:
           REVIEWED_NOTICE_POLICY_SHA256: ${{ inputs.reviewed_notice_policy_sha256 }}
-        run: python3 -B tools/local-zellij-feasibility/package-patched.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/readiness-public-owner/receipt.json" --readiness-owner-receipt "$RUNNER_TEMP/readiness-owner/receipt.json" --output "$RUNNER_TEMP/readiness-package" --prepare-only --reviewed-policy-sha256 "$REVIEWED_NOTICE_POLICY_SHA256"
+          REVIEWED_READINESS_SHA256: ${{ inputs.reviewed_readiness_source_sha256 }}
+          RETAIN_READINESS_PACKAGE: ${{ inputs.retain_readiness_package || false }}
+        run: |
+          package_args=(--prepare-only)
+          if [ "$RETAIN_READINESS_PACKAGE" = true ]; then
+            package_args=(--reviewed-readiness-source-sha256 "$REVIEWED_READINESS_SHA256")
+          fi
+          python3 -B tools/local-zellij-feasibility/package-patched.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/readiness-public-owner/receipt.json" --readiness-owner-receipt "$RUNNER_TEMP/readiness-owner/receipt.json" --output "$RUNNER_TEMP/readiness-package" "${package_args[@]}" --reviewed-policy-sha256 "$REVIEWED_NOTICE_POLICY_SHA256"
       - name: Reject missing owner semantics and incomplete readiness source archives
         if: inputs.dependency_package
-        run: python3 -B tools/local-zellij-feasibility/check-readiness-package-gates.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/readiness-public-owner/receipt.json" --readiness-owner-receipt "$RUNNER_TEMP/readiness-owner/receipt.json" --package-output "$RUNNER_TEMP/readiness-package" --output "$RUNNER_TEMP/readiness-package-gates"
+        env:
+          RETAIN_READINESS_PACKAGE: ${{ inputs.retain_readiness_package || false }}
+        run: |
+          gate_args=()
+          if [ "$RETAIN_READINESS_PACKAGE" = true ]; then gate_args+=(--promotion-ready); fi
+          python3 -B tools/local-zellij-feasibility/check-readiness-package-gates.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/readiness-public-owner/receipt.json" --readiness-owner-receipt "$RUNNER_TEMP/readiness-owner/receipt.json" --package-output "$RUNNER_TEMP/readiness-package" --output "$RUNNER_TEMP/readiness-package-gates" "${gate_args[@]}"
       - name: Retain source and host evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -116,6 +138,7 @@ jobs:
             ${{ runner.temp }}/readiness-package/payload/components.json
             ${{ runner.temp }}/readiness-package/payload/SOURCES/upstream-source-provenance.json
             ${{ runner.temp }}/readiness-package-gates/receipt.json
+            ${{ runner.temp }}/readiness-package-gates/*.log
             .github/workflows/local-zellij-input-readiness.yml
             .github/workflows/local-zellij-patched-owner.yml
             tools/local-zellij-feasibility/input-readiness-protocol.json
@@ -144,5 +167,15 @@ jobs:
             tools/terminal-feasibility/run.py
             scripts/process_group.py
           include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain exact diagnostic readiness package only after all gates
+        if: inputs.dependency_package && inputs.retain_readiness_package && success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: diagnostic-zellij-readiness-package-Darwin-${{ runner.arch }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/readiness-package/DIAGNOSTIC-zellij-*.tar.gz
+            ${{ runner.temp }}/readiness-package/DIAGNOSTIC-zellij-*.tar.gz.sha256
           if-no-files-found: error
           retention-days: 7

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused archive/owner controls using one real prepare-only readiness package."""
+"""Focused archive/owner controls using one real readiness package."""
 import argparse
 import copy
 import gzip
@@ -9,6 +9,8 @@ import io
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tarfile
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +29,7 @@ def main():
     parser.add_argument("--readiness-owner-receipt", type=Path, required=True)
     parser.add_argument("--package-output", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--promotion-ready", action="store_true", help="require the finite diagnostic retained variant instead of prepare-only")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -35,9 +38,9 @@ def main():
     emitted = package.read_json(args.package_output / "receipt.json")
     manifest = package.read_json(args.package_output / "payload/manifest.json")
     archive = Path(emitted["archive"])
-    if emitted["status"] != "passed" or emitted["promotion_ready"] or package.producer.digest(archive) != emitted["archive_sha256"]:
-        raise RuntimeError("real prepare-only readiness package positive control required")
-    verify_archive(archive, manifest, built, package.producer.digest)
+    if emitted["status"] != "passed" or emitted["promotion_ready"] is not args.promotion_ready or package.producer.digest(archive) != emitted["archive_sha256"]:
+        raise RuntimeError("real readiness package with explicit expected promotion state required")
+    verify_archive(archive, manifest, built, package.producer.digest, promotion_ready=args.promotion_ready)
     results = []
 
     def rejected(label, function, reason):
@@ -99,8 +102,26 @@ def main():
         rejected(case, lambda: package.verify_chain(args.producer_receipt.resolve(), owner_receipt,
                  args.readiness_owner_receipt.resolve()), expected)
 
+    # Exercise the real public packager refusal using the same actual producer,
+    # before any platform/package work. It must not infer review from the input.
+    result = subprocess.run([sys.executable, "-B", str(HERE / "package-patched.py"),
+        "--producer-receipt", str(args.producer_receipt.resolve()),
+        "--owner-receipt", str(args.owner_receipt.resolve()),
+        "--readiness-owner-receipt", str(args.readiness_owner_receipt.resolve()),
+        "--reviewed-policy-sha256", package.producer.digest(HERE / "notice-policy.json"),
+        "--reviewed-readiness-source-sha256", "0" * 64,
+        "--output", str(output / "unreviewed-promotion")], capture_output=True, text=True, timeout=60)
+    refusal_log = output / "unreviewed-retention.log"
+    refusal_log.write_text(result.stdout + result.stderr)
+    if result.returncode == 0 or "requires the exact reviewed source inventory SHA256" not in result.stderr:
+        raise RuntimeError(f"public packager did not refuse unreviewed readiness retention: status {result.returncode}: {result.stderr[-4096:]}")
+    results.append({"case": "unreviewed readiness retention", "rejected": True,
+                    "reason": "public packager rejected different reviewed source inventory",
+                    "exit_code": result.returncode, "log": refusal_log.name,
+                    "log_sha256": package.producer.digest(refusal_log)})
+
     original_files = archive_files(archive.read_bytes())
-    for case in ("missing-reporter", "changed-protocol", "wrong-variant"):
+    for case in ("missing-reporter", "changed-protocol", "wrong-variant", "wrong-promotion-state"):
         files, changed_manifest = dict(original_files), copy.deepcopy(manifest)
         if case == "missing-reporter":
             name = "SOURCES/input-readiness-v1/reporter.rs"
@@ -112,6 +133,9 @@ def main():
             files[name] += b"\n"
             changed_manifest["files"][name] = {"bytes": len(files[name]), "sha256": hashlib.sha256(files[name]).hexdigest()}
             expected = "corresponding source differs"
+        elif case == "wrong-promotion-state":
+            changed_manifest["promotion_ready"] = not args.promotion_ready
+            expected = "archive manifest or promotion state differs"
         else:
             changed_manifest["variant"] = "legacy"
             expected = "archive variant differs"
@@ -122,8 +146,8 @@ def main():
                 member = tarfile.TarInfo(name)
                 member.size = len(data)
                 stream.addfile(member, io.BytesIO(data))
-        rejected(case, lambda: verify_archive(path, changed_manifest, built, package.producer.digest), expected)
-    (output / "receipt.json").write_text(json.dumps({"status": "passed", "positive_control": "real prepared readiness archive and both actual owners", "negative_controls": results}, indent=2) + "\n")
+        rejected(case, lambda: verify_archive(path, changed_manifest, built, package.producer.digest, promotion_ready=args.promotion_ready), expected)
+    (output / "receipt.json").write_text(json.dumps({"status": "passed", "positive_control": "real readiness archive and both actual owners", "promotion_ready": args.promotion_ready, "negative_controls": results}, indent=2) + "\n")
 
 
 if __name__ == "__main__":
