@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -16,6 +16,7 @@ use zmux_session_runtime::{
 };
 use zmux_terminal_adapter::Size;
 
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
@@ -23,8 +24,11 @@ impl Fixture {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("zmux-shutdown-{}-{nonce:x}", std::process::id()));
+        let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "zmux-shutdown-{}-{nonce:x}-{sequence:x}",
+            std::process::id()
+        ));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         Self(root)
     }
