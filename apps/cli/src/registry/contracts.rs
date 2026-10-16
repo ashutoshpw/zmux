@@ -1097,20 +1097,21 @@ fn definitions() -> Vec<Contract> {
         result.push(c);
     }
     for (name, operands, force) in [
-        // An explicit scope keeps the probe independent of ambient ZMUX_* caller variables.
+        // An explicit scope keeps the probe independent of ambient ZMUX_* caller variables, and
+        // an absolute path keeps it independent of the invoker's working directory.
         (
             "open",
             vec![
                 "--workspace",
                 "workspace:1",
-                "README.md",
+                "/README.md",
                 "https://example.org/",
             ],
             None,
         ),
         (
             "markdown open",
-            vec!["--workspace", "workspace:1", "README.md"],
+            vec!["--workspace", "workspace:1", "/README.md"],
             Some("markdown"),
         ),
     ] {

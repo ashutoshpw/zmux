@@ -1644,15 +1644,29 @@ impl Worker {
 
 /// Lexical classification of a URL operand (design D3). Only `http` and `https` open as browser
 /// tabs; every other `scheme://` form is refused, and `file://` is not a way to name a file.
-pub fn classify_url(value: &str, force: Option<FileMode>) -> Result<(), FileFailure> {
+/// The scheme is case-insensitive (RFC 3986) and is returned lower-cased, because the browser
+/// URL validator and the tab both want the canonical spelling; the rest is kept byte for byte.
+pub fn classify_url(value: &str, force: Option<FileMode>) -> Result<String, FileFailure> {
     if force.is_some() {
         return Err(FileFailure::new(
             "invalid_operand",
             "this command opens paths only; use `zmux open` for web addresses",
         ));
     }
-    let lower = value.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+    let scheme_len = if value
+        .get(..8)
+        .is_some_and(|head| head.eq_ignore_ascii_case("https://"))
+    {
+        Some(5)
+    } else if value
+        .get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case("http://"))
+    {
+        Some(4)
+    } else {
+        None
+    };
+    let Some(scheme_len) = scheme_len else {
         return Err(if value.contains("://") {
             FileFailure::new(
                 "unsupported_scheme",
@@ -1664,9 +1678,15 @@ pub fn classify_url(value: &str, force: Option<FileMode>) -> Result<(), FileFail
                 "a web address must start with http:// or https://",
             )
         });
-    }
-    zmux_workspace_core::validate_browser_url(value)
-        .map_err(|error| FileFailure::new("invalid_url", error.to_string()))
+    };
+    let canonical = format!(
+        "{}{}",
+        value[..scheme_len].to_ascii_lowercase(),
+        &value[scheme_len..]
+    );
+    zmux_workspace_core::validate_browser_url(&canonical)
+        .map_err(|error| FileFailure::new("invalid_url", error.to_string()))?;
+    Ok(canonical)
 }
 
 /// A per-item failure: data in the result, never a whole-request error.
@@ -1902,6 +1922,41 @@ mod tests {
             .shutdown(Instant::now() + Duration::from_secs(30))
             .unwrap();
         assert!(service.is_finished());
+    }
+    #[test]
+    fn classify_url_accepts_any_case_scheme_and_returns_the_lower_case_form() {
+        for (given, canonical) in [
+            (
+                "https://example.org/Docs?Q=1#Frag",
+                "https://example.org/Docs?Q=1#Frag",
+            ),
+            ("HTTPS://Example.org/Docs", "https://Example.org/Docs"),
+            ("HtTp://example.org/", "http://example.org/"),
+            ("HTTP://EXAMPLE.ORG", "http://EXAMPLE.ORG"),
+        ] {
+            assert_eq!(classify_url(given, None).unwrap(), canonical, "{given}");
+        }
+    }
+    #[test]
+    fn classify_url_still_refuses_what_is_not_a_safe_web_address() {
+        for (given, code) in [
+            ("FILE:///etc/passwd", "unsupported_scheme"),
+            ("ftp://example.org/", "unsupported_scheme"),
+            ("example.org", "invalid_url"),
+            ("HTTPS://", "invalid_url"),
+            ("HTTPS://user@example.org/", "invalid_url"),
+            ("HTTP://exa mple.org/", "invalid_url"),
+            ("héllo", "invalid_url"),
+            ("http:/é", "invalid_url"),
+        ] {
+            assert_eq!(classify_url(given, None).unwrap_err().code, code, "{given}");
+        }
+        assert_eq!(
+            classify_url("https://example.org/", Some(FileMode::Markdown))
+                .unwrap_err()
+                .code,
+            "invalid_operand"
+        );
     }
     #[test]
     fn shutdown_joins_an_idle_worker_and_refuses_new_work() {

@@ -610,7 +610,9 @@ Base: `4eddc9ce07bac31a66570d9b5dc8421db41cba64`.
 - `apps/cli/src/registry/contracts.rs`: leaves `open` and `markdown open` (route `open`, pointers
   `/request/operation/operation = open_items` and, for markdown, `force_mode = markdown`, default
   `focus` read from the live parse); `parsed()` allows `Parsed::Open`. The probes carry an explicit
-  `--workspace workspace:1` so they do not depend on ambient `ZMUX_*` variables.
+  `--workspace workspace:1` so they do not depend on ambient `ZMUX_*` variables, and the file
+  operand is the absolute `/README.md` so the catalog does not depend on the invoker's working
+  directory (fix round 1, below).
 - `apps/cli/src/registry/frozen-coverage.json`: `CMD-006` and `CMD-114` moved from `unresolved`
   to `local_counterpart_compatibility_unverified` with `local_contract` `open` / `markdown open`.
   `behavioral_parity_verified` stays false; nothing under `apps/cli/contracts/baseline/` changed.
@@ -635,7 +637,7 @@ Green: the 12 `open.rs` tests pass, as do the changed `cli.rs` tests and the new
 
 New and changed tests (all run by `cargo test --workspace --locked`):
 
-- `apps/cli/tests/open.rs` (new, 12). Wire tests use a one-shot fake app that owns the listener
+- `apps/cli/tests/open.rs` (new, 12 in the first round, 14 after fix round 1). Wire tests use a one-shot fake app that owns the listener
   and records the single request; "never connected" is proved after the child exits.
   `open_sends_the_designed_wire_request_with_cwd_absolute_paths` (exact `open_items` operation:
   relative paths joined to the fixture cwd, `..` and `~` untouched, absolute passthrough,
@@ -687,9 +689,9 @@ fails 3 including the lexical-rejection table.
 ### Checks run
 
 - `scripts/check` (fmt, `cargo test --workspace --locked`, clippy `-D warnings`,
-  `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 542 tests
+  `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0 (first round: 542 tests
   passed, 0 failed, 2 ignored (the `lease_child` and `mutation_child` subprocess fixtures,
-  unrelated) across 78 test binaries. No dependency change.
+  unrelated) across 78 test binaries. No dependency change).
 - `zmux commands --check` passes inside the `cli` test (inventory entries 428).
 
 Determinism, executed against the final test binaries (24 CPUs; Linux; the harness ran each binary
@@ -698,7 +700,7 @@ alongside 24 busy-loop CPU hogs):
 
 | binary | serial | 8 concurrent x3 | 24 copies + 24 hogs x3 |
 | --- | --- | --- | --- |
-| `open` (apps/cli/tests/open.rs, 12 tests) | 20/20 | 24/24 | 72/72 |
+| `open` (apps/cli/tests/open.rs, 12 tests, first round) | 20/20 | 24/24 | 72/72 |
 | `cli` (apps/cli/tests/cli.rs, 13 tests) | 20/20 | 24/24 | 72/72 |
 | `zmux` bin unit tests (apps/cli, incl. `open::tests`) | 20/20 | 24/24 | 72/72 |
 | `zmux-desktop-runtime` lib, `control_policy` filter | 20/20 | 24/24 | 72/72 |
@@ -716,6 +718,43 @@ Unchanged from S2 and not run on this Linux machine: `scripts/check-macos-source
 `scripts/build-macos-dev`, `scripts/check-macos-app`, the in-app smokes and
 `.github/workflows/macos-development.yml`. S3 touches no Swift. Rendering, editing, saving and
 tab presentation of the tabs that `zmux open` creates are S4 and are not verified here.
+
+### Fix round 1 (two blocking findings, both verified valid)
+
+Checks run in this round are in the last bullets; the sections above describe the first round, with
+the counts corrected where this round changed them (`open.rs` is 14 tests, `scripts/check` is 546
+passed / 0 failed / 2 ignored across 78 binaries).
+
+1. Upper-case scheme rejected by the server. Verified from the code path: the CLI and
+   `classify_url` accepted `HTTPS://` case-insensitively, but `validate_browser_url`
+   (`crates/workspace-core/src/surfaces.rs`) strips `https://`/`http://` case-sensitively, so the
+   item came back `invalid_url`. Fix: `files::classify_url` now returns the canonical URL, with
+   only the scheme lower-cased (RFC 3986: schemes are case-insensitive; host, path, query and
+   fragment are byte for byte), validates that canonical form, and `lib.rs` plans the tab with it,
+   so the receipt `url` and the tab carry `https://`. `validate_browser_url` is shared with the
+   browser actions and is unchanged. The CLI keeps sending the operand as typed (the server is the
+   owner of the rule, and other control-socket clients benefit). Tests: `classify_url` unit tests
+   in `crates/desktop-runtime/src/files.rs` (any-case scheme accepted and canonicalised; `FILE://`,
+   `ftp://`, bare host, empty authority, credentials, whitespace, non-ASCII near the prefix and
+   the markdown force are still refused with the same codes) and the real-Desktop test
+   `an_upper_case_scheme_opens_a_browser_tab_with_the_canonical_scheme` in `apps/cli/tests/open.rs`
+   (`HTTPS://Example.org/Docs?Q=1` and `HtTp://example.net/` open two browser tabs, receipt
+   urls canonical, host case kept).
+2. Catalog depended on the working directory. Verified: the probes used the relative `README.md`,
+   which the CLI joins to `env::current_dir()`, so `zmux commands` embedded the cwd and
+   `commands`/`commands --check` failed from a removed directory. Fix: both probes use the
+   absolute `/README.md`. Test `the_command_catalog_does_not_depend_on_the_working_directory`:
+   `commands` from two different directories is identical once the per-request random
+   `request_id` values (already random before this slice) are ignored and contains neither
+   directory; `commands` and `commands --check` succeed from a directory that was removed under
+   the process. Mutation check: restoring `README.md` makes this test fail (the catalog embeds the
+   cwd); restored.
+
+Checks (fix round 1): `scripts/check` PASS (546 passed, 0 failed, 2 ignored, 78 binaries).
+Determinism for the changed/new tests, executed against the final binaries: the `open` binary
+(14 tests) 20/20 serial, then 3 rounds of 8 concurrent copies (24/24), the last two rounds beside
+4 busy-loop CPU hogs; the `zmux-desktop-runtime` lib `classify_url` filter 20/20 serial. The
+determinism table above is from the first round; its other rows were not rerun in this round.
 
 ### Deviations from the design, with reasons
 

@@ -846,9 +846,7 @@ impl Desktop {
                     }
                 }
                 targets::OpenItemKind::Url => match files::classify_url(&item.value, force_mode) {
-                    Ok(()) => files::OpenPlan::Url {
-                        url: item.value.clone(),
-                    },
+                    Ok(url) => files::OpenPlan::Url { url },
                     Err(failure) => files::OpenPlan::Invalid {
                         kind: "url",
                         operand: item.value.clone(),
