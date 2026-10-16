@@ -51,7 +51,8 @@ subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-We
                 "-o", str(dist / "native-profile-lease-probe")], check=True, timeout=30)
 
 report = dist / "native-smoke.json"
-if report.exists(): report.unlink()
+for stale in (report, dist / "native-smoke.json.stages.json", dist / "native-download-preflight.log"):
+    if stale.exists(): stale.unlink()
 stdout = dist / "native-stdout.log"
 stderr = dist / "native-stderr.log"
 def diagnose_failure():

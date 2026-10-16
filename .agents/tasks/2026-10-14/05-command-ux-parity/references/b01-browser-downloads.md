@@ -292,3 +292,40 @@ bounds, UI actions, deadlines and assertions are unchanged. The early native
 source gate also type-checks this driver for both Apple architectures before Rust
 compilation. Python syntax and whitespace checks pass locally; strict Darwin
 compilation and actual permission-checked Save panel acceptance remain pending.
+
+## Required host capability and independent assertion progress
+
+Run [38836209900](https://github.com/ashutoshpw/zmux/actions/runs/38836209900)
+at `12d5c140aa4341fff4fc5345fd2b02aa2c22911e` compiled the driver and reached
+the first actual save sheet. Its external process reported
+`accessibility_trusted=false`; native save acceptance remained gated. No prompt,
+permission change or destination callback substitution occurred. The passed
+browser keyboard and workspace/surface ordering fixtures are separate executed
+subsets. Browser PNG/native render, remote clipboard, local tmux and terminal
+special-key checks were not reached in that run. The later automatic diagnostic
+app's BUSY/timeout does not identify the original failure or prove original exit.
+
+The continuation fixture moves the unchanged download/history assertions after
+those independent checks. Their actual progress is atomically retained in bounded
+`native-smoke.json.stages.json`, correlated by source SHA and app PID. Its scope
+is assertion progress; it never establishes shared shutdown or process exit. An
+error records the active stage and already completed stages, then still throws
+the original error. Full smoke JSON remains unavailable unless every assertion,
+including real native download acceptance, passes.
+
+At the final download stage, a separately launched driver's `preflight` checks the
+exact app PID/executable and existing AX/post-event capabilities without prompting
+or inspecting/mutating a sheet. This precedes fixture browser creation, download
+admission and sheet presentation. Its retained `native-download-preflight.log`
+reports capability only. An untrusted host still fails the required download gate;
+an authorized host must still execute the original select/accept UI phases and
+all saved-byte/history/cancellation assertions.
+
+The original browser HTTP origin is carried from the automation setup. Remote
+clipboard cleanup restores its original workspace; local tmux restores its
+original workspace/surface; special-key cleanup closes its temporary tab and
+restores the previous selected surface. The final download fixture creates its
+own browser without focus, with the same main-window owner and existing cleanup
+barrier. No production download/resource behavior changed. Local whitespace and
+source review are available; strict Swift compilation and actual native stage
+receipts remain hosted gates because this Linux host has no Swift/AppKit SDK.

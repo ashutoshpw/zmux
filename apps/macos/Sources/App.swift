@@ -2,6 +2,61 @@ import AppKit
 import Darwin
 import WebKit
 
+/// Assertion progress only; process exit and shared shutdown remain separate gates.
+@MainActor
+private final class NativeSmokeStages {
+    private struct Evidence: Encodable, Sendable {
+        let scope = "native_smoke_assertions"
+        let sourceSHA: String
+        let appPID: Int32
+        var state = "running"
+        var currentStage: String?
+        var completedStages: [String] = []
+        var failure: String?
+    }
+    private let output: URL
+    private var evidence = Evidence(
+        sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local",
+        appPID: getpid())
+
+    init(report: URL) { output = report.appendingPathExtension("stages.json") }
+
+    func begin(_ stage: String) async throws {
+        guard evidence.currentStage == nil, evidence.completedStages.count < 16 else {
+            throw BridgeFailure(message: "Native assertion stages exceeded their bound or overlapped")
+        }
+        evidence.currentStage = stage
+        try await save()
+    }
+    func complete(_ stage: String) async throws {
+        guard evidence.currentStage == stage else {
+            throw BridgeFailure(message: "Native assertion stage completion does not match its owner")
+        }
+        evidence.completedStages.append(stage)
+        evidence.currentStage = nil
+        try await save()
+    }
+    func finish() async throws {
+        evidence.state = "assertions_complete"
+        try await save()
+    }
+    func fail(_ error: any Error) async {
+        evidence.state = "failed"
+        evidence.failure = String(String(describing: error).prefix(2048))
+        do { try await save() }
+        catch { FileHandle.standardError.write(Data(("Native assertion stage receipt failed: " + error.localizedDescription + "\n").utf8)) }
+    }
+    private func save() async throws {
+        let value = evidence
+        let output = output
+        try await Task.detached {
+            let data = try JSONEncoder().encode(value)
+            guard data.count <= 16384 else { throw BridgeFailure(message: "Native assertion stage receipt exceeds its bound") }
+            try data.write(to: output, options: .atomic)
+        }.value
+    }
+}
+
 /// One main window's presentation. Shared sessions and resource lifetimes belong
 /// to its injected coordinator, including views retained while this host is hidden.
 @MainActor
@@ -1200,6 +1255,18 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     func smokeTest(report: URL) async throws {
+        let stages = NativeSmokeStages(report: report)
+        do {
+            try await runSmokeTest(report: report, stages: stages)
+            try await stages.finish()
+        } catch {
+            await stages.fail(error)
+            throw error
+        }
+    }
+
+    private func runSmokeTest(report: URL, stages: NativeSmokeStages) async throws {
+        try await stages.begin("core_native_and_browser_setup")
         try AppStartup.validateCloudCallbackContract()
         try await waitUntil { $0.frames.count == 1 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
         guard let initialSnapshot = snapshot, let first = initialSnapshot.workspace else {
@@ -1530,7 +1597,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard window.firstResponder === browser.webView else {
             throw BridgeFailure(message: "Terminal-to-browser navigation did not focus WebKit: " + browserFocusDiagnostics())
         }
-        try await smokeBrowserAutomation(report: report, surface: browserPane.selectedSurface, pane: browserPane, terminalSession: originalSession)
+        try await stages.complete("core_native_and_browser_setup")
+        try await stages.begin("browser_automation")
+        let origin = try await smokeBrowserAutomation(report: report, surface: browserPane.selectedSurface, pane: browserPane, terminalSession: originalSession)
+        try await stages.complete("browser_automation")
+        try await stages.begin("browser_render")
         let pagePNG: Data = try await withCheckedThrowingContinuation { continuation in
             browser.webView.takeSnapshot(with: nil) { image, error in
                 if let error { continuation.resume(throwing: error); return }
@@ -1543,6 +1614,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             }
         }
         try pagePNG.write(to: report.deletingLastPathComponent().appendingPathComponent("zmux-browser-smoke.png"), options: .atomic)
+        try await stages.complete("browser_render")
+        try await stages.begin("native_render")
         enqueue(.input(originalSession, "PS1='❯ '; printf '\\033[2J\\033[H\\033[32mnative terminal ready\\033[0m\\n'\r"))
         try await waitUntil { $0.frames.contains { $0.snapshot?.viewport.contents.components(separatedBy: "\n").contains("native terminal ready") == true } }
         guard let view = window.contentView,
@@ -1568,9 +1641,24 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             capture.waitUntilExit()
             return capture.terminationStatus
         }.value
+        try await stages.complete("native_render")
+        try await stages.begin("remote_clipboard")
         try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
+        try await stages.complete("remote_clipboard")
+        try await stages.begin("local_tmux")
         try await LocalTmuxSmoke.validate(report: report.deletingLastPathComponent().appendingPathComponent("zmux-local-tmux-smoke.png"), cli: { try await self.nativeCLI($0, timeout: 15000, externalCaller: true) }, snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
+        try await stages.complete("local_tmux")
+        try await stages.begin("terminal_special_keys")
         try await smokeTerminalSpecialKeys()
+        try await stages.complete("terminal_special_keys")
+        try await stages.begin("browser_downloads_native")
+        try await BrowserDownloadSmoke.validate(origin: origin, window: window, report: report, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
+        guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
+              let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }
+        downloadsMenu.performActionForItem(at: downloadsMenu.index(of: downloadsItem))
+        guard let downloadsWindow = NSApp.windows.first(where: { $0.title == "Downloads" && $0.isVisible }) else { throw BridgeFailure(message: "Downloads menu did not open its native history") }
+        downloadsWindow.close()
+        try await stages.complete("browser_downloads_native")
         let evidence: [String: Any] = [
             "success": true,
             "notification_permission_ordering": true,
@@ -2145,7 +2233,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             throw BridgeFailure(message: "Disconnected native wait ref was silently retargeted")
         }
     }
-    private func smokeBrowserAutomation(report: URL, surface: UInt64, pane: Pane, terminalSession: UInt64) async throws {
+    private func smokeBrowserAutomation(report: URL, surface: UInt64, pane: Pane, terminalSession: UInt64) async throws -> String {
         let data = try Data(contentsOf: report.deletingLastPathComponent().appendingPathComponent("native-browser-fixture.json"))
         guard let fixture = try JSONSerialization.jsonObject(with: data) as? [String: String], let origin = fixture["origin"] else {
             throw BridgeFailure(message: "Missing browser HTTP fixture")
@@ -2267,12 +2355,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             return view.subviews.flatMap { nativeTabs($0) }
         }
         try await SurfaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, tabs: { nativeTabs(self.canvas) }, terminals: { self.terminals }, browser: { self.browsers[$0] })
-        try await BrowserDownloadSmoke.validate(origin: origin, window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
-        guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
-              let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }
-        downloadsMenu.performActionForItem(at: downloadsMenu.index(of: downloadsItem))
-        guard let downloadsWindow = NSApp.windows.first(where: { $0.title == "Downloads" && $0.isVisible }) else { throw BridgeFailure(message: "Downloads menu did not open its native history") }
-        downloadsWindow.close()
+        return origin
     }
 
     private func smokePublishedBrowserTitle(surface: UInt64, title: String) async throws {
