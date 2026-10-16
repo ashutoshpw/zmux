@@ -1,7 +1,8 @@
 # CU-14 / CV-01 / CV-05 / CV-06 file panel: evidence receipt
 
-Status: in progress. Evidence for each slice of [cu14-file-panel-design.md](cu14-file-panel-design.md)
-is appended here as the slice lands. Original Zmux code, MIT; nothing under the cmux checkout was
+Status: S1 to S5 landed on this branch (not pushed); delivery is `implementing`, nothing is verified on
+macOS. Evidence for each slice of [cu14-file-panel-design.md](cu14-file-panel-design.md)
+is appended here as the slice lands; S5 (closure) is the last section. Original Zmux code, MIT; nothing under the cmux checkout was
 read or consulted. This machine is Linux without a Swift toolchain: every Swift, macOS and hosted
 gate is recorded UNAVAILABLE, never passed.
 
@@ -1762,3 +1763,103 @@ Deviations and limits:
 - Still UNAVAILABLE: `scripts/check-macos-sources`, `scripts/check-file-close-resolution`,
   `scripts/check-file-editor-model`, `scripts/check-file-load-gate`, `scripts/build-macos-dev`,
   `scripts/check-macos-app`, the `file_panel` smoke stage and every hosted macOS workflow.
+
+## S5 closure: task evidence, tracker, status, notices
+
+Base: `413237a5d2e982e708806eb534f67f47655f078d`. Documentation and tracker changes only; no Rust or
+Swift source changed, so there is no red-then-green test for this slice (a docs slice has no
+observable behaviour to fail first).
+
+### Delivered commits (S1 to S4, oldest first)
+
+| Slice | Commits |
+| --- | --- |
+| Research and design | `19df8e0` (docs) |
+| S1 core model, session format 10 | `e66b167` |
+| S2 file service and trusted native channel | `465907e`, `af761de`, `1e48a25`, `db4d840`, `4eddc9c` |
+| S3 CLI and control route | `2e1b9d7`, `b135b75` |
+| S4 native panel and its review fix rounds 1 to 11 | `bfa8e66`, `9b9a848`, `6e3c021`, `a06accb`, `06dcf64`, `58abc37`, `9bb1f04`, `cdacaa6`, `08155d2`, `9e00550`, `4ef1c4f`, `413237a` |
+| S5 closure | the commit that adds this section (see `git log` for its SHA; a file cannot name its own commit) |
+
+### What changed
+
+- `closure-tracker.json`: features `CU-14`, `CV-01`, `CV-05` and `CV-06` moved `planned` to
+  `implementing`, the tracker's only non-planned value (the design chose it; the task's "implemented
+  but unverified at most" is the same meaning, and the tracker has no `verified` state in use for
+  these). Each carries the 20 S1 to S4 implementation commits, this receipt under
+  `verification_receipts` and a `remaining_gates` list that keeps the "Retain all audit-row acceptance
+  criteria" note first and then names the deferred work (design section 7) and the UNAVAILABLE native
+  gates. `CV-02` and `CV-07` stay `planned` and untouched. Package `C01` moved `planned` to
+  `implementing` with `implemented_slices`, `verification_receipts` and `remaining_gates` (its other
+  three commit slices are untouched and no exit gate is claimed). Package `S01` stays `in_progress`;
+  it gained this receipt under `evidence`, an `implemented_slices` entry (file surface, session format
+  10, open routing) and `remaining_gates`.
+- `status.md`: a new newest-first "Active implementation" entry; `plan.md`: References links this
+  receipt, the design and the digest.
+- `docs/native-bridge.md`: earlier slices had missed three things, now documented: the
+  `zmux_desktop_dispatch_acknowledged` export (round 10), the `generation` carried by a `sync_failed`
+  save failure and the bridge `ZMUX_BUSY`/`ZMUX_CAPACITY` retry meaning plus the reply-header cap, and session format version 10 for persisted file surfaces. `docs/local-control.md` was
+  re-read against `apps/cli/src/open.rs` and `control_policy.rs` (wire shape, 16 operands, 16 KiB
+  request, per-item codes, 5 s default, exit status, mutation policy) and needed no change.
+- No dependency was added. `crates/desktop-runtime/Cargo.toml` gained a dev-dependency on `rustix`
+  at `=1.1.5` with the `pty` feature (test support); `rustix 1.1.5` was already in the resolved
+  graph, `Cargo.lock` is unchanged, and `THIRD_PARTY_NOTICES.md` is unchanged and current:
+  `scripts/license-inventory --check` passes ("Inventoried 84 resolved packages, 66 distinct notice
+  texts; 3 require upstream text review"). `docs/dependencies.md` needed no change. No font, icon or
+  asset was added; Swift uses Apple system frameworks only.
+- `apps/cli/src/registry/frozen-coverage.json` re-read against S3: `CMD-006` (`open`) and `CMD-114`
+  (`markdown open`) are `local_counterpart_compatibility_unverified` with `local_contract` `open` and
+  `markdown open`; every other entry is unchanged and `behavioral_parity_verified` is `false`. The
+  `zmux commands --check` probes for both leaves run inside `cargo test` (apps/cli tests). Nothing
+  under `apps/cli/contracts/baseline/` or the historical audit/inventory files changed (empty
+  `git diff --stat` for those paths).
+
+### Checks run
+
+`scripts/check` PASS, exit 0 (log `/tmp/zmux-s5-check.log`): `cargo fmt --check`;
+`cargo test --workspace --locked` with 79 `test result` lines, 579 passed, 0 failed, 2 ignored (the
+same totals as the end of fix round 11, as expected for a docs slice); clippy `-D warnings`;
+`scripts/license-inventory --check`; `scripts/check-native-bridge` (C ABI, framed file channel,
+profile lease). No test, thread, timer or filesystem code changed in this slice, so no determinism
+run was needed or claimed; the determinism runs of S2 to S4 are recorded in their sections.
+
+### UNAVAILABLE gates (this machine is Linux with no Swift toolchain; none of these ran)
+
+- `scripts/check-macos-sources` (Swift 6 type check of every Swift source, including the S4 and
+  fix-round code that has never been compiled), `scripts/build-macos-dev`, `scripts/check-macos-app`.
+- `scripts/check-file-editor-model`, `scripts/check-file-close-resolution`,
+  `scripts/check-file-load-gate`: the Swift fixture runs of the pure editor, close and load-gate types.
+- The `FilePanelSmoke` in-app journey (`file_panel` stage) and its latest steps.
+- Every hosted GitHub Actions workflow, including `.github/workflows/macos-development.yml` and the
+  macOS job in `check.yml` (nothing was pushed).
+- Physical-interaction checks: Cmd-S/Cmd-O/Cmd-W, first-responder retention, IME composition,
+  VoiceOver, large-file `NSTextView` performance, ImageIO/PDFKit decode, `AttributedString(markdown:)`
+  fidelity, `NSOpenPanel`, the quit-with-dirty prompt.
+- macOS filesystem specifics: APFS case folding, `/var` realpath, `renameat`/`fsync` durability,
+  Finder-created files, network volumes.
+
+### Remaining gates and limitations (not hidden)
+
+The authoritative list is design section 7 and the per-feature `remaining_gates` in the tracker. In
+short: CV-02 (typography, zoom, rendered find, copy as Markdown/HTML) is not started; editor settings
+(word wrap, highlighting, line numbers, encodings), Quick Look/media, PDF and image zoom/outline,
+relative links and extended Markdown, preferred external editor, `file://` and `file:LINE` operands,
+directory-to-workspace, Save As, merge/diff of a conflict, autosave and crash recovery, real file
+watching (polling can miss a same-size same-timestamp rewrite), ownership/ACL/xattr preservation,
+remote (SSH) files and non-UTF-8 paths are not delivered. The remaining S4 limitations under "Remaining
+known limitations of the native file panel" above also still hold. The Swift behaviour is covered on
+Linux only by source-structure pins and by Rust-side contract tests that decode the exact wire the
+Swift expects; those pins say nothing about how the Swift behaves.
+
+### Deviations from the design, with reasons
+
+- Design section 6 asks for `delivery_status` `implementing`; the task text says "implemented-unverified
+  at most". The tracker has no such value, so `implementing` (the existing, weaker-than-verified
+  vocabulary) was used.
+- Design section 6 also asks for a `plan.md` step line; the plan has no step for this feature, so only
+  the References entry was added rather than inventing a checked item.
+- The design asks for a final full `scripts/check` log path: `/tmp/zmux-s5-check.log` (temporary; the
+  counts above are the durable record).
+- The design lists `docs/dependencies.md` as unchanged "if no dependency is added". The `rustix`
+  dev-dependency entry is a new manifest line for an already-resolved crate, so no dependency docs or
+  notices changed; this is stated above instead of left implicit.

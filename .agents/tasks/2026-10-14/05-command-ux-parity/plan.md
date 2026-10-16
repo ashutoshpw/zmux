@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [CU-14 file panel evidence](references/cu14-file-panel.md) and [design](references/cu14-file-panel-design.md) (research: [digest](references/cu14-file-panel-research.md)) — `zmux open` / `zmux markdown open`, bounded file service, atomic save and native text/Markdown/image/PDF tabs; Linux-verified Rust, CLI and bridge; Swift/macOS gates UNAVAILABLE; CU-14, CV-01, CV-05, CV-06 and package C01 are implementing, not verified.
+
 - [Terminal pointer reporting](references/t01-pointer-reporting.md) — missing mouse button/motion routing, shared worker design and actual PTY/native acceptance plan.
 
 - [A02 provider hooks](references/a02-provider-hooks.md) — approved bounded Claude adapter, durable unknown-exposure suppression and explicit retry; actual-provider gate remains open.

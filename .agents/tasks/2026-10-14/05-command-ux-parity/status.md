@@ -5,6 +5,14 @@
 
 ## Active implementation
 
+- CU-14 file panel (`zmux open`, `zmux markdown open`, native text/Markdown/image/PDF tabs) closed out for
+  this phase, 19df8e0..413237a: core file surface and session format 10, bounded file service and trusted
+  native channel, CLI and control route, Swift/AppKit panel with many review fix rounds. Tracker: CU-14,
+  CV-01, CV-05, CV-06 and C01 `implementing`, none verified; CV-02 stays planned. Rust, CLI and C ABI are
+  verified on Linux by `scripts/check`; every Swift, macOS, in-app smoke and hosted gate is UNAVAILABLE (no
+  Swift toolchain) and unrun, so there is no native acceptance or parity claim. No new dependency;
+  THIRD_PARTY_NOTICES.md unchanged. Not pushed. See `references/cu14-file-panel.md`.
+
 - Screenshot-driven compact sidebar/group UI in progress. Shared group domain,
   persistence and CLI integrated (0e77cac/b4aab55/e178d25/ffc635e); full scripts/check
   passes, including strict Clippy/notices/both ABI and four group core tests.
