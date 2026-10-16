@@ -425,7 +425,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let sidebarTop = sidebarContainer.convert(sidebarContainer.bounds, to: content).maxY
             let listTop = sidebarScroll.map { $0.convert($0.bounds, to: content).maxY } ?? 0
             guard abs(sidebarTop - top) < 1, top - listTop <= 38,
-                  abs(mainHeader.bounds.height - 32) < 1 else { throw BridgeFailure(message: "Chrome still wastes a second toolbar row") }
+                  abs(mainHeader.bounds.height - 32) < 1 else { throw BridgeFailure(message: "Chrome geometry: top=\(top), listTop=\(listTop), sidebarTop=\(sidebarTop), headerHeight=\(mainHeader.bounds.height)") }
             let toggle = sidebarToggleButton.convert(sidebarToggleButton.bounds, to: content)
             let bell = notificationButton.convert(notificationButton.bounds, to: content)
             guard !sidebarToggleButton.isHiddenOrHasHiddenAncestor, toggle.width >= 22,
@@ -529,7 +529,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "window_scoping": snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
-    private func captureSidebarImage(_ url: URL) throws {
+    fileprivate func captureSidebarImage(_ url: URL) throws {
         guard let view = window.contentView, let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw BridgeFailure(message: "Sidebar drawing surface unavailable") }
         view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
         view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: image) }
@@ -3032,6 +3032,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         try await coordinator.shutdown(); exit(0)
                     } catch {
                         FileHandle.standardError.write(Data("Native sidebar smoke failed: \(error)\n".utf8))
+                        do {
+                            let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                            try controller.captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-failure.png"))
+                        } catch { FileHandle.standardError.write(Data("Sidebar failure image unavailable: \(error)\n".utf8)) }
                         do { try await coordinator.shutdown() } catch { FileHandle.standardError.write(Data("Sidebar cleanup failed: \(error)\n".utf8)) }
                         exit(1)
                     }
