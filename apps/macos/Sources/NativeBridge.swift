@@ -1,5 +1,19 @@
 import Foundation
 
+private struct NativeFrameEnvelope: Decodable {
+    let schemaVersion: Int
+    let baseRevision: UInt64?
+    var snapshot: DesktopSnapshot
+    let framePackets: [NativeFramePacket]
+}
+private struct NativeFramePacket: Decodable {
+    let frame: Frame
+    let unchanged: Bool
+    let changedRows: [Int]?
+    let contentsStart: Int
+    let contentsEnd: Int
+}
+
 struct BridgeFailure: Error, LocalizedError, Sendable {
     let message: String
     var errorDescription: String? { message }
@@ -60,6 +74,8 @@ actor NativeBridge {
     private var handle: UInt64 = 0
     private var requestId: UInt64 = 0
     private var revision: UInt64 = 0
+    private var frameCache: [UInt64: Frame] = [:]
+    private var frameNamespace: UUID?
     private let profileLeaseEpoch = UUID()
 
     func start(storage: NativeDesktopStorage = .transient, terminalEngine: String? = nil) throws {
@@ -100,6 +116,7 @@ actor NativeBridge {
         }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
+        revision = 0; frameCache.removeAll(); frameNamespace = nil
     }
     func acquireBrowserProfileLease(profile: UUID, store: UUID) async throws -> BrowserProfileLeaseToken {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed; profile store acquisition was not admitted.") }
@@ -122,15 +139,60 @@ actor NativeBridge {
     }
     func poll() throws -> DesktopSnapshot? {
         guard handle != 0 else { return nil }
-        let result = zmux_desktop_snapshot(handle, revision)
+        let result = zmux_desktop_poll_frames(handle, revision)
         if result.status == -4 { return nil }
         guard result.status == 0 else { throw Self.failure(result.status) }
         guard result.value != 0 else { return nil }
         let data = try Self.consume(result.value)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let snapshot = try decoder.decode(DesktopSnapshot.self, from: data)
+        let envelope = try decoder.decode(NativeFrameEnvelope.self, from: data)
+        let paneCount = envelope.snapshot.model.workspaces.reduce(0) { $0 + $1.root.panes.count }
+        guard envelope.schemaVersion == 1,
+              envelope.baseRevision == nil || (envelope.baseRevision == revision && frameNamespace == envelope.snapshot.model.identityNamespace),
+              envelope.framePackets.count <= paneCount else { throw BridgeFailure(message: "Invalid native frame baseline") }
+        var snapshot = envelope.snapshot
         guard snapshot.model.modelVersion == 6 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        var next: [UInt64: Frame] = [:]
+        for packet in envelope.framePackets {
+            let frame = packet.frame
+            guard next[frame.sessionId] == nil else { throw BridgeFailure(message: "Duplicate native terminal frame") }
+            var terminal = frame.snapshot
+            if packet.unchanged {
+                guard envelope.baseRevision != nil, let old = frameCache[frame.sessionId], terminal == nil,
+                      packet.changedRows == nil else { throw BridgeFailure(message: "Missing unchanged native frame baseline") }
+                terminal = old.snapshot
+            } else if let rows = packet.changedRows {
+                guard envelope.baseRevision != nil, let old = frameCache[frame.sessionId]?.snapshot,
+                      let delta = terminal, old.viewport.size == delta.viewport.size,
+                      old.viewport.lines.count == delta.viewport.lines.count,
+                      Set(rows).count == rows.count,
+                      rows.allSatisfy({ delta.viewport.lines.indices.contains($0) }) else {
+                    throw BridgeFailure(message: "Invalid native terminal row delta")
+                }
+                var viewport = delta.viewport
+                let changed = Set(rows)
+                for row in viewport.lines.indices where !changed.contains(row) { viewport.lines[row] = old.viewport.lines[row] }
+                let bytes = Array(old.viewport.contents.utf8)
+                let replacement = Array(viewport.contents.utf8)
+                guard packet.contentsStart >= 0, packet.contentsEnd >= packet.contentsStart,
+                      packet.contentsEnd <= bytes.count,
+                      bytes.count - (packet.contentsEnd - packet.contentsStart) + replacement.count <= 8_388_608 else {
+                    throw BridgeFailure(message: "Invalid native terminal text delta")
+                }
+                var merged = Data(bytes[..<packet.contentsStart])
+                merged.append(contentsOf: replacement)
+                merged.append(contentsOf: bytes[packet.contentsEnd...])
+                guard let contents = String(data: merged, encoding: .utf8) else { throw BridgeFailure(message: "Native terminal text delta broke UTF-8") }
+                viewport.contents = contents
+                terminal = TerminalSnapshot(state: delta.state, viewport: viewport, bytesRead: delta.bytesRead,
+                    exitCode: delta.exitCode, failure: delta.failure)
+            }
+            next[frame.sessionId] = Frame(sessionId: frame.sessionId, processId: frame.processId,
+                starting: frame.starting, snapshot: terminal, failure: frame.failure)
+        }
+        snapshot.frames = envelope.framePackets.compactMap { next[$0.frame.sessionId] }
+        frameCache = next; frameNamespace = snapshot.model.identityNamespace
         revision = snapshot.revision
         return snapshot
     }
@@ -523,6 +585,7 @@ actor NativeBridge {
         let status = await Task.detached { zmux_desktop_shutdown_release(desktop, ticket) }.value
         guard status == 0 else { throw Self.failure(status) }
         handle = 0
+        frameCache.removeAll(); frameNamespace = nil
     }
     private nonisolated static func decodeShutdown(_ result: ZmuxResult) throws -> DesktopShutdownReport {
         guard result.status == 0 else { throw failure(result.status) }

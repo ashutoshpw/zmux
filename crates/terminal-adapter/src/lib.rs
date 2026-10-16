@@ -29,7 +29,7 @@ pub struct Style {
     pub inverse: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Run {
     pub column: u16,
     pub width: u16,

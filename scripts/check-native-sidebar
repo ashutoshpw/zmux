@@ -119,7 +119,7 @@ def main():
         result = json.loads(report.read_text())
         required = ("compact_toolbar", "visible_toggle", "groups", "group_menus",
                     "collapse_preserves_terminal", "focus_preserved", "sidebar_restored",
-                    "notification_toggle", "window_scoping")
+                    "notification_toggle", "window_scoping", "native_terminal_damage")
         failed = [key for key in required if result.get(key) is not True]
         if failed:
             raise RuntimeError("Sidebar acceptance failed: " + ", ".join(failed))
