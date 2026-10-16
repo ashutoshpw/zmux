@@ -420,12 +420,16 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private func revealNativeWindow(_ host: MainWindowHost) {
         guard shutdownTask == nil, let token = host.nativeToken else { return }
         pendingActivationWindow = token
+        // Hiding can still be completing when the menu action arrives. Capture
+        // that state before unhide changes it; a transient isActive value does
+        // not confirm that the window will retain foreground ownership.
+        let needsActivation = NSApp.isHidden || !NSApp.isActive
         host.installMenus()
         NSApp.unhide(nil)
         if host.window.isMiniaturized { host.window.deminiaturize(nil) }
         host.window.makeKeyAndOrderFront(nil)
         NSApp.activate()
-        guard !NSApp.isActive, activationTask == nil else { return }
+        guard (needsActivation || !NSApp.isActive), activationTask == nil else { return }
         activationTask = Task { [weak self] in
             guard let self else { return }
             defer { self.activationTask = nil; self.pendingActivationWindow = nil }
@@ -440,6 +444,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 current.installMenus()
                 NSApp.unhide(nil)
                 if current.window.isMiniaturized { current.window.deminiaturize(nil) }
+                // Launch Services confirms process identity before its activation
+                // necessarily finishes. Renew cooperative activation afterwards.
+                NSApp.activate()
                 current.window.makeKeyAndOrderFront(nil)
             } catch {
                 guard !Task.isCancelled, self.shutdownTask == nil else { return }
