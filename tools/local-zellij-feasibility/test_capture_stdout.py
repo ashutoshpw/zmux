@@ -78,6 +78,39 @@ worker.join()
             self.assertEqual(phases[0]["exit_code"], 7)
             self.assertEqual(json.loads((directory / "metadata.json").read_text()), {"version": 1})
 
+    def test_explicit_binary_bound_preserves_non_utf8_bytes_and_separate_warnings(self):
+        with tempfile.TemporaryDirectory(prefix="zmux-binary-stream-") as temporary:
+            directory = Path(temporary)
+            sink = directory / "download.zip"
+            command = [sys.executable, "-B", HERE / "capture-stdout.py", "--output", sink,
+                       "--max-bytes", "16384", "--", sys.executable, "-c",
+                       "import os; os.write(2,b'gh warning\\n'); os.write(1,bytes(range(256))*64)"]
+            phases = []
+            runner.run(command, "binary", directory, phases, timeout=3)
+            self.assertEqual(sink.read_bytes(), bytes(range(256)) * 64)
+            self.assertEqual((directory / "binary.log").read_bytes(), b"gh warning\n")
+            self.assertEqual(phases[0]["log_bytes_seen"], len(b"gh warning\n"))
+            command[command.index("16384")] = "1024"
+            command[command.index(sink)] = directory / "bounded.zip"
+            with self.assertRaises(RuntimeError):
+                runner.run(command, "bounded-binary", directory, [], timeout=3)
+            self.assertEqual((directory / "bounded.zip").stat().st_size, 1024)
+            self.assertIn("stdout exceeded 1024 bytes", (directory / "bounded-binary.log").read_text())
+
+    def test_invalid_explicit_bound_refuses_before_sink_or_command_creation(self):
+        with tempfile.TemporaryDirectory(prefix="zmux-binary-bound-") as temporary:
+            directory = Path(temporary)
+            marker = directory / "must-not-run"
+            for bound in ("0", "-1", str(128 * 1024 * 1024 + 1)):
+                sink = directory / ("invalid-" + bound)
+                with self.assertRaises(RuntimeError):
+                    runner.run([sys.executable, "-B", HERE / "capture-stdout.py", "--output", sink,
+                                "--max-bytes", bound, "--", sys.executable, "-c",
+                                "from pathlib import Path; import sys; Path(sys.argv[1]).touch()", marker],
+                               "invalid-" + bound, directory, [], timeout=3)
+                self.assertFalse(marker.exists())
+                self.assertFalse(sink.exists())
+
     def exercise_lifecycle(self, script, expires):
         with tempfile.TemporaryDirectory(prefix="zmux-metadata-lifetime-") as temporary:
             directory = Path(temporary)

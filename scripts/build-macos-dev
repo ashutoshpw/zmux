@@ -9,15 +9,29 @@ import platform
 import plistlib
 import shutil
 import subprocess
+import sys
 
 root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument("--architecture", choices=["universal", "host"], default="universal")
 parser.add_argument("--with-ghostty", action="store_true", help="Link the optional engine; runtime selection remains explicit")
 parser.add_argument("--ghostty-artifact-root", type=Path, help="Explicit retained engine artifact root; never rebuilt or downloaded")
+parser.add_argument("--with-zellij", action="store_true", help="Package the explicit retained dependency; does not select a terminal backend")
+parser.add_argument("--zellij-package-root", type=Path, help="Explicit retained package artifact directory; never downloaded or rebuilt")
 args = parser.parse_args()
 if args.with_ghostty != (args.ghostty_artifact_root is not None):
     parser.error("--with-ghostty and --ghostty-artifact-root must be supplied together")
+if args.with_zellij != (args.zellij_package_root is not None):
+    parser.error("--with-zellij and --zellij-package-root must be supplied together")
+zellij_acceptance = None
+if args.with_zellij:
+    sys.path.insert(0, str(root / "tools/local-zellij-feasibility"))
+    from package_admission import Rejected, accept, native_target, pin, verify_payload
+    try:
+        zellij_target = native_target(args.architecture, platform.system(), platform.machine())
+        zellij_acceptance = accept(args.zellij_package_root, zellij_target)
+    except (Rejected, OSError, ValueError, KeyError, TypeError) as error:
+        parser.error(str(error))
 if platform.system() != "Darwin":
     raise SystemExit("Native development builds require macOS; use GitHub's macOS development build workflow.")
 def run(argv, **kwargs):
@@ -40,6 +54,20 @@ frameworks = bundle / "Contents/Frameworks"
 resources = bundle / "Contents/Resources"
 for path in [macos, frameworks, resources]:
     path.mkdir(parents=True, exist_ok=True)
+zellij = None
+if zellij_acceptance:
+    dependency = resources / "Dependencies/local-zellij"
+    accept(args.zellij_package_root, zellij_target, dependency)
+    # Admission owns a private staging root; packaged resources must be readable
+    # after the development bundle is copied to another user's installation.
+    dependency.chmod(0o755)
+    for directory in dependency.rglob("*"):
+        if directory.is_dir():
+            directory.chmod(0o755)
+    zellij = dependency / "bin/zellij"
+    # The retained Mach-O already carries its linker signature. Never silently
+    # change independently tested dependency bytes to make signing succeed.
+    run(["codesign", "--verify", "--strict", "--verbose=2", str(zellij)])
 targetdir = Path(json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1"], cwd=root, text=True))["target_directory"])
 env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET="14.0")
 if artifact_root:
@@ -103,11 +131,19 @@ with (bundle / "Contents/Info.plist").open("wb") as file:
 for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"]:
     shutil.copy2(root / name, resources / name)
 metadata = {"source_sha":sha,"architectures":architectures,"minimum_macos":"14.0","bundle_id":info["CFBundleIdentifier"],"signing":"ad-hoc","notarized":False,"cloud_origin":deployment["cloud_origin"],"optional_ghostty_linked":bool(artifact_root),"default_terminal_engine":"vt100"}
+metadata["optional_zellij_packaged"] = bool(zellij_acceptance)
+if zellij_acceptance:
+    metadata["optional_zellij"] = {**zellij_acceptance, "retained_artifact_expires_at": pin()["download"]["expires_at"],
+                                  "native_start_attach_integrated": False, "default_acquisition_changed": False}
 (resources / "build-info.json").write_text(json.dumps(metadata,indent=2)+"\n")
 run(["codesign","--force","--sign","-",str(library)])
 run(["codesign","--force","--sign","-",str(cli)])
 run(["codesign","--force","--sign","-",str(bundle)])
 run(["codesign","--verify","--deep","--strict","--verbose=2",str(bundle)])
+if zellij:
+    run(["codesign", "--verify", "--strict", "--verbose=2", str(zellij)])
+    if verify_payload(zellij.parent.parent) != zellij_acceptance:
+        raise SystemExit("Optional dependency changed while building/signing the application")
 for path in [executable,library,cli]:
     actual = set(subprocess.check_output(["lipo","-archs",str(path)],text=True).split())
     if actual != set(architectures):

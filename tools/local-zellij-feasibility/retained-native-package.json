@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "repository": "ashutoshpw/zmux",
+  "run_id": 38823056442,
+  "source_sha": "986600f2a258a20f896083a4407f08b3778afa2c",
+  "target": "aarch64-apple-darwin",
+  "notice_policy_sha256": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79",
+  "archive_name": "zellij-0.43.0-zmux-aarch64-apple-darwin-1dba7394d653.tar.gz",
+  "archive_bytes": 62685782,
+  "archive_sha256": "29d931115b1b013310c28df096bd05594cca848aba22209cc1f39cfaabc15a45",
+  "manifest_sha256": "a46b08268a4cb1ef38d7e69537a87816221149a96a84406c7e5dc55b81e02f5e",
+  "binary_sha256": "f3168d37e1ecd278e66b28edb0b5755202b6c16ff67ea0cd3d38ebd10d82b98d",
+  "payload_bytes": 96487276,
+  "files": 1237,
+  "independent_review": {
+    "path": "evidence/retained-package-independent-review.json",
+    "sha256": "73256d9dd903ca77a2c62cefbbe96f16a6eeb250b2da75f8ef7455e033330b9d"
+  },
+  "download": {
+    "artifact_id": 12014537209,
+    "name": "experimental-zellij-package-macOS-ARM64-986600f2a258a20f896083a4407f08b3778afa2c",
+    "zip_bytes": 62648250,
+    "zip_sha256": "0960c93edcd6c8a0efb1d04398f874043ba32402c0860fad2354140cb92820fc",
+    "expires_at": "2026-10-22T23:40:05Z"
+  },
+  "scope": "explicit host-only feasibility input; seven-day retained artifact, no implicit download/rebuild/latest fallback; no default acquisition, Intel/universal, minimum-OS or AppKit launch acceptance"
+}

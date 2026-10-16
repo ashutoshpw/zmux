@@ -1,0 +1,50 @@
+name: Opt-in retained Zellij native package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: local-zellij-native-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-package:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Verify package admission and exact retained inputs
+        run: |
+          python3 -B tools/local-zellij-feasibility/test_capture_stdout.py
+          python3 -B tools/local-zellij-feasibility/test_package_admission.py
+          python3 -B tools/local-zellij-feasibility/native-package.py --check-inputs
+      - name: Build host-only app and exercise unchanged bundled dependency through actual CLI owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tools/local-zellij-feasibility/native-package.py --output "$RUNNER_TEMP/native-zellij-package"
+      - name: Retain bounded native dependency execution evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: opt-in-native-zellij-package-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-zellij-package/receipt.json
+            ${{ runner.temp }}/native-zellij-package/*.log
+            ${{ runner.temp }}/native-zellij-package/retained-package.zip
+            ${{ runner.temp }}/native-zellij-package/zmux-dev-arm64-*.zip
+            dist/build-info.json
+          if-no-files-found: error
+          retention-days: 7
