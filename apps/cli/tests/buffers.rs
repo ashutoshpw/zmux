@@ -188,11 +188,26 @@ fn buffer_paste_reaches_actual_pty_once_with_mode_aware_brackets() {
             assert!(Instant::now() < deadline, "terminal not published: {value}");
             thread::sleep(Duration::from_millis(10));
         };
-        let screen = |needle: &str| {
+        let screen = |needle: &str, allow_starting: bool| {
+            let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let mut args = prefix.clone();
                 args.extend(["read-screen", &pane]);
-                let value = h.run(&args);
+                let output = h.command(&args).output().unwrap();
+                if allow_starting && !output.status.success() {
+                    let error = String::from_utf8_lossy(&output.stderr);
+                    assert_eq!(
+                        error.trim(),
+                        "zmux: screen_unavailable: terminal is still starting"
+                    );
+                    assert!(
+                        Instant::now() < deadline,
+                        "terminal never published a screen: {error}"
+                    );
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                let value = success(output);
                 if value.to_string().contains(needle) {
                     break;
                 }
@@ -200,7 +215,7 @@ fn buffer_paste_reaches_actual_pty_once_with_mode_aware_brackets() {
                 thread::sleep(Duration::from_millis(10));
             }
         };
-        screen("READY");
+        screen("READY", true);
         success(h.input(&["set-buffer"], text.as_bytes()));
         let mut bad = prefix.clone();
         bad.extend(["paste-buffer", "--pane", "999999"]);
@@ -226,7 +241,7 @@ fn buffer_paste_reaches_actual_pty_once_with_mode_aware_brackets() {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
-        screen(&format!("BYTES:{hex}:END"));
+        screen(&format!("BYTES:{hex}:END"), false);
         prefix.clear();
         server.shutdown(Duration::from_secs(3)).unwrap();
         desktop.shutdown(Duration::from_secs(3)).unwrap();
