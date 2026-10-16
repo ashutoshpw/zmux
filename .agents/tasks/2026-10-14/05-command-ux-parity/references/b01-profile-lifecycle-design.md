@@ -551,3 +551,105 @@ notice inventory, foreign C ABI and profile lease checks. Log:
 `/tmp/zmux-b01-fresh-b-lifetime-repository-check-20261016.log`. Portable validation:
 `/tmp/zmux-b01-fresh-b-lifetime-portable-validation-20261016.json`. Swift/native
 compilation and lifecycle outcome remain pending the one authorized diagnostic.
+
+### V11 actual no-removal baseline lifecycle passed
+
+Single authorized run
+[38849145986](https://github.com/ashutoshpw/zmux/actions/runs/38849145986) at
+`1d3bbb2dd1a386f3387c5a41a71eaf7f0a08f960` passed after only the reviewed
+fresh-B helper extraction. Swift6 strict compilation passed (19.734 seconds).
+Preparer PID14475 retained both exact stores through normal termination with both
+views released, then exited/reaped0. Fresh reader PID14563 observed all four
+JS/native-created cookies plus localStorage A/B, unchanged expiry1792127440, and
+no reader cookie sets. Both weak-view release guards passed, both public cleanup
+callbacks succeeded, and the reader reached `public_cleanup_complete`, normal
+termination and owned exit/reap0. No timeout, truncation or unknown callback was
+observed. Process observations showed original leaders zombie before their owned
+cleanup and no recorded candidate afterward; they are not a global WebKit-helper
+retirement proof.
+
+Artifact12024786443 ZIP SHA256:
+`d166a0514172fb9828c06bb4376247006fe885c637d26e292bb5e22e9993c3b5`.
+Five retained source copies and all six claimed source hashes match exact Git and
+reviewed freeze; the hidden workflow-copy limitation remains disclosed. Archive
+SHA256 is `30eda866438aff4a8813c66f9514c1cbb03f0689d319070815aa1d32a90787f8`.
+Independent result/source/archive receipt:
+`/tmp/zmux-b01-fresh-b-lifetime-result-review-20261016.json`, SHA256
+`245de87d15e537d7bc21970e0c48d411836fc8805f3c7baf73972d26deacc977`.
+This accepts only the changed no-removal diagnostic baseline. It does not prove
+an internal NetworkProcess save path, fsync, HTTPS/user-origin durability or
+production clear/delete safety.
+
+### V12 proposed clear/removal isolation scenario (not run)
+
+The old clear scenario lacked an observation between its all-data-clear callback
+and UUID removal, and it released B's store before termination. Its final empty A
+could not independently establish the clear phase, and a lost B cookie could
+repeat the no-removal lifetime confound. The next diagnostic keeps the successful
+view-loading/lifetime structure and exercises distinct physical API phases:
+
+1. Mounted A's public UUID removal must reject, with its seeded data unchanged.
+2. Release A's actual view under the unchanged weak-view guard, retaining the
+   exact inactive A store. Invoke `allWebsiteDataTypes` clearing once and await
+   its original callback. No callback replay or timeout-derived success.
+3. Mount a verification view on that same store object, without retrieving or
+   creating another UUID store. Before any namespace removal, require empty A
+   localStorage, the entire empty JavaScript cookie string and empty public cookie
+   array. Return from the helper, release this view with the same strict guard,
+   then drop application references to A's store.
+4. Invoke public A UUID removal once and require its exact successful callback.
+   A stays absent in the preparer. Observe unchanged B data, release B's view and
+   keep only the original exact B store through normal preparer termination.
+   The termination receipt must report Afalse/Btrue and released views; it does
+   not assert internal network-session state.
+5. After the original preparer exits/reaps0, the no-reseed reader creates A for
+   the first time after namespace removal and requires empty localStorage and
+   all cookies. B must preserve its original cookie attributes/expiry and exact
+   localStorage. Both original view-release and public cleanup gates then run.
+
+No new cookie creation path is added; this clear scenario retains its original
+JS-only probes. Baseline mode remains available with its prior paired-cookie
+assertions. A's fresh cookie check is strengthened from absence of the probe name
+to an entirely empty cookie string plus public cookie array; B's public attributes
+must match the preparation exactly. Existing phase limits, polling cadence,
+process-group ownership, unknown callback handling and failure behavior remain.
+The workflow also sets `include-hidden-files: true` on the fixed six-input source
+artifact so the already-hashed workflow itself will be retained; no broader file
+or credential collection is introduced.
+
+Python syntax, synthetic positive prep/reader/termination validation and21 negative
+controls pass. Controls reject incorrect caller/view state, missing clear/removal
+callbacks, mounted-removal success, residual A data, B loss and changed B expiry.
+They are validator evidence only, not native clear/removal evidence. No V12 native
+run or push is authorized before parent source review.
+
+### Production owner implication, not implemented by the diagnostic
+
+Current `BrowserProfileStores` keeps constructed stores and their lease tokens
+for the process lifetime. Destructive support needs one correlated per-profile
+owner under construction admission and lifetime writer authority, as designed
+above. It must reject actual mounted/hidden views, pending constructors and
+physical download/conversion owners before mutation. For an inactive selected
+profile, retain that exact store only through its all-data-clear callback, release
+its views/caller store references before one public UUID-removal call, and retain
+writer/callback capacity until the original outcome is known. Leave other profile
+stores and leases intact; B's fixture retention is no permission to release or
+retain every profile indiscriminately.
+
+Native success then feeds the same operation's durable catalog phase. Clear keeps
+the immutable catalog UUID/name and admits a fresh empty store only after the
+physical sequence is known complete. Delete removes selected catalog membership
+only after that native success, making old selected-catalog bindings unavailable.
+A known clear followed by removal error is a disclosed partial mutation. Unknown
+callbacks or catalog completion keep the original operation and authority fenced;
+no replay, silent rollback or successor construction is allowed. Cross-process
+admission/writer conversion, exact receipt retention/restart policy and durable
+catalog integration still require implementation and their own owner tests; a
+successful standalone physical fixture cannot substitute for those gates.
+
+V12 `CARGO_TARGET_DIR=target/agent-validation/profile-caller-retention/cargo
+scripts/check` passed exit0: formatting, workspace tests, strict all-target Clippy,
+notice inventory, foreign C ABI and profile lease checks. Log:
+`/tmp/zmux-b01-clear-removal-repository-check-v12-20261016.log`. Parent reviewed the
+exact Swift/Python/workflow delta and authorized commit/push plus one native run
+after this check. No production destructive owner or merge is authorized.
