@@ -1136,50 +1136,123 @@ impl Drop for ProfileApp {
     }
 }
 
+fn start_profile_app(fixture: &Fixture, state: &Path, socket: &Path) -> ProfileApp {
+    let desktop = Arc::new(
+        Desktop::with_persistence(
+            Shell {
+                program: "/bin/sh".into(),
+                args: vec!["-i".into()],
+                cwd: Some(fixture.0.clone()),
+            },
+            state.to_path_buf(),
+        )
+        .unwrap(),
+    );
+    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+    let running = ProfileApp { desktop, server };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = profile_snapshot(&running.desktop, deadline);
+        assert!(
+            snapshot.persistence.error.is_none(),
+            "{:?}",
+            snapshot.persistence.error
+        );
+        assert!(
+            snapshot.browser_profiles.error.is_none(),
+            "{:?}",
+            snapshot.browser_profiles.error
+        );
+        if !snapshot.persistence.startup_pending
+            && !snapshot.browser_profiles.loading
+            && snapshot.pending_launches == 0
+            && !snapshot.model.workspaces.is_empty()
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    }
+    running
+}
+
+#[test]
+fn destructive_profile_requests_require_native_owner_before_any_catalog_change() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("destructive-profile-state");
+    let socket = fixture.0.join("destructive-profile.sock");
+    let running = start_profile_app(&fixture, &state, &socket);
+    let profile = value(&socket, &fixture.0, &["browser", "profiles", "add", "Work"]);
+    let catalog_path = state.join(zmux_desktop_runtime::profiles::CATALOG_NAME);
+    let original_catalog = fs::read(&catalog_path).unwrap();
+    let original = profile_snapshot(&running.desktop, Instant::now() + Duration::from_secs(5));
+    let request = |operation: &str| {
+        let bytes = serde_json::to_vec(&json!({"version":2,"request_id":8001,
+            "command":{"method":"browser_profiles","action":{"operation":operation,"profile":profile["id"]}}})).unwrap();
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&bytes).unwrap();
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let length = u32::from_be_bytes(length) as usize;
+        assert!(length <= 16_384);
+        let mut response = vec![0; length];
+        stream.read_exact(&mut response).unwrap();
+        serde_json::from_slice::<Value>(&response).unwrap()
+    };
+    // A portable Desktop cannot claim WebKit clearing or namespace removal.
+    // Shared ingress must reject before admission, even for a valid catalog UUID.
+    for operation in ["clear", "delete"] {
+        let response = request(operation);
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(
+            response["error"]["code"], "native_profile_owner_unavailable",
+            "{response}"
+        );
+        assert_eq!(fs::read(&catalog_path).unwrap(), original_catalog);
+        let after = profile_snapshot(&running.desktop, Instant::now() + Duration::from_secs(5));
+        assert_eq!(after.model, original.model);
+        assert_eq!(
+            after.browser_profiles.profiles,
+            original.browser_profiles.profiles
+        );
+        assert_eq!(
+            serde_json::to_value(&after.browser_profiles.operations).unwrap(),
+            serde_json::to_value(&original.browser_profiles.operations).unwrap()
+        );
+    }
+    running
+        .server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    for operation in ["clear", "delete"] {
+        let response = request(operation);
+        assert_eq!(response["ok"], false, "{response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("read-only"),
+            "{response}"
+        );
+        assert_eq!(fs::read(&catalog_path).unwrap(), original_catalog);
+    }
+}
+
 #[test]
 fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_catalog() {
     let fixture = Fixture::new();
     let state = fixture.0.join("profile-state");
     let socket = fixture.0.join("profile.sock");
-    let start = || {
-        let desktop = Arc::new(
-            Desktop::with_persistence(
-                Shell {
-                    program: "/bin/sh".into(),
-                    args: vec!["-i".into()],
-                    cwd: Some(fixture.0.clone()),
-                },
-                state.clone(),
-            )
-            .unwrap(),
-        );
-        let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
-        let running = ProfileApp { desktop, server };
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let snapshot = profile_snapshot(&running.desktop, deadline);
-            assert!(
-                snapshot.persistence.error.is_none(),
-                "{:?}",
-                snapshot.persistence.error
-            );
-            assert!(
-                snapshot.browser_profiles.error.is_none(),
-                "{:?}",
-                snapshot.browser_profiles.error
-            );
-            if !snapshot.persistence.startup_pending
-                && !snapshot.browser_profiles.loading
-                && snapshot.pending_launches == 0
-                && !snapshot.model.workspaces.is_empty()
-            {
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            thread::sleep(Duration::from_millis(5));
-        }
-        running
-    };
+    let start = || start_profile_app(&fixture, &state, &socket);
     let running = start();
     let desktop = &running.desktop;
     let server = &running.server;

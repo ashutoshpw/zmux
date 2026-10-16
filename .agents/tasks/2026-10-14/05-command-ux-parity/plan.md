@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [B01 production destructive owner](references/b01-production-destructive-owner.md) — shared admission, physical callbacks, durable unknown quarantine and correlated clear/delete catalog commit.
+
 - [V2 execution runtime](references/r03-runtime-execution-admission.md) — pre-execution durable binding and admitted child lifetime; integrated after Linux and retained Darwin owner checks.
 - [V8 history contract](references/r03-v8-history.md) — explicit admitted-lifetime persistence, legacy compatibility and native decoder/presentation evidence.
 
