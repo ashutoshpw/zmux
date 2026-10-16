@@ -5,6 +5,34 @@
 
 ## Active implementation
 
+- T01 wrapped-word selection integrated as `a6c8e3b`/`a14d94d` after actual native
+  red `38853562903` and green `38854246653`. All32 clipboard cases and shared
+  shutdown pass;266 source hashes/archive/bridge verified. Production terminal
+  sources are byte-identical to accepted6c58fb0. Exact-main native gate remains
+  separate; no full-parity or user-facing artifact claim.
+
+- A02 provider owner prerequisites integrated locally at `97965e3`: single-message
+  context claims, exact consumer retirement, durable unconfirmed attempt records,
+  explicit duplicate-risk retry and automatic replay suppression. Successful fresh
+  retirement/retry fences cached local handoffs; replayed mutation receipts cannot
+  fence a newer consumer. Read/failed messages with unknown attempts are not evicted.
+  Combined `scripts/check` passes 387 tests, 1 existing ignored, strict Clippy,
+  notices and both ABI checks. Adapter and native inbox remain separate active work.
+
+- Main `69ff15c` Foundation run `38852633864` passes both macOS and Linux.
+  Native run `38852633869` completed universal compilation, then the packaged
+  journey stopped at the Save driver Accessibility/post-event permission gate.
+  Shared shutdown joined all physical owners. No generic -4 appeared in this run;
+  the earlier BUSY remains unresolved. No artifact/full-parity acceptance follows.
+  Raw log: `/tmp/zmux-main-69ff15c-native-failure.log`. Local cloud
+  health at `http://127.0.0.1:3530/health` returned `{"status":"ok"}`.
+- Active isolated follow-ups: exact-window native agent inbox; Claude provider
+  exposure/retirement/retry owner; connected browser profile clear/delete; atomic
+  readiness-capable dependency admission/native opt-in. Constructor generation,
+  cached-retirement and unknown-attempt retention review findings are being repaired
+  before integration. Wrapped-word selection regression at `e54e3bb`, Actions
+  `38853562903`, exercises the actual PTY/native clipboard boundary before repair.
+
 - A02 Rust/CLI durable inbox integrated locally as `d429636` (behavioral red) and
   `8c54b39` (reviewed fix). Original owner checks passed 368 tests plus strict
   Clippy/notices/ABI. Review repairs cover retained-send replay, cached lease expiry/

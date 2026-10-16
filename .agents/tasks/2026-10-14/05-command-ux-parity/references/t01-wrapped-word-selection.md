@@ -35,3 +35,27 @@ The repair builds one displayed logical line from the same authoritative wrap
 predicate as clipboard joining, then maps AppKit UTF-16 boundaries back to exact
 row/cell endpoints. Word drag uses the existing common expansion path. No history
 outside the viewport is read or guessed. Native green remains pending.
+
+## Accepted native green and integration
+
+Run `38854246653` at `6c58fb023e1f59d1d69e97b8b7778c1e03c7bb0e` passes
+actual app build, production metadata decoder checks and all32 native clipboard
+cases. This includes the unchanged intended regression, both word rows, forward/
+reverse word drag, hard boundaries and exact decomposed combining-character words.
+Actual app10045/child10104, every phase parent/nonce and kernel31x100 grid agree.
+The native phase completes after shared shutdown in10.081s; all phases exit0,
+without timeout or log truncation. All266 retained sources match Git and receipt
+hashes; archive plist names the exact source, and the decoder's linked bridge
+matches the archived app bridge.
+
+Archive SHA256: `271ee3a90194bc4570296a38f8f719179dfc9f48036b3a652d34aea4a0f89f80`.
+Bridge SHA256: `9ab80f65357f2094f5c256b96d234500570ab395458d411bc888e10c9f7c3c5a`.
+Independent review: `/tmp/zmux-wrapped-word-green-independent-review.json`.
+
+Integrated as `a6c8e3b` (red) and `a14d94d` (repair). All three terminal/fixture
+source files are byte-identical to the accepted diagnostic commit. Only the plan
+reference needed merge resolution, retaining both messaging and terminal entries.
+Combined Rust owner checks at preceding97965e3 pass387 tests plus strict Clippy,
+notices and both ABI checks; terminal changes alter no Rust/C input. Exact combined
+main native acceptance remains separate. Physical mouse/VoiceOver, optional engine
+wrap metadata, persistent anchors, autoscroll and full terminal parity remain open.
