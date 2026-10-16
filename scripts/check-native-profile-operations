@@ -26,9 +26,13 @@ def main():
     report = directory / "acceptance.json"
     profile = directory / "profile"
     socket = directory / "control.sock"
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("ZMUX_", "DYLD_"))
+                   and key not in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS")}
+    environment.update(ZMUX_SOCKET=str(socket), ZMUX_SOCKET_PATH=str(socket))
     subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
                     str(root / "tools/native-fixtures/profile-lease-holder.c"), "-o",
-                    str(dist / "native-profile-lease-holder")], check=True, timeout=30)
+                    str(dist / "native-profile-lease-holder")], env=environment, check=True, timeout=30)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -95,9 +99,6 @@ def main():
         for phase in ["prepare", "reader", "verify"]:
             output = directory / (phase + ".stdout.log")
             errors = directory / (phase + ".stderr.log")
-            environment = dict(os.environ, ZMUX_SOCKET=str(socket))
-            for key in ["ZMUX_WINDOW_ID", "ZMUX_WORKSPACE_ID", "ZMUX_SURFACE_ID", "ZMUX_TAB_ID"]:
-                environment.pop(key, None)
             command = [str(executable), "--profile-operations-smoke", str(report), str(profile), phase, origin]
             with output.open("wb") as stdout, errors.open("wb") as stderr:
                 # Own the actual packaged executable PID. wait() is an actual
@@ -122,6 +123,7 @@ def main():
             preserve()
         evidence = {"success": True, "source_sha": metadata["source_sha"], "phases": phases,
                     "fixture_directory": str(directory), "packaged_executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                    "launch_environment": "Inherited ZMUX_ and DYLD_ values removed; exact private ZMUX_SOCKET/ZMUX_SOCKET_PATH supplied",
                     "download_scope": "Actual WKDownload conversion, refusal with live tab, real Save Cancel and physical cleanup; no Save acceptance or download-only guard isolation",
                     "unexercised": ["missing callback and interrupted nonterminal reconciliation fault injection",
                                     "deterministic constructor-during-restore race",
