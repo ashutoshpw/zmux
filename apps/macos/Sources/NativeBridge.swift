@@ -372,6 +372,11 @@ actor NativeBridge {
     func wheel(session: UInt64, lines: Int, row: Int, col: Int, modifiers: Int, history: Bool) async throws {
         try await send(["command": "wheel", "session_id": session, "event": ["lines": lines, "row": row, "col": col, "modifiers": modifiers, "history": history]])
     }
+    func pointer(session: UInt64, event: TerminalPointerEvent) async throws {
+        try await send(["command": "pointer", "session_id": session, "event": [
+            "action": event.action.rawValue, "button": event.button.rawValue,
+            "row": event.row, "col": event.col, "modifiers": event.modifiers]])
+    }
     func scroll(session: UInt64, lines: Int) async throws {
         try await send(["command": "scroll", "session_id": session, "lines": lines])
     }

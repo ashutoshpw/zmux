@@ -40,6 +40,22 @@ final class SidebarLayout {
 @MainActor
 final class SidebarFocusWindow: NSWindow {
     var onWorkspaceNumber: ((Int) -> Void)?
+    private var terminalMotionOwners: Set<ObjectIdentifier> = []
+    private var previousMouseMovedEvents: Bool?
+
+    func terminalMouseMovedEvents(owner: ObjectIdentifier, enabled: Bool) {
+        if enabled {
+            if terminalMotionOwners.isEmpty { previousMouseMovedEvents = acceptsMouseMovedEvents }
+            terminalMotionOwners.insert(owner)
+            acceptsMouseMovedEvents = true
+        } else {
+            terminalMotionOwners.remove(owner)
+            if terminalMotionOwners.isEmpty, let previousMouseMovedEvents {
+                acceptsMouseMovedEvents = previousMouseMovedEvents
+                self.previousMouseMovedEvents = nil
+            }
+        }
+    }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.contain(event) == true { return true }
         (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.observeUnowned(event)

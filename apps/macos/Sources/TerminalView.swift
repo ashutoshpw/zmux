@@ -15,6 +15,22 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     private var semanticKeysDown: Set<UInt16> = []
     var onScroll: ((Int) -> Void)?
     var onWheel: ((Int, Int, Int, Int, Bool) -> Void)?
+    // Admission to the bounded UI queue, not an acknowledgement of PTY delivery.
+    var onPointer: ((TerminalPointerEvent) -> Bool)?
+    private struct PointerSample: Equatable {
+        let row: Int
+        let col: Int
+        let modifiers: Int
+    }
+    private enum PointerRoute: Equatable { case selection, application, refused }
+    private struct PointerGesture {
+        let route: PointerRoute
+        var last: PointerSample
+    }
+    private var pointerGestures: [TerminalPointerEvent.Button: PointerGesture] = [:]
+    private var lastHover: PointerSample?
+    private var pointerTrackingArea: NSTrackingArea?
+    private weak var motionWindow: SidebarFocusWindow?
     private var wheelRemainder: CGFloat = 0
     var onResize: ((Int, Int) -> Void)?
     var onFocus: (() -> Void)?
@@ -48,20 +64,51 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         if lastSize != (rows, cols) { lastSize = (rows, cols); onResize?(rows, cols) }
     }
     override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
-    override func resignFirstResponder() -> Bool { semanticKeysDown.removeAll(); needsDisplay = true; return true }
+    override func resignFirstResponder() -> Bool {
+        semanticKeysDown.removeAll(); cancelPointerGestures(); needsDisplay = true; return true
+    }
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if motionWindow !== newWindow {
+            motionWindow?.terminalMouseMovedEvents(owner: ObjectIdentifier(self), enabled: false)
+            motionWindow = nil
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateTrackingAreas()
+    }
+    override func updateTrackingAreas() {
+        if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+        pointerTrackingArea = nil
+        let enabled = frameState == "running" && viewport?.pointerTracking == .some(.anyMotion) && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty
+        if enabled {
+            let area = NSTrackingArea(rect: .zero,
+                options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+                owner: self, userInfo: nil)
+            addTrackingArea(area)
+            pointerTrackingArea = area
+        }
+        motionWindow = window as? SidebarFocusWindow
+        motionWindow?.terminalMouseMovedEvents(owner: ObjectIdentifier(self), enabled: enabled)
+        super.updateTrackingAreas()
+    }
     var requestedSize: (Int, Int) { lastSize }
     func update(_ frame: Frame) {
         let oldState = frameState
         frameState = frame.failure ?? frame.snapshot?.failure ?? (frame.starting ? "Starting shell…" : frame.snapshot?.state ?? "Unavailable")
+        if oldState == "running", frameState != "running" { pointerGestures.removeAll(); lastHover = nil }
         if let snapshot = frame.snapshot {
+            let oldTracking = viewport?.pointerTracking
             if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection.clear() }
             let changed = lastBytes != snapshot.bytesRead || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset || viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || oldState != frameState
             viewport = snapshot.viewport
+            if oldTracking != viewport?.pointerTracking || oldState != frameState { lastHover = nil; updateTrackingAreas() }
             lastBytes = snapshot.bytesRead
             setAccessibilityLabel(snapshot.viewport.title?.isEmpty == false ? snapshot.viewport.title : "Terminal")
             setAccessibilityValue(snapshot.viewport.contents)
             if changed { needsDisplay = true }
-        } else { needsDisplay = true }
+        } else { updateTrackingAreas(); needsDisplay = true }
     }
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.current?.shouldAntialias = true
@@ -131,17 +178,99 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self); onFocus?()
-        guard let viewport else { return }
-        let point = gridPoint(event)
-        selection.begin(row: point.0, column: point.1, clicks: event.clickCount, viewport: viewport)
-        needsDisplay = true
+        beginPointer(event, button: .left)
     }
     override func mouseDragged(with event: NSEvent) {
+        dragPointer(event, button: .left)
+    }
+    override func mouseUp(with event: NSEvent) { endPointer(event, button: .left) }
+    override func rightMouseDown(with event: NSEvent) { beginPointer(event, button: .right) }
+    override func rightMouseDragged(with event: NSEvent) { dragPointer(event, button: .right) }
+    override func rightMouseUp(with event: NSEvent) { endPointer(event, button: .right) }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 { beginPointer(event, button: .middle) } else { super.otherMouseDown(with: event) }
+    }
+    override func otherMouseDragged(with event: NSEvent) {
+        if event.buttonNumber == 2 { dragPointer(event, button: .middle) } else { super.otherMouseDragged(with: event) }
+    }
+    override func otherMouseUp(with event: NSEvent) {
+        if event.buttonNumber == 2 { endPointer(event, button: .middle) } else { super.otherMouseUp(with: event) }
+    }
+    override func mouseEntered(with event: NSEvent) { lastHover = nil }
+    override func mouseExited(with event: NSEvent) { lastHover = nil }
+    override func mouseMoved(with event: NSEvent) {
+        guard frameState == "running", viewport?.pointerTracking == .some(.anyMotion), pointerGestures.isEmpty,
+              !event.modifierFlags.contains(.shift) else { return }
+        let sample = pointerSample(event)
+        guard sample != lastHover else { return }
+        if sendPointer(.motion, button: .none, sample: sample) { lastHover = sample }
+    }
+    private func beginPointer(_ event: NSEvent, button: TerminalPointerEvent.Button) {
+        window?.makeFirstResponder(self); onFocus?()
         guard let viewport else { return }
-        let point = gridPoint(event)
-        selection.extend(row: point.0, column: point.1, viewport: viewport)
+        // A route is latched at press, including Shift override and refused input.
+        // Modifier/mode changes cannot turn the remainder into another gesture.
+        if let previous = pointerGestures.removeValue(forKey: button), previous.route == .application {
+            _ = sendPointer(.release, button: button, sample: previous.last)
+        }
+        let sample = pointerSample(event)
+        let local = frameState != "running" || viewport.pointerTracking == nil || viewport.pointerTracking == .some(.none) || event.modifierFlags.contains(.shift)
+        let route: PointerRoute
+        if local {
+            route = button == .left ? .selection : .refused
+            if button == .left {
+                let point = gridPoint(event)
+                selection.begin(row: point.0, column: point.1, clicks: event.clickCount, viewport: viewport)
+            }
+        } else {
+            selection.clear()
+            route = sendPointer(.press, button: button, sample: sample) ? .application : .refused
+        }
+        pointerGestures[button] = PointerGesture(route: route, last: sample)
+        lastHover = nil
         needsDisplay = true
+    }
+    private func dragPointer(_ event: NSEvent, button: TerminalPointerEvent.Button) {
+        guard var gesture = pointerGestures[button] else { return }
+        switch gesture.route {
+        case .selection:
+            guard let viewport else { return }
+            let point = gridPoint(event)
+            selection.extend(row: point.0, column: point.1, viewport: viewport)
+            needsDisplay = true
+        case .application:
+            let sample = pointerSample(event)
+            guard sample != gesture.last else { return }
+            if sendPointer(.motion, button: button, sample: sample) {
+                gesture.last = sample
+                pointerGestures[button] = gesture
+            }
+        case .refused: break
+        }
+    }
+    private func endPointer(_ event: NSEvent, button: TerminalPointerEvent.Button) {
+        guard let gesture = pointerGestures.removeValue(forKey: button) else { return }
+        if gesture.route == .application { _ = sendPointer(.release, button: button, sample: pointerSample(event)) }
+        lastHover = nil
+    }
+    // Focus loss ends native ownership. Releases use the same admission/error
+    // path; a full queue remains explicit failure, with no unbounded retry task.
+    func cancelPointerGestures() {
+        for button in [TerminalPointerEvent.Button.left, .middle, .right] {
+            if let gesture = pointerGestures.removeValue(forKey: button), gesture.route == .application {
+                _ = sendPointer(.release, button: button, sample: gesture.last)
+            }
+        }
+        lastHover = nil
+    }
+    private func pointerSample(_ event: NSEvent) -> PointerSample {
+        let (row, col) = gridPoint(event)
+        let flags = event.modifierFlags
+        return PointerSample(row: row, col: min(col, max(0, (viewport?.size.cols ?? 1) - 1)),
+            modifiers: (flags.contains(.shift) ? 4 : 0) | (flags.contains(.option) ? 8 : 0) | (flags.contains(.control) ? 16 : 0))
+    }
+    private func sendPointer(_ action: TerminalPointerEvent.Action, button: TerminalPointerEvent.Button, sample: PointerSample) -> Bool {
+        onPointer?(TerminalPointerEvent(action: action, button: button, row: sample.row, col: sample.col, modifiers: sample.modifiers)) ?? false
     }
     private func gridPoint(_ event: NSEvent) -> (Int, Int) {
         let point = convert(event.locationInWindow, from: nil)
