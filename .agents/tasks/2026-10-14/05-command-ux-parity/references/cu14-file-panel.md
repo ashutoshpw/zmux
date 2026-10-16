@@ -943,6 +943,8 @@ close and (fix round 2) discard sheets are answered through the panel's own seam
 10. (fix round 1) Two dirty panels, `resolveFilesBeforeClose` answered Don't Save then Cancel: the
     close is refused and both panels keep their text, dirty marker and model dirty bit; then two
     back-to-back `closeTerminalTab` calls with Don't Save both close their tabs.
+    (fix round 4) Between those two, a two-file Don't Save close is resolved and the model must
+    stay clean across four `status` polls for both panels, and new edits must mark both dirty again.
 11. (fix round 2) A dirty panel with the changed-on-disk banner: pressing the banner's Reload button
     asks first; Cancel keeps the text, Discard adopts the disk version.
 12. (fix round 2) A closed clean tab whose file was deleted is reopened: the panel shows the
@@ -1041,7 +1043,7 @@ reverted, and by the strengthened in-app smoke, which is UNAVAILABLE here and ha
 | --- | --- | --- | --- |
 | 1 | `closeAfterFileCheck` silently dropped a close made while another check was pending (smoke cleanup closes four tabs in a row, so `file_panel` could never finish; Cmd-W twice) | Yes: `guard !closePromptActive else { return }` ran before the first Task could run | `App.swift`: a bounded FIFO (`pendingFileCloses`, 64) drained by one task; each request runs in order. A repeat of the same gesture (same `key`, for example `surface:<id>`) is folded into the one still waiting or being asked about, which is the only case that does not queue; a full queue shows an error. `hasPendingFileCloses` lets the smoke wait for a request to settle before repeating it. |
 | 2 | Keyboard focus stayed on the panel after an async load replaced the loading state | Yes: `present()` swapped the subview without touching the responder chain | `FilePanelView.present`: reads `ownsFocus(in:)` before the outgoing view leaves the window and calls `makeFirstResponder(preferredResponder)` afterwards; focus elsewhere is never taken. |
-| 3 | Don't Save was applied immediately, so a later Cancel or failed Save left an earlier file clean | Yes: `discardLocalChanges()` ran inside the per-file loop | `resolveFilesBeforeClose` only records discards, settles every mirror (a discarded panel reports clean while keeping its text, `settleDirtyMirror(assumingDiscarded:)`), and applies `discardLocalChanges()` last. If a settle fails, `resumeDirtyMirror()` on every panel restores the model's dirty bit. |
+| 3 | Don't Save was applied immediately, so a later Cancel or failed Save left an earlier file clean | Yes: `discardLocalChanges()` ran inside the per-file loop | `resolveFilesBeforeClose` only records discards, settles every mirror (a discarded panel reports clean while keeping its text, `settleDirtyMirror(assumingDiscarded:)`), and applies `discardLocalChanges()` last. If a settle fails, `resumeDirtyMirror()` on every panel restores the model's dirty bit. SUPERSEDED in part by fix round 4: this version still let a snapshot poll re-mark a discarded panel dirty between settles, and the decision now lives in `FileCloseResolution`. |
 | 4 | Dirty detection used `String !=` (canonical equivalence) | Yes: `"\u{E9}" == "e\u{301}"` is true in Swift | `sameBytes` compares `utf8.elementsEqual`; used on every keystroke and after a save. |
 | 5 | The dirty observation gave up after 8 acknowledged-but-unconfirmed attempts | Yes, and it contradicted design D7a; it was also missing from this receipt's deviations | The count no longer stops the loop: the confirmation wait backs off 150 ms to 2 s with no limit, an informational banner (`dirtyUnconfirmed`, no action, clears when the model agrees) appears after 8 attempts. Non-retryable refusals still stop the loop and say so, as designed. |
 
@@ -1053,7 +1055,8 @@ the Swift works):
   bounded with a visible refusal, smoke closes tabs back to back),
   `keyboard_focus_follows_content_that_replaces_the_loading_state` (focus read before the swap, then
   moved), `dont_save_is_applied_only_after_the_whole_close_is_settled` (one `discardLocalChanges`
-  call, after every `return false` and after the settle loop, restore on abort),
+  call, after every `return false` and after the settle loop, restore on abort; REPLACED in fix
+  round 4 because it could not see a failed Save no longer aborting the close),
   `dirty_detection_compares_utf8_bytes_not_canonical_equivalence`, and
   `the_dirty_observation_never_gives_up_after_a_count`.
 - Mutation evidence: each fix was reverted in a copy of the Swift, the binary run, then the sources
@@ -1079,7 +1082,7 @@ Deviations and limits:
 - Repeats of the same close gesture while it is pending are folded rather than queued (a second Cmd-W
   on the same tab would otherwise ask the same question twice or close a vanished tab). This is
   documented in the code, and it is the only dropped request path.
-- `discardLocalChanges()` still takes the editor text at the moment it runs, so text typed in a
+- `discardLocalChanges()` (now reached through `applyDiscard()`) still takes the editor text at the moment it runs, so text typed in a
   panel between its Don't Save answer and the last settle of the same close is also discarded. The
   window is the duration of the remaining sheets and syncs; not testable here.
 - UNAVAILABLE as before: `scripts/check-macos-sources` (a Swift 6 type check of these edits, in
@@ -1180,3 +1183,109 @@ Deviations and limits:
 - UNAVAILABLE as before: `scripts/check-macos-sources` (a Swift 6 type check of this edit),
   `scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke stage and the hosted
   macOS workflows. None is recorded as passed.
+
+### Fix round 4 (S4 review findings, two blocking, both verified valid and fixed at the root)
+
+Base of the round: `a06accb`. Swift still cannot be compiled or run here (no Swift toolchain, Linux).
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | Don't Save raced the snapshot poll: `settleDirtyMirror(assumingDiscarded: true)` cancelled the dirty-mirror task and told Rust the file was clean while the panel kept the text, with no state to stop `update()` -> `reconcileDirty()` from restarting the loop. With two or more discarded panels a poll between panel 1's settle and the final discard re-marked panel 1 dirty (`observe(true)`); the core close guard then refused the close of a panel that already read clean, and a later close lost the edits silently. | Yes, by reading: `update()` calls `reconcileDirty()` on every snapshot; `observeNeeded` had no discard state; `resolveFilesBeforeClose` awaited one bridge call per panel before the single `discards.forEach`. A second, narrower hole of the same kind was found while fixing it: a cancelled loop can still have an `observe(true)` in flight on a detached worker that lands after the settle's `observe(false)`, and the `wanted == lastModelDirty` shortcut would then skip the write. | New `DirtyMirrorGate` (a counted hold) in `FileCloseResolution.swift`. `observeNeeded` is `dirtyGate.observationNeeded(...)`, which is false while a hold is taken, so neither `update()` nor the loop's own tail can restart the mirror. `holdDiscard()` takes the hold and cancels the task synchronously. The whole close decision moved out of the coordinator into `FileCloseResolution.resolve`: all Cancel/Save decisions first, then every discarded panel is held before the first awaited settle (nothing awaited in between), then settle, then `applyDiscard()` for every discarded panel. `applyDiscard()` drops the text from dirty tracking and lifts the hold in one synchronous step. On a failed settle every hold is released and every mirror resumed. `settleDirtyMirror` now waits for the cancelled loop (`if let running { await running.value }`) before it writes, and `closeWriteNeeded` forces a write when a loop ran or the panel is held, so a late `observe(true)` cannot land after (and undo) the settle. Holds are counted so two overlapping closes of one panel cannot release each other's. |
+| 2 | `dont_save_is_applied_only_after_the_whole_close_is_settled` could not detect a failed Save no longer aborting the close (D8). | Yes, reproduced as reported: replacing the Save guard with `_ = await view.performSave(force: false)` left the old test green (its `last_return_false` was found at the later settle failure). | The Save guard text is pinned exactly in the new `close_resolution_aborts_without_discarding_and_applies_dont_save_last`, together with the exact Cancel and Discard arms, hold before settle with no `await` between, release then resume on failure, `applyDiscard` last, and exactly three `return false` abort paths. Because the decision is now an ordinary generic function, a macOS fixture also executes it (below). |
+
+Tests added or strengthened:
+
+- `tools/native-fixtures/file-close-resolution.swift` + `scripts/check-file-close-resolution` (new,
+  wired into `.github/workflows/macos-development.yml`): compiles the production
+  `FileCloseResolution.swift` with scripted panels and runs the real `FileCloseResolution.resolve` and
+  `DirtyMirrorGate` with a snapshot poll injected before and after every settle write (synchronous
+  calls, no threads, timers or sleeps). Scenarios: two Don't Saves keep the model clean and a later
+  poll does not re-mark it; a control with holds disabled shows the model re-marked dirty for a panel
+  that reads clean (proves the scenario can fail); Cancel after Don't Save changes nothing; a failed
+  Save aborts before anything is settled or held; Save then Don't Save; a failed settle restores the
+  first panel's bit in the model and lifts every hold; a clean panel is settled but never held; the
+  gate's truth table, counted holds and `closeWriteNeeded`. UNAVAILABLE here: it needs `xcrun swiftc`.
+  It was never compiled or run, so even its own syntax is unproven.
+- `crates/native-bridge/tests/swift_file_contract.rs`: removed
+  `dont_save_is_applied_only_after_the_whole_close_is_settled`; added
+  `close_resolution_aborts_without_discarding_and_applies_dont_save_last`,
+  `a_panel_being_discarded_cannot_restart_the_dirty_mirror`,
+  `closing_waits_for_an_in_flight_observation_before_writing` and
+  `the_close_decision_fixture_is_wired_into_macos_ci`. These only read source files; they pin exact
+  statements and their order. They do not execute the Swift. That the production `FilePanelView`
+  actually behaves like the fixture's scripted panel (its `update()`/`reconcileDirty()` plumbing, the
+  loop tail, the in-flight wait) is therefore pinned structurally only; the in-app smoke is the
+  behavioural check and has not run.
+- `FilePanelSmoke` (UNAVAILABLE here): new step between the Cancel check and the back-to-back close
+  burst in step 10. A two-file `resolveFilesBeforeClose` answered Don't Save twice must return true,
+  leave both models clean across four `status` polls, and, after new keystrokes, mark both models
+  dirty again (the hold is lifted). The burst then runs from those re-dirtied panels.
+- Mutation evidence (fix reverted in a copy of the Swift, the binary run, the file restored and
+  checked): Save guard replaced by `_ = await panel.performSave`, the hold line removed, the gate's
+  `!isDiscarding` removed, the wait for the old loop removed, and `|| assumingDiscarded` removed from
+  the write decision each made exactly one matching test FAIL (15 passed, 1 failed each). The old test
+  stayed green for the first of these before the round, as the finding said.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test binaries,
+563 passed, 0 failed, 2 ignored, which is the previous 560 minus 1 removed plus 4 added; clippy
+`-D warnings`; license inventory; `scripts/check-native-bridge`). Determinism of the changed binary
+(`swift_file_contract`, 16 tests, one real Desktop test among them): 20 serial runs, 0 failures; then
+3 rounds of 8 concurrent copies at once (24 runs), 0 failures. This is fewer concurrent rounds than
+earlier rounds and was run on an otherwise idle machine without busy-loop CPU hogs; the new tests only
+read source files and use no threads, timers or sleeps. (A first concurrent attempt used a faulty
+`wait` loop in my driver and every copy reported failure by the driver's own bug; it was discarded
+and the 24 runs reported here are from the rerun with a bash driver.)
+
+Deviations and limits specific to this round:
+
+- The decision logic is executed by a fixture only on macOS CI. On this machine the only evidence is
+  source-structure pinning, stated as such above.
+- After a successful `resolve`, the tab is closed by the caller. If the core still refuses that close
+  for a reason other than the dirty bit, the discarded panel stays open reading clean while still
+  holding the text (the hold is already lifted, so edits made from then on are tracked normally).
+  Pre-existing in kind; not changed.
+- `settleDirtyMirror` waits for a cancelled loop's in-flight `observe`, bounded by the file call
+  timeout (2 s), so Don't Save can take that long to close when the file service is stalled. There is
+  no progress UI for that wait.
+- `resolveFilesBeforeQuit` goes through the same function; no smoke step quits the app.
+
+#### Remaining known limitations of the native file panel (for the PR description)
+
+Every Swift/macOS gate is UNAVAILABLE locally: `scripts/check-macos-sources` (Swift 6 strict
+concurrency, warnings-as-errors type check of all sources including `FileCloseResolution.swift`),
+`scripts/check-file-close-resolution`, `scripts/check-browser-download-files`, `scripts/build-macos-dev`,
+`scripts/check-macos-app`, the `file_panel` smoke stage and every hosted macOS workflow. None is
+recorded as passed; CI is the verifier and none of the Swift in this slice has ever been compiled.
+
+- Unconfirmed Swift API use that CI must confirm first: `PresentationIntent` components/kinds in
+  `FileMarkdownRenderer`; `NSTextViewDelegate` isolation on the MainActor view; `NSFont`/`NSColor`/
+  `NSParagraphStyle` built inside a detached task; autolinking of `import PDFKit` (add
+  `-framework PDFKit` to `scripts/build-macos-dev` if the link fails); `withCheckedContinuation` around
+  `beginSheetModal`; `Process`/`Pipe` in a detached task; `NSButton.performClick(nil)`; `@discardableResult`
+  on `enqueueFile`; `Banner == Banner.none`; and, new, the `@MainActor` closure parameter of the generic
+  `FileCloseResolution.resolve`, the `[self]` capture in its coordinator call, and `@main @MainActor struct`
+  in the new fixture.
+- Behaviour only a Mac can show: first-responder retention, Cmd-S/Cmd-O/Cmd-Z, `NSOpenPanel`, the
+  Save/Don't Save/conflict/discard/orphan sheets, quit-with-dirty, IME, VoiceOver labels, large-file
+  `NSTextView` performance, ImageIO/PDFKit decode of real files, Markdown fidelity, word-wrap layout,
+  dark-appearance banner contrast.
+- Between the first keystroke and the acknowledged `observe(true)` (D7a), a socket `close-surface` can
+  still get through; the orphan sheet then offers Copy Text.
+- A stalled file service surfaces `file_worker_unavailable`/`busy` on Save, Reload and observe; observe
+  retries at a bounded rate, the others show a banner and wait.
+- Session quit/restore (`files.epoch` rotation) and the quit-with-dirty prompt are not exercised by the
+  smoke; the epoch reaction is pinned structurally only.
+- Typing is blocked, not buffered, while a reload or attach is in flight; keystrokes then are lost.
+- Text typed into a panel between its Don't Save answer and the end of the same close is also discarded.
+- Repeats of the same close gesture while it is pending are folded into the pending request.
+- Rendered Markdown: tables degrade to tab-separated text; thematic breaks, images and raw HTML are not
+  drawn; relative links are inert; only http, https and mailto open; scroll position is not kept across
+  a reload.
+- Word wrap is one global user default, not per file and not in the session document.
+- `Open File...` is capped at 16 selections; the orphan sheet offers Copy Text and Discard only (no
+  Save As).
+- `scripts/check-macos-app` does not list `file_panel` among its required evidence keys (the key is
+  emitted).
+- The dirty-mirror gate and the in-flight wait in the production `FilePanelView` are pinned by source
+  structure on Linux and run only by the macOS fixture (against scripted panels, not `FilePanelView`)
+  and the in-app smoke.

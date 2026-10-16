@@ -15,7 +15,6 @@ protocol FilePanelOwner: AnyObject {
 }
 
 enum FileConflictChoice: Sendable { case reload, overwrite, cancel }
-enum FileCloseChoice: Sendable { case save, discard, cancel }
 
 /// Presents `alert` as a sheet of `window` (or modally without one) and returns the response.
 @MainActor
@@ -103,6 +102,8 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     /// no sign. Saving is not part of this; it compares the buffer against what it wrote.
     private var editingSuspended = false
     private var lastModelDirty = false
+    /// Held for a panel whose Don't Save is being applied; see `DirtyMirrorGate`.
+    private var dirtyGate = DirtyMirrorGate()
     private var observeTask: Task<Void, Never>?
     private var observeLoopID = 0
     private var observeGaveUp = false
@@ -961,7 +962,8 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     }
 
     private var observeNeeded: Bool {
-        ownerToken != nil && (mode?.isEditableText ?? false) && !closed && !observeGaveUp && isDirty != lastModelDirty
+        dirtyGate.observationNeeded(attached: ownerToken != nil, editable: mode?.isEditableText ?? false, closed: closed,
+                                    gaveUp: observeGaveUp, isDirty: isDirty, modelDirty: lastModelDirty)
     }
 
     private func reconcileDirty() {
@@ -1031,6 +1033,29 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         setDirty(false)
     }
 
+    /// Don't Save was chosen for this panel and is about to be settled. From here until
+    /// `releaseDiscard` or `applyDiscard` no snapshot may start a dirty-mirror observation: the
+    /// model is told the text is clean while the panel still holds it. Synchronous, so it can run
+    /// before the first awaited step of a multi-panel close.
+    func holdDiscard() {
+        dirtyGate.hold()
+        observeTask?.cancel()
+    }
+
+    /// The close was aborted: nothing is discarded, so the mirror resumes and re-marks the model.
+    func releaseDiscard() {
+        dirtyGate.release()
+        reconcileDirty()
+    }
+
+    /// The close can no longer be aborted. The text is dropped from dirty tracking and the hold is
+    /// lifted in the same synchronous step, so no snapshot sees one without the other.
+    func applyDiscard() {
+        discardLocalChanges()
+        dirtyGate.release()
+        reconcileDirty()
+    }
+
     /// Makes the model's dirty bit equal this view's before an app-initiated close, so the core
     /// close guard cannot race a pending observation. False means the close must not proceed.
     /// `assumingDiscarded` is for a panel whose Don't Save has been chosen but not yet applied:
@@ -1038,10 +1063,17 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     /// abort of the close loses nothing (see `resumeDirtyMirror`).
     func settleDirtyMirror(assumingDiscarded: Bool = false) async -> Bool {
         guard mode?.isEditableText ?? false, let token = ownerToken else { return true }
-        observeTask?.cancel()
+        // A running observation may have a write in flight. Wait for it to finish so it cannot
+        // land after (and undo) the write below; the snapshot cannot be trusted to show it.
+        let running = observeTask
+        running?.cancel()
         observeTask = nil
+        if let running { await running.value }
         let wanted = assumingDiscarded ? false : isDirty
-        if wanted == lastModelDirty { return true }
+        // A held panel's loop was cancelled by the hold, possibly long before this call, so it may
+        // already have finished with its write landed but not yet visible in `lastModelDirty`.
+        guard DirtyMirrorGate.closeWriteNeeded(wanted: wanted, modelDirty: lastModelDirty,
+                                               loopMayHaveWritten: running != nil || assumingDiscarded) else { return true }
         switch await send(.observe(token, dirty: wanted)) {
         case .success:
             lastModelDirty = wanted
@@ -1300,3 +1332,5 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         NSPasteboard.general.setString(editor.string, forType: .string)
     }
 }
+
+extension FilePanelView: FileCloseParticipant {}

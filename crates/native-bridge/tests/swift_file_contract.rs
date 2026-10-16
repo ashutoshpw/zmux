@@ -576,38 +576,224 @@ fn keyboard_focus_follows_content_that_replaces_the_loading_state() {
     );
 }
 
+/// Index of `needle` in `haystack`, or a panic naming what is missing.
+fn at(haystack: &str, needle: &str) -> usize {
+    haystack
+        .find(needle)
+        .unwrap_or_else(|| panic!("`{needle}` is missing from:\n{haystack}"))
+}
+
+// The close decision is executed for real by `scripts/check-file-close-resolution` on macOS CI.
+// There is no Swift toolchain here, so the tests below can only pin the exact statements the
+// decision is made of. They do not run it.
 #[test]
-fn dont_save_is_applied_only_after_the_whole_close_is_settled() {
-    let coordinator = swift("ApplicationCoordinator.swift");
+fn close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
+    let resolution = swift("FileCloseResolution.swift");
     let body = between(
+        &resolution,
+        "static func resolve<Panel: FileCloseParticipant>(",
+        "\n    }\n}",
+    );
+    let cancel = at(body, "case .cancel: return false");
+    let save = at(
+        body,
+        "case .save: guard await panel.performSave(force: false) else { return false }",
+    );
+    let discard = at(body, "case .discard: discards.append(panel)");
+    let hold = at(body, "discards.forEach { $0.holdDiscard() }");
+    let settle = at(
+        body,
+        "guard await panel.settleDirtyMirror(assumingDiscarded: discarded) else {",
+    );
+    let release = at(body, "discards.forEach { $0.releaseDiscard() }");
+    let resume = at(body, "panels.forEach { $0.resumeDirtyMirror() }");
+    let apply = at(body, "discards.forEach { $0.applyDiscard() }");
+    assert!(
+        cancel < hold && save < hold && discard < hold,
+        "every Cancel and Save decision must be made before any panel is held"
+    );
+    assert!(
+        hold < settle,
+        "panels must be held before the first awaited settle"
+    );
+    assert!(
+        !body[hold..settle].contains("await"),
+        "nothing may be awaited between holding the discarded panels and the first settle"
+    );
+    assert!(
+        settle < release && release < resume,
+        "a failed settle must lift the holds, then resume the mirrors"
+    );
+    let failure_arm = &body[settle..apply];
+    assert!(
+        failure_arm.contains("return false"),
+        "a failed settle must abort the close"
+    );
+    assert!(
+        resume < apply && apply == body.rfind("discards.forEach").unwrap(),
+        "Don't Save is applied last, after every panel settled"
+    );
+    assert_eq!(
+        body.matches("return false").count(),
+        3,
+        "exactly three abort paths: Cancel, a failed Save and a failed settle"
+    );
+    assert_eq!(
+        body.matches("holdDiscard()").count()
+            + body.matches("applyDiscard()").count()
+            + body.matches("releaseDiscard()").count(),
+        3,
+        "holds are taken, applied and released in one place each"
+    );
+    assert!(
+        !body[..hold].contains("Discard()") && !body.contains("discardLocalChanges"),
+        "the per-panel decision loop must not touch dirty tracking"
+    );
+    // The coordinator only asks the question; it cannot reorder the decision.
+    let coordinator = swift("ApplicationCoordinator.swift");
+    let asks = between(
         &coordinator,
         "func resolveFilesBeforeClose(",
         "/// Quit: resolves every dirty panel",
     );
-    let apply = body
-        .find("discards.forEach { $0.discardLocalChanges() }")
-        .expect("discards are applied in one place");
-    let settle = body
-        .find("settleDirtyMirror(")
-        .expect("mirrors are settled");
-    let last_return_false = body.rfind("return false").expect("abort paths exist");
-    assert_eq!(
-        body.matches("discardLocalChanges()").count(),
-        1,
-        "Don't Save must not clear dirty tracking inside the per-file loop"
+    assert!(
+        asks.contains("FileCloseResolution.resolve(filePanels(for: surfaces))")
+            && !asks.contains("discardLocalChanges")
+            && !asks.contains("settleDirtyMirror")
+            && !asks.contains("performSave"),
+        "the coordinator must delegate the decision to FileCloseResolution"
     );
     assert!(
-        settle < apply && last_return_false < apply,
-        "discarding must come after every Cancel, failed Save and failed sync"
-    );
-    assert!(
-        body.contains("resumeDirtyMirror()") && body.contains("assumingDiscarded:"),
-        "an aborted settle must restore the model's dirty bit"
+        swift("FilePanelView.swift").contains("extension FilePanelView: FileCloseParticipant {}"),
+        "the production panel must be the participant the fixture's logic runs against"
     );
     let smoke = swift("FilePanelSmoke.swift");
     assert!(
-        smoke.contains("CloseScript([.discard, .cancel])"),
-        "the smoke must cancel after a Don't Save"
+        smoke.contains("CloseScript([.discard, .cancel])")
+            && smoke.contains("CloseScript([.discard, .discard])")
+            && smoke.contains("both models stay clean after Don't Save"),
+        "the smoke must cancel after a Don't Save and settle two Don't Saves together"
+    );
+}
+
+#[test]
+fn the_close_decision_fixture_is_wired_into_macos_ci() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let script = read("scripts/check-file-close-resolution");
+    assert!(
+        script.contains("apps/macos/Sources/FileCloseResolution.swift")
+            && script.contains("tools/native-fixtures/file-close-resolution.swift")
+            && script.contains("-warnings-as-errors"),
+        "the script must compile the production decision with the fixture"
+    );
+    assert!(
+        read(".github/workflows/macos-development.yml")
+            .contains("scripts/check-file-close-resolution"),
+        "macOS CI must run the fixture; it cannot run on this machine"
+    );
+    let fixture = read("tools/native-fixtures/file-close-resolution.swift");
+    for scenario in [
+        "two Don't Saves must close",
+        "Cancel after Don't Save must leave every panel exactly as it was",
+        "a failed Save must abort the close",
+        "a failed settle must abort the close",
+        "control: without a hold",
+    ] {
+        assert!(
+            fixture.contains(scenario),
+            "fixture scenario `{scenario}` is missing"
+        );
+    }
+}
+
+#[test]
+fn a_panel_being_discarded_cannot_restart_the_dirty_mirror() {
+    let resolution = swift("FileCloseResolution.swift");
+    let gate = between(
+        &resolution,
+        "func observationNeeded(",
+        "/// Whether the close-time sync",
+    );
+    assert!(
+        gate.contains(
+            "attached && editable && !closed && !gaveUp && !isDiscarding && isDirty != modelDirty"
+        ),
+        "the gate must refuse observation while a discard is held: {gate}"
+    );
+    let panel = swift("FilePanelView.swift");
+    let needed = between(&panel, "private var observeNeeded: Bool {", "}\n");
+    assert!(
+        needed.contains("dirtyGate.observationNeeded("),
+        "observeNeeded must be decided by the gate"
+    );
+    assert_eq!(
+        panel.matches("observeTask = Task").count(),
+        1,
+        "the only place that starts an observation is reconcileDirty"
+    );
+    let reconcile = between(
+        &panel,
+        "private func reconcileDirty() {",
+        "observeLoopID += 1",
+    );
+    assert!(
+        reconcile.contains("guard observeNeeded, observeTask == nil else { return }"),
+        "reconcileDirty must consult observeNeeded"
+    );
+    // Both the snapshot path and the loop's own tail only restart through reconcileDirty.
+    let update = between(
+        &panel,
+        "func update(surface: Surface",
+        "private func epochChanged()",
+    );
+    assert!(update.contains("reconcileDirty()"));
+    let hold = between(&panel, "func holdDiscard() {", "}\n");
+    assert!(
+        hold.contains("dirtyGate.hold()")
+            && hold.contains("observeTask?.cancel()")
+            && !hold.contains("await"),
+        "holdDiscard must hold and cancel synchronously"
+    );
+    let apply = between(&panel, "func applyDiscard() {", "}\n");
+    assert!(
+        at(apply, "discardLocalChanges()") < at(apply, "dirtyGate.release()")
+            && !apply.contains("await"),
+        "the hold is lifted only after the text is dropped from dirty tracking, in one synchronous step"
+    );
+    let release = between(&panel, "func releaseDiscard() {", "}\n");
+    assert!(
+        release.contains("dirtyGate.release()") && release.contains("reconcileDirty()"),
+        "an aborted close must lift the hold and resume the mirror"
+    );
+}
+
+#[test]
+fn closing_waits_for_an_in_flight_observation_before_writing() {
+    let panel = swift("FilePanelView.swift");
+    let settle = between(
+        &panel,
+        "func settleDirtyMirror(assumingDiscarded: Bool = false) async -> Bool {",
+        "/// Restarts the dirty-mirror observation",
+    );
+    let cancel = at(settle, "running?.cancel()");
+    let wait = at(settle, "if let running { await running.value }");
+    let decide = at(settle, "DirtyMirrorGate.closeWriteNeeded(");
+    let write = at(settle, "send(.observe(token, dirty: wanted))");
+    assert!(
+        cancel < wait && wait < decide && decide < write,
+        "the close must cancel, wait out the old write, then decide and send its own"
+    );
+    assert!(
+        settle.contains("loopMayHaveWritten: running != nil || assumingDiscarded"),
+        "a held panel's loop was cancelled earlier, so its write must be assumed"
+    );
+    let resolution = swift("FileCloseResolution.swift");
+    assert!(
+        resolution.contains("loopMayHaveWritten || wanted != modelDirty"),
+        "a possibly landed write must force a fresh write"
     );
 }
 
