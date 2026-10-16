@@ -391,6 +391,8 @@ fn ghostty_viewport(engine: &zmux_ghostty_vt::Engine) -> Result<Viewport, Engine
         // The optional exporter has no authoritative per-row wrap/copy extents.
         // Preserve physical-row copying; pending cursor wrap is not row metadata.
         row_copy: None,
+        // This engine does not implement the semantic pointer contract.
+        pointer_tracking: None,
         application_cursor: f.application_cursor != 0,
         bracketed_paste: f.bracketed_paste != 0,
         hide_cursor: f.cursor_visible == 0,

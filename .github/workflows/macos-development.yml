@@ -150,7 +150,7 @@ jobs:
           path: |
             ${{ runner.temp }}/native-terminal-selection/receipt.json
             ${{ runner.temp }}/native-terminal-selection/native-selection.json
-            ${{ runner.temp }}/native-terminal-selection/pointer-child.json
+            ${{ runner.temp }}/native-terminal-selection/pointer*-child.json
             ${{ runner.temp }}/native-terminal-selection/child.json
             ${{ runner.temp }}/native-terminal-selection/wrap-child.json
             ${{ runner.temp }}/native-terminal-selection/copy-child-*.json

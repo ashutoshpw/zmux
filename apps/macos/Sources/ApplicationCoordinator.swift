@@ -26,6 +26,7 @@ enum UICommand: Sendable {
     case resize(UInt64, Int, Int)
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
+    case pointer(UInt64, TerminalPointerEvent)
 }
 
 /// Application lifetime owns one Rust Desktop. Main-window presenters borrow its
@@ -172,6 +173,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         try await self.bridge.paste(session: session, text: text)
                     case .wheel(let session, let lines, let row, let col, let modifiers, let history):
                         try await self.bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
+                    case .pointer(let session, let event):
+                        try await self.bridge.pointer(session: session, event: event)
                     case .scroll(let session, let lines):
                         try await self.bridge.scroll(session: session, lines: lines)
                     case .resize(let session, let rows, let cols):
@@ -329,14 +332,15 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         try await task.value
     }
 
-    func enqueue(_ command: UICommand) {
+    @discardableResult
+    func enqueue(_ command: UICommand) -> Bool {
         mainWindowHost.clearErrorForCommand()
         if case .paste(_, let text) = command, text.isEmpty || text.utf8.count > 16_384 {
             reportError("Development build pastes must contain 1–16 KiB of text")
-            return
+            return false
         }
         switch continuation.yield(command) {
-        case .enqueued: break
+        case .enqueued: return true
         case .dropped:
             reportError("Command queue is full; the new command was not accepted")
         case .terminated:
@@ -344,6 +348,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         @unknown default:
             reportError("The application command queue is unavailable")
         }
+        return false
     }
     func reportError(_ message: String) {
         if shutdownTask != nil, shutdownNativeIssues.count < 16 {
@@ -354,6 +359,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     }
     func appActive(_ active: Bool) {
         guard shutdownTask == nil else { return }
+        if !active { terminals.values.forEach { $0.cancelPointerGestures() } }
         enqueue(.attention("app_active", nil, nil, active))
         if active { notificationDelivery.refreshPermission() }
     }
@@ -468,6 +474,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
 
     func windowKeyChanged(_ host: MainWindowHost, key: Bool) {
         if key { host.installMenus() }
+        else { terminals.values.filter { $0.window === host.window }.forEach { $0.cancelPointerGestures() } }
         guard host.nativeReady, let token = host.nativeToken else { return }
         enqueue(.windowEvent(NativeWindowEvent(event: "key", token: token, key: key)))
     }
