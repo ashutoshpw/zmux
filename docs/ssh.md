@@ -23,7 +23,14 @@ forwarding the local control socket or requiring cloud services. Explicit remote
 commands are not wrapped. Set `ZMUX_CLAUDE_INTEGRATION_DISABLED=1` in the remote
 shell to bypass Claude wrapping; `ZMUX_SHELL_INTEGRATION_DISABLED=1` in the app's
 launch environment disables integration for new local and SSH shells. A supported
-Claude version with repeatable `--plugin-dir` is required. Notification banners
+Claude version with repeatable `--plugin-dir` is required. A private session FIFO
+relays fixed attention events to the original terminal, including from nested tmux
+sessions. One blocked relay process lives with each integrated shell; no tmux
+configuration is changed. An inherited wrapper bypasses expired hook directories.
+Configured OpenSSH `RemoteCommand` launches are preserved and bypass automatic
+integration. A bounded `ssh -G` probe runs on the launch worker before ordinary
+shell launches; OpenSSH may evaluate configured `Match exec` during this probe.
+Notification banners
 also require enabling zmux's macOS system-notification permission.
 The launcher passes the SSH program and connection options directly as argv.
 OpenSSH still owns configured ProxyCommand, Match exec and LocalCommand behavior.

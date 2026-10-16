@@ -4,6 +4,39 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Added a macOS text collection command for the user: 12 process-only top samples
+  followed by a 10s/1ms sample of the exact zmux-app PID, with private output.
+  Physical-Mac mostly-idle attribution is still pending; hosted idle did not reproduce it.
+- Authenticated nested tmux reproduced missing Stop attention before the relay
+  (`/tmp/zmux-tmux-notification-red.log`). The session-owned FIFO relay passes
+  plain and nested SSH journeys, with exact origin routing and cleanup, in
+  `/tmp/zmux-relay-ssh-green.log` and `/tmp/zmux-relay-tmux-green.log`. One blocked
+  relay process per integrated shell replaces direct writes to inner /dev/tty.
+  No tmux settings or local control credentials are forwarded.
+- Existing effective-OpenSSH-config test now includes RemoteCommand; prior launch
+  failed with "Cannot execute command-line and remote command". A bounded worker
+  probe preserves configured commands; unresolved config bypasses integration and
+  leaves ordinary SSH diagnostics. Both red/green logs are retained in /tmp.
+  Shared bounded runner extracted from local tmux; timeout/descendant tests pass.
+- Full final portable check passes (`RUST_TEST_THREADS=2 scripts/check`,
+  `/tmp/zmux-cpu-notification-final-check.log`), including the unchanged real SSH
+  transfer journey and extracted bounded-runner descendant cleanup. Rendering slice
+  committed as71f3cf2. Native Swift and SSH/tmux workflow gates remain pending;
+  no new repair artifact has been published yet.
+- Native transport now sends changed rows/UTF-8 text spans and omits unchanged
+  grids; two selected-frame baselines bound memory. Swift atomically reconstructs
+  coherent frames. Real ABI two-PTY/Unicode/fallback/full-reader test passes.
+  Full local checks pass after retention refinement; native hosted gate remains.
+- Terminal drawing caches metrics/fonts/styles and uses visual damage; unchanged
+  chrome/accessibility updates are gated. Native repaint assertions and explicit
+  prior-renderer regression reproduction added to the focused macOS workflow.
+  Run38924449741 at53a98b5 caught a fixture reference to a local toolbar variable;
+  fixed the inventory to use retained controls and exact current labels. This
+  failed run is not accepted as a native build. The next workflow is required.
+- Sequential diagnostic full/delta API comparison cuts colored traffic from8.003
+  to0.462MB/s and Unicode stress from51.508 to1.738MB/s; these are backend payload
+  observations, not a claim of physical-Mac idle CPU repair. Reference records
+  exact scope, probes, library hash and pending native acceptance.
 - Notification phase full portable checks pass (`RUST_TEST_THREADS=2 scripts/check`,
   `/tmp/zmux-claude-shell-check-2.log`), including real SSH transfers/reopen and C ABI.
   A focused manual macOS workflow now validates local provider contract, packaged

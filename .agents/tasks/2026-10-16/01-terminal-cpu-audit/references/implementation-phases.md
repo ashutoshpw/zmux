@@ -1,6 +1,6 @@
 # Phased repair and verification
 
-Planning only. Keep implementations original MIT and use normal hooks. Each phase
+Implementation authorized2026-10-16. Keep implementations original MIT and use normal hooks. Each phase
 ends in one cohesive working commit or a few related commits; separately record a
 failing behavioral regression before its fix when repairing production behavior.
 No full-parity label follows from this bounded repair.
@@ -181,3 +181,23 @@ checked, correctness/stability preserved and installable artifact tied to the
 tested executable. Phase3 managed-SSH notification acceptance is also required
 in this session, before the repair build is handed off. Do not defer it.
 These repairs alone do not close full cmux parity.
+
+## Nested remote terminal repair
+
+The authenticated SSH acceptance fixture also enters a private tmux server. Direct
+OSC777 writes were swallowed by its inner PTY (red log
+`/tmp/zmux-tmux-notification-red.log`). A session-owned 0600 FIFO in the 0700
+bootstrap root carries only stop/failure/attention tags to a blocked relay that
+retains the original TTY descriptor. Shell children inherit neither the TTY relay
+FD nor the outer owner's keepalive FIFO writer. Session close releases the writer,
+removes exact hook/FIFO files and lets the reader reach EOF. Hook invocations keep
+their existing three-second provider timeout; stale inherited wrappers bypass
+missing plugins. This does not modify user tmux or Claude configuration.
+
+One extra sleeping process per integrated shell is the lifecycle cost. Plain and
+nested authenticated SSH both pass exact-surface inbox attention, completion while
+provider remains alive and hook cleanup; no real Claude API or macOS banner is
+claimed. A configured OpenSSH RemoteCommand bypasses bootstrap. An existing bounded
+process runner is shared for ssh -G configuration resolution on the launch worker
+(5s, 64KiB per stream, private group cleanup), without blocking terminal_spec/UI.
+Config probe failure retains ordinary SSH behavior and reports integration disabled.

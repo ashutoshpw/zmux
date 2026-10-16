@@ -1,11 +1,7 @@
 //! Explicit user-owned local tmux sessions. Filesystem/process waits belong on a
 //! CLI/background worker, never the desktop action executor. GUI binding is separate.
 use crate::ProcessSpec;
-use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, poll, pollfd};
-use nix::{
-    sys::signal::{Signal, killpg},
-    unistd::{Pid, geteuid},
-};
+use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -16,7 +12,7 @@ use std::{
         process::CommandExt,
     },
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -29,7 +25,6 @@ use uuid::Uuid;
 
 pub const MAX_SESSIONS: usize = 64;
 pub const MAX_REGISTRY_BYTES: usize = 128 * 1024;
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const MARKER: &str = "@zmux_local_tmux_server";
 const REJECT: &str = "__zmux_stale_local_tmux_binding__";
@@ -1133,132 +1128,18 @@ fn validate_socket(path: &Path, private: bool) -> Result<bool> {
     Ok(true)
 }
 
-struct Output {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-struct Running {
-    child: Child,
-}
-impl Drop for Running {
-    fn drop(&mut self) {
-        // The tmux server daemon creates its own session. Every remaining process
-        // in the launcher's group belongs to this bounded invocation, even after
-        // the leader exits or descendants close their inherited output pipes.
-        if let Err(e) = killpg(Pid::from_raw(self.child.id() as i32), Signal::SIGKILL)
-            && e != nix::errno::Errno::ESRCH
-        {
-            eprintln!("zmux tmux process cancellation: {e}");
-        }
-        if let Err(e) = self.child.wait() {
-            eprintln!("zmux tmux process reap: {e}");
-        }
-    }
-}
-fn run_bounded(mut command: Command, cancellation: Option<&AtomicBool>) -> Result<Output> {
-    let mut child = Running {
-        child: command.spawn().map_err(|e| failure("launch tmux", e))?,
-    };
-    let mut stdout = FileDescriptor::dup(&child.child.stdout.take().expect("piped stdout"))
-        .map_err(|e| failure("open tmux output", e))?;
-    let mut stderr = FileDescriptor::dup(&child.child.stderr.take().expect("piped stderr"))
-        .map_err(|e| failure("open tmux errors", e))?;
-    stdout
-        .set_non_blocking(true)
-        .map_err(|e| failure("configure tmux output", e))?;
-    stderr
-        .set_non_blocking(true)
-        .map_err(|e| failure("configure tmux errors", e))?;
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let mut out_eof = false;
-    let mut err_eof = false;
-    let deadline = Instant::now() + OPERATION_TIMEOUT;
-    let mut status = None;
-    loop {
-        if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
-            return Err(MultiplexerError::Failure(
-                "local tmux operation cancelled; inspect list if owner creation was pending".into(),
-            ));
-        }
-        for (pipe, bytes, eof) in [
-            (&mut stdout, &mut out, &mut out_eof),
-            (&mut stderr, &mut err, &mut err_eof),
-        ] {
-            if *eof {
-                continue;
-            }
-            for _ in 0..4 {
-                let mut buffer = [0; 4096];
-                match pipe.read(&mut buffer) {
-                    Ok(0) => {
-                        *eof = true;
-                        break;
-                    }
-                    Ok(n) => {
-                        if bytes.len() + n > MAX_OUTPUT_BYTES {
-                            return Err(MultiplexerError::Failure(
-                                "tmux response exceeded the 64 KiB stream bound".into(),
-                            ));
-                        }
-                        bytes.extend_from_slice(&buffer[..n]);
-                    }
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::Interrupted =>
-                    {
-                        break;
-                    }
-                    Err(e) => return Err(failure("read tmux response", e)),
-                }
-            }
-        }
-        if status.is_none() {
-            status = child
-                .child
-                .try_wait()
-                .map_err(|e| failure("poll tmux process", e))?;
-        }
-        if let Some(status) = status
-            && out_eof
-            && err_eof
-        {
-            return Ok(Output {
-                success: status.success(),
-                stdout: String::from_utf8(out).map_err(|e| failure("decode tmux output", e))?,
-                stderr: String::from_utf8(err).map_err(|e| failure("decode tmux errors", e))?,
-            });
-        }
-        if Instant::now() >= deadline {
-            return Err(MultiplexerError::Timeout);
-        }
-        let mut fds = Vec::new();
-        if !out_eof {
-            fds.push(pollfd {
-                fd: stdout.as_raw_file_descriptor(),
-                events: POLLIN,
-                revents: 0,
-            });
-        }
-        if !err_eof {
-            fds.push(pollfd {
-                fd: stderr.as_raw_file_descriptor(),
-                events: POLLIN,
-                revents: 0,
-            });
-        }
-        if let Err(e) = poll(&mut fds, Some(Duration::from_millis(10)))
-            && !matches!(&e,filedescriptor::Error::Poll(e) if e.kind()==io::ErrorKind::Interrupted)
-        {
-            return Err(failure("poll tmux output", e));
-        }
-    }
+use crate::bounded_command::Output;
+fn run_bounded(command: Command, cancellation: Option<&AtomicBool>) -> Result<Output> {
+    crate::bounded_command::run(command, cancellation).map_err(|error| match error {
+        crate::bounded_command::Error::Timeout => MultiplexerError::Timeout,
+        other => failure("local tmux command", other),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::{sys::signal::Signal, unistd::Pid};
 
     #[test]
     fn timeout_kills_pipe_holding_descendant_after_leader_exits() {

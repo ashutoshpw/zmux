@@ -1,6 +1,6 @@
 # Original zmux session-only Claude completion integration (MIT).
 function claude
-    if test "$ZMUX_CLAUDE_INTEGRATION_DISABLED" = 1
+    if test "$ZMUX_CLAUDE_INTEGRATION_DISABLED" = 1; or not test -r "$ZMUX_SHELL_INTEGRATION_DIRECTORY/plugin/hooks/hooks.json"; or not test -p "$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention"
         command claude $argv
         return $status
     end

@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import shlex
 
 REPO = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('zmux_ssh_fixture', REPO / 'scripts/native-ssh-fixture.py')
@@ -27,6 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--library', type=Path, required=True)
     parser.add_argument('--cli', type=Path, required=True)
+    parser.add_argument('--via-tmux', action='store_true', help='Exercise remote multiplexer PTY routing')
     args = parser.parse_args()
     library = c.CDLL(str(args.library.resolve(strict=True)))
     signatures = [
@@ -72,6 +74,7 @@ print('REMOTE_PROVIDER_STOPPED_BUT_ALIVE',flush=True)
 time.sleep(30)
 ''')
         provider.chmod(0o700)
+        tmux_socket = root / 'tmux.sock'
         (home / '.bashrc').write_text("export PATH=" + str(root) + ':"$PATH"\nPS1=\nTMOUT=35\nprintf REMOTE_SHELL_BOOT_READY\\\\n\n')
         (home / '.bash_profile').write_text('. "$HOME/.bashrc"\n')
         environment = {key: value for key, value in os.environ.items() if not key.startswith(('ZMUX_', 'CMUX_'))}
@@ -131,7 +134,11 @@ time.sleep(30)
                 workspace = remote['model']['focused_workspace']
                 owner = next(w for w in remote['model']['workspaces'] if w['id'] == workspace)['root']['pane']['selected_surface']
                 dispatch({'command':'attention', 'action':{'operation':'app_active','active':False}})
-                dispatch({'command':'input', 'session_id':session, 'text':"claude 'literal $HOME ; text'\n"})
+                invocation = "claude 'literal $HOME ; text'"
+                if args.via_tmux:
+                    invocation = ('tmux -S ' + shlex.quote(str(tmux_socket))
+                                  + ' -f /dev/null new-session /bin/bash -c ' + shlex.quote(invocation))
+                dispatch({'command':'input', 'session_id':session, 'text':invocation+'\n'})
                 stopped = wait(lambda s: any(f.get('snapshot') and 'REMOTE_PROVIDER_STOPPED_BUT_ALIVE' in f['snapshot']['viewport']['contents'] for f in s['frames']))
                 notified = wait(lambda s: len(s['notifications']) == 1)
                 notice = notified['notifications'][0]
@@ -148,10 +155,14 @@ time.sleep(30)
                     time.sleep(.05)
                 assert not plugin.exists(), 'Remote session hook directory survived SSH close'
                 print(json.dumps({'authenticated_ssh':True, 'plain_claude_plugin':True,
+                                  'via_tmux':args.via_tmux,
                                   'completion_while_provider_alive':True, 'exact_surface_attention':True,
                                   'remote_hook_cleanup':True, 'actual_claude_api':False,
                                   'os_banner_observed':False}))
         finally:
+            if args.via_tmux and tmux_socket.exists():
+                subprocess.run(['tmux','-S',str(tmux_socket),'kill-server'],
+                               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=5,check=False)
             assert library.zmux_desktop_destroy(desktop.value) == 0
 
 if __name__ == '__main__':

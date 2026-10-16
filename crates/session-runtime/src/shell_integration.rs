@@ -17,6 +17,7 @@ const FILES: &[&str] = &[
     ".zprofile",
     ".zshrc",
     "env",
+    "attention",
     "plugin/.claude-plugin/plugin.json",
     "plugin/hooks/hooks.json",
 ];
@@ -123,7 +124,7 @@ fn bootstrap_script() -> String {
         ),
         (
             "plugin/hooks/hooks.json",
-            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"printf '\\033]777;notify;Claude;Claude finished its turn\\007' > /dev/tty 2>/dev/null || :","timeout":3}]}],"StopFailure":[{"hooks":[{"type":"command","command":"printf '\\033]777;notify;Claude;Claude stopped with an error\\007' > /dev/tty 2>/dev/null || :","timeout":3}]}],"Notification":[{"matcher":"permission_prompt|elicitation_dialog","hooks":[{"type":"command","command":"printf '\\033]777;notify;Claude;Claude needs attention\\007' > /dev/tty 2>/dev/null || :","timeout":3}]}]}}"#,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"{ [ -p \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\" ] && printf 'stop\\n' > \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\"; } 2>/dev/null || :","timeout":3}]}],"StopFailure":[{"hooks":[{"type":"command","command":"{ [ -p \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\" ] && printf 'failure\\n' > \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\"; } 2>/dev/null || :","timeout":3}]}],"Notification":[{"matcher":"permission_prompt|elicitation_dialog","hooks":[{"type":"command","command":"{ [ -p \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\" ] && printf 'attention\\n' > \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\"; } 2>/dev/null || :","timeout":3}]}]}}"#,
         ),
         (
             ".zshenv",
