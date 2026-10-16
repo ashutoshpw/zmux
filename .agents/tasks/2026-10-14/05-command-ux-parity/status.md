@@ -5,12 +5,16 @@
 
 ## Active implementation
 
-- Cohort published `38698c3`; foundation38835680975 and macOS38835681008 are
-  executing on that exact SHA. Native typecheck and early fixtures pass; packaged
-  lifecycle/browser acceptance is still pending. Selection integration and the
-  updated deferred-cloud plan are held locally to avoid cancelling useful native
-  execution. Cloud `/ready` rechecked successfully at port3530.
-
+- Cohort `38698c3`: native38835681008 passed native typecheck/early fixtures,
+  then failed the buffer fixture because a published pane can precede its first
+  screen. The fixture now polls only the exact startup error before READY, retains
+  strict failures afterwards and uses a bounded deadline per observation. Isolated
+  real CLI/PTY tests (2) and strict Clippy pass; native rerun remains required.
+  Foundation38835680975 passed macOS, but Ubuntu Chrome `--version` timed out
+  before DOM tests started. Prior green used the same runner image; no DOM
+  regression or underlying startup cause is established. Check remains unchanged.
+  Selection `b659b73` and the updated deferred-cloud plan await the next push.
+  Cloud `/ready` rechecked successfully at port3530.
 - Published cohort `3fc2364` passes foundation38832687268 and native universal
   compilation, then native38832687280 stops in WindowLifecycleSmoke's metadata
   predicate. Earlier move coverage retains status `move`; later preparation adds
