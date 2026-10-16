@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 private struct SelectionWordReference: Codable, Sendable {
     let text: String
@@ -29,6 +30,8 @@ private struct SelectionNativeReport: Codable, Sendable {
     let windowVisible: Bool
     let keyWindow: Bool
     let terminalFirstResponder: Bool
+    let activationRequestProcessID: Int32?
+    let activationFailure: String?
     var state: String
     var publicWordReferences: [SelectionWordReference]
     var cases: [SelectionNativeCase]
@@ -66,6 +69,16 @@ enum TerminalSelectionSmoke {
         let applicationActiveBefore = NSApp.isActive
         let windowVisibleBefore = window.isVisible
         let keyWindowBefore = window.isKeyWindow
+        var activationRequestProcessID: Int32?
+        var activationFailure: String?
+        do {
+            activationRequestProcessID = try await activateOwnedApplication()
+            if activationRequestProcessID != getpid() {
+                activationFailure = "LaunchServices activation returned a different process"
+            }
+        } catch {
+            activationFailure = String(describing: error)
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         _ = window.makeFirstResponder(view)
@@ -84,6 +97,7 @@ enum TerminalSelectionSmoke {
             keyWindowBefore: keyWindowBefore, applicationActive: NSApp.isActive, windowVisible: window.isVisible,
             keyWindow: window.isKeyWindow && NSApp.keyWindow === window,
             terminalFirstResponder: window.firstResponder === view,
+            activationRequestProcessID: activationRequestProcessID, activationFailure: activationFailure,
             state: "running", publicWordReferences: [], cases: [])
         // Public system behavior is recorded separately from the independently
         // specified regression literal below. Punctuation is not guessed.
@@ -97,10 +111,11 @@ enum TerminalSelectionSmoke {
             result.publicWordReferences.append(SelectionWordReference(text: text, clickedUTF16: clicked,
                 location: range.location, length: range.length, selected: string.substring(with: range)))
         }
-        guard result.applicationActive, result.windowVisible, result.keyWindow, result.terminalFirstResponder else {
+        guard result.activationFailure == nil, result.activationRequestProcessID == getpid(),
+              result.applicationActive, result.windowVisible, result.keyWindow, result.terminalFirstResponder else {
             result.state = "prerequisite_failed"
             try await save(result, to: report)
-            throw failure("Actual key window or terminal first responder was unavailable before selection")
+            throw failure("Exact-self activation or actual focus was unavailable before selection: \(result.activationFailure ?? "no activation error")")
         }
         try await save(result, to: report)
 
@@ -130,6 +145,32 @@ enum TerminalSelectionSmoke {
         try await coordinator.shutdown()
         result.state = "complete"
         try await save(result, to: report)
+    }
+
+    private static func activateOwnedApplication() async throws -> Int32 {
+        let current = NSRunningApplication.current
+        let bundle = Bundle.main.bundleURL.standardizedFileURL
+        guard current.processIdentifier == getpid(), current.bundleURL?.standardizedFileURL == bundle,
+              let identifier = current.bundleIdentifier,
+              NSWorkspace.shared.runningApplications.filter({ $0.bundleIdentifier == identifier }).map(\.processIdentifier) == [getpid()] else {
+            throw failure("LaunchServices did not identify this exact unique running fixture")
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        // If LaunchServices unexpectedly starts another instance, offline CLI
+        // help exits before AppKit/Rust/storage and cannot run this fixture.
+        configuration.arguments = ["--cli", "--help"]
+        // This callback runs on LaunchServices' concurrent queue. Transfer only
+        // the PID, never NSRunningApplication across the MainActor boundary.
+        return try await withCheckedThrowingContinuation { continuation in
+            NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { @Sendable running, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let running { continuation.resume(returning: running.processIdentifier) }
+                else { continuation.resume(throwing: BridgeFailure(message: "Native selection: LaunchServices returned no running application")) }
+            }
+        }
     }
 
     private static func click(_ view: TerminalView, window: NSWindow, row: Int, col: Int,
