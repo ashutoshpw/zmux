@@ -351,3 +351,20 @@ The fixture now retains each bounded CLI send receipt with independently expecte
 body bytes, sender and recipient plus decoded observed bytes. This distinguishes
 actual transport/state/attribution changes from a native fixture decoding issue
 without weakening an assertion or changing production comparisons.
+
+Run [38859020493](https://github.com/ashutoshpw/zmux/actions/runs/38859020493), exact
+`effba260a5a8412a37f14ffc9b85fa4cb7494f4c`, passed Swift 6 slices (125.898 s)
+and the package (337.365 s), then owned app PID 9452 failed without timeout
+(5.263 s) at the same prerequisite. The retained precomposed seed expects UTF-8
+`195,169` but the actual CLI saved receipt and decoded body contain `101,204,129`.
+State is queued, durability saved and exact sender/recipient match. Decomposed
+seed bytes match their independent literal. All 273 retained source hashes match
+the freeze. Archive SHA256:
+`77985737376cb203139a57a5cadedbf07ce61214a00a066cf1ce0d93b8cafce6`.
+This remains setup evidence, not the intended selected-body behavioral red.
+
+The fixture now uses supported `agent message TARGET -- -` and writes exact
+`Data(body.utf8)` through a private CLI stdin pipe off the UI thread, closing it
+before reading the bounded response. This avoids Darwin argv string bridging.
+The exact seed assertions and selected-body oracle are unchanged. Each receipt
+records `inputTransport: stdin_utf8`; production Unicode comparisons remain unfixed.
