@@ -1766,9 +1766,10 @@ Deviations and limits:
 
 ## S5 closure: task evidence, tracker, status, notices
 
-Base: `413237a5d2e982e708806eb534f67f47655f078d`. Documentation and tracker changes only; no Rust or
-Swift source changed, so there is no red-then-green test for this slice (a docs slice has no
-observable behaviour to fail first).
+Base: `413237a5d2e982e708806eb534f67f47655f078d`. Documentation and tracker changes only; no
+production Rust or Swift source changed. The first commit of this slice has no red-then-green test (a
+docs slice has no observable behaviour to fail first); fix round 1 below adds a drift test for the
+one tracker claim review found wrong.
 
 ### Delivered commits (S1 to S4, oldest first)
 
@@ -1818,7 +1819,8 @@ observable behaviour to fail first).
 
 `scripts/check` PASS, exit 0 (log `/tmp/zmux-s5-check.log`): `cargo fmt --check`;
 `cargo test --workspace --locked` with 79 `test result` lines, 579 passed, 0 failed, 2 ignored (the
-same totals as the end of fix round 11, as expected for a docs slice); clippy `-D warnings`;
+same totals as the end of fix round 11, as expected for a docs slice; fix round 1 below raises the
+count to 580); clippy `-D warnings`;
 `scripts/license-inventory --check`; `scripts/check-native-bridge` (C ABI, framed file channel,
 profile lease). No test, thread, timer or filesystem code changed in this slice, so no determinism
 run was needed or claimed; the determinism runs of S2 to S4 are recorded in their sections.
@@ -1842,17 +1844,22 @@ run was needed or claimed; the determinism runs of S2 to S4 are recorded in thei
 
 The authoritative list is design section 7 and the per-feature `remaining_gates` in the tracker. In
 short: CV-02 (typography, zoom, rendered find, copy as Markdown/HTML) is not started; editor settings
-(word wrap, highlighting, line numbers, encodings), Quick Look/media, PDF and image zoom/outline,
+(highlighting, line numbers, indent guides, current-line highlight, tab width, encodings, editor
+zoom), Quick Look/media, PDF and image zoom/outline,
 relative links and extended Markdown, preferred external editor, `file://` and `file:LINE` operands,
 directory-to-workspace, Save As, merge/diff of a conflict, autosave and crash recovery, real file
 watching (polling can miss a same-size same-timestamp rewrite), ownership/ACL/xattr preservation,
-remote (SSH) files and non-UTF-8 paths are not delivered. The remaining S4 limitations under "Remaining
+remote (SSH) files and non-UTF-8 paths are not delivered. The word wrap toggle is the one editor setting that
+is delivered, as a single global user default. The remaining S4 limitations under "Remaining
 known limitations of the native file panel" above also still hold. The Swift behaviour is covered on
 Linux only by source-structure pins and by Rust-side contract tests that decode the exact wire the
 Swift expects; those pins say nothing about how the Swift behaves.
 
 ### Deviations from the design, with reasons
 
+- The S5 tracker entry for CV-06 followed design section 7 ("word-wrap toggle deferred") although S4
+  had delivered the toggle as a deviation (see "Deviations from the design and the task", above).
+  This was an S5 error, not a design choice; fix round 1 corrects it.
 - Design section 6 asks for `delivery_status` `implementing`; the task text says "implemented-unverified
   at most". The tracker has no such value, so `implementing` (the existing, weaker-than-verified
   vocabulary) was used.
@@ -1863,3 +1870,64 @@ Swift expects; those pins say nothing about how the Swift behaves.
 - The design lists `docs/dependencies.md` as unchanged "if no dependency is added". The `rustix`
   dev-dependency entry is a new manifest line for an already-resolved crate, so no dependency docs or
   notices changed; this is stated above instead of left implicit.
+
+### Fix round 1 (S5 review finding, one blocking, verified valid and fixed)
+
+Finding: the CV-06 `remaining_gates` entry in `closure-tracker.json` said the word-wrap toggle was
+"not delivered", contradicting the receipt's own S4 limitations list.
+
+Verified true. Evidence: `apps/macos/Sources/FilePanelView.swift` defines
+`wrapKey = "filePanel.wordWrap"`, a `wrapButton` ("Toggle word wrap (Opt-Cmd-L)") and
+`toggleWordWrap()`; `apps/macos/Sources/App.swift` has the File > Toggle Word Wrap item
+(`toggleFileWordWrap`, Opt-Cmd-L) whose checkmark follows `wordWrap`. The tracker had copied design
+section 7, which deferred the toggle, instead of the delivered state. The same stale claim also sat in
+this receipt's "Remaining gates and limitations" paragraph (it listed word wrap among the undelivered
+editor settings), and design section 7 still listed it as deferred.
+
+Fix:
+- `closure-tracker.json`, CV-06: the word wrap entry now begins "Delivered in S4", states its true
+  scope (one global user default `filePanel.wordWrap`, not per file, not in the session document, no
+  command-palette action) and lists only the settings that really remain: syntax highlighting, line
+  numbers, indent guides, current-line highlight, tab width, encoding selection/conversion, editor zoom
+  and the shared save/wrap/find/zoom palette actions.
+- This receipt's remaining-gates paragraph no longer lists word wrap as undelivered; the deviation
+  entry below records the S5 omission.
+- `cu14-file-panel-design.md` section 7 gains an amendment note instead of being rewritten, so the
+  design stays the record of what was planned.
+
+Test (red first): `the_tracker_and_receipt_say_the_word_wrap_toggle_is_delivered_while_the_swift_defines_it`
+in `crates/native-bridge/tests/swift_file_contract.rs`. It is a contract test: it reads the Swift
+(key, toggle function, File menu item), the tracker JSON and this receipt, and fails if the Swift
+defines the toggle while the CV-06 gate does not begin "Delivered in S4" and name
+`filePanel.wordWrap`, lists word wrap after "Not delivered:", or this receipt's remaining-gates
+paragraph lists it as undelivered. With the fixed tracker and the
+unfixed receipt it failed on the receipt paragraph; with the base tracker it failed on the CV-06 gate
+text (that assertion runs first). It checks
+documentation against Swift text only; it does not run the Swift, and the word wrap behaviour itself
+is still unobserved on macOS.
+
+A second defect surfaced by the determinism run, in the same test binary and not caused by this
+fix: `an_acknowledged_close_reports_the_cores_refusal_where_plain_dispatch_reports_only_queueing`
+asserted `closed.revision == after.revision`. The executor revision counts every publish, including
+unrelated asynchronous ones (the default terminal's output frames), so under CPU contention a later
+snapshot was newer than the close reply (observed once in 8 concurrent copies: reply 7, snapshot 8).
+That is a test race, not a product bug: the reply is the executor's own revision at the close, which
+may legitimately be older than a later snapshot. The assertion now states what is deterministic: the
+reply revision is strictly newer than a snapshot taken just before the close (the close was
+published) and no newer than the snapshot taken after it, and that later snapshot (which cannot
+predate the reply) shows the tab gone.
+
+Determinism: the new test reads three files and uses no thread, timer, queue or shared state. The
+whole `swift_file_contract` test binary (30 tests) was run after both changes: 20 times in sequence
+(0 failures), then 8 copies at once (8 of 8 exit 0), then 5 further rounds of 8 concurrent copies
+(40 runs, 0 failures) while 8 busy-loop processes held the CPUs. Before the revision assertion was
+fixed, one of the first 8 concurrent copies failed on it, as described above.
+
+#### Checks run (fix round 1)
+
+`scripts/check` PASS, exit 0 (log `/tmp/zmux-s5fix-check.log`, temporary): `cargo fmt --check`;
+`cargo test --workspace --locked` with 79 `test result` lines, 580 passed, 0 failed, 2 ignored (one
+more than the 579 above: the new drift test); clippy `-D warnings`; `scripts/license-inventory
+--check` ("Inventoried 84 resolved packages, 66 distinct notice texts; 3 require upstream text
+review"); `scripts/check-native-bridge`. No Swift was compiled or run; every gate listed under
+"UNAVAILABLE gates" above is still UNAVAILABLE.

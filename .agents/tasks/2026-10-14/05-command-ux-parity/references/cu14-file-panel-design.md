@@ -1018,8 +1018,9 @@ as UNAVAILABLE or pending CI, none as passed; `git diff --stat` shows no edits u
 Explicitly NOT delivered by this work (each stays a `remaining_gates` entry):
 - CV-02: font family/size/max width, per-panel zoom, rendered find and next/previous, copy as
   Markdown/HTML, default-following settings, shared find/zoom actions and shortcuts.
-- CV-06 editor settings: word-wrap toggle, syntax highlighting, line numbers, indent guides,
-  current-line highlight, tab width, encoding selection/conversion (non-UTF-8 text is rejected),
+- CV-06 editor settings (amended after S4: the word-wrap toggle WAS delivered, as one global user
+  default; see the receipt's deviations): word-wrap toggle (planned here, since delivered), syntax
+  highlighting, line numbers, indent guides, current-line highlight, tab width, encoding selection/conversion (non-UTF-8 text is rejected),
   editor zoom, shared save/wrap/find/zoom command-palette actions.
 - CV-05: Quick Look and media sessions, PDF thumbnails/outline/zoom/rotation/share/viewport
   restore, image zoom/anchor, native drag, remote preview refresh, preserved scroll position

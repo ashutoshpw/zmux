@@ -2017,7 +2017,7 @@
       ],
       "remaining_gates": [
         "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
-        "Word-wrap toggle, syntax highlighting, line numbers, indent guides, current-line highlight, tab width, encoding selection/conversion (non-UTF-8 is rejected), editor zoom and shared save/wrap/find/zoom command-palette actions are not delivered",
+        "Delivered in S4: a word-wrap toggle (File > Toggle Word Wrap, Opt-Cmd-L, and a header button) stored as one global user default, filePanel.wordWrap; it is not per file, not in the session document, and has no command-palette action. Not delivered: syntax highlighting, line numbers, indent guides, current-line highlight, tab width, encoding selection/conversion (non-UTF-8 is rejected), editor zoom and shared save/wrap/find/zoom command-palette actions",
         "Save As, three-way merge/diff of a conflict, backup of overwritten content, autosave and crash recovery of unsaved text are not delivered (closing is blocked instead); ownership/ACL/xattr preservation, hard-linked saves and network-volume semantics are not provided",
         "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
         "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
