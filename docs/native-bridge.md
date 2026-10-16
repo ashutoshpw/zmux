@@ -161,6 +161,18 @@ from `last_op` for the returned `op_id`, then reloads; the save is never repeate
 reload is bounded polling (1 s per attached tab) on the file worker; a session restore rotates
 `epoch` so every old owner is stale.
 
+The macOS app consumes this channel from `FileHostClient.swift` (frame codec, `NativeBridge.file`,
+decode of the shapes above) and presents it in `FilePanelView.swift`: an editable monospaced text
+view, rendered Markdown (`AttributedString(markdown:)`, links limited to http, https and mailto),
+an image view and a PDF view, with explicit error, empty, too-large and binary states. The view
+holds the unsaved text, so its own dirty state is the truth and the model's `file.dirty` is a
+mirror that the view re-sends (`observe`, bounded backoff) until a snapshot agrees. Cmd-S saves
+through the channel; a `conflict` offers Cancel, Reload from Disk or Overwrite; a clean view
+reloads itself on `changed`, a dirty view shows a banner; closing a dirty tab, pane, workspace,
+window or quitting asks Save, Don't Save or Cancel first. `crates/native-bridge/tests/
+swift_file_contract.rs` checks on Linux that the Swift `Decodable` shapes and frame limits match
+what Rust actually emits; compiling and running the Swift is left to macOS CI.
+
 ## Workspace model version 7
 
 The JSON model carries `model_version: 7`; the function ABI/request envelope remains version 1.
