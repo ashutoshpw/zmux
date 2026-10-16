@@ -93,6 +93,14 @@ pub struct TransportReport {
     pub errors: Vec<String>,
     pub input_loss: Vec<InputLoss>,
 }
+#[derive(Serialize)]
+pub(super) struct FrontendReceipt<'a> {
+    owned_client_exit: ExitObservation,
+    requested_cancel: bool,
+    original_owner_preserved: bool,
+    workers_joined: bool,
+    transport: &'a TransportReport,
+}
 struct Connection {
     client: UnixStream,
     backend: UnixStream,
@@ -435,10 +443,18 @@ impl Drop for Attachment {
 }
 
 pub(super) fn connect(path: &std::path::Path, deadline: Instant) -> io::Result<UnixStream> {
+    connect_while(path, deadline, || Ok(()))
+}
+pub(super) fn connect_while(
+    path: &std::path::Path,
+    deadline: Instant,
+    mut tick: impl FnMut() -> io::Result<()>,
+) -> io::Result<UnixStream> {
     let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
     socket.set_nonblocking(true)?;
     let address = socket2::SockAddr::unix(path)?;
     loop {
+        tick()?;
         super::check_deadline(deadline, "Unix connect")?;
         match socket.connect(&address) {
             Ok(()) => return Ok(socket.into()),
@@ -462,6 +478,8 @@ pub(super) fn attach(
     owner: &LocalZellij,
     record: Record,
     terminal: &mut ForegroundTerminal,
+    mut observer: Option<super::observer::Observer>,
+    startup_deadline: Instant,
 ) -> io::Result<i32> {
     terminal.startup_events()?;
     record.verify()?;
@@ -494,11 +512,12 @@ pub(super) fn attach(
     *broker
         .expected
         .lock()
-        .map_err(|_| fail("child binding poisoned"))? = Some(identity);
+        .map_err(|_| fail("child binding poisoned"))? = Some(identity.clone());
     terminal.give_to(child)?;
     child.signal(nix::sys::signal::Signal::SIGCONT)?;
     let mut requested_cancel = false;
     let mut cancel_deadline = None;
+    let mut connected = false;
     while child.observe(false)?.is_none() {
         if terminal.events(child, || {
             broker.cancel.store(true, Ordering::Release);
@@ -517,6 +536,16 @@ pub(super) fn attach(
             .lock()
             .map_err(|_| fail("transport report poisoned"))?
             .clone();
+        if let Some(observer) = &mut observer {
+            observer.poll()?;
+            if !connected {
+                super::check_deadline(startup_deadline, "observer authenticated transport")?;
+                if report.authenticated_connections > 0 {
+                    observer.connected(record.id, &identity)?;
+                    connected = true;
+                }
+            }
+        }
         if !report.errors.is_empty() {
             return Err(fail(format!(
                 "zellij relay failed; owner was not terminated; report={}",
@@ -538,10 +567,20 @@ pub(super) fn attach(
     // This is a transport/lifecycle receipt, not a semantic attached proof.
     // In particular, a clean client exit cannot turn opaque rejected input into
     // a successful operation after the original workload has already ended.
+    let receipt = FrontendReceipt {
+        owned_client_exit: outcome,
+        requested_cancel,
+        original_owner_preserved: preservation.is_ok(),
+        workers_joined: true,
+        transport: &report,
+    };
     eprintln!(
         "zmux local-zellij attachment receipt: {}",
-        serde_json::json!({"owned_client_exit":outcome,"requested_cancel":requested_cancel,"original_owner_preserved":preservation.is_ok(),"workers_joined":true,"transport":report})
+        serde_json::to_string(&receipt).map_err(io::Error::other)?
     );
+    if let Some(observer) = &mut observer {
+        observer.finished(record.id, &receipt)?;
+    }
     if !report.errors.is_empty() {
         return Err(fail(format!("relay failed: {:?}", report.errors)));
     }

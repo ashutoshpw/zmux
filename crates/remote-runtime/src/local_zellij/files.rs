@@ -140,6 +140,7 @@ impl LocalZellij {
         let binary = executable(&selected)?;
         let mut version = std::process::Command::new(&binary);
         super::super::local_multiplexer::clear_context(&mut version);
+        version.env_remove(super::observer::ENV);
         if process::capture(
             version.arg("--version"),
             Instant::now() + Duration::from_secs(5),
@@ -163,6 +164,13 @@ impl LocalZellij {
         })
     }
     pub(super) fn lock(&self) -> io::Result<Flock<File>> {
+        self.lock_while(Instant::now() + START_TIMEOUT, || Ok(()))
+    }
+    fn lock_while(
+        &self,
+        deadline: Instant,
+        mut tick: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Flock<File>> {
         directory(&self.root, true)?;
         let path = self.root.join("registry.lock");
         let file = OpenOptions::new()
@@ -174,9 +182,10 @@ impl LocalZellij {
             .custom_flags(nix::libc::O_NOFOLLOW)
             .open(path)?;
         private_file(&file)?;
-        let deadline = Instant::now() + START_TIMEOUT;
         let mut file = file;
         loop {
+            tick()?;
+            check_deadline(deadline, "registry lock")?;
             match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
                 Ok(lock) => return Ok(lock),
                 Err((returned, error)) if error == nix::errno::Errno::EWOULDBLOCK => {
@@ -251,7 +260,14 @@ impl LocalZellij {
         {
             return Err(fail("invalid bounded zellij name/cwd/start command"));
         }
-        let lock = self.lock()?;
+        let deadline = Instant::now() + super::START_TIMEOUT;
+        let mut observer =
+            super::observer::Observer::configured(deadline, || terminal.startup_events())?;
+        let lock = if observer.is_some() {
+            self.lock_while(deadline, || terminal.startup_events())?
+        } else {
+            self.lock()?
+        };
         let mut records = self.records()?;
         if records.len() >= 64 || records.iter().any(|record| record.name == name) {
             return Err(fail(
@@ -269,12 +285,25 @@ impl LocalZellij {
         };
         records.push(record.clone());
         self.save(&records)?;
-        let result = supervisor::create(self, &mut record, cwd, command, terminal, |record| {
-            *records
-                .last_mut()
-                .ok_or_else(|| fail("reservation disappeared"))? = record.clone();
-            self.save(&records)
-        });
+        let result = (|| {
+            if let Some(observer) = &mut observer {
+                observer.reserved(record.id, deadline, || terminal.startup_events())?;
+            }
+            supervisor::create(
+                self,
+                &mut record,
+                cwd,
+                command,
+                terminal,
+                observer.as_ref().map(|_| deadline),
+                |record| {
+                    *records
+                        .last_mut()
+                        .ok_or_else(|| fail("reservation disappeared"))? = record.clone();
+                    self.save(&records)
+                },
+            )
+        })();
         if let Err(error) = result {
             record.state = "uncertain".into();
             *records
@@ -291,22 +320,31 @@ impl LocalZellij {
             "zmux local-zellij reserved owner{} (foreground transport only)",
             record.id
         );
-        self.attach_record(record, terminal)
+        self.attach_record(record, terminal, observer, deadline)
     }
     pub fn attach(&self, id: Uuid, terminal: &mut process::ForegroundTerminal) -> io::Result<i32> {
+        let deadline = Instant::now() + super::START_TIMEOUT;
+        let observer =
+            super::observer::Observer::configured(deadline, || terminal.startup_events())?;
         let record = {
-            let _lock = self.lock()?;
+            let _lock = if observer.is_some() {
+                self.lock_while(deadline, || terminal.startup_events())?
+            } else {
+                self.lock()?
+            };
             self.records()?
                 .into_iter()
                 .find(|record| record.id == id)
                 .ok_or_else(|| fail("local zellij record was not found"))?
         };
-        self.attach_record(record, terminal)
+        self.attach_record(record, terminal, observer, deadline)
     }
     fn attach_record(
         &self,
         record: Record,
         terminal: &mut process::ForegroundTerminal,
+        mut observer: Option<super::observer::Observer>,
+        deadline: Instant,
     ) -> io::Result<i32> {
         record.verify()?;
         if record
@@ -320,7 +358,10 @@ impl LocalZellij {
         {
             return Err(fail("configured executable differs from reserved owner"));
         }
-        super::broker::attach(self, record, terminal)
+        if let Some(observer) = &mut observer {
+            observer.bound(&record, deadline, || terminal.startup_events())?;
+        }
+        super::broker::attach(self, record, terminal, observer, deadline)
     }
 }
 

@@ -1,5 +1,5 @@
 use super::{
-    START_TIMEOUT, check_deadline, fail,
+    check_deadline, fail,
     files::{self, LocalZellij, Record},
     process,
 };
@@ -35,6 +35,7 @@ struct Bootstrap {
 pub(super) fn clean(command: &mut Command) {
     super::super::local_multiplexer::clear_context(command);
     command.env_remove("ZMUX_LOCAL_TMUX");
+    command.env_remove(super::observer::ENV);
 }
 pub(super) fn environment(command: &mut Command, root: &Path) {
     clean(command);
@@ -77,6 +78,7 @@ pub(super) fn create(
     cwd: &Path,
     command: Option<&str>,
     terminal: &mut process::ForegroundTerminal,
+    deadline: Option<Instant>,
     mut persist: impl FnMut(&Record) -> io::Result<()>,
 ) -> io::Result<()> {
     terminal.startup_events()?;
@@ -126,7 +128,7 @@ pub(super) fn create(
     files::write_private(&config, super::OWNED_CONFIG)?;
     let backend = record.backend()?;
     files::socket_path(&backend)?;
-    let deadline = Instant::now() + START_TIMEOUT;
+    let deadline = deadline.unwrap_or_else(|| Instant::now() + super::START_TIMEOUT);
     let mut launch = Command::new(&owner.binary);
     environment(&mut launch, &root);
     launch
