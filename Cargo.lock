@@ -789,6 +789,8 @@ dependencies = [
  "serde_json",
  "uuid",
  "zmux-desktop-runtime",
+ "zmux-session-runtime",
+ "zmux-terminal-adapter",
  "zmux-workspace-core",
 ]
 

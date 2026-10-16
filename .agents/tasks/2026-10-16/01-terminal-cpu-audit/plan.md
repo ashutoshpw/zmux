@@ -50,3 +50,5 @@ Active-screen amplification is reproduced but does not establish this idle CPU c
 - [Findings](references/findings.md) — source trace, executed backend probe and limits.
 - [Implementation phases](references/implementation-phases.md) — owners, changes,
   commit boundaries and behavioral/native acceptance for each phase.
+- [Native presentation repair](references/native-frame-delivery.md) — delta ABI,
+  repaint ownership, bounded caches and diagnostic throughput comparison.

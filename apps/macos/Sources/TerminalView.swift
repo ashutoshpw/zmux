@@ -36,15 +36,20 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var onFocus: (() -> Void)?
     private var viewport: Viewport?
     private var frameState = "Starting shell…"
-    private var lastBytes: UInt64 = .max
     private var lastSize: (Int, Int) = (0, 0)
     private var marked = NSAttributedString(string: "")
     private var markedSelection = NSRange(location: 0, length: 0)
     private let selection = TerminalSelection()
     private let font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
     private let contentInset: CGFloat = 10
-    private var cellWidth: CGFloat { ("M" as NSString).size(withAttributes: [.font: font]).width }
-    private var lineHeight: CGFloat { ceil(font.ascender - font.descender + 3) }
+    private lazy var cellWidth: CGFloat = ("M" as NSString).size(withAttributes: [.font: font]).width
+    private lazy var lineHeight: CGFloat = ceil(font.ascender - font.descender + 3)
+    private struct RenderStyle {
+        let background: NSColor
+        let attributes: [NSAttributedString.Key: Any]
+    }
+    private var renderStyles: [TerminalStyle: RenderStyle] = [:]
+    private var fontVariants: [UInt: NSFont] = [:]
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
@@ -99,15 +104,29 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         frameState = frame.failure ?? frame.snapshot?.failure ?? (frame.starting ? "Starting shell…" : frame.snapshot?.state ?? "Unavailable")
         if oldState == "running", frameState != "running" { pointerGestures.removeAll(); lastHover = nil }
         if let snapshot = frame.snapshot {
+            let previous = viewport
             let oldTracking = viewport?.pointerTracking
             if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection.clear() }
-            let changed = lastBytes != snapshot.bytesRead || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset || viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || oldState != frameState
             viewport = snapshot.viewport
             if oldTracking != viewport?.pointerTracking || oldState != frameState { lastHover = nil; updateTrackingAreas() }
-            lastBytes = snapshot.bytesRead
-            setAccessibilityLabel(snapshot.viewport.title?.isEmpty == false ? snapshot.viewport.title : "Terminal")
-            setAccessibilityValue(snapshot.viewport.contents)
-            if changed { needsDisplay = true }
+            if previous?.title != snapshot.viewport.title {
+                setAccessibilityLabel(snapshot.viewport.title?.isEmpty == false ? snapshot.viewport.title : "Terminal")
+            }
+            if previous?.contents != snapshot.viewport.contents { setAccessibilityValue(snapshot.viewport.contents) }
+            if let previous, previous.size == snapshot.viewport.size,
+               previous.scrollbackOffset == snapshot.viewport.scrollbackOffset, oldState == frameState,
+               previous.lines.count == snapshot.viewport.lines.count {
+                for row in snapshot.viewport.lines.indices where previous.lines[row] != snapshot.viewport.lines[row] {
+                    setNeedsDisplay(rowRect(row))
+                }
+                if window?.firstResponder === self, snapshot.viewport.scrollbackOffset == 0,
+                   (!previous.hideCursor || !snapshot.viewport.hideCursor),
+                   previous.cursorRow != snapshot.viewport.cursorRow || previous.cursorCol != snapshot.viewport.cursorCol
+                    || previous.hideCursor != snapshot.viewport.hideCursor {
+                    setNeedsDisplay(rowRect(previous.cursorRow))
+                    setNeedsDisplay(rowRect(snapshot.viewport.cursorRow))
+                }
+            } else { needsDisplay = true }
         } else { updateTrackingAreas(); needsDisplay = true }
     }
     override func draw(_ dirtyRect: NSRect) {
@@ -119,18 +138,12 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             (frameState as NSString).draw(at: NSPoint(x: contentInset, y: contentInset), withAttributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
             return
         }
-        for (row, runs) in viewport.lines.enumerated() {
+        for (row, runs) in viewport.lines.enumerated() where rowRect(row).intersects(dirtyRect) {
             for run in runs {
                 let rect = NSRect(x: contentInset + CGFloat(run.column) * cellWidth, y: contentInset + CGFloat(row) * lineHeight, width: CGFloat(run.width) * cellWidth, height: lineHeight)
-                let foreground = color(run.style.inverse ? run.style.background : run.style.foreground, foreground: true)
-                let background = color(run.style.inverse ? run.style.foreground : run.style.background, foreground: false)
-                background.setFill(); rect.fill()
-                var traits: NSFontTraitMask = []
-                if run.style.bold { traits.insert(.boldFontMask) }
-                if run.style.italic { traits.insert(.italicFontMask) }
-                var attributes: [NSAttributedString.Key: Any] = [.font: NSFontManager.shared.convert(font, toHaveTrait: traits), .foregroundColor: foreground]
-                if run.style.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
-                (run.text as NSString).draw(at: rect.origin, withAttributes: attributes)
+                let style = rendering(run.style)
+                style.background.setFill(); rect.fill()
+                (run.text as NSString).draw(at: rect.origin, withAttributes: style.attributes)
             }
         }
         if let (lo, hi) = normalizedSelection() {
@@ -146,6 +159,26 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             NSColor.white.withAlphaComponent(0.4).setFill(); cursor.fill()
         }
         if hasMarkedText() && viewport.scrollbackOffset == 0 { marked.draw(at: cursor.origin) }
+    }
+    private func rowRect(_ row: Int) -> NSRect {
+        NSRect(x: 0, y: contentInset + CGFloat(row) * lineHeight, width: bounds.width, height: lineHeight)
+    }
+    private func rendering(_ style: TerminalStyle) -> RenderStyle {
+        if let cached = renderStyles[style] { return cached }
+        var traits: NSFontTraitMask = []
+        if style.bold { traits.insert(.boldFontMask) }
+        if style.italic { traits.insert(.italicFontMask) }
+        let fontKey = UInt(traits.rawValue)
+        let variant = fontVariants[fontKey] ?? NSFontManager.shared.convert(font, toHaveTrait: traits)
+        fontVariants[fontKey] = variant
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: variant,
+            .foregroundColor: color(style.inverse ? style.background : style.foreground, foreground: true)]
+        if style.underline { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+        let rendered = RenderStyle(background: color(style.inverse ? style.foreground : style.background, foreground: false), attributes: attributes)
+        if renderStyles.count >= 256 { renderStyles.removeAll(keepingCapacity: true) }
+        renderStyles[style] = rendered
+        return rendered
     }
     private func color(_ color: TerminalColor, foreground: Bool) -> NSColor {
         if let rgb = color.rgb, rgb.count == 3 { return NSColor(calibratedRed: CGFloat(rgb[0]) / 255, green: CGFloat(rgb[1]) / 255, blue: CGFloat(rgb[2]) / 255, alpha: 1) }

@@ -3,7 +3,9 @@
 2026-10-16. Investigated zmux `5527ba0bdd62afd3482d66c1d9a905082462d213`.
 Product paths examined are unchanged from the supplied `38bfc72` development app.
 Read-only reference: cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
-No reference implementation or assets imported. Runtime code remains unchanged.
+No reference implementation or assets imported. Runtime code was unchanged at
+this initial audit; subsequent implementation receipts are recorded in status.md
+and native-frame-delivery.md in this task.
 
 ## What the screenshot establishes
 

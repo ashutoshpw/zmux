@@ -118,6 +118,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private let browserProfilesMenu = NSMenu(title: "Browser Profiles")
     private var browserProfilesWindow: BrowserProfilesWindowController?
     private var workspaceCount = 1
+    private var presentedUnreadCount: Int?
     private var didSetInitialTerminalFocus = false
     private var detachedContentResponder = false
     private var pendingBrowserFocus: UInt64?
@@ -386,6 +387,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         applySidebarLayout()
         window.makeKeyAndOrderFront(nil); NSApp.activate()
         try await waitUntil { $0.workspace != nil && $0.frames.first?.snapshot?.state == "running" && self.nativeReady && self.window.isKeyWindow && NSApp.isActive }
+        guard let terminal = focusedTerminal, let frame = snapshot?.frames.first else {
+            throw BridgeFailure(message: "Native terminal damage fixture has no presenter")
+        }
+        try TerminalDamageSmoke.validate(view: terminal, frame: frame)
         guard let content = window.contentView else { throw BridgeFailure(message: "Sidebar fixture has no content view") }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
         func click(_ view: NSView) throws {
@@ -548,7 +553,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             }, cli: { try await self.nativeCLI($0, externalCaller: true) })
         let receipt: [String: Bool] = ["compact_toolbar": true, "visible_toggle": true, "groups": true, "group_menus": true,
             "collapse_preserves_terminal": true, "focus_preserved": true, "sidebar_restored": true, "notification_toggle": true,
-            "window_scoping": windowScopingVerified]
+            "window_scoping": windowScopingVerified, "native_terminal_damage": true]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
     fileprivate func captureSidebarImage(_ url: URL) throws {
@@ -877,7 +882,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             detail = "No terminal"
         }
         mainHeader.update(title: title, detail: detail, error: isError)
-        window.title = title
+        if window.title != title { window.title = title }
     }
 
     @objc private func cancelActiveUpload(_ sender: Any?) {
@@ -1576,11 +1581,14 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     private func updateNotifications(_ snapshot: DesktopSnapshot) {
         let unread = snapshot.notifications.filter { !$0.read }.count
-        NSApp.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
-        notificationButton.image = NSImage(systemSymbolName: unread > 0 ? "bell.badge.fill" : "bell", accessibilityDescription: "Notifications")
-        notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
-        notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
-        notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
+        if presentedUnreadCount != unread {
+            presentedUnreadCount = unread
+            NSApp.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
+            notificationButton.image = NSImage(systemSymbolName: unread > 0 ? "bell.badge.fill" : "bell", accessibilityDescription: "Notifications")
+            notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
+            notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
+            notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
+        }
         jumpToUnreadButton.isEnabled = canJumpToUnread
         guard let list = notificationList else { return }
         let key = snapshot.notifications.map { "\($0.id):\($0.read)" }.joined(separator: ",") + ":\(snapshot.model.revision):\(snapshot.notificationsDropped):\(snapshot.nativeNotifications.epoch)"
@@ -1684,8 +1692,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let initialSnapshot = snapshot, let first = initialSnapshot.workspace else {
             throw BridgeFailure(message: "No initial workspace")
         }
-        let expectedControls = Set(["New workspace", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
-        let accessibleControls = Set((actionButtons + [newWorkspaceButton, sidebarToggleButton, cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
+        let expectedControls = Set(["New workspace (⌘N)", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
+        let accessibleControls = Set((actionButtons + [sidebarToggleButton, cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
         guard expectedControls.isSubset(of: accessibleControls) else {
             throw BridgeFailure(message: "Native icon controls are missing accessibility labels")
         }
