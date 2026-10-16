@@ -887,7 +887,9 @@ Swift cannot be compiled or executed here, so there is no red-then-green for the
 none is claimed. The Linux-testable part is the contract between Rust and Swift:
 `crates/native-bridge/tests/swift_file_contract.rs`, three contract tests in the original slice
 (eight tests after fix round 1, which added five structure tests; twelve after fix round 2, which
-added four more, see below), all green:
+added four more; sixteen after fix round 4; eighteen after fix round 5, which also renamed every
+source-text test with a `pin_` prefix, see below), all green. Test names quoted in earlier fix-round
+sections are the names at the time; the structure tests now carry the `pin_` prefix:
 
 - `swift_decodables_name_exactly_the_fields_the_real_rust_wire_carries`: runs a real Desktop
   (open with one good and one missing path, attach, save, observe, a content conflict, a refused
@@ -1288,4 +1290,70 @@ recorded as passed; CI is the verifier and none of the Swift in this slice has e
   emitted).
 - The dirty-mirror gate and the in-flight wait in the production `FilePanelView` are pinned by source
   structure on Linux and run only by the macOS fixture (against scripted panels, not `FilePanelView`)
-  and the in-app smoke.
+  and the in-app smoke. (Fix round 5 narrowed this: the dirty, save, reload and banner decisions now
+  live in `FileEditorModel`, which its own fixture runs directly; the dirty-mirror plumbing, the
+  observe loop and `settleDirtyMirror` remain in the view and remain structure-pinned.)
+
+### Fix round 5 (S4 review finding, one blocking, valid and fixed by extraction)
+
+Base of the round: `06dcf64`. Swift still cannot be compiled or run here (no Swift toolchain, Linux).
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | Almost all S4 native-panel "behaviour" tests were substring pins on Swift source. The data-loss-critical logic (`hasUnsavedChanges`, save payload, dirty tracking, reload, banner) had no runnable test at its production owner, and the receipt's claim that each assertion fails if its fix is reverted held only for the exact pinned text. | Yes, by reading: `hasUnsavedChanges`, `Data(text.utf8)`, `setDirty`, `reconcileExternal`, `performReload`'s keep-typed-text branch and `bannerAction` were inline in the AppKit `FilePanelView`, so no fixture could reach them; the sixteen tests of the binary read source text for all of them. The reviewer's mutations (`hasUnsavedChanges { false }`, dropping the last byte of the save body) would have left the Linux suite green, and they still do: Linux can only pin structure. They are caught only by the new macOS fixture. | New Foundation-only `apps/macos/Sources/FileEditorModel.swift` (`FileEditorModel`, `FileBanner` and four small answer enums). It owns the baseline, dirty bit, base generation, kept-edits flag, editing suspension and the external-change and banner bookkeeping, and answers: byte-exact `textEdited`/`adopt`/`saved`, `hasUnsavedChanges(editable:)`, `canSave`, `savePayload(for:)`, `saveNeedsConflictPrompt`, `isEditable`, `reloadReplied` (an automatic reload that finds typed text keeps it), `externalStateReported`, `saveOutcomeBanner`, `bannerAction`, and which banners a load or a save obsoletes. `FilePanelView` holds one `model` and applies the answers (`dirtyChanged`, `setBanner`, `reloadFromDisk`); its `isDirty` and `banner` are now read-only views of the model and `FilePanelView.Banner` is a typealias of `FileBanner`. No behaviour was intentionally changed; the move is a re-homing of the same statements. |
+
+Tests added or changed:
+
+- `tools/native-fixtures/file-editor-model.swift` + `scripts/check-file-editor-model` (new, wired into
+  `.github/workflows/macos-development.yml` after the close-resolution step): compiles the production
+  `FileEditorModel.swift` alone (no AppKit) with Swift 6 strict concurrency and warnings as errors and
+  runs it synchronously (no threads, timers, files or sleeps). Scenarios: canonical-equivalent text is
+  dirty (with a control proving Swift `==` would call it equal), undo returns to clean; save payload
+  equals the UTF-8 bytes for empty, multibyte, CRLF and decomposed text; the `canSave` truth table;
+  a confirmed save rebases baseline and generation, text typed during the save stays dirty, a reply
+  without a generation keeps the old base; kept edits over a newer disk ask before saving and a
+  confirmed save ends that state; the editor is read-only exactly while a reload or attach is in
+  flight; an automatic reload that finds typed text keeps it and shows the changed-on-disk banner while
+  manual and clean reloads replace the buffer; external-state reactions (automatic reload only for a
+  clean buffer and once per disk generation, banners for dirty, deleted and unreadable, nothing when
+  detached or busy, dismissals remembered until the disk moves or re-syncs, banner cleared on sync
+  unless edits were kept); save-outcome resolution; and every banner button (only reload answers
+  reach `reloadFromDisk`, a load failure over unsaved text only dismisses, a pending save has no
+  buttons). UNAVAILABLE here: it needs `xcrun swiftc`. It was never compiled or run, so even its own
+  syntax is unproven; its expected values were traced by hand against the model.
+- `crates/native-bridge/tests/swift_file_contract.rs`: every source-text test was renamed with a
+  `pin_` prefix and the module documentation now separates contract tests (execute real Rust against
+  the Swift text) from structure pins (assert statements exist and their order, never run the Swift),
+  so no test name claims a behaviour it does not execute. The pins for dirty detection, banner
+  reload, lost-binding recovery and the read-only buffer now read `FileEditorModel.swift` for the
+  decision and `FilePanelView.swift` for the delegation. New:
+  `the_file_editor_model_fixture_is_wired_into_macos_ci` (script compiles the model alone, strictly;
+  CI runs it; eleven named fixture scenarios exist) and
+  `pin_the_file_editor_model_is_appkit_free_and_the_panel_asks_it` (the model imports Foundation only;
+  the panel no longer contains the moved state or `Data(text.utf8)`; the panel asks the model at each
+  decision site). These cannot show that the Swift is correct; they keep the model runnable by the
+  fixture and keep decisions from drifting back into the view.
+- No mutation of the model is caught on Linux, by design: the reviewer's two mutations now land in
+  `FileEditorModel.swift` and only `scripts/check-file-editor-model` on macOS can fail them. This is
+  stated rather than claimed as covered.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test binaries,
+565 passed, 0 failed, 2 ignored, which is the previous 563 plus 2 added; clippy `-D warnings`;
+license inventory; `scripts/check-native-bridge`). Determinism of the changed binary
+(`swift_file_contract`, 18 tests, one real Desktop test among them): 20 serial runs, 0 failures, every
+log carrying `18 passed; 0 failed`; then 5 rounds of 8 copies started together beside 24 busy-loop CPU
+hogs, 40 runs, 0 failures, every log carrying `18 passed; 0 failed`. The driver's `wait` loop was
+faulty under zsh (it reported `job not found` and did not block per round), so rounds may have
+overlapped more than 8 copies; pass/fail was taken from the 60 logs, not from the driver's counters.
+
+Still UNAVAILABLE: `scripts/check-file-editor-model`, `scripts/check-file-close-resolution`,
+`scripts/check-macos-sources` (which type-checks `FileEditorModel.swift` and the edited
+`FilePanelView.swift` with the other sources), `scripts/build-macos-dev`, `scripts/check-macos-app`,
+the in-app smoke and every hosted macOS workflow. New unconfirmed Swift points for CI: the
+`@discardableResult` mutating methods, the `Optional` implicit-member comparisons such as
+`model.saveOutcomeBanner(...) == .saveResolved` in the fixture, and `typealias Banner = FileBanner`
+inside the `@MainActor` view.
+
+Limits: the observe loop, `settleDirtyMirror`, `epochChanged`, the attach and reload plumbing and the
+sheets are still in the view and still only structure-pinned (plus the existing close fixture for the
+gate and the resolution); the extraction covers the decisions, not the asynchronous sequencing.

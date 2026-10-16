@@ -5,6 +5,15 @@
 //! fields the real Rust replies and snapshots carry, the Swift frame limits must equal the Rust
 //! ones, and the audit of every place that tests for the browser kind must stay current. Each
 //! failure message says what to update. This does not prove the Swift compiles; macOS CI does.
+//!
+//! Two kinds of test live here and they prove different things:
+//! - contract tests (the decodables, limits and browser-kind audit) execute real Rust against the
+//!   Swift text and are the only tests here that check anything the Swift does;
+//! - tests named `pin_*` read Swift source and assert that exact statements exist and in what
+//!   order. They are structure pins: they catch a reverted fix or a moved statement, not wrong
+//!   behaviour, and they never run the Swift. Behaviour is checked only by the macOS fixtures
+//!   (`scripts/check-file-close-resolution`, `scripts/check-file-editor-model`) and the in-app
+//!   smoke, none of which can run on this machine.
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -487,12 +496,13 @@ fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &rest[..start.len() + to]
 }
 
-// The Swift cannot run on this machine, so these pin the structure that the native fixes depend
-// on. Each assertion fails if the corresponding fix is reverted; the macOS in-app smoke
-// (`FilePanelSmoke`) is the behavioural check and has not run here.
+// The Swift cannot run on this machine, so the `pin_*` tests below pin the structure that the
+// native fixes depend on. An assertion fails if the pinned text is reverted or moved; it does not
+// show that the Swift behaves. The macOS fixtures and the in-app smoke (`FilePanelSmoke`) are the
+// behavioural checks and have not run here.
 
 #[test]
-fn close_requests_are_queued_never_dropped() {
+fn pin_close_requests_are_queued_never_dropped() {
     let app = swift("App.swift");
     assert!(
         !app.contains("closePromptActive"),
@@ -548,7 +558,7 @@ fn close_requests_are_queued_never_dropped() {
 }
 
 #[test]
-fn keyboard_focus_follows_content_that_replaces_the_loading_state() {
+fn pin_keyboard_focus_follows_content_that_replaces_the_loading_state() {
     let panel = swift("FilePanelView.swift");
     let present = between(
         &panel,
@@ -584,10 +594,10 @@ fn at(haystack: &str, needle: &str) -> usize {
 }
 
 // The close decision is executed for real by `scripts/check-file-close-resolution` on macOS CI.
-// There is no Swift toolchain here, so the tests below can only pin the exact statements the
+// There is no Swift toolchain here, so the pins below can only check the exact statements the
 // decision is made of. They do not run it.
 #[test]
-fn close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
+fn pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
     let resolution = swift("FileCloseResolution.swift");
     let body = between(
         &resolution,
@@ -677,7 +687,7 @@ fn close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
 }
 
 #[test]
-fn the_close_decision_fixture_is_wired_into_macos_ci() {
+fn pin_the_close_decision_fixture_is_wired_into_macos_ci() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |path: &str| {
         std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
@@ -710,7 +720,7 @@ fn the_close_decision_fixture_is_wired_into_macos_ci() {
 }
 
 #[test]
-fn a_panel_being_discarded_cannot_restart_the_dirty_mirror() {
+fn pin_a_panel_being_discarded_cannot_restart_the_dirty_mirror() {
     let resolution = swift("FileCloseResolution.swift");
     let gate = between(
         &resolution,
@@ -771,7 +781,7 @@ fn a_panel_being_discarded_cannot_restart_the_dirty_mirror() {
 }
 
 #[test]
-fn closing_waits_for_an_in_flight_observation_before_writing() {
+fn pin_closing_waits_for_an_in_flight_observation_before_writing() {
     let panel = swift("FilePanelView.swift");
     let settle = between(
         &panel,
@@ -798,33 +808,44 @@ fn closing_waits_for_an_in_flight_observation_before_writing() {
 }
 
 #[test]
-fn dirty_detection_compares_utf8_bytes_not_canonical_equivalence() {
+fn pin_dirty_detection_compares_utf8_bytes_not_canonical_equivalence() {
     let panel = swift("FilePanelView.swift");
-    for forbidden in [
-        "editor.string != baseline",
-        "editor.string != text",
-        "editor.string == baseline",
-        "editor.string == text",
-    ] {
-        assert!(
-            !panel.contains(forbidden),
-            "`{forbidden}` uses Swift String equality, which ignores normalization form"
-        );
+    let model = swift("FileEditorModel.swift");
+    for source in [&panel, &model] {
+        for forbidden in [
+            "editor.string != baseline",
+            "editor.string != text",
+            "editor.string == baseline",
+            "editor.string == text",
+            "text != baseline",
+            "text == baseline",
+            "current != written",
+            "current == written",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "`{forbidden}` uses Swift String equality, which ignores normalization form"
+            );
+        }
     }
-    let helper = between(&panel, "private static func sameBytes", "}");
+    let helper = between(&model, "static func sameBytes", "}");
     assert!(
         helper.contains("lhs.utf8.elementsEqual(rhs.utf8)"),
         "sameBytes must compare UTF-8 code units"
     );
     assert_eq!(
-        panel.matches("Self.sameBytes(").count(),
+        model.matches("Self.sameBytes(").count(),
         2,
-        "both the keystroke path and the post-save path must use sameBytes"
+        "both the keystroke path and the post-save path of the model must use sameBytes"
+    );
+    assert!(
+        !panel.contains("sameBytes"),
+        "the panel must ask the model, not compare text itself"
     );
 }
 
 #[test]
-fn the_dirty_observation_never_gives_up_after_a_count() {
+fn pin_the_dirty_observation_never_gives_up_after_a_count() {
     let panel = swift("FilePanelView.swift");
     let success = between(
         &panel,
@@ -852,10 +873,12 @@ fn the_dirty_observation_never_gives_up_after_a_count() {
 }
 
 #[test]
-fn every_manual_reload_asks_before_discarding_unsaved_text() {
+fn pin_every_manual_reload_asks_before_discarding_unsaved_text() {
     let panel = swift("FilePanelView.swift");
+    let model = swift("FileEditorModel.swift");
     // Banner buttons used to start a discarding reload directly, bypassing the confirmation that
-    // File > Reload from Disk shows.
+    // File > Reload from Disk shows. The model decides which button means "reload" and the panel
+    // only maps that answer to reloadFromDisk().
     let banner = between(
         &panel,
         "private func bannerAction(primary: Bool)",
@@ -865,18 +888,28 @@ fn every_manual_reload_asks_before_discarding_unsaved_text() {
         !banner.contains("startReload(") && !banner.contains("performReload("),
         "a banner button must not reload without going through reloadFromDisk()"
     );
+    let reload_arm = between(banner, "case .reloadFromDisk:", "case .retry");
+    assert!(
+        reload_arm.contains("reloadFromDisk()"),
+        "the model's reload answer must reload through reloadFromDisk(): {reload_arm}"
+    );
+    let actions = between(
+        &model,
+        "mutating func bannerAction(",
+        "default:\n            return .nothing",
+    );
     for case in [
         "case (.changedOnDisk, true), (.unreadable, true), (.saveResolved, true), (.ownerLost, true):",
         "case (.saveUnknown(let operation), true) where operation == 0:",
     ] {
-        let at = banner
+        let at = actions
             .find(case)
             .unwrap_or_else(|| panic!("banner case `{case}` is missing"));
-        let arm = &banner[at + case.len()..];
+        let arm = &actions[at + case.len()..];
         let arm = &arm[..arm.find("case (").unwrap_or(arm.len())];
         assert!(
-            arm.contains("reloadFromDisk()"),
-            "`{case}` must reload through reloadFromDisk(): {arm}"
+            arm.contains("return .reloadFromDisk"),
+            "`{case}` must answer reloadFromDisk: {arm}"
         );
     }
     // The only remaining use of the unconfirmed route is the automatic reload of a clean view.
@@ -886,8 +919,8 @@ fn every_manual_reload_asks_before_discarding_unsaved_text() {
         "one definition and one caller expected"
     );
     assert!(
-        panel.contains("startReload(discard: true, automatic: true)")
-            && panel.contains("if !hasUnsavedChanges {"),
+        panel.contains("case .reloadAutomatically: startReload(discard: true, automatic: true)")
+            && model.contains("if !hasUnsavedChanges {\n                return diskGeneration != autoReloadedDiskGeneration ? .reloadAutomatically : .none"),
         "only the automatic reload of a view without unsaved text may skip the confirmation"
     );
     let reload = between(
@@ -915,23 +948,45 @@ fn every_manual_reload_asks_before_discarding_unsaved_text() {
 }
 
 #[test]
-fn a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading() {
+fn pin_a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading() {
     // Rust refuses a re-attach by the bound host while the model is dirty (see
     // `a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach` in
     // desktop-runtime), so the panel must pick the recovery by whether it still holds a token and
     // must never leave a stale loaded panel without Reload and Copy Text.
     let panel = swift("FilePanelView.swift");
+    let model = swift("FileEditorModel.swift");
     let banner = between(
         &panel,
         "private func bannerAction(primary: Bool)",
         "@discardableResult\n    func clickBannerButton",
     );
-    assert!(
-        !banner.contains("retry()") || banner.contains("(.loadFailed, true)"),
-        "retry() is only for the load-failed banner"
+    assert_eq!(
+        banner.matches("retry()").count(),
+        1,
+        "retry() has exactly one caller in the banner: the model's retry answer"
+    );
+    let actions = between(
+        &model,
+        "mutating func bannerAction(",
+        "default:\n            return .nothing",
+    );
+    let retry_arms: Vec<&str> = actions
+        .lines()
+        .filter(|l| l.contains("return hasUnsavedChanges ? .dismiss : .retry"))
+        .collect();
+    assert_eq!(
+        retry_arms.len(),
+        1,
+        "only the load-failed banner may answer retry, and never over unsaved text"
     );
     assert!(
-        !banner.contains("case (.ownerLost, true):\n            retry()"),
+        actions.contains(
+            "case (.loadFailed, true):\n            return hasUnsavedChanges ? .dismiss : .retry"
+        ),
+        "retry is only for the load-failed banner"
+    );
+    assert!(
+        !actions.contains("(.ownerLost, true):\n            return .retry"),
         "the owner-lost banner must not blindly re-attach with the same host"
     );
     let perform = between(
@@ -968,7 +1023,9 @@ fn a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading() {
         "private func applyText",
     );
     assert!(
-        apply.contains("if case .ownerLost = banner { setBanner(.none) }"),
+        apply.contains("if banner.isObsoleteAfterLoad { setBanner(.none) }")
+            && between(&model, "var isObsoleteAfterLoad: Bool {", "}\n    }")
+                .contains(".ownerLost"),
         "a successful re-attach clears the owner-lost banner"
     );
     let attach = between(
@@ -983,7 +1040,7 @@ fn a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading() {
 }
 
 #[test]
-fn file_service_waits_have_their_own_bounded_queue_off_the_terminal_input_path() {
+fn pin_file_service_waits_have_their_own_bounded_queue_off_the_terminal_input_path() {
     let coordinator = swift("ApplicationCoordinator.swift");
     let commands = between(&coordinator, "enum UICommand: Sendable {", "\n}\n");
     assert!(
@@ -1037,7 +1094,7 @@ fn file_service_waits_have_their_own_bounded_queue_off_the_terminal_input_path()
 }
 
 #[test]
-fn the_smoke_covers_error_state_retry_and_descriptor_release_and_names_the_restore_gap() {
+fn pin_the_smoke_covers_error_state_retry_and_descriptor_release_and_names_the_restore_gap() {
     let smoke = swift("FilePanelSmoke.swift");
     for needed in [
         "presentationSummary == \"error:not_found\"",
@@ -1066,14 +1123,15 @@ fn the_smoke_covers_error_state_retry_and_descriptor_release_and_names_the_resto
             && epoch.contains("staleOwner = true")
             && epoch.contains(".ownerLost(")
             && epoch.contains("phase = .idle")
-            && !epoch.contains("setDirty(false)")
+            && !epoch.contains("dirtyChanged(")
+            && !epoch.contains("model.adopt")
             && !epoch.contains("editor.string"),
         "an epoch change must keep unsaved text and re-attach only clean panels"
     );
 }
 
 #[test]
-fn the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it() {
+fn pin_the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it() {
     // Every reply that replaces the buffer (manual reload, automatic reload, attach, re-attach and
     // retry) must not race with typing: the editor is read-only from the moment the request is
     // marked busy until its reply has been handled, and only `refreshEditable` makes it editable.
@@ -1089,8 +1147,13 @@ fn the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it() {
         "// MARK: - Dirty tracking",
     );
     assert!(
-        gate.contains("isLoaded && writable && !editingSuspended"),
-        "the editable state must include the suspension flag: {gate}"
+        gate.contains("model.isEditable(loaded: isLoaded, writable: writable)"),
+        "the editable state must come from the model: {gate}"
+    );
+    let model = swift("FileEditorModel.swift");
+    assert!(
+        model.contains("loaded && writable && !editingSuspended"),
+        "the model's editable state must include the suspension flag"
     );
     let apply_text = between(
         &panel,
@@ -1165,5 +1228,132 @@ fn the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it() {
     assert!(
         manual.contains("if self.hasUnsavedChanges { guard await self.confirmDiscard() else { return } }\n            await self.performReload("),
         "a clean panel must reach performReload without another suspension point: {manual}"
+    );
+}
+
+// `FileEditorModel` is the production owner of every dirty, save, reload and banner decision of
+// the editor, and it is a Foundation-only type so that `scripts/check-file-editor-model` can run
+// the real code on macOS. These tests cannot run it; they keep it runnable by that fixture and keep
+// the decisions from drifting back into the AppKit view, where no fixture could reach them.
+#[test]
+fn the_file_editor_model_fixture_is_wired_into_macos_ci() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let script = read("scripts/check-file-editor-model");
+    assert!(
+        script.contains("apps/macos/Sources/FileEditorModel.swift")
+            && script.contains("tools/native-fixtures/file-editor-model.swift")
+            && script.contains("-warnings-as-errors")
+            && script.contains("-swift-version 6"),
+        "the script must compile the production model with the fixture, strictly"
+    );
+    assert!(
+        !script.contains("FilePanelView.swift"),
+        "the fixture must not need AppKit: it compiles the model alone"
+    );
+    assert!(
+        read(".github/workflows/macos-development.yml").contains("scripts/check-file-editor-model"),
+        "macOS CI must run the fixture; it cannot run on this machine"
+    );
+    let fixture = read("tools/native-fixtures/file-editor-model.swift");
+    for scenario in [
+        "an edit that only changes the normalization form",
+        "the save payload for",
+        "text typed while the save was in flight is still unsaved",
+        "a reply with no generation must not reset the base generation",
+        "kept edits over a newer disk version ask before saving",
+        "the buffer is read-only while a reload or attach is in flight",
+        "an automatic reload must not replace text typed after it was scheduled",
+        "a dirty buffer is never reloaded automatically",
+        "a dismissed disk generation is not announced again",
+        "reloads through reloadFromDisk",
+        "no retry may replace the text",
+    ] {
+        assert!(
+            fixture.contains(scenario),
+            "fixture scenario `{scenario}` is missing"
+        );
+    }
+}
+
+#[test]
+fn pin_the_file_editor_model_is_appkit_free_and_the_panel_asks_it() {
+    let model = swift("FileEditorModel.swift");
+    let imports: Vec<&str> = model
+        .lines()
+        .filter(|l| l.trim_start().starts_with("import "))
+        .collect();
+    assert_eq!(
+        imports,
+        ["import Foundation"],
+        "the model must import Foundation only so the macOS fixture can compile it alone"
+    );
+    for appkit in [
+        "NSView",
+        "NSTextView",
+        "NSColor",
+        "NSAlert",
+        "NSButton",
+        "NSPasteboard",
+        "@MainActor",
+    ] {
+        assert!(
+            !model.contains(appkit),
+            "`{appkit}` does not belong in the Foundation-only model"
+        );
+    }
+    let panel = swift("FilePanelView.swift");
+    for moved in [
+        "private var baseline",
+        "var isDirty = ",
+        "isDirty = value",
+        "private var externalPending",
+        "externalPending = ",
+        "dismissedDeleted",
+        "dismissedDiskGeneration",
+        "autoReloadedDiskGeneration",
+        "latestDiskGeneration",
+        "editingSuspended",
+        "Data(text.utf8)",
+        "private var generation",
+        "enum Banner",
+    ] {
+        assert!(
+            !panel.contains(moved),
+            "`{moved}` is editor state or a decision that belongs to FileEditorModel; the panel must ask the model"
+        );
+    }
+    for asks in [
+        "model.hasUnsavedChanges(editable:",
+        "model.canSave(editable:",
+        "model.savePayload(for: text)",
+        "baseGeneration: model.generation",
+        "model.saved(written: text, current: editor.string, generation: reply.header.generation)",
+        "model.textEdited(editor.string)",
+        "model.adopt(text: text)",
+        "model.externalStateReported(",
+        "model.saveOutcomeBanner(",
+        "model.reloadReplied(",
+        "model.saveNeedsConflictPrompt(force: force)",
+        "model.bannerAction(primary: primary",
+        "model.setBanner(value)",
+        "model.isEditable(loaded: isLoaded, writable: writable)",
+    ] {
+        assert!(
+            panel.contains(asks),
+            "the panel no longer asks the model: `{asks}`"
+        );
+    }
+    // The panel applies the model's dirty answer in exactly one place.
+    assert_eq!(
+        panel.matches("private func dirtyChanged(").count(),
+        1,
+        "one place turns the model's dirty change into chrome and mirror work"
+    );
+    assert!(
+        panel.contains("typealias Banner = FileBanner"),
+        "the smoke and the coordinator still name FilePanelView.Banner"
     );
 }
