@@ -5,6 +5,54 @@
 
 ## Active implementation
 
+- Reviewed browser literal-key repair committed as `08eaee8`: implicit Shift now
+  remains consistent through paired key events, held keys and alias releases.
+  Four frozen source hashes and parent review verified; native green pending.
+  Publishing the cohesive main cohort for exact-head native validation; no
+  full-parity artifact handoff is authorized by these partial checks.
+- Selection baseline38831911526 again stopped before selection: app inactive,
+  visible but not key after bounded activation. This is fixture admission failure,
+  not a selection regression. Public AppKit word-boundary probes were retained;
+  launch ownership is being reassessed before another run. Observer package
+  run38832049927 remains separate from the main validation cohort.
+- Current main `a85dc43`: default macOS38827930379 passes Swift and Rust/CABI
+  gates and the universal build, then fails packaged browser keyboard acknowledgment:
+  trusted events did not match the prepared sequence. Browser diagnosis is active;
+  no runtime browser acceptance is claimed.
+  Idle38827961978 completed idle-one, then failed during idle-eight warmup because
+  macOS ps column padding changed the rendered start timestamp. The observer
+  whitespace correction is in progress; no resource budget acceptance claimed.
+- Zellij native-package38827122318 passed bundle build/signature/version and
+  owner-0/owner-1, then failed owner-2 on Darwin PENDIN kernel state after restore.
+  A reviewed test-only candidate preserves production TCSANOW and compares all
+  configurable settings, with a private-PTY queued-input exactly-once probe.
+  Diagnostic `9ec70f7` native38828839028 passes: downloaded package and source
+  receipts verified, 30 owner tests and the 22-byte Darwin PENDIN probe pass.
+  Test correction committed locally as `ff13144`; GUI Start/Attach remains open.
+  Sampler correction `aac6677` idle38829001880 passes with verified 221 source
+  files, 201 measured samples, exact child identities and shared shutdown.
+  Accepted correction is local main `ee3351f`; one virtual-host run is not a
+  physical-Mac resource budget. Main native checks were preserved.
+- Local main commits through `6949d8f` (push held for keyboard repair): checklist
+  persistence `498f01b`, profile rename `551e501`, reference-compatible final-tab
+  move `7fb59d9`, and authenticated Zellij observer `6949d8f`. Persistence/profile
+  combined310 checks pass; final-move69 scoped cases and observer311/full plus10
+  feature cases pass. Frozen source reviews and exact index hashes recorded.
+  Native v5 save/reopen, profile rename and observer execution remain pending.
+- Final-tab reference review removes the temporary refusal: retiring an emptied
+  workspace retires its checklist, leaves destination data untouched and creates
+  no move recovery entry. Exact close-history capture remains; real2PTY movement,
+  disk and fresh-reopen tests pass. No invented checklist archive is required.
+- Browser diagnostic `28b72ce` run38829898297 establishes case6 press! inserts!
+  but trusted keyup becomes1 with Shiftfalse. Host/document/focus stable; first5
+  acknowledged actions pass. Mapping repair now owns implicitShift correctly;
+  exact native green remains required. Current DOM148 rerun was unavailable due
+  headless startup failure; no pass claimed. Bounded diagnostics preserve assertions.
+- TERM009 baseline `501cdca` run38830756527 compiled but stopped at keyWindowfalse
+  before selection (not intended red). Focus-only `1f3d492` run38831911526 uses
+  canonical activation and actual focus wait; baseline TerminalView unchanged.
+  Expanded selection implementation is separate and unaccepted pending real cases.
+
 - Native38827114277 at7b passes Swift/focused native checks, then fails in
   shutdown fixture directory creation (AlreadyExists). No browser acknowledgment
   execution occurred. A process-local atomic suffix fixes parallel same-clock
