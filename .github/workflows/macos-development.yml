@@ -2,6 +2,13 @@ name: macOS development build
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Native validation suite
+        type: choice
+        options: [full, terminal-selection]
+        default: full
+        required: true
   push:
     branches: [main]
     paths:
@@ -22,14 +29,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-development-${{ github.ref }}
+  group: macos-development-${{ github.ref }}-${{ inputs.suite || 'full' }}
   cancel-in-progress: true
 
 jobs:
   development:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite != 'terminal-selection'
     runs-on: macos-15
     timeout-minutes: 25
     steps:
+      - name: Validate requested native suite
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REQUESTED_NATIVE_SUITE: ${{ inputs.suite || 'full' }}
+        run: |
+          if [ "$REQUESTED_NATIVE_SUITE" != full ]; then
+            echo 'Unknown native validation suite' >&2
+            exit 2
+          fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
@@ -99,3 +116,39 @@ jobs:
               summary.write(f"Download **zmux-macos-dev-universal-{metadata['source_sha']}** from this run's Artifacts.\n\n")
               summary.write('Universal arm64/x86_64 development app for macOS 14+. Ad-hoc signed; not notarized.\n')
           PY
+
+  terminal-selection:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'terminal-selection'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned host Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin
+      - name: Validate finite selection inputs
+        run: python3 -B tools/native-terminal-selection/run.py --check-inputs
+      - name: Build host app and exercise actual terminal selection
+        run: python3 -B tools/native-terminal-selection/run.py --output "$RUNNER_TEMP/native-terminal-selection"
+      - name: Retain exact sources, public word reference and native result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-terminal-selection-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-terminal-selection/receipt.json
+            ${{ runner.temp }}/native-terminal-selection/native-selection.json
+            ${{ runner.temp }}/native-terminal-selection/child.json
+            ${{ runner.temp }}/native-terminal-selection/selection-child.py
+            ${{ runner.temp }}/native-terminal-selection/*.log
+            ${{ runner.temp }}/native-terminal-selection/*.zip
+            ${{ runner.temp }}/native-terminal-selection/source/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

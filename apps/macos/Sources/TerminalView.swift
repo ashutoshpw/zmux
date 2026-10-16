@@ -24,7 +24,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     private var lastSize: (Int, Int) = (0, 0)
     private var marked = NSAttributedString(string: "")
     private var markedSelection = NSRange(location: 0, length: 0)
-    private var selection: ((Int, Int), (Int, Int))?
+    private let selection = TerminalSelection()
     private let font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
     private let contentInset: CGFloat = 10
     private var cellWidth: CGFloat { ("M" as NSString).size(withAttributes: [.font: font]).width }
@@ -54,7 +54,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         let oldState = frameState
         frameState = frame.failure ?? frame.snapshot?.failure ?? (frame.starting ? "Starting shell…" : frame.snapshot?.state ?? "Unavailable")
         if let snapshot = frame.snapshot {
-            if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection = nil }
+            if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection.clear() }
             let changed = lastBytes != snapshot.bytesRead || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset || viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || oldState != frameState
             viewport = snapshot.viewport
             lastBytes = snapshot.bytesRead
@@ -114,7 +114,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         return NSColor(calibratedRed: levels[value / 36] / 255, green: levels[(value / 6) % 6] / 255, blue: levels[value % 6] / 255, alpha: 1)
     }
     private func navigateHistory(_ lines: Int) {
-        selection = nil; needsDisplay = true
+        selection.clear(); needsDisplay = true
         onScroll?(lines)
     }
     override func scrollWheel(with event: NSEvent) {
@@ -126,42 +126,34 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         wheelRemainder -= CGFloat(lines)
         let (row, col) = gridPoint(event)
         let modifiers = (event.modifierFlags.contains(.option) ? 8 : 0) | (event.modifierFlags.contains(.control) ? 16 : 0)
-        selection = nil; needsDisplay = true
+        selection.clear(); needsDisplay = true
         onWheel?(lines, row, col, modifiers, event.modifierFlags.contains(.shift))
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self); onFocus?()
+        guard let viewport else { return }
         let point = gridPoint(event)
-        selection = (point, point); needsDisplay = true
+        selection.begin(row: point.0, column: point.1, clicks: event.clickCount, viewport: viewport)
+        needsDisplay = true
     }
     override func mouseDragged(with event: NSEvent) {
-        if let old = selection { selection = (old.0, gridPoint(event)); needsDisplay = true }
+        guard let viewport else { return }
+        let point = gridPoint(event)
+        selection.extend(row: point.0, column: point.1, viewport: viewport)
+        needsDisplay = true
     }
     private func gridPoint(_ event: NSEvent) -> (Int, Int) {
         let point = convert(event.locationInWindow, from: nil)
         return (max(0, min((viewport?.size.rows ?? 1) - 1, Int((point.y - contentInset) / lineHeight))), max(0, min(viewport?.size.cols ?? 1, Int((point.x - contentInset) / cellWidth))))
     }
     private func normalizedSelection() -> ((Int, Int), (Int, Int))? {
-        guard let (a, b) = selection, a != b else { return nil }
-        return a <= b ? (a, b) : (b, a)
+        guard let range = selection.range, !range.isEmpty else { return nil }
+        return ((range.lower.row, range.lower.column), (range.upper.row, range.upper.column))
     }
     func copySelection(_ sender: Any?) {
-        guard let viewport, let (lo, hi) = normalizedSelection() else { return }
-        var lines: [String] = []
-        for row in lo.0...hi.0 {
-            let lower = row == lo.0 ? lo.1 : 0
-            let upper = row == hi.0 ? hi.1 : viewport.size.cols
-            var text = ""
-            for run in viewport.lines[row] {
-                let start = max(lower, run.column), end = min(upper, run.column + run.width)
-                if start < end {
-                    text += run.text.isASCII ? String(run.text.dropFirst(start - run.column).prefix(end - start)) : run.text
-                }
-            }
-            lines.append(text.replacingOccurrences(of: " +$", with: "", options: .regularExpression))
-        }
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+        guard let viewport, let text = selection.text(viewport: viewport) else { return }
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
     }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard TerminalPasteboardContent.hasFilesOrImage(sender.draggingPasteboard) else { return [] }
@@ -201,7 +193,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         }
     }
     func selectViewport(_ sender: Any?) {
-        if let viewport { selection = ((0,0),(viewport.size.rows-1,viewport.size.cols)); needsDisplay = true }
+        if let viewport { selection.selectAll(viewport: viewport); needsDisplay = true }
     }
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) && (event.keyCode == 115 || event.keyCode == 119) {
@@ -212,7 +204,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         }
         if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
         if hasMarkedText() { interpretKeyEvents([event]); return }
-        selection = nil
+        selection.clear(); needsDisplay = true
         if let semantic = TerminalKeyEncoder.event(keyCode: event.keyCode, modifiers: event.modifierFlags,
                                                    action: event.isARepeat ? .repeated : .press,
                                                    charactersIgnoringModifiers: event.charactersIgnoringModifiers) {
@@ -265,4 +257,3 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     func characterIndex(for point: NSPoint) -> Int { 0 }
 }
-private extension String { var isASCII: Bool { unicodeScalars.allSatisfy { $0.isASCII } } }

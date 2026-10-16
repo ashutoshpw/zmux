@@ -51,6 +51,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+
+- [T01 native selection](references/t01-native-selection.md) — shared word/row selection and native clipboard evidence; history and logical-wrap gates remain open.
 - [A01 named buffers](references/a01-named-buffers.md) — private exact-text persistence and shared terminal paste, with output/capacity parity gates.
 - [Shutdown fixture collision](references/s01-shutdown-fixture-collision.md) — deterministic parallel temporary-directory collision repair without runtime changes.
 - [F04 controlled idle workloads](references/f04-native-idle-workloads.md) — opt-in one/eight-terminal phase ownership and bounded named-host measurements.
