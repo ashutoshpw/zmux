@@ -22,6 +22,11 @@ private struct SelectionNativeReport: Codable, Sendable {
     let sessionID: UInt64
     let surfaceID: UInt64
     let nonce: String
+    let applicationActiveBefore: Bool
+    let windowVisibleBefore: Bool
+    let keyWindowBefore: Bool
+    let applicationActive: Bool
+    let windowVisible: Bool
     let keyWindow: Bool
     let terminalFirstResponder: Bool
     var state: String
@@ -58,20 +63,28 @@ enum TerminalSelectionSmoke {
               viewport.lines.count > 4, viewport.size.cols > 40 else {
             throw failure("Actual native terminal is not mounted with the production routes")
         }
+        let applicationActiveBefore = NSApp.isActive
+        let windowVisibleBefore = window.isVisible
+        let keyWindowBefore = window.isKeyWindow
         window.makeKeyAndOrderFront(nil)
-        let responderAccepted = window.makeFirstResponder(view)
+        NSApp.activate()
+        _ = window.makeFirstResponder(view)
+        // Window activation is asynchronous. Yield the main actor after the
+        // existing native request; never infer focus from the request itself.
+        let focusDeadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < focusDeadline,
+              !(NSApp.isActive && window.isVisible && window.isKeyWindow && NSApp.keyWindow === window && window.firstResponder === view) {
+            try await Task.sleep(for: .milliseconds(32))
+        }
         var result = SelectionNativeReport(schemaVersion: 1,
             sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "",
             appPID: ProcessInfo.processInfo.processIdentifier, childPID: pid,
             sessionID: frame.sessionId, surfaceID: pane.selectedSurface, nonce: nonce,
+            applicationActiveBefore: applicationActiveBefore, windowVisibleBefore: windowVisibleBefore,
+            keyWindowBefore: keyWindowBefore, applicationActive: NSApp.isActive, windowVisible: window.isVisible,
             keyWindow: window.isKeyWindow && NSApp.keyWindow === window,
-            terminalFirstResponder: responderAccepted && window.firstResponder === view,
+            terminalFirstResponder: window.firstResponder === view,
             state: "running", publicWordReferences: [], cases: [])
-        guard result.keyWindow, result.terminalFirstResponder else {
-            result.state = "prerequisite_failed"
-            try await save(result, to: report)
-            throw failure("Actual key window or terminal first responder was unavailable before selection")
-        }
         // Public system behavior is recorded separately from the independently
         // specified regression literal below. Punctuation is not guessed.
         let reference = NSTextView(frame: .zero)
@@ -83,6 +96,11 @@ enum TerminalSelectionSmoke {
             guard range.location != NSNotFound, NSMaxRange(range) <= string.length else { throw failure("Public AppKit word range is invalid") }
             result.publicWordReferences.append(SelectionWordReference(text: text, clickedUTF16: clicked,
                 location: range.location, length: range.length, selected: string.substring(with: range)))
+        }
+        guard result.applicationActive, result.windowVisible, result.keyWindow, result.terminalFirstResponder else {
+            result.state = "prerequisite_failed"
+            try await save(result, to: report)
+            throw failure("Actual key window or terminal first responder was unavailable before selection")
         }
         try await save(result, to: report)
 
@@ -131,7 +149,7 @@ enum TerminalSelectionSmoke {
     }
 
     private static func copy(window: NSWindow) throws {
-        guard window.isKeyWindow, NSApp.keyWindow === window, window.firstResponder is TerminalView else {
+        guard NSApp.isActive, window.isVisible, window.isKeyWindow, NSApp.keyWindow === window, window.firstResponder is TerminalView else {
             throw failure("Actual key window or terminal first responder changed before menu Copy")
         }
         NSApp.mainMenu?.items.forEach { $0.submenu?.update() }
