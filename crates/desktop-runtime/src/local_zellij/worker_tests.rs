@@ -82,3 +82,100 @@ fn configured_cli_waits_for_same_retained_child_to_exec_after_spawn_pipe_closes(
     );
     assert_eq!(process_identity(child.child.id()).unwrap(), identity);
 }
+
+#[test]
+fn configured_cli_exec_admission_rejects_cancellation_deadline_and_identity_drift() {
+    let child = GatedChild::new();
+    let inherited = child.inherited();
+    let launcher = process_identity(std::process::id()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    for (cancelled, deadline) in [(true, deadline), (false, Instant::now())] {
+        let error = configured_cli_identity(
+            inherited.clone(),
+            &launcher,
+            &child.executable,
+            deadline,
+            &AtomicBool::new(cancelled),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("cancelled or deadline"),
+            "{error}"
+        );
+    }
+    for field in ["parent", "uid", "boot"] {
+        let mut changed = inherited.clone();
+        match field {
+            "parent" => changed.parent_pid += 1,
+            "uid" => changed.uid += 1,
+            _ => changed.boot = "00000000-0000-4000-8000-000000000001".into(),
+        }
+        let error = configured_cli_identity(
+            changed,
+            &launcher,
+            &child.executable,
+            deadline,
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("physical child identity changed"),
+            "{error}"
+        );
+    }
+    let mut changed_start = inherited.clone();
+    changed_start.start[0] += 1;
+    child.release();
+    let error = configured_cli_identity(
+        changed_start,
+        &launcher,
+        &child.executable,
+        deadline,
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("physical child identity changed"),
+        "{error}"
+    );
+}
+
+#[test]
+fn configured_cli_exec_admission_rejects_unrelated_image_and_departed_child() {
+    let mut child = GatedChild::new();
+    let inherited = child.inherited();
+    let launcher = process_identity(std::process::id()).unwrap();
+    child.release();
+    let error = configured_cli_identity(
+        inherited.clone(),
+        &launcher,
+        &Path::new("/bin/sh").canonicalize().unwrap(),
+        Instant::now() + Duration::from_secs(2),
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("unconfigured executable"),
+        "{error}"
+    );
+    drop(child.child.stdin.take());
+    assert!(child.child.wait().unwrap().success());
+    let error = configured_cli_identity(
+        inherited,
+        &launcher,
+        &child.executable,
+        Instant::now() + Duration::from_secs(2),
+        &AtomicBool::new(false),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("inspect retained CLI exec transition"),
+        "{error}"
+    );
+}
