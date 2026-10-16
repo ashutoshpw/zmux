@@ -477,3 +477,28 @@ for the intended reason; the same command/environment passes after this fixture 
 Red/green logs are `/tmp/zmux-b01-profile-socket-longtmp-red-20261016.log` and
 `/tmp/zmux-b01-profile-socket-longtmp-green-20261016.log`. The failing behavioral tests
 were already committed before the repair; no source-grep assertions were introduced.
+
+Third-attempt reassessment:38859008207 on c83f165 passed both Swift slices, complete
+macOS `scripts/check` and the optimized universal package build. The original packaged
+prepare PID29653 then exited1 before AppKit/any catalog or WebKit construction because
+`AppStartup.prepare` treated the missing `--profile-operations-smoke` exemption as an
+ordinary CLI command. No second process phase launched. The fixture launch routing,
+not a production profile callback, failed. Raw logs
+`/tmp/zmux-b01-native-38859008207-complete.log` and
+`/tmp/zmux-b01-native-38859008207-failed.log`; artifact12028549362.
+
+Reassessment searched every existing native fixture routing list. App.swift's private
+storage selection, run route and startup-error cleanup already recognize the new flag;
+only AppSupport.swift's earlier CLI-versus-AppKit exemption lacked it. Add exactly that
+exemption, preserving existing routes and effects. Parent authorized this narrow scoped
+rerun after concrete source diagnosis; coordinate the same list with readiness ownership.
+No broad shared flag refactor or native-owner change is part of this repair.
+
+All29 uploaded changed compilation sources match the frozen hashes and lengths. The
+retained universal ZIP source c83f165 and checksum verify:
+`799e646c0018c7aebacc500a3cf6cbed16c6432a7cbd9a75c7c60d0781185c14`.
+Its packaged executable SHA256 is
+`abff0403422691c38648c263b3e9a3972a805af1092b838c94a1694beb8668c5`;
+bundled CLI SHA256
+`0513ad3d17ddd764b7506e0c0cb8319981d4be3d45d1e73ec78073042b8d9922`.
+These establish compilation/package provenance, not physical profile acceptance.
