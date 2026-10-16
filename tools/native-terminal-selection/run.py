@@ -21,7 +21,7 @@ OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos
 # used by NotificationDelivery; never substitute test definitions for app types.
 METADATA_INPUTS = tuple('apps/macos/Sources/' + name + '.swift' for name in (
     'Models', 'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
-    'NotificationDelivery', 'NativeBridge', 'NativeStoragePath', 'TerminalKeyEncoder')) + (
+    'NotificationDelivery', 'NativeBridge', 'NativeStoragePath', 'TerminalKeyEncoder', 'BrowserProfileLeases')) + (
     'crates/native-bridge/include/zmux.h', 'tools/native-terminal-selection/CopyMetadataContract.swift')
 CHILD = '''#!/usr/bin/env python3
 import fcntl,json,os,pathlib,select,struct,termios,time,tty
