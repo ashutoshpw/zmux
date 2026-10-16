@@ -1035,6 +1035,8 @@ impl WorkspaceStore {
         let prior = self.focused();
         let prior_window = self.state.focused_window;
         let effects = self.finish_restore_inner(session, success);
+        crate::workspace_groups::reconcile(&mut self.state.workspace_groups, &self.state.windows)
+            .expect("restore rollback only removes group members from valid ordered windows");
         self.record_focus(prior, prior_window, false, true);
         effects
     }

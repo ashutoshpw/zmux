@@ -12,7 +12,7 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 8;
+pub const SESSION_DOCUMENT_VERSION: u32 = 9;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -24,6 +24,12 @@ pub struct SessionDocument {
     pub version: u32,
     pub identity_namespace: uuid::Uuid,
     pub next_id: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "group_layout"
+    )]
+    pub workspace_groups: Option<Vec<WorkspaceGroup>>,
     pub focused_workspace: Option<WorkspaceId>,
     pub workspaces: Vec<SavedWorkspace>,
     #[serde(
@@ -32,6 +38,12 @@ pub struct SessionDocument {
         deserialize_with = "window_layout"
     )]
     pub window_layout: Option<SavedWindowLayout>,
+}
+
+fn group_layout<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<Vec<WorkspaceGroup>>, D::Error> {
+    Vec::<WorkspaceGroup>::deserialize(decoder).map(Some)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,6 +510,28 @@ impl SessionDocument {
                 ));
             }
         }
+        match (&self.workspace_groups, self.version) {
+            (Some(groups), 9) => {
+                workspace_groups::validate(
+                    groups,
+                    &self
+                        .window_layout
+                        .as_ref()
+                        .expect("validated layout")
+                        .windows,
+                )
+                .map_err(|e| invalid(e.to_string()))?;
+                for group in groups {
+                    validation.id(group.id.0)?;
+                }
+            }
+            (None, 1..=8) => {}
+            _ => {
+                return Err(invalid(
+                    "workspace groups are required only in session version 9",
+                ));
+            }
+        }
         Ok(ValidatedSessionDocument {
             document: self,
             terminals: validation.terminals,
@@ -747,6 +781,7 @@ impl WorkspaceStore {
             version: SESSION_DOCUMENT_VERSION,
             identity_namespace: self.state.identity_namespace,
             next_id: self.next_id,
+            workspace_groups: Some(self.state.workspace_groups.clone()),
             focused_workspace: self.state.focused_workspace,
             window_layout: Some(SavedWindowLayout {
                 windows: self.state.windows.clone(),
@@ -851,6 +886,7 @@ impl WorkspaceStore {
             revision: 0,
             focused_workspace: source.focused_workspace,
             closed_items: Vec::new(),
+            workspace_groups: source.workspace_groups.take().unwrap_or_default(),
             windows: layout.windows,
             focused_window: layout.focused_window,
             workspaces: source

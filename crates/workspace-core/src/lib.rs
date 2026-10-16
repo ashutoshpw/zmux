@@ -12,6 +12,7 @@ mod restore;
 pub mod surface_order;
 mod surfaces;
 mod windows;
+pub mod workspace_groups;
 pub mod workspace_order;
 pub use restore::{
     MAX_NEXT_IDENTIFIER, PreparedSessionRestore, RestoreError, RestoreLimits,
@@ -20,6 +21,7 @@ pub use restore::{
     ValidatedSessionDocument,
 };
 pub use windows::{MAX_WINDOWS, Window};
+pub use workspace_groups::{MAX_WORKSPACE_GROUPS, WorkspaceGroup};
 pub mod targets;
 pub mod todo;
 pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Navigation};
@@ -43,6 +45,7 @@ identifier!(PaneId);
 identifier!(SessionId);
 identifier!(SurfaceId);
 identifier!(WindowId);
+identifier!(WorkspaceGroupId);
 
 pub const MODEL_VERSION: u32 = 6;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
@@ -188,6 +191,7 @@ pub struct Snapshot {
     pub closed_items: Vec<ClosedItem>,
     pub windows: Vec<Window>,
     pub focused_window: Option<WindowId>,
+    pub workspace_groups: Vec<WorkspaceGroup>,
     /// Compatibility projection of the focused window's selected workspace.
     pub focused_workspace: Option<WorkspaceId>,
     pub workspaces: Vec<Workspace>,
@@ -201,6 +205,7 @@ impl Default for Snapshot {
             revision: 0,
             closed_items: Vec::new(),
             windows: Vec::new(),
+            workspace_groups: Vec::new(),
             focused_window: None,
             focused_workspace: None,
             workspaces: Vec::new(),
@@ -211,6 +216,9 @@ impl Default for Snapshot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    WorkspaceGroup {
+        command: workspace_groups::GroupAction,
+    },
     CreateWindow {
         #[serde(default = "default_focus")]
         focus: bool,
@@ -464,10 +472,15 @@ impl WorkspaceStore {
             action,
             Action::MoveWorkspaceToWindow { focus: false, .. }
                 | Action::ReorderWorkspaces { .. }
+                | Action::WorkspaceGroup { .. }
                 | Action::ReorderSurface { focus: false, .. }
         );
         let result = candidate.apply_inner(action)?;
         candidate.check_window_layout()?;
+        workspace_groups::reconcile(
+            &mut candidate.state.workspace_groups,
+            &candidate.state.windows,
+        )?;
         candidate.trim_todo_history()?;
         candidate.validate_todos()?;
         candidate.validate_terminal_descriptors()?;
@@ -484,6 +497,7 @@ impl WorkspaceStore {
             .ok_or(ActionError::Exhausted)?;
         let mut effects = Vec::new();
         match action {
+            Action::WorkspaceGroup { command } => self.group_action(command)?,
             Action::CreateWindow { focus } => self.create_window(focus, &mut effects)?,
             Action::FocusWindow { window_id } => self.focus_window(window_id)?,
             Action::CloseWindow { window_id } => self.close_window(window_id, &mut effects)?,

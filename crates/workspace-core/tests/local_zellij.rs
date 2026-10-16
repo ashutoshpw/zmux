@@ -14,6 +14,7 @@ fn fixture() -> WorkspaceStore {
 fn document() -> Value {
     let mut value = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
     value["version"] = json!(6);
+    value.as_object_mut().unwrap().remove("workspace_groups");
     value["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"] = json!({
         "kind": "local_zellij_terminal",
         "profile_id": uuid::Uuid::from_u128(10),
@@ -439,7 +440,7 @@ fn v8_admitted_lifetime_history_preserves_classification_without_pty_or_start() 
         let surface = &snapshot.workspaces[0].root.panes()[0].surfaces[0];
         assert!(surface.session_id.is_none());
         let saved = serde_json::to_value(prepared.store.session_document().unwrap()).unwrap();
-        assert_eq!(saved["version"], 8);
+        assert_eq!(saved["version"], SESSION_DOCUMENT_VERSION);
         assert_eq!(
             saved["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"],
             wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]

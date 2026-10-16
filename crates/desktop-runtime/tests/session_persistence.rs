@@ -1995,3 +1995,122 @@ fn surface_order_keeps_live_pty_identity_and_persists_exact_tab_order_with_fresh
     }));
     reopened.shutdown(Duration::from_secs(5)).unwrap();
 }
+
+#[test]
+fn workspace_groups_preserve_live_children_and_survive_actual_save_shutdown_and_fresh_restore() {
+    use zmux_workspace_core::workspace_groups::GroupAction;
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    wait(&desktop, ready);
+    for (index, name) in ["B", "C", "D"].iter().enumerate() {
+        let request = 100 + index as u64;
+        send(
+            &desktop,
+            request,
+            Command::Action {
+                action: Action::CreateWorkspace {
+                    name: (*name).into(),
+                },
+            },
+        );
+        let current = wait(&desktop, |s| s.last_request_id == request && ready(s));
+        assert!(current.last_error.is_none(), "{:?}", current.last_error);
+    }
+    let before = desktop_snapshot::read(&desktop);
+    let window = before.model.windows[0].clone();
+    let ids = window.workspace_ids.clone();
+    let children = |s: &Snapshot| {
+        let mut rows: Vec<_> = s
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id, f.process_id))
+            .collect();
+        rows.sort_by_key(|row| row.0.0);
+        rows
+    };
+    let original_children = children(&before);
+    assert_eq!(original_children.len(), 4);
+    assert!(original_children.iter().all(|(_, pid)| pid.is_some()));
+    send(
+        &desktop,
+        110,
+        Command::Action {
+            action: Action::WorkspaceGroup {
+                command: GroupAction::Create {
+                    window_id: window.id,
+                    name: "Persistent group".into(),
+                    workspace_ids: vec![ids[0], ids[2]],
+                    external_id: Some("stable-controller".into()),
+                },
+            },
+        },
+    );
+    let created = wait(&desktop, |s| s.last_request_id == 110);
+    assert!(created.last_error.is_none(), "{:?}", created.last_error);
+    let group_id = created.model.workspace_groups[0].id;
+    send(
+        &desktop,
+        111,
+        Command::Action {
+            action: Action::WorkspaceGroup {
+                command: GroupAction::SetCollapsed {
+                    group_id,
+                    collapsed: true,
+                },
+            },
+        },
+    );
+    let grouped = wait(&desktop, |s| s.last_request_id == 111);
+    assert!(grouped.last_error.is_none(), "{:?}", grouped.last_error);
+    assert_eq!(
+        children(&grouped),
+        original_children,
+        "group metadata/order cannot replace live session children"
+    );
+    assert_eq!(
+        grouped.model.focused_workspace,
+        before.model.focused_workspace
+    );
+    assert_eq!(grouped.model.workspaces, before.model.workspaces);
+    let expected_groups = grouped.model.workspace_groups.clone();
+    let expected_windows = grouped.model.windows.clone();
+    send(
+        &desktop,
+        112,
+        Command::Session {
+            action: SessionCommand::Save,
+        },
+    );
+    wait(&desktop, |s| {
+        s.last_request_id == 112
+            && s.persistence
+                .operations
+                .iter()
+                .any(|op| op.kind == "save" && matches!(op.state, OperationState::Completed))
+    });
+    let disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    assert_eq!(disk["version"], 9);
+    assert_eq!(
+        disk["workspace_groups"],
+        serde_json::to_value(&expected_groups).unwrap()
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let reopened = directory.desktop();
+    let restored = wait(&reopened, ready);
+    assert_eq!(restored.model.workspace_groups, expected_groups);
+    assert_eq!(restored.model.windows, expected_windows);
+    assert_eq!(
+        restored.model.identity_namespace,
+        before.model.identity_namespace
+    );
+    let restored_children = children(&restored);
+    assert_eq!(restored_children.len(), 4);
+    assert!(
+        restored_children
+            .iter()
+            .all(|(session, _)| !original_children.iter().any(|(old, _)| old == session)),
+        "restart must reserve fresh runtime Session IDs while preserving group identity"
+    );
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+}

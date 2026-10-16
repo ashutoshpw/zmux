@@ -119,6 +119,7 @@ impl Snapshot {
                     .expect("preserved membership"),
             })
             .collect();
+        self.check_group_order(window_id, &ordered)?;
         Ok(OrderPlan {
             window_id,
             workspace_ids: ordered,

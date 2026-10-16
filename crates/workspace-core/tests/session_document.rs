@@ -113,6 +113,7 @@ fn document_restores_stable_topology_with_new_shells_and_private_browser_urls() 
 fn version_four_requires_bounded_checked_windows_and_canonical_ownership() {
     let mut wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
     wire["version"] = json!(4);
+    wire.as_object_mut().unwrap().remove("workspace_groups");
     for workspace in wire["workspaces"].as_array_mut().unwrap() {
         workspace.as_object_mut().unwrap().remove("todos");
     }
@@ -201,6 +202,7 @@ fn legacy_versions_require_fresh_reserved_window_identity_and_keep_logical_ids()
     for version in [1, 2, 3] {
         let mut legacy = wire.clone();
         legacy["version"] = json!(version);
+        legacy.as_object_mut().unwrap().remove("workspace_groups");
         for workspace in legacy["workspaces"].as_array_mut().unwrap() {
             workspace.as_object_mut().unwrap().remove("todos");
         }
@@ -565,6 +567,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
     );
     let mut legacy = wire.clone();
     legacy["version"] = json!(1);
+    legacy.as_object_mut().unwrap().remove("workspace_groups");
     for workspace in legacy["workspaces"].as_array_mut().unwrap() {
         workspace.as_object_mut().unwrap().remove("todos");
     }
@@ -582,6 +585,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
         None
     );
     legacy["version"] = json!(2);
+    legacy.as_object_mut().unwrap().remove("workspace_groups");
     assert!(restore(legacy).is_err());
     store
         .apply(Action::CloseSurface {
@@ -649,6 +653,7 @@ fn tmux_session_v3_preserves_only_immutable_identity_and_rejects_older_versions_
     for version in [1, 2] {
         let mut old = wire.clone();
         old["version"] = json!(version);
+        old.as_object_mut().unwrap().remove("workspace_groups");
         for workspace in old["workspaces"].as_array_mut().unwrap() {
             workspace.as_object_mut().unwrap().remove("todos");
         }
@@ -768,6 +773,7 @@ fn version_five_todos_are_explicit_validated_ordered_and_legacy_readers_never_si
     for version in 1..=4 {
         let mut legacy = wire.clone();
         legacy["version"] = json!(version);
+        legacy.as_object_mut().unwrap().remove("workspace_groups");
         if version < 4 {
             legacy.as_object_mut().unwrap().remove("window_layout");
         }
