@@ -84,9 +84,12 @@ The parent owns current-main publication and other active hosted workflows.
 
 In progress. Native intended red is independently accepted at8e96b17/run38837076163;
 all18 original cases passed before the19th exact wrapped-copy mismatch. The
-production metadata/copy repair and expanded24-case fixture are implemented as
-unpublished frozen WIP, with independent production and fixture source reviews
-accepted. Focused11 real adapter tests, strict Clippy, actual session history and
+production metadata/copy repair and expanded24-case fixture are published on
+diagnostic5a71574, with independent production and fixture source reviews accepted.
+Run38839319267 compiled the actual app but stopped at the standalone decoder
+probe compilation boundary before any native clipboard execution. The harness
+repair now compiles the actual production model dependency closure and links the
+exact archived app bridge; its hosted rerun remains pending. Focused11 real adapter tests, strict Clippy, actual session history and
 six-phase portable PTY transport pass. Actual production Swift decoder compile,
 24 native clipboard cases/shared shutdown and parent current-main integration
 remain pending; no green is inferred from source or Linux checks.
@@ -114,7 +117,8 @@ runs and preserves exact written-space extents. Native decoding rejects present
 metadata if viewport bounds, drawing/copy row counts or written extents disagree.
 Optional metadata remains unavailable explicitly. Native copy joins only actual
 wrapped boundaries; empty physical rows retain separators. Existing same-row edge
-spaces and physical triple-click bounds remain. No source repair is published yet.
+spaces and physical triple-click bounds remain. The repair is published diagnostically
+at5a71574; parent current-main integration remains separate.
 
 Focused real vt100 tests pass across widths4/7/31, written boundary spaces,
 wide-margin written extent, hard/blank rows, actual parked history, output while
@@ -122,7 +126,7 @@ anchored, resize refresh, retained snapshot ownership and alternate separation.
 All11 adapter parsing tests and strict adapter all-target Clippy pass. The native
 runner also compiles/executes the actual production Swift Viewport decoder against
 valid/unavailable and malformed count/extent/grid-bound inputs; that new Swift
-wire check is still unexecuted until hosted validation.
+wire assertions remain unexecuted after the first hosted probe compilation failure.
 
 Prepared native green retains original18 plus the unchanged intended-red case,
 then full-edge wide cell, combining/emoji boundary, hard/blank lines, explicit
@@ -149,5 +153,29 @@ extent metadata within its resource contract. Current optional RawFrame does not
 Do not claim that gap, persistent selection anchors, autoscroll, wrapped-word
 expansion, rectangular selection, copy mode or mouse protocols closed here.
 
-The slice remains in progress pending independent source review and actual
-native green/shared shutdown. Parent current-main publication remains separate.
+The slice remains in progress pending the repaired harness hosted compile/contracts
+and actual native24-case green/shared shutdown. Parent current-main publication remains separate.
+
+
+## First repair run: harness dependency failure
+
+Run38839319267 at5a715747b18df8370264ce443844dac8ec462b91 built the actual
+app successfully (exit0,263.074s), then the standalone decoder probe compilation
+failed (exit1,4.232s). Compiling Models.swift alone omitted its actual production
+notification, window and browser model dependencies. No native app/clipboard
+phase ran, so this is a harness boundary failure, not a native copy result.
+All226 retained source copies match that exact Git commit; app plist/source and
+archive agree. Artifact12020617097 ZIP SHA256
+`e1fede116b7ac528f0cd00e4405e7d9018d3007cfe5708a49091dde216c30394`.
+App archive SHA256
+`4727eb138d78fc30a3ca36efba417975da2c2f4f787b05b679b6c3afd57239df`.
+Failure/source audit SHA256
+`251b0c05e805e14f5da67660613b126055b96be8203b1ff7288597bd0660be54`.
+
+The narrow harness repair preserves the production repair, independent decoder
+assertions and all24 exact clipboard cases. It compiles the actual eight-file
+model dependency closure with the real C header, links the just-built app bridge
+with an absolute rpath, verifies that bridge against the archived app, and records
+the explicit compiled input hash subset plus bridge hash. All dependency sources
+were already in the retained all-app/crates inventory. No fake model definitions
+or copied decoder are introduced.
