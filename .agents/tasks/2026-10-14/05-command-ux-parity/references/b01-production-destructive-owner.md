@@ -444,3 +444,19 @@ already committed in5ff0028 before this repair, but could not execute its native
 Linux. Name validation is now scoped to add/rename; clear/delete reach the same Rust
 admission used by the manager. No native effect/ABI changed. The hosted fixture must still
 establish actual compilation and manager behavior; source reasoning is not native red proof.
+
+First focused hosted attempt38857634808 on425fd59 passed both Swift source slices,
+strict concurrency/warnings-as-errors and both C helpers. Its11 browser CLI cases passed,
+including destructive admission/reconciliation. It stopped before package or native launch
+because this branch's older base lacked main22550c1's Darwin socket fixture repair:
+all5 existing execution-admission cases read inherited nonblocking accepted streams and
+failed WouldBlock35. Raw logs are retained at
+`/tmp/zmux-b01-native-38857634808-complete.log` and
+`/tmp/zmux-b01-native-38857634808-failed.log`; artifact12028415276. All29 uploaded
+changed compilation-source files matched the frozen hashes/lengths exactly.
+
+Only the existing3-line `apps/cli/tests/execution_admission.rs` repair from
+22550c1db7a26df12b462405c072538652860a44 is applied here: set the accepted fixture
+stream blocking before its existing bounded3-second frame timeouts. Its concurrent R03
+and status documentation is not imported. No production retry or assertion was changed.
+The focused5-case command passes locally; macOS verification remains the next run's gate.
