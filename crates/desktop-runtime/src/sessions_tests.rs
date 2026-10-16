@@ -1066,6 +1066,16 @@ fn completed_fact_blocks_all_new_input_before_saved_while_the_real_pty_is_live()
             session_id,
             event: serde_json::from_value(serde_json::json!({"key":"enter"})).unwrap(),
         },
+        Command::Pointer {
+            session_id,
+            event: zmux_terminal_adapter::Pointer {
+                action: zmux_terminal_adapter::PointerAction::Press,
+                button: zmux_terminal_adapter::PointerButton::Left,
+                row: 0,
+                col: 0,
+                modifiers: 0,
+            },
+        },
         Command::Wheel {
             session_id,
             event: zmux_terminal_adapter::Wheel {

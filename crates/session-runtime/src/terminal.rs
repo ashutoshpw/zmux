@@ -1,7 +1,7 @@
 use crate::{EngineKind, EngineOptions, SessionError};
 #[cfg(feature = "ghostty")]
 use zmux_terminal_adapter::Engine;
-use zmux_terminal_adapter::{EngineBatch, Size, Terminal, Viewport, Wheel};
+use zmux_terminal_adapter::{EngineBatch, Pointer, Size, Terminal, Viewport, Wheel};
 
 // Default sessions retain their existing immediate vt100 path and frame cadence.
 // The larger worker-bound owner stays inline to avoid an extra infallible Box.
@@ -78,6 +78,15 @@ impl TerminalOwner {
             }
             #[cfg(feature = "ghostty")]
             Self::Ghostty(terminal) => terminal.stage_scroll(lines).map(Some).map_err(failure),
+        }
+    }
+    pub(crate) fn pointer(&mut self, event: Pointer) -> Result<Vec<u8>, SessionError> {
+        match self {
+            Self::Vt100(terminal) => Ok(terminal.pointer(event)),
+            #[cfg(feature = "ghostty")]
+            Self::Ghostty(_) => Err(SessionError::Failure(
+                "Ghostty pointer reporting is not yet supported".into(),
+            )),
         }
     }
     pub(crate) fn wheel(
