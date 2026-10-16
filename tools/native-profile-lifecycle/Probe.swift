@@ -11,6 +11,11 @@ private struct Removal: Codable, Sendable {
     var errorCode: Int?
     var errorDescription: String?
 }
+private struct DataRemoval: Codable, Sendable {
+    let scope: String
+    let dataTypes: [String]
+    var callbackReceived = false
+}
 private struct Report: Codable, Sendable {
     let sourceSHA: String
     let appPID: Int32
@@ -30,6 +35,7 @@ private struct Report: Codable, Sendable {
     var reopenedAStorageObservation: String?
     var separateBRetained = false
     var separateBObservation: String?
+    var aDataRemoval: DataRemoval?
     var removals: [Removal] = []
     var failure: String?
 }
@@ -137,14 +143,14 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         try await save()
         return result
     }
-    private func dropA() {
+    private func dropA(retainStore: Bool = false) {
         retiredAView = aView
         retiredAStore = aStore
         aView?.stopLoading()
         aView?.navigationDelegate = nil
         aView?.removeFromSuperview()
         aView = nil
-        aStore = nil
+        if !retainStore { aStore = nil }
     }
     private func observeARelease() async throws {
         let deadline = ContinuousClock.now + .seconds(5)
@@ -156,6 +162,29 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         try await save()
         guard retiredAView == nil else { throw ProbeFailure(description: "Application-released WKWebView still exists; removal prerequisite is unproven") }
         // Weak-store disappearance is diagnostic only, never a retirement receipt.
+    }
+    private func clearInactiveAData() async throws {
+        guard let store = aStore, store.identifier == report.profileA,
+              aView == nil, retiredAView == nil else {
+            throw ProbeFailure(description: "Store-specific data removal requires the exact inactive A owner")
+        }
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        guard types.contains(WKWebsiteDataTypeCookies) else {
+            throw ProbeFailure(description: "All website data types omitted cookies")
+        }
+        report.aDataRemoval = DataRemoval(scope: "profile_a_all_website_data", dataTypes: types.sorted())
+        report.stage = "inactive_a_data_remove_callback_pending"
+        try await save()
+        // Completion has no error parameter and is not a retirement receipt.
+        // Keep this exact store until completion; never retry a missing callback.
+        let _: Void = await withCheckedContinuation { continuation in
+            store.removeData(ofTypes: types, modifiedSince: .distantPast) {
+                continuation.resume()
+            }
+        }
+        report.aDataRemoval?.callbackReceived = true
+        report.stage = "inactive_a_data_remove_callback_received"
+        try await save()
     }
     private func reopenA() async throws {
         (aStore, aView) = makeView(profile: report.profileA, x: 0)
@@ -188,6 +217,9 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             report.heldAObservation = String(heldObservation.prefix(4096))
             report.heldDataRetained = heldObservation == "{\"local\":\"A\",\"cookie\":true}"
             guard report.heldDataRetained else { throw ProbeFailure(description: "Mounted removal failure did not preserve A data") }
+            dropA(retainStore: true)
+            try await observeARelease()
+            try await clearInactiveAData()
             dropA()
             try await observeARelease()
             let released = try await remove(report.profileA, phase: "released_a_remove")

@@ -167,3 +167,41 @@ localStorage/cookie values, preserving the same assertions, fresh generated IDs
 and one call per removal phase. No failed removal is retried. The native evidence
 does not yet admit production clear/delete, and remains separate from the
 production lease acquisition check.
+
+Run [38838619443](https://github.com/ashutoshpw/zmux/actions/runs/38838619443)
+at `4f6a6028c13389ac8ea0163dc40ced2b8064e94c` compiled and repeated the
+mounted-busy/released-callback behavior. The same-process reopened A observation
+was `{"empty":true,"cookie":false}`; actual localStorage was null but the cookie
+was still `probe=A`. B retained its independent B data. The native process exited
+1 in 3.494 seconds without timeout. Exact Git/source/archive/plist/executable and
+owned PID/SHA/nonce/UUID correlation passed independent inspection. This is an
+installed-OS cookie-retention blocker, not a formatting ambiguity or unknown
+callback. Fresh-process durable behavior has not been tested.
+
+## Store-specific public data-removal candidate
+
+The next diagnostic releases A's WKWebView while retaining the exact inactive A
+store, then calls
+[`removeData(ofTypes:modifiedSince:completionHandler:)`](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/removedata(oftypes:modifiedsince:completionhandler:))
+once with `allWebsiteDataTypes()` and `.distantPast`. The installed set must include
+`WKWebsiteDataTypeCookies`. A pending marker precedes dispatch; the callback has
+no error parameter and establishes only completion, never physical retirement.
+The probe then releases the store reference, calls UUID removal once, and retains
+the strict same-UUID reopened-cookie/localStorage emptiness and B-preservation
+assertions. Unknown callback outcomes still stop without replay or filesystem
+cleanup. This isolated namespace does not prove the production writer protocol.
+
+Apple also exposes store-specific
+[`httpCookieStore`](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/httpcookiestore),
+[`getAllCookies(_:)`](https://developer.apple.com/documentation/webkit/wkhttpcookiestore/getallcookies(_:))
+and [`delete(_:completionHandler:)`](https://developer.apple.com/documentation/webkit/wkhttpcookiestore/delete(_:completionhandler:))
+on macOS 10.13+. They provide a public per-store cookie path, but this experiment
+does not silently add a per-cookie fallback. It uses neither global cookie storage
+nor WebKit filesystem paths/private APIs. Live official documentation responses
+were retained under `/tmp/zmux-public-cookie-removal-docs-20261016` with hashes.
+
+Before any production clear/delete, exclusive admission and lifetime authority
+must span inactive-store data completion, store release, UUID callback and durable
+catalog handling. Active pages, hidden views, pending constructors and retained
+download/conversion owners still reject before mutation. Data-removal completion
+does not replace those requirements or permit timeout-based authority release.
