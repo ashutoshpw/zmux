@@ -367,14 +367,15 @@ fn later_operations_refuse_symlink_swaps_with_path_changed() {
 fn fifo_directory_and_device_are_rejected_without_blocking() {
     let dir = Dir::new();
     let fifo = dir.0.join("pipe");
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &fifo,
-        rustix::fs::FileType::Fifo,
-        Mode::from_raw_mode(0o600),
-        0,
-    )
-    .unwrap();
+    // rustix::fs::mknodat does not exist on Apple targets, so use mkfifo(1), which both
+    // supported platforms ship.
+    let made = std::process::Command::new("mkfifo")
+        .arg("-m")
+        .arg("600")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo is available");
+    assert!(made.success(), "mkfifo failed: {made}");
     // A blocking open of a FIFO with no writer would hang this test forever.
     assert_eq!(code(text(&fifo)), "not_regular_file");
     assert_eq!(
