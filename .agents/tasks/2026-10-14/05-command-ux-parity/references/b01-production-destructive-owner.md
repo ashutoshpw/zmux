@@ -502,3 +502,49 @@ Its packaged executable SHA256 is
 bundled CLI SHA256
 `0513ad3d17ddd764b7506e0c0cb8319981d4be3d45d1e73ec78073042b8d9922`.
 These establish compilation/package provenance, not physical profile acceptance.
+
+## Accepted focused production native evidence
+
+Run [38860801836](https://github.com/ashutoshpw/zmux/actions/runs/38860801836), exact
+source11f51accc56bf380f7094be3e9c63dcb5e19cd17, passed both Swift source slices with
+strict concurrency/warnings-as-errors, complete macOS `scripts/check`, optimized universal
+build and all three production native phases. Artifact12030165672 is retained locally at
+`/tmp/zmux-b01-native-38860801836-artifact`; full raw log
+`/tmp/zmux-b01-native-38860801836-complete.log`.
+
+All115 uploaded source files equal their exact11f51ac Git objects, including all30
+changed compilation-source files. ZIP SHA256
+`5ac5bdcd50c0ee7dd733e58094b73b5c608d851f4d375ae01423321848e011de` and embedded
+source SHA verify. Actual app executable SHA256 matches the native receipt:
+`735f38ff45f509e04b37056c40e78b0d6db09566967d8faa38eed790fe324fd3`.
+App, bundled CLI and Rust library each independently contain arm64 and x86_64 slices.
+
+Original prepare30882, fresh reader31544 and fresh deletion reader31587 each completed
+shared shutdown, exited normally with0, and were actually waited/reaped before the next
+launch. All9 post-exit lifetime observations acquired exclusive ownership, found zero
+sentinel bytes and preserved each UUID's device/inode across all three phases.
+
+The actual production journey verified mounted/hidden/foreign-owner busy refusals,
+real WKDownload conversion plus refusal with a live tab, real Save Cancel and native
+download cleanup; CLI clear A/manager clear C; actual manager destructive-confirmation
+Cancel; new-view empty A/C and untouched B; new post-clear data surviving CLI/manager
+original-intent reconciliation; subsequent clear and fresh restored A/C empty/B intact
+without reseeding; CLI delete C/manager delete A; original status/reconciliation after
+membership removal and another process restart; fresh deleted membership/model absence;
+and public cleanup of all three generated UUIDs. The final generated catalog is empty.
+Raw native stderr contains only expected phase progress; no generic BUSY or cleanup error
+was observed in this run. This does not resolve the older main22550c1 generic BUSY.
+
+The independently hashed review receipt is
+`/tmp/zmux-b01-production-native-acceptance-review-20261016.json`, SHA256
+`6d9523c68f4b131cc623cd0ca4ca61790c79fbef0aacfdec7007dd4ef81b6ec3`.
+Parent independently verified the same115 source files, archive, executable identity,
+three original PID reaps/shared shutdowns and9 zero-sentinel exclusive observations.
+
+Remaining explicit gates: interrupted nonterminal/missing-callback fault injection,
+deterministic construction racing restore, download/conversion-only refusal without a
+simultaneous live model/native view guard, and TCC-authorized Save destination acceptance.
+This is cookie/localStorage happy-path acceptance and known-terminal reconciliation,
+not general website-data durability or callback-loss proof. The original64b4a9 recovery
+freeze remains preserved. Parent owns integration/publication; this branch does not change
+the user's untracked lifecycle design/workflow/tools files or unrelated native work.
