@@ -568,3 +568,39 @@ explicit idle editor validation. Settings already use their separate label. This
 repairs shared feedback ownership across both pending and completed states without
 retries/timing changes. Native saved reply ID/body proof is retained before waiting
 for its UI status, improving failure diagnostics without weakening the assertion.
+
+## Native branch acceptance complete
+
+Run [38870043280](https://github.com/ashutoshpw/zmux/actions/runs/38870043280), exact
+`541ab174957d41602252a80c02735911906969a1`, is green. Both Swift 6 source slices
+pass (98.025 s), the arm64 package builds (288.345 s), and owned app PID 8973
+exits 0 without timeout (20.323 s) with `state: complete`, `stage: complete`.
+All 15 actual behavior checks pass, followed by the opaque capture and shared
+physical cleanup path. Independent helper PID 8972 exits 0; both lock-owner
+completion records match its PID, runner parent PID 1816 and nonce.
+
+The original request `56873bd3-9ae8-481f-b8d3-79784004964f` is independently
+observed pending through the public socket while queued controls remain pending.
+Actual response capacity -5 retains that same UUID and exact 66-byte draft, with
+Send disabled/Check Status enabled. Explicit known/capacity/recovery status counts
+are 1/1/1. Original Saved resolves exactly one late queued reply and clears only
+the unchanged draft. Both saved reply IDs, exact parent/thread/recipient/sender,
+all four mounted/editor/saved UTF-8 proofs and fresh zero-input PTY progress pass.
+
+All 273 retained source hashes and retained bytes equal the frozen local manifest,
+and the receipt's manifest equals it exactly. Freeze SHA256:
+`c01c0597e7e763a7194b3c32d033a165f4652731665bc8fc0a02860c55e2be7e`.
+Archive actual SHA256:
+`924c588bd2baba6332158ec80863e77dbd7ece4c338e202bf4608ab65c221d05`.
+Opaque RGB PNG SHA256:
+`a3827d48c464b6f7677ec93c727fe7364f9bb4ce2e99483b681d343cc02318bd`.
+Visual inspection confirms legible icon controls, highlighted read row, selectable
+plain body, empty reply editor with caret, Saved · Queued, All tabs receiving On
+and Configured On · Effective On, without overlap/clipping. Raw native/lock logs
+are empty and retained. Artifacts: `/tmp/zmux-agent-inbox-native-green-38870043280/`.
+
+This completes the scoped A02b branch acceptance. It is a host arm64 execution
+and dual-slice source check, with ad-hoc signing; current-main integration and
+validation are separate parent-owned gates. No main merge, release or provider
+wake/consumer capability is claimed. The final evidence-only commit changes no
+retained runtime/fixture source input from the qualified native SHA above.
