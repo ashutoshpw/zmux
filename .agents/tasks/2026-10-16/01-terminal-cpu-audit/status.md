@@ -4,6 +4,25 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Fast Darwin probe38943334798 narrows failure to plain SSH: local SSH client is
+  gone, remote session leader is orphaned (PPID1) and waiting on foreground Bash/
+  provider, both with distinct process groups. Provider INT/HUP are not ignored;
+  desktop cleanup_error/last_error are null. Nested tmux succeeds. Group-HUP-only
+  cleanup is insufficient; reassessed without weakening the10s deadline.
+- Candidate uses interruptible owner wait plus legacy Bash3/4 signal reset by
+  short-lived /usr/bin/perl that immediately execs the original shell. Modern
+  Bash/dash need no helper. Private helper suppresses module autoload, restores
+  user Perl environment before exec and exposes no environment values in argv.
+  Direct owner/group HUP, Ctrl-C and environment preservation pass GNU Bash3.2;
+  exact table fails pre-fix. Logs: `/tmp/zmux-bash32-owner-route-red.log`,
+  `/tmp/zmux-bash32-reset-owner-green.log`, `/tmp/zmux-bash32-reset-env-green.log`.
+  Candidate full portable recheck passes (`/tmp/zmux-legacy-wait-final-check.log`),
+  as do ordinary release plain/nested SSH (`/tmp/zmux-owner-wait-{ssh,tmux}.log`).
+  Darwin actual SSH probe remains required before native packaging acceptance.
+- Broad Mac38941972167 passes terminal/browser render and extensive browser/native
+  input/reorder acceptance, then fails existing remote clipboard directory-error
+  visibility: compact header permanently hides detailLabel. Candidate reveals it
+  for errors and retains compact normal chrome; native revalidation is pending.
 - Actions38940969866 again passes native repaint/sidebar/status-menu and system
   Bash lifecycle tests but fails the real plain SSH disconnect10s cleanup. Group
   HUP simulation is insufficient evidence for Darwin's real SSH disconnect path.

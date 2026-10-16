@@ -202,15 +202,36 @@ process runner is shared for ssh -G configuration resolution on the launch worke
 (5s, 64KiB per stream, private group cleanup), without blocking terminal_spec/UI.
 Config probe failure retains ordinary SSH behavior and reports integration disabled.
 
-Darwin POSIX Bash defers the outer HUP trap while its foreground shell is running.
-The existing blocked FIFO reader now also owns exact-file cleanup traps for group
-HUP/TERM/EXIT. Its read builtin is interruptible, so the authenticated SSH group
-hangup removes hooks promptly without changing interactive shell signal handling.
-A real-PTY regression retains the Rust lease outside the worker, exercises Ctrl-C,
-and delivers group HUP while the foreground shell remains alive. A private GNU
-Bash3.2 compatibility build reproduces the old deferred-cleanup failure and passes
-the repair; no GNU source/binary is shipped or added as an app dependency. The
-optional test-only ZMUX_TEST_BASH path selects an independently installed Bash;
-CI tests use the actual platform /bin/bash. macOS packaged cleanup still requires
-the same10s assertion. The intermediate async interactive-child approach was
-rejected after Bash3.2 reproduced inherited ignored SIGINT; it is not retained.
+## Darwin owner-only hangup and legacy signal reset
+
+The real macOS probe leaves the remote session leader orphaned and waiting on its
+foreground shell/provider after the local SSH client exits, while nested tmux
+cleans up. Relay group-HUP traps alone do not cover that owner-only disconnect.
+The owner now launches the interactive child asynchronously with explicit original
+stdin, closed relay/keepalive descriptors and an interruptible wait builtin.
+
+Bash3/4 irrevocably ignore INT/QUIT in an async subshell, even after trap reset.
+On those owners only, `/usr/bin/perl -f` sets those two dispositions to default
+and immediately execs the original shell argv. It stays out of the resident process
+tree. Modern Bash and dash need no interpreter helper. A missing legacy helper
+leaves an ordinary usable shell with an explicit integration-unavailable message.
+Private helper startup suppresses Perl module autoload and restores original
+PERL5OPT/PERL5LIB set/unset values before exec; values remain environment data,
+never command arguments. User startup/provider configuration remains unchanged.
+
+The real-PTY lifecycle test covers owner-only and group HUP with an independently
+held Rust lease, ordinary Ctrl-C and hostile private-helper autoload preferences.
+A private GNU Bash3.2 compatibility build reproduces the owner-HUP regression and
+passes the repair. No GNU code/binary is imported or shipped. Optional test-only
+ZMUX_TEST_BASH selects an independently installed compatibility Bash; CI uses the
+platform's actual /bin/bash. The real macOS plain/nested disconnect probe and
+unchanged10s packaged cleanup assertion remain required product gates.
+
+## Native upload error visibility
+
+Broad macOS build38941972167 passes native terminal/browser/keyboard/reorder stages,
+then the existing combined remote clipboard test times out after successful image
+and file uploads. Compact MainHeaderView permanently hides detailLabel, including
+refused-directory error text. Update now reveals detail only in the error state;
+ordinary chrome stays compact. The existing real native paste/refusal assertion
+is the regression owner; no test is bypassed or rewritten to accept hidden errors.

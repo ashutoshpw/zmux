@@ -126,85 +126,101 @@ printf 'PROVIDER_ARGUMENTS_PRESERVED\n'
 }
 
 #[test]
-fn posix_group_hangup_cleans_hooks_before_the_foreground_shell_exits() {
-    let directory = Directory::new();
-    let report = directory.0.join("lease-root");
-    // Optional local portability reproduction with an independently installed
-    // older Bash. CI uses the platform's actual /bin/bash without an override.
-    let bash = std::env::var("ZMUX_TEST_BASH").unwrap_or_else(|_| "/bin/bash".into());
-    let (mut launch, lease) = shell_integration::prepare(Launch {
-        program: bash.clone(),
-        args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
-        cwd: Some(directory.0.clone()),
-        size: Size {
-            rows: 12,
-            cols: 100,
-        },
-    })
-    .unwrap();
-    // Exercise Darwin's Bash POSIX-shell wait semantics on Linux too. Keep the
-    // Rust cleanup lease outside the worker so it cannot mask shell cleanup.
-    launch.program = bash;
-    launch.args.insert(0, "--posix".into());
-    let mut session = Session::spawn_with_environment(
-        launch,
-        &[(
-            "ZMUX_FIXTURE_LEASE_REPORT".into(),
-            report.to_str().unwrap().into(),
-        )],
-    )
-    .unwrap();
-    let wait = |label: &str, predicate: fn(&str) -> bool| {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            if session
-                .snapshot()
-                .is_ok_and(|s| predicate(&s.viewport.contents))
-            {
-                break;
+fn posix_owner_and_group_hangup_clean_hooks_before_the_foreground_shell_exits() {
+    for group in [false, true] {
+        let directory = Directory::new();
+        let report = directory.0.join("lease-root");
+        // Optional local portability reproduction with an independently installed
+        // older Bash. CI uses the platform's actual /bin/bash without an override.
+        let bash = std::env::var("ZMUX_TEST_BASH").unwrap_or_else(|_| "/bin/bash".into());
+        let (mut launch, lease) = shell_integration::prepare(Launch {
+            program: bash.clone(),
+            args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
+            cwd: Some(directory.0.clone()),
+            size: Size {
+                rows: 12,
+                cols: 100,
+            },
+        })
+        .unwrap();
+        // Exercise Darwin's Bash POSIX-shell wait semantics on Linux too. Keep the
+        // Rust cleanup lease outside the worker so it cannot mask shell cleanup.
+        launch.program = bash;
+        launch.args.insert(0, "--posix".into());
+        let mut session = Session::spawn_with_environment(
+            launch,
+            &[
+                (
+                    "ZMUX_FIXTURE_LEASE_REPORT".into(),
+                    report.to_str().unwrap().into(),
+                ),
+                (
+                    "PERL5OPT".into(),
+                    "-MZmuxPrivateBootstrapMustNotLoad".into(),
+                ),
+                ("PERL5LIB".into(), directory.0.to_str().unwrap().into()),
+                (
+                    "ZMUX_FIXTURE_PERL_LIBRARY".into(),
+                    directory.0.to_str().unwrap().into(),
+                ),
+            ],
+        )
+        .unwrap();
+        let wait = |label: &str, predicate: fn(&str) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if session
+                    .snapshot()
+                    .is_ok_and(|s| predicate(&s.viewport.contents))
+                {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let observed = session.snapshot().map(|s| {
+                        (
+                            s.state,
+                            s.failure.clone(),
+                            s.viewport.contents.chars().take(1800).collect::<String>(),
+                        )
+                    });
+                    panic!("PTY lifecycle fixture did not execute {label}: {observed:?}");
+                }
+                thread::sleep(Duration::from_millis(5));
             }
-            if Instant::now() >= deadline {
-                let observed = session.snapshot().map(|s| {
-                    (
-                        s.state,
-                        s.failure.clone(),
-                        s.viewport.contents.chars().take(1800).collect::<String>(),
-                    )
-                });
-                panic!("PTY lifecycle fixture did not execute {label}: {observed:?}");
-            }
+        };
+        session.send_input(b"[ \"$PERL5OPT\" = -MZmuxPrivateBootstrapMustNotLoad ] && [ \"$PERL5LIB\" = \"$ZMUX_FIXTURE_PERL_LIBRARY\" ] || exit 77; stty -echo; printf '%s' \"$ZMUX_SHELL_INTEGRATION_DIRECTORY\" > \"$ZMUX_FIXTURE_LEASE_REPORT\"; printf '\\033[2J\\033[HHANGUP_READY'\n").unwrap();
+        // Cleared screen prefix excludes echoed command text and proves the preceding
+        // lease-path write completed before the controlled HUP.
+        wait("ready", |text| text.starts_with("HANGUP_READY"));
+        let root = PathBuf::from(fs::read_to_string(report).unwrap());
+        assert!(root.join("plugin/hooks/hooks.json").is_file());
+        // The notification relay must preserve ordinary Ctrl-C handling and PTY input.
+        session.send_input(b"sleep 30\n").unwrap();
+        thread::sleep(Duration::from_millis(100));
+        session
+            .send_input(b"\x03printf '\\nINTERRUPT_RECOVERED\\n'\n")
+            .unwrap();
+        wait("Ctrl-C recovery", |text| {
+            text.contains("INTERRUPT_RECOVERED")
+        });
+        let pid = nix::unistd::Pid::from_raw(session.process_id() as i32);
+        let signal = nix::sys::signal::Signal::SIGHUP;
+        if group {
+            nix::sys::signal::killpg(pid, signal)
+        } else {
+            nix::sys::signal::kill(pid, signal)
+        }
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while root.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
-    };
-    session.send_input(b"stty -echo; printf '%s' \"$ZMUX_SHELL_INTEGRATION_DIRECTORY\" > \"$ZMUX_FIXTURE_LEASE_REPORT\"; printf '\\033[2J\\033[HHANGUP_READY'\n").unwrap();
-    // Cleared screen prefix excludes echoed command text and proves the preceding
-    // lease-path write completed before the controlled HUP.
-    wait("ready", |text| text.starts_with("HANGUP_READY"));
-    let root = PathBuf::from(fs::read_to_string(report).unwrap());
-    assert!(root.join("plugin/hooks/hooks.json").is_file());
-    // The notification relay must preserve ordinary Ctrl-C handling and PTY input.
-    session.send_input(b"sleep 30\n").unwrap();
-    thread::sleep(Duration::from_millis(100));
-    session
-        .send_input(b"\x03printf '\\nINTERRUPT_RECOVERED\\n'\n")
-        .unwrap();
-    wait("Ctrl-C recovery", |text| {
-        text.contains("INTERRUPT_RECOVERED")
-    });
-    nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(session.process_id() as i32),
-        nix::sys::signal::Signal::SIGHUP,
-    )
-    .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while root.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(5));
+        let cleaned = !root.exists();
+        session.shutdown(Duration::from_secs(3)).unwrap();
+        assert!(lease.is_some());
+        assert!(
+            cleaned,
+            "PTY group hangup deferred hook cleanup while its foreground shell was alive"
+        );
     }
-    let cleaned = !root.exists();
-    session.shutdown(Duration::from_secs(3)).unwrap();
-    assert!(lease.is_some());
-    assert!(
-        cleaned,
-        "PTY group hangup deferred hook cleanup while its foreground shell was alive"
-    );
 }

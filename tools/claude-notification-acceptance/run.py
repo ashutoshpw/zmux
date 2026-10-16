@@ -174,7 +174,7 @@ time.sleep(30)
                                              '-o','pid=,ppid=,pgid=,stat=,comm='],
                                             capture_output=True,text=True,timeout=3,check=False)
                     masks = subprocess.run(['ps','-p',','.join(map(str,sorted(ids))),
-                                            '-o','pid=,sig=,sigignore=,sigcatch='],
+                                            '-o','pid=,pending=,ignored=,caught='],
                                            capture_output=True,text=True,timeout=3,check=False)
                     result = library.zmux_desktop_snapshot(desktop.value, 0)
                     runtime = {'status':result.status}
