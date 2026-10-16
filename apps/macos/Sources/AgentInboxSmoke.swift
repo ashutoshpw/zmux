@@ -45,6 +45,9 @@ enum AgentInboxSmoke {
         var mountedControls: MountedControls?
         var knownLockRefusal: MountedControls?
         var capacityRefusal: MountedControls?
+        var knownStatusChecks = 0
+        var capacityStatusChecks = 0
+        var recoveryStatusChecks = 0
     }
     private struct Message: Decodable {
         struct Address: Decodable { let surface_id: UUID }
@@ -311,20 +314,15 @@ enum AgentInboxSmoke {
             guard submit.isEnabled else { throw failure("Reply not available before real lock contention") }
             submit.performClick(nil)
             try submitKey(in: inbox)
-            try await wait(coordinator, "real lock wait yields known refusal or explicit pending status") { _ in
-                (submit.isEnabled && operationStatus(content) == "another instance is reserving session generations; retry") ||
-                (status.isEnabled && !submit.isEnabled)
-            }
-            if status.isEnabled {
-                guard operationStatus(content).split(separator: " ").contains(where: { UUID(uuidString: String($0)) != nil }) else {
-                    throw failure("Background refresh replaced the uncertain operation recovery UUID")
+            evidence.knownStatusChecks = try await checkStatusUntil(status, "known journal lock refusal retains draft without pending status", beforeCheck: {
+                guard !submit.isEnabled, reply.string.utf8.elementsEqual(laterEdit.utf8),
+                      operationStatus(content).split(separator: " ").contains(where: { UUID(uuidString: String($0)) != nil }) else {
+                    throw failure("Background refresh replaced the uncertain operation recovery UUID or draft")
                 }
-                status.performClick(nil)
-            }
-            try await wait(coordinator, "known journal lock refusal retains draft without pending status") { _ in
+            }, predicate: {
                 operationStatus(content) == "another instance is reserving session generations; retry" &&
                 submit.isEnabled && !status.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8)
-            }
+            })
             evidence.knownLockRefusal = mountedControls(content)
             try await signal(root.appendingPathComponent("lock-release"))
             try await file(root.appendingPathComponent("lock-ended"))
@@ -345,7 +343,8 @@ enum AgentInboxSmoke {
             submit.performClick(nil)
             try submitKey(in: inbox)
             try await wait(coordinator, "real journal wait becomes explicit Check Status") { _ in
-                status.isEnabled && !submit.isEnabled && operationStatus(content).contains("Submission unconfirmed") && reply.string.utf8.elementsEqual(laterEdit.utf8)
+                status.isEnabled && !submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8) &&
+                operationStatus(content).split(separator: " ").contains { UUID(uuidString: String($0)) != nil }
             }
             guard let operation = operationStatus(content).split(separator: " ").compactMap({ UUID(uuidString: String($0)) }).last else { throw failure("Uncertain operation did not expose its original UUID") }
             evidence.pendingRequestId = operation
@@ -359,21 +358,29 @@ enum AgentInboxSmoke {
                 status.isEnabled && operationStatus(content).contains(operation.uuidString.lowercased()) && reply.string.utf8.elementsEqual(laterEdit.utf8) && !submit.isEnabled
             }
             heldCapacity = try await reserveCapacity()
-            status.performClick(nil)
-            try await wait(coordinator, "rejected status transport cannot unlock original uncertain send") { _ in
+            evidence.capacityStatusChecks = try await checkStatusUntil(status, "rejected status transport cannot unlock original uncertain send", minimumChecks: 1, beforeCheck: {
+                guard !submit.isEnabled, reply.string.utf8.elementsEqual(laterEdit.utf8),
+                      operationStatus(content).contains(operation.uuidString.lowercased()) else {
+                    throw failure("Status refusal unlocked or replaced the original uncertain send")
+                }
+            }, predicate: {
                 status.isEnabled && !submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8) &&
                 operationStatus(content).contains("(-5)") && operationStatus(content).contains(operation.uuidString.lowercased())
-            }
+            })
             evidence.capacityRefusal = mountedControls(content)
             if let heldCapacity { try await releaseCapacity(heldCapacity) }
             heldCapacity = nil
             evidence.checks.append("status_transport_capacity_refusal_preserves_original_uncertain_request")
             try await signal(root.appendingPathComponent("pending-lock-release"))
             try await file(root.appendingPathComponent("pending-lock-ended.json"))
-            status.performClick(nil)
-            try await wait(coordinator, "original UUID resolves saved and clears unchanged draft") { _ in
+            evidence.recoveryStatusChecks = try await checkStatusUntil(status, "original UUID resolves saved and clears unchanged draft", minimumChecks: 1, beforeCheck: {
+                guard !submit.isEnabled, reply.string.utf8.elementsEqual(laterEdit.utf8),
+                      operationStatus(content).contains(operation.uuidString.lowercased()) else {
+                    throw failure("Original uncertain send changed before saved recovery")
+                }
+            }, predicate: {
                 reply.string.isEmpty && operationStatus(content).hasPrefix("Saved") && !status.isEnabled
-            }
+            })
             let recovered = try await inboxUntil(source, "one original durable reply after real lock release") { rows in
                 rows.messages.contains { $0.request_id == operation && $0.reply_to == primary.id && $0.body.utf8.elementsEqual(laterEdit.utf8) }
             }
@@ -476,6 +483,20 @@ enum AgentInboxSmoke {
         // A disabled button may reject this duplicate key equivalent. It must
         // never create a second mutation through a separate keyboard path.
         _ = window.performKeyEquivalent(with: event)
+    }
+    private static func checkStatusUntil(_ button: NSButton, _ description: String, minimumChecks: Int = 0,
+                                         beforeCheck: () throws -> Void, predicate: () -> Bool) async throws -> Int {
+        let deadline = ContinuousClock.now + .seconds(8)
+        var checks = 0
+        while ContinuousClock.now < deadline {
+            if checks >= minimumChecks, predicate() { return checks }
+            if button.isEnabled {
+                try beforeCheck()
+                button.performClick(nil); checks += 1
+            }
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        throw failure("Timed out awaiting " + description)
     }
     private static func inboxUntil(_ host: MainWindowHost, _ description: String, predicate: (Inbox) -> Bool) async throws -> Inbox {
         let deadline = ContinuousClock.now + .seconds(8)

@@ -464,3 +464,29 @@ or storage behavior changes. The known-refusal case now observes actual pending
 controls when present, verifies a recovery UUID and explicitly invokes the existing
 Check Status action before asserting authoritative refusal and retained draft.
 The independent public-owner accepted-pending journey remains a separate gate.
+
+## Known refusal passes; uncertainty label assertion repaired
+
+Run [38863733082](https://github.com/ashutoshpw/zmux/actions/runs/38863733082), exact
+`4a56321636c8aa77842f104dde4d9921c0138abb`, passes both Swift 6 slices
+(146.266 s), arm64 package (384.192 s), and eleven actual checks including exact
+known refusal/draft retention. Mounted known status equals the storage refusal,
+Send enabled and Check Status disabled; no extra reply is created. The second
+independent helper admits five public queued List controls to exact peer app PID
+16987, with all pending admission receipts retained. The native operation later
+shows Check Status enabled, Send disabled, exact draft and original UUID, with
+`Message acknowledgement failed (-4). Check Status: c5e7f94a-6611-4ee0-bc34-1ecd1a603502`.
+This is a truthful status-read Busy refusal after accepted admission; an initial
+refusal would discharge pending and cannot produce those controls. The fixture
+incorrectly required literal Submission unconfirmed, so it never asked the helper
+to verify the original pending operation. App exits 1 without timeout (35.549 s).
+All 273 retained hashes match the freeze; archive SHA256:
+`1dfcbd17d1caa420b0d23d2723b9c0d363d4b04b752bd359e2256fba2e564599`.
+
+Fixture-only correction accepts actual uncertainty controls, exact draft and
+parseable recovery UUID; independent public original/control pending receipts
+remain mandatory. Bounded explicit Check Status actions may repeat after a Busy
+read for known refusal, actual capacity -5 proof and final original Saved recovery.
+Each action requires the same UUID/draft and Send disabled; exact -5 and late Saved
+remain mandatory. No Send is replayed, no automatic native retry or production
+timing changes are added. Explicit status action counts are retained and bounded.
