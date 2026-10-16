@@ -118,6 +118,10 @@ pub struct FileFailure {
     pub outcome_unknown: bool,
     /// Boxed so a failure stays small inside every `Result` on the hot paths.
     pub conflict: Option<Box<ConflictInfo>>,
+    /// Set only when the failed save's content is already the tab's visible baseline (a rename
+    /// that landed before the directory sync failed): the generation that baseline now has, so
+    /// the view can rebase onto it instead of being refused as stale on its next save.
+    pub committed_generation: Option<u64>,
 }
 impl FileFailure {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
@@ -127,6 +131,7 @@ impl FileFailure {
             op_id: None,
             outcome_unknown: false,
             conflict: None,
+            committed_generation: None,
         }
     }
     fn with_op(mut self, op_id: u64) -> Self {
@@ -1241,6 +1246,7 @@ impl Inner {
                             committed.meta.fingerprint,
                             self.config.poll_interval,
                         );
+                        reported.committed_generation = Some(entry.generation);
                     }
                     entry.last_op = Some(OpReceipt {
                         op_id,

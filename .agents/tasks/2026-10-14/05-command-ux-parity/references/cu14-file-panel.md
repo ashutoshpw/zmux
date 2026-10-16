@@ -1699,3 +1699,66 @@ Deviations and limits:
   `isDiscarding(_:)`), `scripts/check-file-close-resolution`, `scripts/check-file-editor-model`,
   `scripts/check-file-load-gate`, `scripts/build-macos-dev`, `scripts/check-macos-app`, the
   `file_panel` smoke stage and every hosted macOS workflow.
+
+### Fix round 11 (S4 review finding, one blocking, valid and fixed at the root)
+
+Base of the round: `4ef1c4f`. Swift still cannot be compiled or run here (no Swift toolchain, Linux).
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | The recovery that D13 step 6 documents for a save whose directory sync failed (`sync_failed`, `outcome_unknown`) did not work in the panel: the banner had no buttons and never cleared, and a retry ended in the lost-owner banner. | Yes, by reading both owners. Rust: `file_io::save` returns `SaveFailure { sync_failed, outcome_unknown: true, committed: Some(..) }` after the rename; the worker's `Err` arm then calls `entry.adopt(committed ..)`, which does `generation += 1`, and records `last_op = OutcomeUnknown(sync_failed)`; nothing later turns that into `Completed`. The failure reply carried no generation. Swift: `saveFailed` set `.saveUnknown(opId)`, whose banner has neither button; `saveOutcomeBanner` only resolved `completed` and `failed`; the model kept the old generation and a dirty buffer, so Cmd-S sent the old `base_generation` and got `stale_view`, then `ownerLost` ("Reload from disk to discard it", although the text was already on disk). Two reachable variants of the same dead end: the committed sync failure above, and a save that timed out whose worker later finished with `sync_failed` (the receipt stays `outcome_unknown`, code `sync_failed`, for good). No data was lost in either. | Rust owns the generation: `FileFailure` has a new `committed_generation: Option<u64>`, set by the worker only when it adopted the failed save's text (so only for a rename that landed and the host still owns), and `file_channel::failure_header` sends it as the reply's `generation` (absent otherwise). Swift: `FileHostFailure.committedGeneration` is decoded from `header.generation`. `FileEditorModel.savedWithoutDurability(written:current:generation:)` rebases on that generation, makes the written text the baseline (dirty only if the person typed meanwhile) and records `durabilityUnconfirmed`; `canSave` is true for a clean buffer while that is set, so a repeat save is possible; a confirmed `saved(..)` or an `attached(..)` reload clears it. `saveFailed(_:written:)` uses it for a committed failure and shows the new `.savedUnsynced(code)` banner (Save Again, Dismiss; `.saveAgain` calls `save()`, which repeats the whole save on the new generation: same bytes, no conflict, directory synced again). A confirmed save or a load clears the banner (`isObsoleteAfterSave/Load`). Only an unmatched unknown outcome still waits as `.saveUnknown(opId)`. `saveOutcomeBanner` now also resolves `outcome_unknown` whose code is not `timeout` (the worker's final word) to `.saveUnknown(0)`, which has the Reload and Dismiss buttons, so the late `sync_failed` variant no longer waits for ever; a `timeout` receipt keeps waiting because the worker will still resolve it. |
+
+Tests added or changed:
+
+- `crates/desktop-runtime/tests/files.rs` is 48 tests (46 before, 2 added). The `Gated` backend gained
+  `fail_next_directory_sync` (a one-shot flag the test sets before the save; no sleeps, the save call
+  returns only after the worker replied). `a_save_whose_directory_sync_fails_reports_the_generation_its_text_now_has_and_a_retry_completes`:
+  the save fails `sync_failed` with `outcome_unknown`, the op id and `committed_generation == generation + 1`;
+  the text is on disk; the snapshot entry is `in_sync` at that generation with `last_op` `outcome_unknown`
+  / `sync_failed`; a save on the old generation is `stale_view` and writes nothing; a save of the same
+  bytes on the reported generation succeeds (no conflict), completes the receipt with a new op id and
+  generation + 1, and the backend saw exactly two directory syncs and two renames.
+  `only_a_failure_whose_text_became_the_baseline_reports_a_committed_generation`: a `conflict` and a
+  `stale_view` refusal carry no generation.
+- `crates/native-bridge/src/file_channel.rs`: unit test
+  `a_failure_whose_text_is_already_on_disk_carries_the_generation_to_rebase_on` (wire header has
+  `generation` for a committed failure and no such key otherwise).
+- `crates/native-bridge/tests/swift_file_contract.rs` is 29 tests (28 before, 1 added). New structure
+  pin `pin_a_save_whose_directory_sync_failed_rebases_and_offers_a_repeat_save` (decode of
+  `generation` into `committedGeneration`; the order rebase, notice, then waiting in `saveFailed`; the
+  `.saveAgain` arm; `canSave` allowing an owed sync; the `outcome_unknown` arm of `saveOutcomeBanner`;
+  the fixture runs `unsyncedSave()`). It reads source and says nothing about Swift behaviour. The
+  `sameBytes` count pin went from 2 to 3 (the new rebase path compares bytes too), and the fixture
+  wiring test lists three new scenarios.
+- `tools/native-fixtures/file-editor-model.swift` (UNAVAILABLE here): new `unsyncedSave()` (rebase on
+  the reported generation, clean buffer still saveable, typing during the failed save stays dirty,
+  repeat save clears the debt, reload clears it, button actions, the notice survives an in-sync report)
+  and `outcome_unknown` cases in the lost-acknowledgement scenario (final word stops waiting, timeout
+  keeps waiting, another operation is ignored, the resolved notice has working buttons). These run only
+  on macOS CI through `scripts/check-file-editor-model`.
+
+Mutation checks on Linux (applied, run, restored): not setting `committed_generation` after the adopt
+fails the desktop-runtime test; dropping the `generation` key from `failure_header` fails the unit
+test; replacing the `.savedUnsynced` banner in `saveFailed` with `.saveUnknown` fails the new pin
+(each run once, then restored).
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test result
+lines, 579 passed, 0 failed, 2 ignored, the previous 575 plus 4; clippy `-D warnings`; license
+inventory; `scripts/check-native-bridge`). Determinism, each changed test executed from its built
+binary: the two new `desktop-runtime` `files` tests, 20 serial runs, 0 failures, then 8 copies started
+together, 3 rounds each (24 runs), 0 failures; the new pin, the two tests it touches and the
+`file_channel` unit test, 20 serial runs, 0 failures, then 8 concurrent copies, 0 failures. No CPU
+hogs were started beside the 8 copies.
+
+Deviations and limits:
+
+- Durability of the first write is still unconfirmed by design: the repeat save is the recovery, and
+  it is offered, not automatic (D13: an outcome-unknown save is never replayed on its own).
+- A save that timed out and whose worker later committed (success or `sync_failed`) leaves the view on
+  the old generation; the person is told to reload, which shows what is on disk. Only the direct
+  `sync_failed` reply rebases.
+- The in-app smoke does not inject a directory-sync failure; the Swift path is covered by the model
+  fixture and the pin only, and neither can run here.
+- Still UNAVAILABLE: `scripts/check-macos-sources`, `scripts/check-file-close-resolution`,
+  `scripts/check-file-editor-model`, `scripts/check-file-load-gate`, `scripts/build-macos-dev`,
+  `scripts/check-macos-app`, the `file_panel` smoke stage and every hosted macOS workflow.

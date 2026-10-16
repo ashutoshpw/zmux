@@ -485,7 +485,10 @@ possible to keep the window minimal; this limitation is also recorded in the rec
 6. `renameat(temp -> name)`, then `fsync` the directory. A failure before the rename unlinks the
    temp and reports the error (known not written). A directory-`fsync` failure after the rename
    reports `sync_failed` with `outcome_unknown: true`; the baseline is already updated to the
-   visible content, so a retry is a safe no-op-equivalent save.
+   visible content, so a retry is a safe no-op-equivalent save. The adoption moves the entry's
+   generation on, so the failure reply carries it (`generation`, present only for a failure whose
+   text was adopted) and the view rebases on it; the retry is then an ordinary save of the same
+   bytes on that generation.
 7. Success updates the baseline (`generation + 1`, new sha/size/mtime/dev/ino) under the service
    mutex and returns them. The fingerprint is read with `fstat` from the temp file's descriptor,
    which stays open across the rename, never by looking the path up again, so an external
