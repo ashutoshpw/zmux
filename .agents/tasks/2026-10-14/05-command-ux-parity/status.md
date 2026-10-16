@@ -5,6 +5,12 @@
 
 ## Active implementation
 
+- Published `8d7e6e8` includes accepted V1 native history. Exact-main Foundation
+  `38846237751` stopped at rustfmt on one diagnostic assertion; formatting repaired.
+  Fresh full local `scripts/check` passes 343 tests/one ignored, strict workspace
+  Clippy, licenses and ABI. macOS full/selection/history checks are running; no
+  full-parity artifact handoff. The format fix does not change test behavior.
+
 - Finite completion integrated locally as `1a81f2d`, deterministic exec regression
   `f80a432`, and repair `f2fd5b6`. Exact frozen cohort passes 22 desktop tests,
   16 actual Zellij/auth tests and strict relevant Clippy; unchanged broad
