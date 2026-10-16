@@ -30,6 +30,7 @@ jobs:
           name: profile-lifecycle-probe-${{ github.sha }}
           path: |
             ${{ runner.temp }}/native-profile-lifecycle/receipt.json
+            ${{ runner.temp }}/native-profile-lifecycle/native-profile-prepare.json
             ${{ runner.temp }}/native-profile-lifecycle/native-profile-lifecycle.json
             ${{ runner.temp }}/native-profile-lifecycle/*.log
             ${{ runner.temp }}/native-profile-lifecycle/*.zip

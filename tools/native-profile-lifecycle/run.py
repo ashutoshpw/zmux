@@ -47,11 +47,13 @@ def main():
     runner = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(runner)
     owned_groups = []
+    owned_processes = []
     group_factory = runner.ProcessGroup
 
     def record_group(command, **options):
         owner = group_factory(command, **options)
         owned_groups.append({"pid": owner.process.pid, "command": [str(item) for item in command]})
+        owned_processes.append(owner.process)
         return owner
 
     # Delegate the unchanged lifecycle owner; retain its actual spawned identity.
@@ -107,31 +109,61 @@ def main():
                 output.write(path, path.relative_to(root))
         receipt["archive"] = {"name": archive.name, "sha256": digest(archive)}
         fixture = f"http://127.0.0.1:{server.server_port}/fixture/{nonce}"
+        preparation_path = root / "native-profile-prepare.json"
+        runner.run([str(executable), str(preparation_path), fixture,
+                    nonce, profile_a, profile_b, "prepare", str(preparation_path)], "native-profile-prepare", root,
+                   receipt["phases"], timeout=45, cwd=REPO)
+        prepared = json.loads(preparation_path.read_text())
+
+        def validate_identity(report, pid):
+            assert report["appPID"] == pid
+            assert report["sourceSHA"] == source and report["bundleID"] == bundle_id and report["nonce"] == nonce
+            assert report["profileA"].lower() == profile_a and report["profileB"].lower() == profile_b
+
+        validate_identity(prepared, owned_groups[-1]["pid"])
+        assert prepared["phase"] == "prepare" and prepared["state"] == "prepared" and prepared["stage"] == "prepared_for_fresh_process"
+        assert all(prepared[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "reopenedAEmpty", "separateBRetained"))
+        assert prepared["aDataRemoval"]["scope"] == "profile_a_all_website_data"
+        assert prepared["aDataRemoval"]["callbackReceived"] and prepared["aDataRemoval"]["dataTypes"]
+        assert [item["phase"] for item in prepared["removals"]] == ["mounted_a_remove", "released_a_remove"]
+        assert all(item["callbackReceived"] for item in prepared["removals"])
+        assert prepared["removals"][0].get("errorDomain") and not prepared["removals"][1].get("errorDomain")
+        # The unchanged owned runner closes/reaps each phase before returning.
+        # Inspect the retained child handle, never infer exit from a reused PID.
+        assert owned_processes[-1].returncode == 0 and owned_processes[-1].poll() == 0
+        receipt["preparation_exit"] = {"pid": prepared["appPID"], "return_code": owned_processes[-1].returncode,
+                                       "owned_child_reaped_before_reopen": True}
+        receipt["native_preparation"] = prepared
+        receipt["preparation_sha256"] = digest(preparation_path)
+        receipt["same_process_acceptance"] = True
+        assert digest(executable) == receipt["executable_sha256"]
+        assert digest(archive) == receipt["archive"]["sha256"]
         runner.run([str(executable), str(root / "native-profile-lifecycle.json"), fixture,
-                    nonce, profile_a, profile_b], "native-profile-lifecycle", root,
+                    nonce, profile_a, profile_b, "reopen", str(preparation_path)], "native-profile-reopen", root,
                    receipt["phases"], timeout=45, cwd=REPO)
         report = json.loads((root / "native-profile-lifecycle.json").read_text())
-        assert report["appPID"] == owned_groups[-1]["pid"]
-        assert report["sourceSHA"] == source and report["bundleID"] == bundle_id and report["nonce"] == nonce
-        assert report["profileA"].lower() == profile_a and report["profileB"].lower() == profile_b
-        assert report["state"] == "complete" and report["stage"] == "public_cleanup_complete"
-        assert all(report[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "reopenedAEmpty", "separateBRetained"))
-        assert report["aDataRemoval"]["scope"] == "profile_a_all_website_data"
-        assert report["aDataRemoval"]["callbackReceived"]
-        assert report["aDataRemoval"]["dataTypes"]
-        assert [item["phase"] for item in report["removals"]] == ["mounted_a_remove", "released_a_remove", "cleanup_a", "cleanup_b"]
-        assert all(item["callbackReceived"] for item in report["removals"])
-        assert report["removals"][0].get("errorDomain")
-        assert all(not item.get("errorDomain") for item in report["removals"][1:])
+        validate_identity(report, owned_groups[-1]["pid"])
+        assert report["appPID"] != prepared["appPID"] and report["preparerPID"] == prepared["appPID"]
+        assert report["phase"] == "reopen" and report["state"] == "complete" and report["stage"] == "public_cleanup_complete"
+        assert report["reopenedAEmpty"] and report["separateBRetained"] and report["aViewReleased"]
+        assert [item["phase"] for item in report["removals"]] == ["cleanup_a", "cleanup_b"]
+        assert all(item["callbackReceived"] and not item.get("errorDomain") for item in report["removals"])
+        assert owned_processes[-1].returncode == 0 and owned_processes[-1].poll() == 0
+        assert digest(preparation_path) == receipt["preparation_sha256"]
+        assert digest(executable) == receipt["executable_sha256"] and digest(archive) == receipt["archive"]["sha256"]
         assert frozen == {path: digest(REPO / path) for path in INPUTS}
         receipt["native_report"] = report
+        receipt["fresh_process_acceptance"] = True
         receipt["state"] = "complete"
     except Exception as error:
         receipt.update(state="failed", error=f"{type(error).__name__}: {error}")
-        report_path = root / "native-profile-lifecycle.json"
-        if report_path.exists():
-            receipt["partial_native_report"] = json.loads(report_path.read_text())
-            receipt["removal_outcome_unknown"] = receipt["partial_native_report"]["stage"].endswith("_callback_pending")
+        receipt["removal_outcome_unknown"] = False
+        for name, key in (("native-profile-prepare.json", "partial_native_preparation"),
+                          ("native-profile-lifecycle.json", "partial_native_report")):
+            report_path = root / name
+            if report_path.exists():
+                receipt[key] = json.loads(report_path.read_text())
+                receipt["removal_outcome_unknown"] |= receipt[key]["stage"].endswith("_callback_pending")
     finally:
         server.shutdown()
         server.server_close()

@@ -23,6 +23,8 @@ private struct Report: Codable, Sendable {
     let nonce: String
     let profileA: UUID
     let profileB: UUID
+    let phase: String
+    var preparerPID: Int32?
     var state = "starting"
     var stage = "startup"
     var mountedA = false
@@ -45,6 +47,7 @@ private struct ProbeFailure: Error, CustomStringConvertible { let description: S
 private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     private let output: URL
     private let fixture: URL
+    private let preparation: URL
     private var report: Report
     private let window = NSWindow(contentRect: NSRect(x: 30, y: 30, width: 1280, height: 480),
         styleMask: [.titled, .closable], backing: .buffered, defer: false)
@@ -57,11 +60,12 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
     private weak var retiredBView: WKWebView?
     private var navigation: [ObjectIdentifier: CheckedContinuation<Void, any Error>] = [:]
 
-    init(output: URL, fixture: URL, nonce: String, a: UUID, b: UUID) {
+    init(output: URL, fixture: URL, nonce: String, a: UUID, b: UUID, phase: String, preparation: URL) {
         self.output = output
         self.fixture = fixture
+        self.preparation = preparation
         report = Report(sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ProbeSourceSHA") as? String ?? "",
-            appPID: getpid(), bundleID: Bundle.main.bundleIdentifier ?? "", nonce: nonce, profileA: a, profileB: b)
+            appPID: getpid(), bundleID: Bundle.main.bundleIdentifier ?? "", nonce: nonce, profileA: a, profileB: b, phase: phase)
         super.init()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -196,6 +200,63 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         report.reopenedAStorageObservation = String(try await evaluate(aView,
             "JSON.stringify({localValue:localStorage.getItem('probe'),cookieValue:document.cookie})").prefix(4096))
     }
+    private func observeBData() async throws {
+        let observation = try await evaluate(bView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=B')})")
+        report.separateBObservation = String(observation.prefix(4096))
+        report.separateBRetained = observation == "{\"local\":\"B\",\"cookie\":true}"
+    }
+    private func dropB() async throws {
+        retiredBView = bView
+        bView?.stopLoading()
+        bView?.navigationDelegate = nil
+        bView?.removeFromSuperview()
+        bView = nil
+        bStore = nil
+        let deadline = ContinuousClock.now + .seconds(5)
+        while retiredBView != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        guard retiredBView == nil else { throw ProbeFailure(description: "Released B WKWebView still exists; cleanup prerequisite is unproven") }
+    }
+    private func runFreshProcess() async throws {
+        let preparation = preparation
+        let prepared = try await Task.detached {
+            let data = try Data(contentsOf: preparation)
+            guard data.count <= 65536 else { throw ProbeFailure(description: "Preparation report exceeds bound") }
+            return try JSONDecoder().decode(Report.self, from: data)
+        }.value
+        guard prepared.phase == "prepare", prepared.state == "prepared", prepared.stage == "prepared_for_fresh_process",
+              prepared.sourceSHA == report.sourceSHA, prepared.bundleID == report.bundleID, prepared.nonce == report.nonce,
+              prepared.profileA == report.profileA, prepared.profileB == report.profileB, prepared.appPID != getpid(),
+              prepared.reopenedAEmpty, prepared.separateBRetained, prepared.aDataRemoval?.callbackReceived == true else {
+            throw ProbeFailure(description: "Fresh process does not match the completed exact preparation")
+        }
+        report.preparerPID = prepared.appPID
+        report.stage = "fresh_process_loading"
+        try await save()
+        // Never seed on reopen. Observe the exact namespace from the exited app.
+        (bStore, bView) = makeView(profile: report.profileB, x: 640)
+        guard let view = bView else { throw ProbeFailure(description: "Fresh B is absent") }
+        try await load(view)
+        try await reopenA()
+        try await observeBData()
+        guard report.reopenedAEmpty, report.separateBRetained else {
+            throw ProbeFailure(description: "Fresh process did not observe empty A and unchanged B")
+        }
+        report.stage = "fresh_process_data_verified"
+        try await save()
+        dropA()
+        try await observeARelease()
+        let cleanupA = try await remove(report.profileA, phase: "cleanup_a")
+        try await dropB()
+        let cleanupB = try await remove(report.profileB, phase: "cleanup_b")
+        guard cleanupA.errorDomain == nil, cleanupB.errorDomain == nil else {
+            throw ProbeFailure(description: "Generated-store public cleanup failed; no filesystem deletion attempted")
+        }
+        report.state = "complete"
+        report.stage = "public_cleanup_complete"
+        try await save()
+    }
     private func run() async {
         do {
             guard report.profileA != report.profileB,
@@ -204,9 +265,13 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             }
             try await save()
             window.title = "zmux isolated profile lifecycle probe"
+            window.orderFront(nil)
+            if report.phase == "reopen" {
+                try await runFreshProcess()
+                exit(0)
+            }
             (aStore, aView) = makeView(profile: report.profileA, x: 0)
             (bStore, bView) = makeView(profile: report.profileB, x: 640)
-            window.orderFront(nil)
             try await seedA()
             try await seedB()
             report.mountedA = aView?.window === window && aStore?.identifier == report.profileA
@@ -225,30 +290,14 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             let released = try await remove(report.profileA, phase: "released_a_remove")
             guard released.errorDomain == nil else { throw ProbeFailure(description: "Public removal after releasing A failed; see exact callback error") }
             try await reopenA()
-            let separateObservation = try await evaluate(bView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=B')})")
-            report.separateBObservation = String(separateObservation.prefix(4096))
-            report.separateBRetained = separateObservation == "{\"local\":\"B\",\"cookie\":true}"
+            try await observeBData()
             guard report.reopenedAEmpty, report.separateBRetained else { throw ProbeFailure(description: "Removal/recreation did not preserve profile isolation") }
             dropA()
             try await observeARelease()
-            let cleanupA = try await remove(report.profileA, phase: "cleanup_a")
-            retiredBView = bView
-            bView?.stopLoading()
-            bView?.navigationDelegate = nil
-            bView?.removeFromSuperview()
-            bView = nil
-            bStore = nil
-            let bReleaseDeadline = ContinuousClock.now + .seconds(5)
-            while retiredBView != nil, ContinuousClock.now < bReleaseDeadline {
-                try await Task.sleep(for: .milliseconds(32))
-            }
-            guard retiredBView == nil else { throw ProbeFailure(description: "Released B WKWebView still exists; cleanup prerequisite is unproven") }
-            let cleanupB = try await remove(report.profileB, phase: "cleanup_b")
-            guard cleanupA.errorDomain == nil, cleanupB.errorDomain == nil else {
-                throw ProbeFailure(description: "Generated-store public cleanup failed; no filesystem deletion attempted")
-            }
-            report.state = "complete"
-            report.stage = "public_cleanup_complete"
+            try await dropB()
+            // Preserve B for the separate reader. Preparation is not fresh-process proof.
+            report.state = "prepared"
+            report.stage = "prepared_for_fresh_process"
             try await save()
             exit(0)
         } catch {
@@ -269,13 +318,14 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
 private enum Main {
     static func main() {
         let arguments = CommandLine.arguments
-        guard arguments.count == 6, let fixture = URL(string: arguments[2]),
+        guard arguments.count == 8, let fixture = URL(string: arguments[2]),
               fixture.scheme == "http", fixture.host == "127.0.0.1",
-              let a = UUID(uuidString: arguments[4]), let b = UUID(uuidString: arguments[5]) else { exit(2) }
+              let a = UUID(uuidString: arguments[4]), let b = UUID(uuidString: arguments[5]),
+              ["prepare", "reopen"].contains(arguments[6]) else { exit(2) }
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let delegate = Probe(output: URL(fileURLWithPath: arguments[1]), fixture: fixture,
-            nonce: arguments[3], a: a, b: b)
+            nonce: arguments[3], a: a, b: b, phase: arguments[6], preparation: URL(fileURLWithPath: arguments[7]))
         app.delegate = delegate
         withExtendedLifetime(delegate) { app.run() }
     }

@@ -205,3 +205,35 @@ must span inactive-store data completion, store release, UUID callback and durab
 catalog handling. Active pages, hidden views, pending constructors and retained
 download/conversion owners still reject before mutation. Data-removal completion
 does not replace those requirements or permit timeout-based authority release.
+
+Run [38839388593](https://github.com/ashutoshpw/zmux/actions/runs/38839388593)
+at `ade61dafe3d9aa6d868125f2fef4fd76d0f6c41e` passed the same-process
+candidate on macOS: A's store-specific data completion arrived, UUID removal
+returned no error, reopened localStorage was null and the cookie string was empty.
+B retained its independent data. All four UUID callbacks arrived, including the
+expected mounted-A busy error and generated-store cleanup. Build/sign/native
+exited 0 without timeout. Exact source/archive/app/identity evidence was reviewed.
+This accepts only the isolated same-process sequence, not production deletion.
+
+## Fresh-process persistence gate
+
+The success-only extension keeps the same signed archived app, bundle, UUIDs,
+loopback origin and nonce across two separate native processes. The preparer runs
+the same mounted-busy/data-clear/UUID-remove/same-process-empty assertions, releases
+both views and preserves B, then writes `prepared_for_fresh_process` and exits.
+Its receipt is preparation evidence. It does not delete B before the reader.
+
+Only after the existing owned process runner returns and its retained child
+handle reports reaped exit 0 may the reader launch. The runner validates the
+preparation identity and hashes its immutable receipt; archive/executable hashes
+must remain unchanged. The reader loads that exact preparation and records its
+preparer PID, then opens A/B without seeding. It must observe empty A cookie and
+localStorage and unchanged B in the new process before publicly removing only
+those generated UUIDs. The reader must have a different actual PID and the same
+SHA/bundle/nonce/UUIDs. Both processes have independent 45-second watchdogs and
+separate reports/logs; a failed or unknown preparer never launches the reader.
+
+The runner retains `same_process_acceptance` and `fresh_process_acceptance`
+separately. Pending markers cover all-data completion and UUID callbacks. Unknown
+outcomes never cause a retry, overlapping app or filesystem cleanup. Production
+writer/lease coordination and destructive command exposure remain unavailable.
