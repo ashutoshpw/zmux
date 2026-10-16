@@ -240,6 +240,7 @@ impl Worker {
             .reset("desktop shutdown cancelled browser operations");
         self.cancel_replies();
         self.local_tmux.cancel_all();
+        self.local_zellij.cancel_all();
         self.cancel_transfers();
         self.attention
             .reset_native("desktop shutdown cancelled native notifications");
@@ -249,11 +250,11 @@ impl Worker {
         }
         let sessions: Vec<_> = self
             .slots
-            .values_mut()
-            .filter_map(|s| s.session.take())
+            .iter_mut()
+            .filter_map(|(id, s)| s.session.take().map(|session| (*id, s.launch_id, session)))
             .collect();
-        for session in sessions {
-            self.retire(session);
+        for (id, launch_id, session) in sessions {
+            self.retire_owned(session, id, launch_id);
         }
         self.slots.clear();
         let deadline = self
@@ -281,28 +282,21 @@ impl Worker {
                 }
             }
             while let Ok(mut completion) = self.completion_rx.try_recv() {
+                self.complete_zellij(&mut completion);
+                self.launch_certificates
+                    .remove(&(completion.id, completion.launch_id));
                 if let Some(session) = completion.cleanup.take() {
-                    self.retire(session);
+                    self.retire_owned(session, completion.id, completion.launch_id);
                 }
                 self.pending_launches = self.pending_launches.saturating_sub(1);
                 if let Ok(session) = completion.result {
-                    self.retire(session);
+                    self.retire_owned(session, completion.id, completion.launch_id);
                 }
             }
             self.reap_launch_workers();
             self.local_tmux.drain();
             self.poll_transfers();
-            let mut active = Vec::new();
-            for mut session in std::mem::take(&mut self.retired) {
-                if session.is_finished() {
-                    if let Err(error) = session.shutdown(Duration::ZERO) {
-                        self.shutdown_issue(error.to_string());
-                    }
-                } else {
-                    active.push(session);
-                }
-            }
-            self.retired = active;
+            self.poll_retired_sessions();
             for session in &self.retired {
                 if let Err(error) = session.request_close_until(deadline) {
                     eprintln!("zmux shared session cancellation: {error}");

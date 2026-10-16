@@ -8,6 +8,7 @@ mod download_paths;
 pub mod downloads;
 pub mod inspection;
 pub mod local_tmux;
+pub mod local_zellij;
 pub mod metadata;
 pub mod persistence;
 pub mod profile_leases;
@@ -21,6 +22,7 @@ pub mod terminal_engine;
 pub mod transfers;
 pub mod windows;
 pub mod workspace_order;
+pub mod zellij_coordinator;
 use attention::{
     Attention, AttentionCommand, DismissSelection, NativeAttentionAction, NativeNotificationEvent,
     NativeNotificationSnapshot, Notification, NotificationAction, NotificationAddress,
@@ -108,6 +110,9 @@ pub enum Command {
     #[serde(skip)]
     NativeWindow {
         event: windows::NativeWindowEvent,
+    },
+    LocalZellij {
+        request: zellij_coordinator::Request,
     },
     LocalTmux {
         request: local_tmux::Request,
@@ -236,6 +241,8 @@ pub struct Snapshot {
     pub browser_profiles: profiles::ProfileSnapshot,
     pub local_tmux_epoch: uuid::Uuid,
     pub local_tmux_operations: Vec<local_tmux::Receipt>,
+    pub local_zellij_epoch: uuid::Uuid,
+    pub local_zellij_operations: Vec<zellij_coordinator::Receipt>,
     pub browser_epoch: uuid::Uuid,
     pub browser_operations: Vec<BrowserReceipt>,
     pub workspace_identities: Vec<zmux_workspace_core::targets::ObjectIdentity>,
@@ -333,6 +340,7 @@ pub struct NativeNotificationExecution {
 pub struct DesktopOptions {
     pub state_directory: Option<PathBuf>,
     pub local_tmux_profile: local_tmux::Profile,
+    pub local_zellij: Option<local_zellij::Configuration>,
     pub terminal_engine: terminal_engine::TerminalEngineConfig,
 }
 impl Desktop {
@@ -349,6 +357,9 @@ impl Desktop {
         )
     }
     pub fn with_options(shell: Shell, options: DesktopOptions) -> Result<Self, DesktopError> {
+        if let Some(configuration) = &options.local_zellij {
+            configuration.validate().map_err(DesktopError::Failure)?;
+        }
         let terminal_engine = options.terminal_engine.session_options()?;
         let persistence = options
             .state_directory
@@ -360,6 +371,7 @@ impl Desktop {
             persistence,
             options.state_directory,
             options.local_tmux_profile,
+            options.local_zellij,
             terminal_engine,
         )
     }
@@ -368,6 +380,7 @@ impl Desktop {
         persistence: Option<sessions::SessionPersistence>,
         profile_directory: Option<PathBuf>,
         tmux_profile: local_tmux::Profile,
+        zellij_configuration: Option<local_zellij::Configuration>,
         terminal_engine: Option<zmux_session_runtime::EngineOptions>,
     ) -> Result<Self, DesktopError> {
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
@@ -376,6 +389,7 @@ impl Desktop {
         let windows = windows::WindowRuntime::default();
         let profiles = profiles::ProfileRuntime::start(profile_directory)?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
+        let local_zellij = zellij_coordinator::Runtime::new(zellij_configuration);
         let attention = Attention::default();
         let persistence_snapshot = persistence
             .as_ref()
@@ -398,6 +412,8 @@ impl Desktop {
                 browser_profiles: profiles.snapshot.clone(),
                 local_tmux_epoch: local_tmux.epoch,
                 local_tmux_operations: Vec::new(),
+                local_zellij_epoch: local_zellij.epoch,
+                local_zellij_operations: Vec::new(),
                 browser_epoch: browser.epoch(),
                 browser_operations: Vec::new(),
                 workspace_identities: Vec::new(),
@@ -426,6 +442,8 @@ impl Desktop {
             .spawn(move || {
                 let mut worker = Worker {
                     local_tmux,
+                    local_zellij,
+                    launch_certificates: HashMap::new(),
                     tmux_operation_id: None,
                     model,
                     browser,
@@ -847,7 +865,23 @@ impl Drop for Slot {
         self.cancellation.store(true, Ordering::Release);
     }
 }
+struct RetiredSession {
+    session: Session,
+    zellij: Option<zellij_coordinator::ZellijTag>,
+}
+impl std::ops::Deref for RetiredSession {
+    type Target = Session;
+    fn deref(&self) -> &Session {
+        &self.session
+    }
+}
+impl std::ops::DerefMut for RetiredSession {
+    fn deref_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+}
 struct Completion {
+    zellij: Option<zellij_coordinator::ZellijCompletion>,
     launch_id: u64,
     id: SessionId,
     result: Result<Session, SessionError>,
@@ -921,6 +955,8 @@ fn notification_filter(
 }
 
 struct Worker {
+    local_zellij: zellij_coordinator::Runtime,
+    launch_certificates: HashMap<(SessionId, u64), zellij_coordinator::LaunchCertificate>,
     local_tmux: local_tmux::Runtime,
     tmux_operation_id: Option<u64>,
     profiles: profiles::ProfileRuntime,
@@ -949,7 +985,7 @@ struct Worker {
     next_transfer_id: u64,
     app_active: bool,
     slots: HashMap<SessionId, Slot>,
-    retired: Vec<Session>,
+    retired: Vec<RetiredSession>,
     shell: Shell,
     terminal_engine: Option<zmux_session_runtime::EngineOptions>,
     shared: Arc<Shared>,
@@ -1065,21 +1101,14 @@ impl Worker {
             }
             dirty |= self.profiles.poll();
             dirty |= self.poll_local_tmux();
+            dirty |= self.poll_zellij();
             if !self.profiles.snapshot.loading {
                 dirty |= self.poll_sessions();
             }
             dirty |= self.attention.reconcile(&self.model.snapshot());
             dirty |= self.poll_transfers();
             dirty |= self.poll_replies();
-            self.retired.retain_mut(|session| {
-                if !session.is_finished() {
-                    return true;
-                }
-                if let Err(error) = session.shutdown(Duration::ZERO) {
-                    self.cleanup_error = Some(error.to_string());
-                }
-                false
-            });
+            dirty |= self.poll_retired_sessions();
             if dirty {
                 self.publish(false);
             }
@@ -1087,11 +1116,34 @@ impl Worker {
         self.run_shutdown(receiver);
     }
 
-    fn retire(&mut self, session: Session) {
+    fn retire_owned(&mut self, session: Session, id: SessionId, launch_id: u64) {
+        let zellij = self.zellij_retirement_tag(id, launch_id);
         if let Err(error) = session.request_close() {
             eprintln!("zmux terminal cancellation wake: {error}");
         }
-        self.retired.push(session);
+        self.retired.push(RetiredSession { session, zellij });
+    }
+    fn poll_retired_sessions(&mut self) -> bool {
+        let mut dirty = false;
+        for mut retired in std::mem::take(&mut self.retired) {
+            if retired.is_finished() {
+                let result = retired.shutdown(Duration::ZERO);
+                let exit_code = retired
+                    .snapshot()
+                    .ok()
+                    .and_then(|snapshot| snapshot.exit_code);
+                if let Some(tag) = &retired.zellij {
+                    self.zellij_session_joined(tag, exit_code, &result);
+                }
+                if let Err(error) = result {
+                    self.cleanup_error = Some(error.to_string());
+                }
+                dirty = true;
+            } else {
+                self.retired.push(retired);
+            }
+        }
+        dirty | self.poll_zellij_observations()
     }
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
@@ -1262,6 +1314,7 @@ impl Worker {
             Command::SurfaceOrder { request } => self.surface_order(request),
             Command::WorkspaceOrder { request } => self.workspace_order(request),
             Command::LocalTmux { request } => self.local_tmux_command(request),
+            Command::LocalZellij { request } => self.local_zellij_command(request),
             Command::Downloads { request } => {
                 let model = self.model.snapshot();
                 let target = request.scope.resolve(&model, &request.caller)?;
@@ -1960,11 +2013,10 @@ impl Worker {
         candidate
     }
     pub(crate) fn validate_launch_effects(&self, effects: &[Effect]) -> Result<(), DesktopError> {
-        if effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::AttachLocalZellijSession { .. }))
-        {
-            return Err(DesktopError::Failure("local Zellij attach client is unavailable; native checkpoint/consumer is not enabled".into()));
+        for effect in effects {
+            if let Effect::AttachLocalZellijSession { identity, .. } = effect {
+                self.zellij_profile(identity.profile_id)?;
+            }
         }
         Ok(())
     }
@@ -2022,7 +2074,12 @@ impl Worker {
         let starts = transition
             .effects
             .iter()
-            .filter(|e| matches!(e, Effect::StartSession { .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    Effect::StartSession { .. } | Effect::AttachLocalZellijSession { .. }
+                )
+            })
             .count();
         let owned = self.pending_launches
             + self.local_tmux.reserved.len()
@@ -2065,6 +2122,7 @@ impl Worker {
             self.windows = windows;
         }
         self.effects(transition.effects);
+        self.refresh_checkpoint_baseline();
         if let Some((workspace, source, destination, focus)) = move_context {
             let model = self.model.snapshot();
             self.window_result = Some(serde_json::json!({
@@ -2093,21 +2151,18 @@ impl Worker {
     fn effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
-                Effect::AttachLocalZellijSession { session_id, .. } => {
-                    // Admission rejects this effect until the authenticated consumer exists.
-                    let error =
-                        SessionError::Failure("local Zellij attach client is unavailable".into());
-                    if !self.complete_session_restore(session_id, &Err(error)) {
-                        let cleanup = self.model.finish_restore(session_id, false);
-                        self.effects(cleanup);
-                    }
-                    self.last_error = Some("local Zellij attach client is unavailable".into());
+                Effect::AttachLocalZellijSession {
+                    pane_id,
+                    session_id,
+                    identity,
+                } => {
+                    self.launch_zellij_attach(pane_id, session_id, identity);
                 }
                 Effect::StopSession { session_id } => {
                     if let Some(mut slot) = self.slots.remove(&session_id)
                         && let Some(session) = slot.session.take()
                     {
-                        self.retire(session);
+                        self.retire_owned(session, session_id, slot.launch_id);
                     }
                 }
                 Effect::StartSession {
@@ -2196,6 +2251,19 @@ impl Worker {
                             })
                         })
                         .expect("live terminal has binding");
+                    let certificate = zellij_coordinator::LaunchCertificate {
+                        namespace: model.identity_namespace,
+                        surface: binding.surface,
+                        session: session_id,
+                        kind: if local_tmux.is_some() {
+                            zellij_coordinator::LaunchKind::LocalTmux
+                        } else if remote.is_some() {
+                            zellij_coordinator::LaunchKind::Ssh
+                        } else {
+                            zellij_coordinator::LaunchKind::Ordinary
+                        },
+                        cancellation: cancellation.clone(),
+                    };
                     self.pending_launches += 1;
                     let result = thread::Builder::new()
                         .name(format!("zmux-launch-{}", session_id.0))
@@ -2270,6 +2338,7 @@ impl Worker {
                             };
                             // A dropped coordinator rejects the result; dropping Session cancels its worker.
                             if let Err(error) = sender.send(Completion {
+                                zellij: None,
                                 launch_id,
                                 id: session_id,
                                 result,
@@ -2280,6 +2349,8 @@ impl Worker {
                             }
                         });
                     if let Ok(handle) = result {
+                        self.launch_certificates
+                            .insert((session_id, launch_id), certificate);
                         self.launch_workers.push(handle);
                     } else if let Err(error) = result {
                         self.pending_launches -= 1;
@@ -2299,9 +2370,12 @@ impl Worker {
         }
     }
     fn complete(&mut self, mut completion: Completion) {
+        self.complete_zellij(&mut completion);
         if let Some(session) = completion.cleanup.take() {
-            self.retire(session);
+            self.retire_owned(session, completion.id, completion.launch_id);
         }
+        self.launch_certificates
+            .remove(&(completion.id, completion.launch_id));
         self.pending_launches -= 1;
         self.complete_local_tmux(&completion);
         if self
@@ -2310,7 +2384,7 @@ impl Worker {
             .is_none_or(|slot| slot.launch_id != completion.launch_id)
         {
             if let Ok(session) = completion.result {
-                self.retire(session);
+                self.retire_owned(session, completion.id, completion.launch_id);
             }
             return;
         }
@@ -2322,7 +2396,7 @@ impl Worker {
                     slot.connection = completion.connection;
                 }
             } else if let Ok(session) = completion.result {
-                self.retire(session);
+                self.retire_owned(session, completion.id, completion.launch_id);
             }
             self.commit_session_restore();
             return;
@@ -2344,7 +2418,7 @@ impl Worker {
             let cleanup = self.model.finish_restore(completion.id, success);
             self.effects(cleanup);
         } else if let Ok(session) = completion.result {
-            self.retire(session);
+            self.retire_owned(session, completion.id, completion.launch_id);
         }
         // Results for closed panes are canceled and reaped, never reattached.
     }
@@ -2425,6 +2499,8 @@ impl Worker {
             browser_profiles: self.profiles.snapshot.clone(),
             local_tmux_epoch: self.local_tmux.epoch,
             local_tmux_operations: self.local_tmux.receipts.clone(),
+            local_zellij_epoch: self.local_zellij.epoch,
+            local_zellij_operations: self.local_zellij.receipts.clone(),
             browser_epoch: self.browser.epoch(),
             browser_operations: self.browser.receipts(),
             window_epoch: self.windows.epoch,

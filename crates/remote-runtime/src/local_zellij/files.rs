@@ -63,7 +63,8 @@ impl Record {
     pub(super) fn backend(&self) -> io::Result<PathBuf> {
         Ok(self.runtime()?.join("s/0.43.0").join(self.session_name()))
     }
-    pub(super) fn verify(&self) -> io::Result<()> {
+    /// Revalidate the original owner without adopting or signalling its processes.
+    pub fn verify_live(&self) -> io::Result<()> {
         if self.state != "bound" {
             return Err(fail(
                 "owner is not committed; inspect status, never replay creation",
@@ -229,7 +230,7 @@ impl LocalZellij {
         let _lock = self.lock()?;
         let mut records = self.records()?;
         for record in &mut records {
-            if record.verify().is_err() {
+            if record.verify_live().is_err() {
                 record.state = "uncertain".into();
             } else {
                 record.state = "identity_present".into();
@@ -346,7 +347,7 @@ impl LocalZellij {
         mut observer: Option<super::observer::Observer>,
         deadline: Instant,
     ) -> io::Result<i32> {
-        record.verify()?;
+        record.verify_live()?;
         if record
             .server
             .as_ref()

@@ -582,7 +582,7 @@ fn final_surface_move_keeps_live_pty_and_persists_only_the_destination_checklist
 }
 
 #[test]
-fn unsupported_zellij_restore_retains_v6_source_and_never_launches_it_as_an_ordinary_shell() {
+fn unconfigured_zellij_restore_retains_v6_source_and_never_launches_it_as_an_ordinary_shell() {
     use zmux_workspace_core::{
         LocalZellijIdentity,
         todo::{TodoEntry, TodoOrigin, TodoState},
@@ -630,7 +630,7 @@ fn unsupported_zellij_restore_retains_v6_source_and_never_launches_it_as_an_ordi
             .error
             .as_deref()
             .unwrap()
-            .contains("attach client is unavailable")
+            .contains("local Zellij installation is not configured")
     );
     assert!(!failed.persistence.autosave_enabled);
     assert_eq!(

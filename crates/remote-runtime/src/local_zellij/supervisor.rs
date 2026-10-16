@@ -223,7 +223,7 @@ pub(super) fn create(
     };
     record.workload = Some(workload);
     record.state = "bound".into();
-    record.verify()?;
+    record.verify_live()?;
     persist(record)?;
     send(&mut connection, &"committed")?;
     // The workload no longer needs startup text or the one-use challenge file.

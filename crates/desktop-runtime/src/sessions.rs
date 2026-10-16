@@ -59,6 +59,11 @@ struct IoOperation {
     startup: bool,
     save_revision: Option<u64>,
     authoritative: bool,
+    checkpoint: Option<CheckpointOperation>,
+}
+struct CheckpointOperation {
+    seal: crate::zellij_coordinator::CheckpointSeal,
+    document: SessionDocument,
 }
 pub(crate) struct SessionPersistence {
     io: PersistenceWorker,
@@ -69,6 +74,8 @@ pub(crate) struct SessionPersistence {
     committed: Option<(u64, SessionDocument)>,
     saved_document: Option<SessionDocument>,
     autosave_inflight: bool,
+    checkpoint_inflight: Option<u64>,
+    checkpoint_lineage: bool,
     allocation_end: u64,
     reservation_pending: bool,
     allocation_failed: bool,
@@ -108,6 +115,8 @@ impl SessionPersistence {
             committed: None,
             saved_document: None,
             autosave_inflight: false,
+            checkpoint_inflight: None,
+            checkpoint_lineage: false,
             allocation_end: 0,
             reservation_pending: false,
             allocation_failed: false,
@@ -244,7 +253,15 @@ impl Worker {
             .unwrap_or(&mut self.model)
     }
     fn stable_document(&self) -> Result<(u64, SessionDocument), DesktopError> {
-        if self.pending_launches != 0 || self.session_transition_pending() {
+        if self.pending_launches != 0
+            || self.session_transition_pending()
+            || self
+                .model
+                .snapshot()
+                .closed_items
+                .iter()
+                .any(|item| item.restoring)
+        {
             return Err(failure(
                 "session topology is still starting; retry after launches complete",
             ));
@@ -254,6 +271,259 @@ impl Worker {
             captured.snapshot().revision,
             captured.session_document().map_err(failure)?,
         ))
+    }
+    pub(crate) fn zellij_start_admission(&self) -> Result<(), DesktopError> {
+        let p = self
+            .persistence
+            .as_ref()
+            .ok_or_else(|| failure("local Zellij Start requires session persistence"))?;
+        if !p.snapshot.autosave_enabled
+            || p.checkpoint_inflight.is_some()
+            || self.session_transition_pending()
+            || self
+                .model
+                .snapshot()
+                .closed_items
+                .iter()
+                .any(|item| item.restoring)
+        {
+            return Err(failure(
+                "local Zellij checkpoint is unavailable during persistence or restore transition",
+            ));
+        }
+        Ok(())
+    }
+    /// Pending ordinary launches are canonical only inside this explicit lineage.
+    /// Unknown, provisional and mismatched generations always fail closed.
+    fn checkpoint_pending_safe(
+        &self,
+        model: &WorkspaceStore,
+        excluded: Option<(SessionId, u64)>,
+    ) -> bool {
+        use crate::zellij_coordinator::LaunchKind;
+        use std::sync::atomic::Ordering;
+        if self.session_transition_pending()
+            || self.launch_certificates.len() != self.pending_launches
+        {
+            return false;
+        }
+        let snapshot = model.snapshot();
+        if snapshot.closed_items.iter().any(|item| item.restoring) {
+            return false;
+        }
+        self.launch_certificates.iter().all(|(key, certificate)| {
+            if Some(*key) == excluded {
+                return true;
+            }
+            if certificate.namespace != snapshot.identity_namespace || certificate.session != key.0
+            {
+                return false;
+            }
+            let surface = snapshot
+                .workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .flat_map(|p| &p.surfaces)
+                .find(|surface| surface.session_id == Some(key.0));
+            let Some(surface) = surface else {
+                return certificate.cancellation.load(Ordering::Acquire);
+            };
+            if snapshot.object_uuid(
+                zmux_workspace_core::targets::TargetKind::Surface,
+                surface.id.0,
+            ) != certificate.surface
+                || self
+                    .slots
+                    .get(&key.0)
+                    .is_none_or(|slot| slot.launch_id != key.1)
+            {
+                return false;
+            }
+            match &certificate.kind {
+                LaunchKind::Ordinary => {
+                    surface.remote.is_none()
+                        && surface.local_tmux.is_none()
+                        && surface.local_zellij.is_none()
+                }
+                LaunchKind::Ssh => {
+                    surface.remote.is_some()
+                        && surface.local_tmux.is_none()
+                        && surface.local_zellij.is_none()
+                }
+                LaunchKind::LocalTmux => {
+                    surface.remote.is_none()
+                        && surface.local_tmux.is_some()
+                        && surface.local_zellij.is_none()
+                }
+                LaunchKind::LocalZellij(Some(identity)) => {
+                    surface.remote.is_none()
+                        && surface.local_tmux.is_none()
+                        && surface.local_zellij.as_ref() == Some(identity)
+                }
+                LaunchKind::LocalZellij(None) => false,
+            }
+        })
+    }
+    fn checkpoint_document(&self) -> Result<(u64, SessionDocument), DesktopError> {
+        if let Ok(document) = self.stable_document() {
+            return Ok(document);
+        }
+        if !self
+            .persistence
+            .as_ref()
+            .is_some_and(|p| p.checkpoint_lineage)
+            || !self.checkpoint_pending_safe(&self.model, None)
+        {
+            return Err(failure("session checkpoint topology is provisional"));
+        }
+        let captured = self.model_with_session_metadata();
+        let document = captured.session_document().map_err(failure)?;
+        crate::persistence::validate_document_size(&document).map_err(failure)?;
+        Ok((captured.snapshot().revision, document))
+    }
+    pub(crate) fn refresh_checkpoint_baseline(&mut self) {
+        if let Ok((revision, document)) = self.checkpoint_document() {
+            let strict = self.pending_launches == 0 && !self.session_transition_pending();
+            if let Some(p) = &mut self.persistence {
+                p.committed = Some((revision, document));
+                if strict && p.checkpoint_inflight.is_none() {
+                    p.checkpoint_lineage = false;
+                }
+            }
+        }
+    }
+    pub(crate) fn zellij_owner_reserved(
+        &mut self,
+        correlation: crate::local_zellij::Correlation,
+        owner_uuid: uuid::Uuid,
+    ) -> Result<(), DesktopError> {
+        use crate::zellij_coordinator::{CheckpointSeal, LaunchKind};
+        use std::sync::atomic::Ordering;
+        self.zellij_start_admission()?;
+        let job = self
+            .local_zellij
+            .jobs
+            .get(&correlation.operation_id)
+            .ok_or_else(|| failure("unknown local Zellij reservation"))?;
+        if job.correlation != correlation
+            || job.installed
+            || job.checkpoint.is_some()
+            || job.cancel.load(Ordering::Acquire)
+            || Instant::now() >= job.deadline
+            || self.shared.stop.load(Ordering::Acquire)
+        {
+            return Err(failure("stale or cancelled local Zellij reservation"));
+        }
+        let identity = zmux_workspace_core::LocalZellijIdentity {
+            profile_id: correlation.profile_id,
+            owner_uuid,
+        };
+        identity.validate().map_err(failure)?;
+        if !self
+            .launch_certificates
+            .get(&(job.session, job.launch_id))
+            .is_some_and(|certificate| {
+                certificate.namespace == correlation.identity_namespace
+                    && certificate.surface == correlation.surface_id
+                    && certificate.session == job.session
+                    && matches!(certificate.kind, LaunchKind::LocalZellij(None))
+                    && std::sync::Arc::ptr_eq(&certificate.cancellation, &job.cancel)
+            })
+        {
+            return Err(failure(
+                "local Zellij reservation launch certificate changed",
+            ));
+        }
+        let ticket = job
+            .reservation
+            .as_ref()
+            .ok_or_else(|| failure("local Zellij reservation already consumed"))?;
+        let prepared = self
+            .model
+            .prepare_local_zellij_surface(ticket, identity.clone(), job.focus)
+            .map_err(failure)?;
+        self.profiles.validate_model(&prepared.store().snapshot())?;
+        self.validate_todo_candidate(prepared.store())?;
+        if !self.checkpoint_pending_safe(prepared.store(), Some((job.session, job.launch_id))) {
+            return Err(failure(
+                "local Zellij checkpoint includes an unknown pending launch",
+            ));
+        }
+        let captured = self.capture_session_metadata(prepared.store().clone());
+        let document = captured.session_document().map_err(failure)?;
+        crate::persistence::validate_document_size(&document).map_err(failure)?;
+        let revision = captured.snapshot().revision;
+        let mut seal = CheckpointSeal {
+            correlation: correlation.clone(),
+            session: job.session,
+            surface: job.surface,
+            launch_id: job.launch_id,
+            identity: identity.clone(),
+            revision,
+            io_id: 0,
+        };
+        let p = self.persistence.as_mut().expect("admitted persistence");
+        let receipt = p.receipt("local_zellij_checkpoint")?;
+        let io_id = match p.io.submit_save(p.path.clone(), document.clone(), true) {
+            Ok(id) => id.0,
+            Err(error) => {
+                p.finish(Some(receipt), Err(error.to_string()));
+                return Err(failure(error));
+            }
+        };
+        seal.io_id = io_id;
+        // Every fallible operation precedes acceptance. This serialized install
+        // consumes the prepared ticket without replaying a Start/Attach effect.
+        self.model = prepared.into_store();
+        let job = self
+            .local_zellij
+            .jobs
+            .get_mut(&correlation.operation_id)
+            .expect("validated job");
+        job.reservation = None;
+        job.identity = Some(identity.clone());
+        job.installed = true;
+        job.checkpoint = Some(io_id);
+        self.slots.insert(
+            job.session,
+            crate::Slot {
+                cancellation: job.cancel.clone(),
+                launch_id: job.launch_id,
+                session: None,
+                connection: None,
+                cached: None,
+                starting: true,
+                failure: None,
+                resize: None,
+                last_notice: 0,
+            },
+        );
+        self.launch_certificates
+            .get_mut(&(job.session, job.launch_id))
+            .expect("validated launch certificate")
+            .kind = LaunchKind::LocalZellij(Some(identity));
+        if let Some(operation) = self
+            .local_zellij
+            .receipts
+            .iter_mut()
+            .find(|operation| operation.operation_id == correlation.operation_id)
+        {
+            operation.owner_uuid = Some(owner_uuid);
+        }
+        p.committed = Some((revision, document.clone()));
+        p.checkpoint_inflight = Some(io_id);
+        p.checkpoint_lineage = true;
+        p.pending.insert(
+            io_id,
+            IoOperation {
+                receipt: Some(receipt),
+                save_revision: Some(revision),
+                authoritative: true,
+                checkpoint: Some(CheckpointOperation { seal, document }),
+                ..Default::default()
+            },
+        );
+        Ok(())
     }
     pub(crate) fn session_command(&mut self, action: SessionCommand) -> Result<(), DesktopError> {
         if self.persistence.is_none() {
@@ -354,6 +624,23 @@ impl Worker {
             let completion = match self.persistence.as_ref().map(|p| p.io.try_completion()) {
                 Some(Ok(Some(c))) => c,
                 Some(Err(error)) => {
+                    let failed: Vec<_> = self
+                        .persistence
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|p| p.pending.values())
+                        .filter_map(|op| {
+                            op.checkpoint
+                                .as_ref()
+                                .map(|checkpoint| checkpoint.seal.correlation.operation_id)
+                        })
+                        .collect();
+                    for id in failed {
+                        self.fail_zellij(
+                            id,
+                            format!("local Zellij checkpoint completion unavailable: {error}"),
+                        );
+                    }
                     if let Some(p) = &mut self.persistence {
                         let message = error.to_string();
                         dirty |= p.snapshot.error.as_ref() != Some(&message);
@@ -373,6 +660,15 @@ impl Worker {
             let Some(op) = op else {
                 continue;
             };
+            if op.checkpoint.is_some()
+                && !matches!(&completion.result, Ok(PersistenceOutcome::Saved) | Err(_))
+            {
+                self.load_failed(
+                    op,
+                    "unexpected completion for local Zellij authoritative checkpoint".into(),
+                );
+                continue;
+            }
             match completion.result {
                 Ok(PersistenceOutcome::Profiles(_)) => {
                     self.last_error =
@@ -410,6 +706,13 @@ impl Worker {
                     if op.authoritative {
                         p.snapshot.last_saved_revision = op.save_revision;
                         p.autosave_inflight = false;
+                    }
+                    if let Some(checkpoint) = op.checkpoint
+                        && p.checkpoint_inflight == Some(completion.operation_id.0)
+                    {
+                        p.checkpoint_inflight = None;
+                        p.saved_document = Some(checkpoint.document);
+                        self.authorize_zellij_checkpoint(checkpoint.seal);
                     }
                 }
                 Ok(PersistenceOutcome::Loaded(loaded)) => {
@@ -493,12 +796,13 @@ impl Worker {
         }
         // Store only a fully committed topology. PTY frames and transient undo-close
         // candidates never become an authoritative shutdown/autosave snapshot.
-        if let Ok((revision, document)) = self.stable_document()
+        if let Ok((revision, document)) = self.checkpoint_document()
             && let Some(p) = &mut self.persistence
         {
             p.committed = Some((revision, document.clone()));
             if p.snapshot.autosave_enabled
                 && !p.autosave_inflight
+                && p.checkpoint_inflight.is_none()
                 && p.saved_document.as_ref() != Some(&document)
             {
                 match p.io.submit_save(p.path.clone(), document.clone(), true) {
@@ -542,6 +846,12 @@ impl Worker {
         dirty
     }
     fn load_failed(&mut self, op: IoOperation, error: String) {
+        if let Some(checkpoint) = &op.checkpoint {
+            self.fail_zellij(
+                checkpoint.seal.correlation.operation_id,
+                format!("local Zellij checkpoint failed: {error}"),
+            );
+        }
         let p = self.persistence.as_mut().expect("enabled");
         p.finish(op.receipt, Err(error.clone()));
         if op.startup || op.authoritative {
@@ -551,6 +861,9 @@ impl Worker {
         }
         if op.authoritative {
             p.autosave_inflight = false;
+        }
+        if op.checkpoint.is_some() {
+            p.checkpoint_inflight = None;
         }
         if op.startup {
             self.prepare_starter();
@@ -599,7 +912,7 @@ impl Worker {
             if let Some(mut slot) = self.slots.remove(&id)
                 && let Some(session) = slot.session.take()
             {
-                self.retire(session);
+                self.retire_owned(session, id, slot.launch_id);
             }
         }
         let p = self.persistence.as_mut().expect("enabled");
@@ -618,7 +931,7 @@ impl Worker {
         if self.restoring.is_some() {
             self.fail_session_restore("session restore cancelled by shutdown".into());
         }
-        if let Ok((revision, document)) = self.stable_document()
+        if let Ok((revision, document)) = self.checkpoint_document()
             && let Some(p) = &mut self.persistence
         {
             p.committed = Some((revision, document));
@@ -722,3 +1035,7 @@ impl Worker {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "sessions_tests.rs"]
+mod tests;
