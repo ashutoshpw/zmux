@@ -6,7 +6,7 @@ on:
       suite:
         description: Native validation suite
         type: choice
-        options: [full, terminal-selection, completed-history]
+        options: [full, terminal-selection, completed-history, agent-inbox]
         default: full
         required: true
   push:
@@ -194,6 +194,41 @@ jobs:
             ${{ runner.temp }}/native-completed-history/*.log
             ${{ runner.temp }}/native-completed-history/*.zip
             ${{ runner.temp }}/native-completed-history/source/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  agent-inbox:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'agent-inbox'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned host Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin
+      - name: Validate bounded inbox fixture inputs
+        run: python3 -B tools/native-agent-inbox/run.py --check-inputs
+      - name: Build host app and exercise native durable Agent Inbox
+        run: python3 -B tools/native-agent-inbox/run.py --output "$RUNNER_TEMP/native-agent-inbox"
+      - name: Retain exact sources and native inbox evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-agent-inbox-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-agent-inbox/receipt.json
+            ${{ runner.temp }}/native-agent-inbox/*.json
+            ${{ runner.temp }}/native-agent-inbox/*.py
+            ${{ runner.temp }}/native-agent-inbox/*.log
+            ${{ runner.temp }}/native-agent-inbox/*.zip
+            ${{ runner.temp }}/native-agent-inbox/source/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
