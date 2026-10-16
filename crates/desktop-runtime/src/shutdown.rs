@@ -200,8 +200,11 @@ impl Desktop {
                 .min(Instant::now() + wait.min(Duration::from_secs(30)))
         };
         loop {
+            // Read the clock first: a report taken after the deadline was seen to pass always
+            // says so, so a wait that ended by expiry never returns "not expired".
+            let expired = Instant::now() >= deadline;
             let report = self.shutdown_status(ticket)?;
-            if report.physical_cleanup_complete || Instant::now() >= deadline {
+            if report.physical_cleanup_complete || expired {
                 return Ok(report);
             }
             thread::sleep(

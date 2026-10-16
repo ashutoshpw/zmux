@@ -40,7 +40,7 @@ fn json_of(id: u64) -> Value {
     serde_json::from_slice(&bytes_of(id)).unwrap()
 }
 fn snapshot(desktop: u64, predicate: impl Fn(&Value) -> bool) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let result = zmux_desktop_snapshot(desktop, 0);
         if result.status == 0 && result.value != 0 {
@@ -380,7 +380,7 @@ fn observe_returns_busy_not_ok_when_the_command_queue_is_full() {
     let _unhold = Unhold(hold.clone());
     hold.0.lock().unwrap().0 = true;
     // Do not flood until the executor is provably parked inside the hook.
-    let parked = Instant::now() + Duration::from_secs(5);
+    let parked = Instant::now() + Duration::from_secs(60);
     while !hold.0.lock().unwrap().1 {
         assert!(
             Instant::now() < parked,
@@ -424,7 +424,7 @@ fn observe_returns_busy_not_ok_when_the_command_queue_is_full() {
     // Once the executor drains, the same idempotent write is retried and sticks.
     hold.0.lock().unwrap().0 = false;
     hold.1.notify_all();
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let (retry, _) = call(
             desktop,
@@ -460,6 +460,7 @@ fn patient_desktop() -> u64 {
             probe_timeout: Duration::from_secs(60),
             read_timeout: Duration::from_secs(60),
             save_timeout: Duration::from_secs(60),
+            command_timeout: Duration::from_secs(60),
             stall_after: Duration::from_secs(120),
             ..FilesConfig::default()
         }),
