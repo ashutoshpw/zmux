@@ -75,7 +75,7 @@ enum FilePanelSmoke {
             throw error
         }
         try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window)
-        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, reopen from disk and dedupe passed\n".utf8))
+        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, cancelled multi-file close, back-to-back closes, keyboard focus after load, reopen from disk and dedupe passed\n".utf8))
     }
 
     private static func journey(
@@ -111,6 +111,11 @@ enum FilePanelSmoke {
 
         // 2. Each mode presents its own content, with no placeholder standing in for a failure.
         try await wait("Markdown rendered") { markdownPanel.presentationSummary == "markdown:rendered" }
+        // A tab opened by `zmux open` was selected while it was still loading; once the content
+        // replaced the loading state the keyboard must have followed it (typing, Cmd-V, arrows).
+        try await wait("keyboard focus moved into the rendered Markdown view") {
+            window.firstResponder === markdownPanel.markdownTextView && markdownPanel.preferredResponder === markdownPanel.markdownTextView
+        }
         let rendered = markdownPanel.markdownTextView.string
         guard rendered.contains("Zmux heading"), rendered.contains("emphasis"), !rendered.contains("# Zmux"), !rendered.contains("*emphasis*") else {
             throw failure("rendered Markdown still shows its syntax: \(rendered)")
@@ -190,7 +195,7 @@ enum FilePanelSmoke {
         let closing = CloseScript([.cancel, .discard])
         coordinator.fileCloseChoiceOverride = { _ in closing.next() }
         host.closeTerminalTab(textID)
-        try await wait("Cancel consulted") { closing.count == 1 }
+        try await wait("Cancel consulted and its request settled") { closing.count == 1 && !host.hasPendingFileCloses }
         _ = try await cli(["status"], false)
         guard coordinator.files[textID] === text, text.isDirty, coordinator.snapshot.flatMap({ fileSurface($0, textID) }) != nil else {
             throw failure("Cancel in the close sheet closed the tab or dropped the edits")
@@ -200,25 +205,70 @@ enum FilePanelSmoke {
         guard coordinator.orphanedFiles.isEmpty else { throw failure("a closed tab left an orphaned panel") }
         coordinator.fileCloseChoiceOverride = nil
         host.reopenClosed()
+        var reopenedSurface: UInt64?
         try await wait("reopened tab reloaded from disk") {
             guard let snapshot = coordinator.snapshot,
                   let reopened = fileSurfaces(snapshot).first(where: { $0.file?.path == f.text }),
                   let view = coordinator.files[reopened.id] else { return false }
+            reopenedSurface = reopened.id
             return view.isLoaded && view.editorTextView.string == "epsilon\n" && !view.isDirty
         }
+        guard let reopenedID = reopenedSurface, let reopened = coordinator.files[reopenedID] else { throw failure("the reopened tab has no panel") }
 
         // 9. A preview whose file disappears says so and keeps the last good content.
         try await remove(f.image)
         try await wait("deleted banner on the image preview") { image.banner == .deletedOnDisk }
         guard image.presentationSummary == "image:3x2" else { throw failure("a deleted image replaced its last good preview with a placeholder") }
+
+        // 10. A multi-file close that is cancelled part way changes nothing: Don't Save on the
+        // first file must not clear its edits when the second file answers Cancel.
+        host.selectTab(reopenedID)
+        try await wait("reopened text editor focused") { window.isKeyWindow && window.firstResponder === reopened.editorTextView }
+        typeText("R", into: reopened.editorTextView)
+        host.selectTab(markdownID)
+        try await wait("Markdown tab selected") { window.isKeyWindow && window.firstResponder === markdownPanel.markdownTextView }
+        markdownPanel.toggleMarkdownSource()
+        let sourceEditor = markdownPanel.editorTextView
+        try await wait("Markdown source editor focused") { markdownPanel.presentationSummary == "markdown:source" && window.firstResponder === sourceEditor }
+        typeText("M", into: sourceEditor)
+        try await wait("two dirty panels") {
+            markdownPanel.isDirty && reopened.isDirty && modelDirty(coordinator, markdownID) == true && modelDirty(coordinator, reopenedID) == true
+        }
+        let partial = CloseScript([.discard, .cancel])
+        coordinator.fileCloseChoiceOverride = { _ in partial.next() }
+        let aborted = await coordinator.resolveFilesBeforeClose([markdownID, reopenedID], window: window)
+        guard !aborted, partial.count == 2 else { throw failure("a cancelled multi-file close was not refused") }
+        _ = try await cli(["status"], false)
+        guard markdownPanel.isDirty, markdownPanel.hasUnsavedChanges, sourceEditor.string == "M" + markdownSource,
+              reopened.isDirty, reopened.editorTextView.string == "Repsilon\n" else {
+            throw failure("Cancel after Don't Save dropped the earlier file's edits or its dirty tracking")
+        }
+        try await wait("both panels still guarded in the model") {
+            modelDirty(coordinator, markdownID) == true && modelDirty(coordinator, reopenedID) == true
+        }
+        // Closing several tabs in a row answers every request, in order; none is dropped.
+        let burst = CloseScript([.discard, .discard])
+        coordinator.fileCloseChoiceOverride = { _ in burst.next() }
+        host.closeTerminalTab(markdownID)
+        host.closeTerminalTab(reopenedID)
+        try await wait("both tabs closed by back-to-back close requests") {
+            guard let snapshot = coordinator.snapshot else { return false }
+            return fileSurface(snapshot, markdownID) == nil && fileSurface(snapshot, reopenedID) == nil
+        }
+        guard burst.count == 2, coordinator.orphanedFiles.isEmpty else {
+            throw failure("back-to-back closes of dirty tabs were dropped or left an orphaned panel")
+        }
+        coordinator.fileCloseChoiceOverride = nil
     }
 
     private static func cleanup(_ f: FilePanelFixture, host: MainWindowHost, coordinator: ApplicationCoordinator, selection: UInt64,
                                 responder: NSResponder?, window: NSWindow) async throws {
-        coordinator.fileCloseChoiceOverride = nil
+        // A failed journey may leave a dirty tab; answer its sheet instead of waiting for a person.
+        coordinator.fileCloseChoiceOverride = { _ in .discard }
         for panel in coordinator.files.values { panel.conflictChooser = nil }
         for surface in coordinator.snapshot.map({ fileSurfaces($0) }) ?? [] { host.closeTerminalTab(surface.id) }
         try await wait("fixture file tabs closed") { coordinator.snapshot.map { fileSurfaces($0).isEmpty } == true && coordinator.files.isEmpty }
+        coordinator.fileCloseChoiceOverride = nil
         host.selectTab(selection)
         try await wait("original tab selected") {
             coordinator.snapshot?.workspace?.root.panes.contains { $0.selectedSurface == selection } == true

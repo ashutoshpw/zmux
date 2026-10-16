@@ -60,6 +60,8 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         case saveResolved
         case loadFailed(String)
         case message(String)
+        /// Informational: the dirty bit has not been confirmed yet; the observation keeps retrying.
+        case dirtyUnconfirmed
     }
 
     let surfaceID: UInt64
@@ -393,6 +395,11 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     private func present(_ view: NSView) {
         guard presented !== view else { return }
+        // Decide before the outgoing view leaves the hierarchy: removing the first responder
+        // makes the window the responder. Focus that was on this panel (the loading or error
+        // state, or the view being replaced) follows the content that now takes its place; focus
+        // elsewhere is never taken.
+        let hadFocus = window.map { ownsFocus(in: $0) } ?? false
         presented?.removeFromSuperview()
         view.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(view)
@@ -408,6 +415,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             content.layoutSubtreeIfNeeded()
             syncEditorSize()
         }
+        if hadFocus { window?.makeFirstResponder(preferredResponder) }
     }
 
     private func showLoading(_ message: String) {
@@ -811,7 +819,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             generation = reply.header.generation ?? generation
             baseline = text
             externalPending = false
-            setDirty(editor.string != text)
+            setDirty(!Self.sameBytes(editor.string, text))
             if isExternalBanner || banner == .saveResolved { setBanner(.none) }
             refreshHeader()
             return true
@@ -875,7 +883,14 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     private func editorDidChange() {
         guard !suppressEdits else { return }
-        setDirty(editor.string != baseline)
+        setDirty(!Self.sameBytes(editor.string, baseline))
+    }
+
+    /// Exact UTF-8 equality. Swift `==` on `String` treats canonically equivalent text (a
+    /// precomposed "é" and "e" plus a combining accent) as equal, which would hide an edit that
+    /// only changes the normalization form even though it changes the bytes Save writes.
+    private static func sameBytes(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.elementsEqual(rhs.utf8)
     }
 
     private func setDirty(_ value: Bool) {
@@ -905,6 +920,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     /// shows the model agrees; a refused owner stops the loop and says so.
     private func runObserveLoop(id: Int) async {
         var delay = 250
+        var confirmDelay = 150
         var unconfirmed = 0
         loop: while !Task.isCancelled && observeNeeded {
             guard let token = ownerToken else { break loop }
@@ -913,15 +929,17 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             switch result {
             case .success:
                 delay = 250
-                do { try await Task.sleep(for: .milliseconds(150)) } catch { break loop }
+                do { try await Task.sleep(for: .milliseconds(confirmDelay)) } catch { break loop }
                 if observeNeeded && isDirty == wanted {
+                    // Acknowledged but not yet visible in a snapshot. A lost observation is a
+                    // data-loss hazard, so this never gives up: it only slows to a bounded rate
+                    // and says so once it has been waiting for a while.
                     unconfirmed += 1
-                    if unconfirmed >= 8 {
-                        observeGaveUp = true
-                        setBanner(.message("Unsaved changes could not be recorded with the file service. Save or copy your text before closing."))
-                    }
+                    confirmDelay = min(confirmDelay * 2, 2_000)
+                    if unconfirmed >= 8 && banner == Banner.none { setBanner(.dirtyUnconfirmed) }
                 } else {
                     unconfirmed = 0
+                    confirmDelay = 150
                 }
             case .failure(let failure):
                 if failure.isRetryableObservation {
@@ -939,6 +957,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
                 }
             }
         }
+        if !observeNeeded && banner == .dirtyUnconfirmed { setBanner(.none) }
         if observeLoopID == id {
             observeTask = nil
             if observeNeeded { reconcileDirty() }
@@ -955,11 +974,14 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     /// Makes the model's dirty bit equal this view's before an app-initiated close, so the core
     /// close guard cannot race a pending observation. False means the close must not proceed.
-    func settleDirtyMirror() async -> Bool {
+    /// `assumingDiscarded` is for a panel whose Don't Save has been chosen but not yet applied:
+    /// the model is told the text is clean while the panel still holds the text, so a later
+    /// abort of the close loses nothing (see `resumeDirtyMirror`).
+    func settleDirtyMirror(assumingDiscarded: Bool = false) async -> Bool {
         guard mode?.isEditableText ?? false, let token = ownerToken else { return true }
         observeTask?.cancel()
         observeTask = nil
-        let wanted = isDirty
+        let wanted = assumingDiscarded ? false : isDirty
         if wanted == lastModelDirty { return true }
         switch await send(.observe(token, dirty: wanted)) {
         case .success:
@@ -970,6 +992,11 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             return false
         }
     }
+
+    /// Restarts the dirty-mirror observation after a close was aborted part way through
+    /// `settleDirtyMirror`, which cancels it and may have recorded a state this panel no longer
+    /// has. A no-op when the model already agrees with the panel.
+    func resumeDirtyMirror() { reconcileDirty() }
 
     /// Releases tasks and decoded content without talking to the file service (shutdown).
     func shutdown() {
@@ -1141,6 +1168,9 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             return BannerStyle(text: message, warning: false, primary: hasUnsavedChanges ? "Dismiss" : "Retry", secondary: nil)
         case .message(let text):
             return BannerStyle(text: text, warning: false, primary: "Dismiss", secondary: nil)
+        case .dirtyUnconfirmed:
+            return BannerStyle(text: "Still recording your unsaved changes with the file service. Save or copy your text before closing.",
+                               warning: true, primary: nil, secondary: nil)
         }
     }
 

@@ -803,8 +803,9 @@ New Swift (all under `apps/macos/Sources`, system frameworks only: AppKit, PDFKi
   worker-stall notes; a banner row carries the external-change, deleted, unreadable, save-unknown,
   owner-lost and load-failure states with explicit buttons. The view owns the unsaved text, so its
   own dirty bit is the truth; the model's `file.dirty` is reconciled by an `observe` loop (bounded
-  backoff 250 ms to 2 s, one in flight, stops on a non-retryable refusal and says so, gives up
-  visibly after 8 acknowledged-but-unconfirmed attempts). Save (`Cmd-S`) goes through the bridge
+  backoff 250 ms to 2 s, one in flight, stops on a non-retryable refusal and says so; an acknowledged-but-unconfirmed
+  observation is retried with no count limit, at a rate that slows to 2 s, and shows an informational
+  banner after 8 such attempts, see "Fix round 1"). Save (`Cmd-S`) goes through the bridge
   with `base_generation`; `conflict` opens Cancel / Reload from Disk / Overwrite (Recreate File for a
   deleted file); `stale_view` and owner loss keep the text and offer Reload or Copy Text; a lost
   acknowledgement (`outcome_unknown`) is never replayed, the banner waits for `last_op` in a later
@@ -883,7 +884,8 @@ that `PaneTree.key` carries no dirty state; adding a site fails it with instruct
 
 Swift cannot be compiled or executed here, so there is no red-then-green for the Swift itself and
 none is claimed. The Linux-testable part is the contract between Rust and Swift:
-`crates/native-bridge/tests/swift_file_contract.rs`, three tests, all green:
+`crates/native-bridge/tests/swift_file_contract.rs`, three contract tests in the original slice
+(eight tests after fix round 1, which added five structure tests, see below), all green:
 
 - `swift_decodables_name_exactly_the_fields_the_real_rust_wire_carries`: runs a real Desktop
   (open with one good and one missing path, attach, save, observe, a content conflict, a refused
@@ -909,10 +911,11 @@ shown by mutation. Each mutation was applied to the Swift, the test run, then th
 
 ### Determinism
 
-The new test binary (`swift_file_contract`, 3 tests, one real Desktop, unique temp directories, the
-usual bounded snapshot poll) was executed against the final sources: 20 serial runs, 0 failures;
-then 5 rounds of 8 concurrent copies (40 runs) beside 24 busy-loop CPU hogs on a 24-core machine,
-0 failures, every log carrying the 3-passed line. No other Rust test changed in this slice.
+The new test binary (`swift_file_contract`, 3 tests in the original slice, one real Desktop, unique
+temp directories, the usual bounded snapshot poll) was executed against the sources of that slice: 20
+serial runs, 0 failures; then 5 rounds of 8 concurrent copies (40 runs) beside 24 busy-loop CPU hogs
+on a 24-core machine, 0 failures, every log carrying the 3-passed line. No other Rust test changed in
+that slice. Fix round 1 re-ran the 8-test binary, see its own Determinism paragraph.
 
 ### In-app smoke (`FilePanelSmoke`, UNAVAILABLE here)
 
@@ -935,6 +938,11 @@ and close sheets are answered through the panel's own seams (`conflictChooser`,
 8. Close of a dirty tab: Cancel keeps it and the edits, Don't Save closes it with no orphan; Reopen
    Closed restores the tab from disk.
 9. Deleting an open image shows the deleted banner and keeps the last good preview.
+10. (fix round 1) Two dirty panels, `resolveFilesBeforeClose` answered Don't Save then Cancel: the
+    close is refused and both panels keep their text, dirty marker and model dirty bit; then two
+    back-to-back `closeTerminalTab` calls with Don't Save both close their tabs.
+Step 2 also (fix round 1) waits for the keyboard to land in the rendered Markdown view of the tab
+that `zmux open` selected while it was loading.
 Cleanup closes the tabs, removes the directory and restores the original selection and responder.
 `scripts/check-macos-app` does not yet list `file_panel` among its required evidence keys (scripts
 are outside this slice); the key is emitted.
@@ -1006,5 +1014,62 @@ around `beginSheetModal` in `presentSheet`.
 - `cargo test -p zmux-native-bridge --test swift_file_contract`: 3 passed; mutation and
   determinism evidence above.
 - `cargo fmt --all` reformatted the new test file once; clippy found nothing to fix.
+- Fix round 1 checks are in "Fix round 1" below.
 - Brace, bracket and string balance of every touched Swift file was checked with a script (all
   balanced). This is not a type check and is not evidence that the Swift compiles.
+
+### Fix round 1 (S4 review findings, all five verified and fixed)
+
+Base of the round: `bfa8e66`. Swift still cannot be compiled or run here; every fix below is
+verified by reading the code path, by a Linux-runnable structure test that fails when the fix is
+reverted, and by the strengthened in-app smoke, which is UNAVAILABLE here and has not run.
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | `closeAfterFileCheck` silently dropped a close made while another check was pending (smoke cleanup closes four tabs in a row, so `file_panel` could never finish; Cmd-W twice) | Yes: `guard !closePromptActive else { return }` ran before the first Task could run | `App.swift`: a bounded FIFO (`pendingFileCloses`, 64) drained by one task; each request runs in order. A repeat of the same gesture (same `key`, for example `surface:<id>`) is folded into the one still waiting or being asked about, which is the only case that does not queue; a full queue shows an error. `hasPendingFileCloses` lets the smoke wait for a request to settle before repeating it. |
+| 2 | Keyboard focus stayed on the panel after an async load replaced the loading state | Yes: `present()` swapped the subview without touching the responder chain | `FilePanelView.present`: reads `ownsFocus(in:)` before the outgoing view leaves the window and calls `makeFirstResponder(preferredResponder)` afterwards; focus elsewhere is never taken. |
+| 3 | Don't Save was applied immediately, so a later Cancel or failed Save left an earlier file clean | Yes: `discardLocalChanges()` ran inside the per-file loop | `resolveFilesBeforeClose` only records discards, settles every mirror (a discarded panel reports clean while keeping its text, `settleDirtyMirror(assumingDiscarded:)`), and applies `discardLocalChanges()` last. If a settle fails, `resumeDirtyMirror()` on every panel restores the model's dirty bit. |
+| 4 | Dirty detection used `String !=` (canonical equivalence) | Yes: `"\u{E9}" == "e\u{301}"` is true in Swift | `sameBytes` compares `utf8.elementsEqual`; used on every keystroke and after a save. |
+| 5 | The dirty observation gave up after 8 acknowledged-but-unconfirmed attempts | Yes, and it contradicted design D7a; it was also missing from this receipt's deviations | The count no longer stops the loop: the confirmation wait backs off 150 ms to 2 s with no limit, an informational banner (`dirtyUnconfirmed`, no action, clears when the model agrees) appears after 8 attempts. Non-retryable refusals still stop the loop and say so, as designed. |
+
+Tests added or strengthened (Swift behaviour cannot run here, so none of these is claimed to prove
+the Swift works):
+
+- `crates/native-bridge/tests/swift_file_contract.rs`, five new tests: `close_requests_are_queued_never_dropped`
+  (no `closePromptActive`, no unexplained early return in the request path, every call site keyed,
+  bounded with a visible refusal, smoke closes tabs back to back),
+  `keyboard_focus_follows_content_that_replaces_the_loading_state` (focus read before the swap, then
+  moved), `dont_save_is_applied_only_after_the_whole_close_is_settled` (one `discardLocalChanges`
+  call, after every `return false` and after the settle loop, restore on abort),
+  `dirty_detection_compares_utf8_bytes_not_canonical_equivalence`, and
+  `the_dirty_observation_never_gives_up_after_a_count`.
+- Mutation evidence: each fix was reverted in a copy of the Swift, the binary run, then the sources
+  restored (checked with `cmp`). The close queue guard replaced by a silent early return, the focus
+  move removed, the discard moved back into the loop, `editor.string != baseline` restored and the
+  count-based give-up restored each made exactly the matching new test FAIL (7 passed, 1 failed).
+- `FilePanelSmoke` (UNAVAILABLE here): step 2 waits for the keyboard to land in the rendered Markdown
+  view of a tab selected while loading; step 8 waits for the close queue to settle before repeating
+  a close; new step 10 (Don't Save then Cancel keeps both panels edited and guarded in the model,
+  then two back-to-back Don't Save closes both); cleanup answers a leftover dirty sheet with
+  Don't Save instead of waiting for a person, and still closes four tabs in a row.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test binaries,
+554 passed, 0 failed, 2 ignored, which is the previous 549 plus the 5 new tests; clippy `-D warnings`;
+license inventory; `scripts/check-native-bridge`). Determinism of the changed binary
+(`swift_file_contract`, 8 tests, one real Desktop test among them): 20 serial runs, 0 failures; then
+5 rounds of 8 concurrent copies (40 runs) beside 24 busy-loop CPU hogs on a 24-core machine, 0
+failures, every log carrying the 8-passed line. The five new tests read source files and use no
+threads, timers or sleeps.
+
+Deviations and limits:
+
+- Repeats of the same close gesture while it is pending are folded rather than queued (a second Cmd-W
+  on the same tab would otherwise ask the same question twice or close a vanished tab). This is
+  documented in the code, and it is the only dropped request path.
+- `discardLocalChanges()` still takes the editor text at the moment it runs, so text typed in a
+  panel between its Don't Save answer and the last settle of the same close is also discarded. The
+  window is the duration of the remaining sheets and syncs; not testable here.
+- UNAVAILABLE as before: `scripts/check-macos-sources` (a Swift 6 type check of these edits, in
+  particular the `Banner == Banner.none` comparison and the `Task` closures capturing `self` weakly
+  in `drainFileCloses`), `scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke
+  stage and the hosted macOS workflows. None is recorded as passed.
