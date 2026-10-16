@@ -3,6 +3,7 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -10,15 +11,17 @@ use zmux_session_runtime::{Launch, Session, State, shell_integration};
 use zmux_terminal_adapter::Size;
 
 struct Directory(PathBuf);
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 impl Directory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "zmux-shell-contract-{}-{}",
+            "zmux-shell-contract-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
         Self(path)
