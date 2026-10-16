@@ -88,6 +88,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private let browserEvents = AsyncStream<(UInt64, BrowserHostEvent?)>.makeStream(bufferingPolicy: .bufferingOldest(256))
     private var browserEventGeneration: UInt64 = 0
     private var browserEventsNeedRecovery = false
+    private var browserFailureDiagnosticCount = 0
     private var browserEventTask: Task<Void, Never>?
     private var browserEpoch: UUID?
     private(set) var terminals: [UInt64: TerminalView] = [:]
@@ -121,6 +122,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
                     self.browserEventsNeedRecovery = true
+                    self.traceBrowserHostFailure(event, queuedGeneration: generation, recovery: false)
                     self.reportError("Browser host synchronization failed: " + error.localizedDescription)
                 }
                 if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
@@ -514,10 +516,63 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
     }
 
+    private func traceBrowserHostFailure(_ event: BrowserHostEvent, queuedGeneration: UInt64, recovery: Bool) {
+        // Diagnostic-only metadata: never encode the event or its page-controlled
+        // URL/title/result/error. This observer cannot change admission or recovery.
+        guard CommandLine.arguments.contains("--smoke-test"), browserFailureDiagnosticCount < 32 else { return }
+        browserFailureDiagnosticCount += 1
+        let kind: String
+        let owner: BrowserOwner
+        var nextDocument: UInt64?
+        var nextNavigation: UInt64?
+        var operation: UInt64?
+        switch event {
+        case .attach(let value): kind = "attach"; owner = value
+        case .detach(let value): kind = "detach"; owner = value
+        case .documentChanged(let value, let document, let navigation, let cause):
+            kind = "document_changed"; owner = value
+            nextDocument = document; nextNavigation = navigation; operation = cause
+        case .observed(let value, _, _): kind = "observed"; owner = value
+        case .complete(let id, let value, _): kind = "complete"; owner = value; operation = id
+        case .fail(let id, let value, _): kind = "fail"; owner = value; operation = id
+        }
+        let native = browsers[owner.surfaceId]
+        let attached: BrowserOwner?
+        if case .attach(let value)? = native?.automationAttachment() { attached = value }
+        else { attached = nil }
+        let target = snapshot?.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
+            .first { $0.id == owner.surfaceId }
+        let fields = [
+            "browser-sync-diagnostic=\(browserFailureDiagnosticCount)",
+            "phase=\(recovery ? "recovery" : "incremental")", "event=\(kind)",
+            "queue=\(queuedGeneration)", "currentQueue=\(browserEventGeneration)",
+            "epoch=\(owner.epoch)", "namespace=\(owner.identityNamespace)",
+            "surface=\(owner.surfaceId)", "host=\(owner.hostId)",
+            "document=\(owner.documentGeneration)", "navigation=\(owner.modelNavigation)",
+            "nextDocument=\(nextDocument.map(String.init) ?? "none")",
+            "nextNavigation=\(nextNavigation.map(String.init) ?? "none")",
+            "operation=\(operation.map(String.init) ?? "none")",
+            "snapshotEpoch=\(snapshot?.browserEpoch.uuidString ?? "none")",
+            "snapshotNamespace=\(snapshot?.model.identityNamespace.uuidString ?? "none")",
+            "targetPresent=\(target != nil)", "targetBrowser=\(target?.kind == "browser")",
+            "targetNavigation=\((target?.navigation).map(String.init) ?? "none")",
+            "nativeHost=\(native?.hostID.uuidString ?? "none")", "mounted=\(native?.window != nil)",
+            "nativeEpoch=\(attached?.epoch.uuidString ?? "none")",
+            "nativeNamespace=\(attached?.identityNamespace.uuidString ?? "none")",
+            "nativeDocument=\((attached?.documentGeneration).map(String.init) ?? "none")",
+            "nativeNavigation=\((attached?.modelNavigation).map(String.init) ?? "none")"
+        ]
+        // Every value above is a fixed label, UUID, integer or Boolean. Write
+        // at most 64 KiB to retained stderr; the general trace truncates each
+        // message to 256 characters and would discard the comparison metadata.
+        FileHandle.standardError.write(Data((String(fields.joined(separator: " ").prefix(2_047)) + "\n").utf8))
+    }
+
     private func recoverBrowserHostEvents() async {
         guard !Task.isCancelled, shutdownTask == nil else { return }
         browserEventsNeedRecovery = false
         browserEventGeneration &+= 1
+        let recoveryGeneration = browserEventGeneration
         // Discard queued incremental events captured before this full-owner snapshot.
         // New events retain order after the snapshot while acknowledgements are awaited.
         let attachments = browsers.values.compactMap { $0.automationAttachment() }
@@ -527,6 +582,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             do { try await bridge.browserEvent(event) }
             catch {
                 browserEventsNeedRecovery = true
+                traceBrowserHostFailure(event, queuedGeneration: recoveryGeneration, recovery: true)
                 reportError("Browser synchronization is retrying: " + error.localizedDescription)
                 return
             }
