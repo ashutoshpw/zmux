@@ -2,6 +2,7 @@
 //! No arbitrary socket adoption, automatic owner close, or GUI readiness receipt.
 mod broker;
 mod files;
+mod observer;
 mod process;
 mod supervisor;
 

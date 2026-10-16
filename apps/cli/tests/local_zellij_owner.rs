@@ -18,6 +18,9 @@ use std::{
 };
 use zmux_session_runtime::child::{ExitObservation, observe_child, process_identity};
 
+#[path = "local_zellij_owner/observer.rs"]
+mod observer;
+
 // Compare fresh tcgetattr snapshots. Darwin keeps PENDIN as kernel input state
 // after noncanonical -> canonical TCSANOW, even when the saved flags omit it.
 // Mask only that state in local copies, including nix's private raw snapshot;
@@ -144,6 +147,13 @@ struct Client {
 }
 impl Client {
     fn new(fixture: &Fixture, args: &[&str]) -> Self {
+        Self::with_environment(fixture, args, &[])
+    }
+    fn with_environment(
+        fixture: &Fixture,
+        args: &[&str],
+        environment: &[(&str, std::ffi::OsString)],
+    ) -> Self {
         let pair = portable_pty::native_pty_system()
             .openpty(PtySize {
                 rows: 30,
@@ -156,6 +166,9 @@ impl Client {
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_zmux"));
         command.args(args);
         for (key, value) in fixture.environment() {
+            command.env(key, value);
+        }
+        for (key, value) in environment {
             command.env(key, value);
         }
         let child = pair.slave.spawn_command(command).unwrap();
