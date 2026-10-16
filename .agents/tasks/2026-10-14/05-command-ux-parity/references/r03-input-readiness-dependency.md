@@ -153,3 +153,41 @@ reviewed hash to `local-zellij-patched-owner.yml`. A true selection calls the ne
 workflow through `workflow_call`; its legacy matrix is unchanged when false.
 Readiness plus package publication is an explicit preflight error. This allows a
 feature-branch diagnostic without first registering the new filename on main.
+
+## Darwin dependency acceptance
+
+The reviewed registered route ran once at exact source commit
+`d36bc912c0889436c055a7daeb21bead1156b65f`:
+[run 38849682804](https://github.com/ashutoshpw/zmux/actions/runs/38849682804).
+Only the Darwin readiness job executed; the legacy owner/package job was skipped.
+The exact reviewed inventory remained
+`49e0a0f1d8cdaec3b9c3e7e50d552b40c2694c2f3e0323362b535b27f9748cad`.
+
+On macOS 15.7.9 ARM64 the fresh source producer, existing EINTR/non-EINTR controls,
+seven reporter tests, exact capability/empty HOME probe and actual silent workload
+all passed. Both genuine attachments completed accepted3/EOF with the original
+frontend alive before one unique line was submitted once. Exact private records
+contained two complete lines; startup count stayed one. Both frontend exits were
+zero, and the backend/workload identities disappeared through isolated cleanup.
+The real peer controls exercise Darwin's public LOCAL_PEERPID path.
+
+The retained source/evidence artifact ZIP SHA-256 is
+`d04c0bc7fb84f2a18c7c3f4da7414e4d353b5e804976d7e8c73361a41d7abfe6`,
+matching GitHub artifact `12024539448`. Review verified all 18 retained repository
+sources against the exact Git commit, all four compiled upstream files against
+the inventory, producer/owner log hashes and semantic receipt fields. Review:
+`/tmp/zmux-input-readiness-darwin-38849682804-review.json`, SHA-256
+`f3feceba9960f7cbf98dd25d56b70179aaadd4c0b4a26db5922888e96ea7e274`.
+Producer receipt SHA-256:
+`3223b5785ac2cd318160e5909a8335d1dba50866725318be922c04ac9687da67`.
+Actual owner receipt SHA-256:
+`5e8b36934e7f31d76d8ccee42fd8b0a6a2504ace99af8fb30dab6e89a95a577a`.
+
+The executed Darwin binary hash recorded by both receipts is
+`b69867c654c5c0d78304725acf57610eda918a2be4c4ec684613b52a255844b6`.
+Executable bytes were deliberately not uploaded. This is dependency control and
+actual frontend acceptance, not a retained distributable package, native
+observer4/completion-before-Ready acceptance, or macOS 14 runtime proof. A native
+Darwin consumer needs the same fresh producer in its own reviewed job or an
+explicitly accepted package; it cannot treat this source-only artifact as a
+binary handoff. The seven-day artifact retention remains a bounded evidence gate.
