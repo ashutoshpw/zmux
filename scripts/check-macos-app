@@ -3,7 +3,6 @@
 from pathlib import Path
 import json
 import os
-import signal
 import platform
 import plistlib
 import subprocess
@@ -55,52 +54,50 @@ report = dist / "native-smoke.json"
 if report.exists(): report.unlink()
 stdout = dist / "native-stdout.log"
 stderr = dist / "native-stderr.log"
-def diagnose_startup(native_environment):
-    # Launch Services can report success even when the child crashes before stderr
-    # opens. Run the same packaged executable for diagnostics only; this cannot
-    # substitute for a successful Launch Services smoke check.
-    diagnostic = dist / "native-direct.log"
-    with diagnostic.open("w") as log:
-        try:
-            result = subprocess.run([str(dist / "zmux.app/Contents/MacOS/zmux-app"),
-                                     "--smoke-test", str(dist / "native-direct-smoke.json")],
-                                    stdout=log, stderr=subprocess.STDOUT, timeout=100, env=native_environment)
-            log.write(f"\nPackaged executable return code: {result.returncode}\n")
-        except subprocess.TimeoutExpired:
-            log.write("\nPackaged executable diagnostic timed out\n")
-    print(diagnostic.read_text())
-    # Crash reports are written asynchronously and may not exist yet. Capture a
-    # synchronous backtrace from this packaged build; diagnostics never count as
-    # a successful native smoke run.
-    if "return code: -" in diagnostic.read_text():
-        trace = dist / "native-backtrace.log"
-        with trace.open("w") as log:
-            process = subprocess.Popen(
-                ["/usr/bin/lldb", "--batch", "-o", "run", "-k", "thread backtrace all",
-                 "--", str(bundle / "MacOS/zmux-app"), "--smoke-test",
-                 str(dist / "native-debugger-smoke.json")],
-                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                env=native_environment,
-            )
-            try:
-                process.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                log.write("\nPackaged debugger diagnostic timed out\n")
-            finally:
-                # The isolated diagnostic process group owns only this debugger
-                # and its child build, including a child left after debugger exit.
+def diagnose_failure():
+    # A missing report can follow a real smoke failure while its app still owns
+    # sessions or a socket. Never start another app as a diagnostic retry.
+    diagnostic = dist / "native-failure-process.json"
+    observation = {"scope": "read_only_after_failed_smoke", "second_app_launched": False}
+    resources = dist / "native-resources.json"
+    try:
+        if resources.exists():
+            if resources.stat().st_size > 16 * 1024 * 1024:
+                raise ValueError("Resource diagnostic exceeds 16 MiB")
+            resources_data = json.loads(resources.read_text())
+            if not isinstance(resources_data, dict) or not isinstance(resources_data.get("samples", []), list):
+                raise ValueError("Resource diagnostic has an invalid sample shape")
+            samples = resources_data.get("samples", [])
+            observed = next((sample for sample in reversed(samples) if isinstance(sample, dict)
+                             and type(sample.get("app_pid")) is int and 0 < sample["app_pid"] < 2**31), None)
+            if observed:
+                pid = observed["app_pid"]
+                observation["last_sample"] = {key: observed.get(key) for key in
+                                              ("app_pid", "sample_wall_unix_seconds", "elapsed_seconds")}
+                # Read-only observation, never authority to signal a reused PID.
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-        print(trace.read_text()[:24_000])
+                    result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "pid=,ppid=,stat=,lstart=,comm="],
+                                            capture_output=True, text=True, timeout=2)
+                    observation["process_probe"] = {"return_code": result.returncode,
+                                                    "stdout": result.stdout[:8192], "stderr": result.stderr[:2048]}
+                except subprocess.TimeoutExpired:
+                    observation["process_probe"] = {"timed_out": True}
+    except (OSError, ValueError) as error:
+        observation["diagnostics_error"] = str(error)[:2048]
+    try:
+        diagnostic.write_text(json.dumps(observation, indent=2) + "\n")
+    except OSError as error:
+        print("Failure diagnostic could not be retained: " + str(error)[:2048])
+    print("Preserving original smoke failure; no diagnostic app relaunch. See " + str(diagnostic))
     for directory in [Path.home() / "Library/Logs/DiagnosticReports", Path("/Library/Logs/DiagnosticReports")]:
         if directory.exists():
             for path in sorted(directory.glob("zmux-app*"))[-4:]:
                 target = dist / ("native-crash-" + path.name + ".log")
-                target.write_text(path.read_text(errors="replace"))
-                print(target.read_text()[:24_000])
+                try:
+                    target.write_text(path.read_text(errors="replace"))
+                    print(target.read_text()[:24_000])
+                except OSError as error:
+                    print("Crash diagnostic could not be retained: " + str(error)[:2048])
 @contextlib.contextmanager
 def local_tmux_fixture():
     binary = shutil.which("tmux")
@@ -205,14 +202,13 @@ with local_tmux_fixture() as native_environment, browser_fixture(), fixture_modu
         for path in [stdout,stderr]:
             if path.exists(): print(path.read_text())
         if isinstance(error, subprocess.TimeoutExpired):
-            print("Launch Services smoke timed out; its app may remain alive. Skipping a second app launch to preserve the original failure.")
-        else:
-            diagnose_startup(native_environment)
+            print("Launch Services smoke timed out; its app may remain alive.")
+        diagnose_failure()
         raise
     if not report.exists():
         for path in [stdout,stderr]:
             if path.exists(): print(path.read_text())
-        diagnose_startup(native_environment)
+        diagnose_failure()
         raise SystemExit("The packaged app did not produce native smoke evidence")
 evidence = json.loads(report.read_text())
 metadata = json.loads((dist / "build-info.json").read_text())

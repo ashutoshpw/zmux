@@ -235,3 +235,32 @@ scope: logical wrapped-line joining, retained history, autoscroll and copy mode
 are not implemented by this slice. No cmux implementation or assets were imported.
 The unchanged Rust/C ABI baseline passes `scripts/check`; later Swift/reference-
 only revisions reuse that result and require their relevant syntax/native gates.
+
+
+## Accepted exact-main visible selection integration
+
+Published main12d5c140aa4341fff4fc5345fd2b02aa2c22911e independently passes the
+same18 visible-selection cases in run38836229618. All235 retained source copies
+match that exact Git SHA. The three selection-owner/native-fixture Swift files
+are byte-identical to the accepted diagnostic3b686c1; the archive hash and
+Info.plist source also match main12d5c14.
+
+Actual app/LaunchServices activationPID10656 and childPID10662 parent/nonce agree;
+active/visible/key/terminal-responder are alltrue. Every clipboard literal passes
+exact UTF8 comparison, including NFD combining text and right-edge spaces. Build
+exit0/nativeexit0 in7.583s, non-timeout, with full logs. The report reaches complete
+only after awaited shared shutdown and the owned app-group runner completes;
+there is no separate retained final-child-absence ps observation.
+
+Artifact12019428046 ZIP SHA256
+`f4880a896c4bd2cb57a20cd1c03c80ca49ea3cb282511d6fd46c0cb242dc40a4`;
+app archive SHA256
+`32505b993d15ab7ce39b7c43faa40844950357a09b20c360770f5f45d2fe8691`.
+Independent exact-main review at
+`target/agent-validation/t01-selection-native-38836229618/independent-review.json`,
+SHA256 `8d7e1a0efeae3e4ba13e32b1da749e4865b14c873bb5b1c03a87b41f0321a9b0`.
+
+This binds only the existing18 visible-selection cases to published main12d5c14.
+New wrapped-copy metadata/fixture work is separate and unaccepted. It does not
+establish physical input, VoiceOver, optional-engine/Intel/minimum-macOS coverage,
+other workflow success or full T01/product parity.

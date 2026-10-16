@@ -25,12 +25,13 @@ enum WindowLifecycleSmoke {
 
     private static var traceLines = 0
     static func trace(_ message: String) {
-        guard CommandLine.arguments.contains("--window-lifecycle-smoke"), traceLines < 256 else { return }
+        guard let flag = ["--window-lifecycle-smoke", "--smoke-test"].first(where: { CommandLine.arguments.contains($0) }),
+              traceLines < 256 else { return }
         traceLines += 1
         let text = "[window-lifecycle pid=\(ProcessInfo.processInfo.processIdentifier) t=\(ProcessInfo.processInfo.systemUptime)] " + String(message.prefix(256)) + "\n"
         let data = Data(text.utf8)
         FileHandle.standardError.write(data)
-        guard let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 1 else { return }
+        guard let index = CommandLine.arguments.firstIndex(of: flag), CommandLine.arguments.count > index + 1 else { return }
         let url = URL(fileURLWithPath: CommandLine.arguments[index + 1]).appendingPathExtension("trace.log")
         do {
             if !FileManager.default.fileExists(atPath: url.path) {

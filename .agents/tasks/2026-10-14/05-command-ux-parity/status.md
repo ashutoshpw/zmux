@@ -5,6 +5,27 @@
 
 ## Active implementation
 
+- Published `12d5c14` passes foundation38836210021 on macOS and Linux, including
+  unchanged Chrome DOM coverage. Exact-main selection38836229618 passes18 native
+  clipboard cases; independent review binds235 source files, archive/plist,
+  focus/PTY identity and shared shutdown. Scope remains visible selection only.
+  Full native38836209900 passed core/C ABI/universal build and window fresh-process
+  reopen (including todos and split ratio). Browser profile rename, zoom, fill,
+  click, interactions, edit/scroll, keyboard Shift and topology checks logged pass.
+  It stopped at the save-panel Accessibility gate (runner untrusted). No full smoke
+  receipt exists. A second diagnostic relaunch then returned BUSY and timed out;
+  this does not prove the original shutdown cause. Runner repair removes diagnostic
+  relaunch and adds bounded original-process/shutdown observations. Retained ZIP
+  SHA2562439b767f080ab5ee122155019c0e60a287b7c4d7885507e890facebcec988e8.
+  An asynchronous question asks for any existing AX-enabled self-hosted Mac labels;
+  independent work continues without assuming that hardware is available.
+- Browser native lease acquisition committed locally `78aa188`: fixed OS Library
+  lock namespace, asynchronous exact-token store construction, process-lifetime
+  ownership and cancellation-before-construction release. Full323 isolated checks
+  pass; parent caught and reviewed the repaired macOS temporary-root assumption,
+  followed by focused original/new C ABI green. Swift/WebKit execution remains
+  pending; clear/delete and physical lifecycle parity remain open.
+
 - Cohort `38698c3`: native38835681008 passed native typecheck/early fixtures,
   then failed the buffer fixture because a published pane can precede its first
   screen. The fixture now polls only the exact startup error before READY, retains
