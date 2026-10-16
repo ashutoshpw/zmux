@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Hosted Linux Foundation112e55a exposed an execution-admission fixture race:
+  shell redirection creates the file before writing. Regression75ddce1 reproduces
+  empty bytes with the actual admitted helper. The repair waits for authenticated
+  terminal receipt and child_reaped before asserting exact output; pre-Run absence,
+  supervisor lifetime and exit7 remain required. Focused red/green logs:
+  `/tmp/zmux-admission-created-before-write-{red,green}.log`.
+  Full `scripts/check` passes (tests, Clippy, notices and both C ABI checks);
+  `/tmp/zmux-admission-publication-check.log`.
+
 - Main3f81147 native pointer/selection run38862148076 passes35 cases, strict
   decoder and shared shutdown. Parent independently verified271 source hashes,
   archive3737c9f969a64618af8f51bb6e7382c6720bcdb5a068db4f54dd4f0e00d94ba9,
