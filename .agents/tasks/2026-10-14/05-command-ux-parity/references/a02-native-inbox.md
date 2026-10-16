@@ -531,3 +531,18 @@ stream. It preserves user-command refusal reporting, startup/bridge ownership,
 native cleanup tickets and current main's pointer path. Other owners were informed;
 no other worktree or main edit occurred. The committed actual full-behavior/failed-
 shutdown receipt precedes this narrow production repair.
+
+Run [38867612703](https://github.com/ashutoshpw/zmux/actions/runs/38867612703), exact
+`684bedaf87f5906fca00153202ece5427da476ff`, passes both Swift 6 slices
+(72.613 s), package (207.973 s), and all 15 native behavior checks again.
+Two explicit status reads establish capacity -5, one read recovers original Saved,
+all exact text/draft/public-pending/PTY checks pass. App PID 7654 exits 1 without
+timeout (18.939 s) only because AppKit cannot create a 24-bit/three-sample drawing
+context for the opaque capture; shared shutdown is not reached. All 273 retained
+hashes match frozen source. Archive SHA256:
+`b72744b85fd84badc7641a3c2ebdac04f18c57ff6a55d06ebb5a1ee87baedb9e`.
+
+Capture-only repair uses CoreGraphics' supported 32-bit RGBx CGContext
+(`noneSkipLast`), draws the same actual background/native pixels, and exports
+the resulting opaque CGImage through NSBitmapImageRep. No production change or
+acceptance weakening: opaque PNG, shared shutdown and final native green remain.
