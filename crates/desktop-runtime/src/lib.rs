@@ -1472,6 +1472,7 @@ impl Worker {
                 request.caller = request.caller.bind_local_tmux(&model)?;
             }
         }
+        let paste = matches!(&request.operation, TargetOperation::PasteText { .. });
         match request.operation {
             TargetOperation::SelectWorkspaceNumber { digit } => {
                 if request.scope.workspace.is_some()
@@ -1565,7 +1566,7 @@ impl Worker {
             TargetOperation::Notifications { action } => {
                 self.scoped_notifications(&model, &request.scope, &request.caller, action)
             }
-            TargetOperation::SendText { text } => {
+            TargetOperation::SendText { text } | TargetOperation::PasteText { text } => {
                 let target = request.scope.resolve(&model, &request.caller)?;
                 let session_id = model
                     .workspaces
@@ -1580,9 +1581,12 @@ impl Worker {
                     .get(&session_id)
                     .and_then(|s| s.session.as_ref())
                     .ok_or(DesktopError::TerminalUnavailable)?;
-                session
-                    .send_input(text.as_bytes())
-                    .map_err(|e| DesktopError::Failure(e.to_string()))
+                if paste {
+                    session.send_paste(&text)
+                } else {
+                    session.send_input(text.as_bytes())
+                }
+                .map_err(|e| DesktopError::Failure(e.to_string()))
             }
             _ => Err(DesktopError::Failure(
                 "read operation cannot mutate the desktop".into(),

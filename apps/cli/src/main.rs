@@ -23,6 +23,7 @@ use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
 mod bounded_command;
 mod browser;
 mod browser_download;
+mod buffers;
 mod inspection;
 mod local_multiplexer;
 mod local_zellij;
@@ -65,6 +66,7 @@ struct ClientOptions {
 }
 
 enum Parsed {
+    Buffers(buffers::Invocation),
     PullRequest(pull_request::Invocation),
     Offline(Offline),
     LocalMultiplexer(local_multiplexer::Invocation),
@@ -102,6 +104,18 @@ fn main() -> ExitCode {
 fn run() -> Result<u8, Box<dyn Error>> {
     let (parsed, socket_override, timeout, password) = parse(env::args_os().skip(1).collect())?;
     match parsed {
+        Parsed::Buffers(invocation) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&buffers::run(
+                    invocation,
+                    socket_override,
+                    timeout,
+                    password
+                )?)?
+            );
+            Ok(0)
+        }
         Parsed::PullRequest(invocation) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(
@@ -254,6 +268,9 @@ fn parse(
         .and_then(|value| value.to_str())
         .map(|name| registry::find(name).map_or(name, |spec| spec.name));
     let tail = &args[(index + 1).min(args.len())..];
+    if let Some(command @ ("set-buffer" | "list-buffers" | "paste-buffer")) = command {
+        return Ok((buffers::parse(command, tail)?, socket, timeout, password));
+    }
     if command == Some("local-zellij") {
         return Ok((local_zellij::parse(tail)?, socket, timeout, password));
     }

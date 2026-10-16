@@ -133,6 +133,37 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    for (name, operands, method) in [
+        ("set-buffer", vec!["example"], "set_buffer"),
+        ("list-buffers", vec![], "list_buffers"),
+        ("paste-buffer", vec!["--surface", "1"], "paste_buffer"),
+    ] {
+        let mut arguments = if name == "paste-buffer" {
+            target_arguments()
+        } else {
+            vec![]
+        };
+        arguments.retain(|a| a.name != "expected_model_revision");
+        if name != "list-buffers" {
+            arguments.push(option("name", &["--name"], ValueKind::Text));
+        }
+        if name == "set-buffer" {
+            arguments.push(positional("text_or_stdin", ValueKind::Text, false));
+        }
+        if name == "paste-buffer" {
+            arguments.push(option("bracketed", &["--bracketed"], ValueKind::Flag));
+        }
+        let mut c = contract(name, &operands, arguments, method);
+        c.route = "buffers";
+        c.requirements = if name == "paste-buffer" {
+            &["running_app", "private_buffer_store"]
+        } else {
+            &["private_buffer_store"]
+        };
+        c.defaults = json!({"buffer":"default", "text_bytes":4096, "max_buffers":128});
+        c.limitations = "Private CLI-owned atomic store; set/list offline. UTF-8 bytes preserved; list size is bytes, not reference graphemes. No native clipboard synchronization. Bracketed paste uses terminal mode; ordinary paste sends exact text. Existing transport size limits apply; full historical capacity/output parity unverified.";
+        result.push(c);
+    }
     for (name, input) in [("pr", Some("17")), ("pr clear", None)] {
         let mut operands = vec![];
         if let Some(input) = input {
@@ -990,6 +1021,7 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
         .map_err(|error| failure(format!("{}: {}", c.name, error)))?;
     let value = |command| serde_json::to_value(command).map_err(|e| failure(e.to_string()));
     let (route, request) = match parsed {
+        Parsed::Buffers(invocation) => ("buffers", invocation.discovery()),
         Parsed::PullRequest(invocation) => ("pull_request", invocation.discovery()),
         Parsed::App(command) => ("app", value(command)?),
         Parsed::WorkspaceMove(command) => ("workspace_move", value(command)?),
