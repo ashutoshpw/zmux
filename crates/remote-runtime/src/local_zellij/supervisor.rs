@@ -31,6 +31,9 @@ struct Bootstrap {
     cwd: PathBuf,
     shell: PathBuf,
     command: Option<String>,
+    owner_uuid: Uuid,
+    owner_generation: Uuid,
+    profile: PathBuf,
 }
 pub(super) fn clean(command: &mut Command) {
     super::super::local_multiplexer::clear_context(command);
@@ -45,6 +48,13 @@ pub(super) fn environment(command: &mut Command, root: &Path) {
         .env("ZELLIJ_SOCKET_DIR", root.join("s"))
         .env("XDG_CACHE_HOME", root.join("cache"));
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Hello {
+    nonce: String,
+    completion_socket: (u64, u64),
+}
+
 fn configure(stream: &UnixStream) -> io::Result<()> {
     // Darwin accept inherits O_NONBLOCK from its listener. Framed bootstrap I/O
     // uses socket timeouts and must wait for the authenticated peer's next field.
@@ -107,6 +117,9 @@ pub(super) fn create(
         cwd: cwd.into(),
         shell,
         command: command.map(str::to_owned),
+        owner_uuid: record.id,
+        owner_generation: Uuid::new_v4(),
+        profile: owner.root.clone(),
     };
     let path = root.join("bootstrap.json");
     files::write_private(&path, &serde_json::to_vec(&spec).map_err(io::Error::other)?)?;
@@ -164,8 +177,10 @@ pub(super) fn create(
             "bootstrap peer is not the pinned production supervisor",
         ));
     }
-    let nonce: String = receive(&mut connection)?;
-    if nonce != spec.nonce {
+    let hello: Hello = receive(&mut connection)?;
+    if hello.nonce != spec.nonce
+        || files::inode(&root.join("completion.sock"))? != hello.completion_socket
+    {
         return Err(fail("bootstrap reservation challenge rejected"));
     }
     let backend_connection = super::broker::connect(&backend, deadline)?;
@@ -224,8 +239,27 @@ pub(super) fn create(
     record.workload = Some(workload);
     record.state = "bound".into();
     record.verify_live()?;
+    let binding = super::completion::CommittedBinding {
+        version: 1,
+        owner_uuid: record.id,
+        owner_generation: spec.owner_generation,
+        namespace: record.namespace.clone().expect("bound namespace"),
+        completion_socket: hello.completion_socket,
+        server: record.server.clone().expect("bound server"),
+        supervisor: record.supervisor.clone().expect("bound supervisor"),
+        workload: record.workload.clone().expect("bound workload"),
+    };
+    record.completion = Some(super::completion::Capability {
+        owner_generation: spec.owner_generation,
+        completion_socket: hello.completion_socket,
+        binding_digest: binding.digest()?,
+    });
     persist(record)?;
-    send(&mut connection, &"committed")?;
+    send(&mut connection, &binding)?;
+    let accepted: String = receive(&mut connection)?;
+    if accepted != binding.digest()? {
+        return Err(fail("supervisor binding acknowledgment rejected"));
+    }
     // The workload no longer needs startup text or the one-use challenge file.
     fs::remove_file(path)?;
     fs::remove_file(layout)?;
@@ -251,7 +285,18 @@ pub fn run_supervisor(path: &Path) -> io::Result<i32> {
     if super::broker::peer(&connection)? != spec.starter {
         return Err(fail("bootstrap starter identity changed"));
     }
-    send(&mut connection, &spec.nonce)?;
+    let root = path
+        .parent()
+        .ok_or_else(|| fail("missing supervisor runtime root"))?
+        .to_path_buf();
+    let mut publisher = super::completion_control::Publisher::create(root, spec.profile.clone())?;
+    send(
+        &mut connection,
+        &Hello {
+            nonce: spec.nonce.clone(),
+            completion_socket: publisher.endpoint(),
+        },
+    )?;
     let instruction: String = receive(&mut connection)?;
     if instruction != "spawn_once" {
         return Err(fail("supervisor was not authorized to start workload"));
@@ -273,12 +318,16 @@ pub fn run_supervisor(path: &Path) -> io::Result<i32> {
     // its sole physical owner. Continue waiting even if parent commit failed.
     let committed = (|| {
         send(&mut connection, &child.id())?;
-        let reply: String = receive(&mut connection)?;
-        if reply == "committed" {
-            Ok(())
-        } else {
-            Err(fail("unexpected bootstrap completion"))
+        let binding: super::completion::CommittedBinding = receive(&mut connection)?;
+        if binding.owner_uuid != spec.owner_uuid
+            || binding.owner_generation != spec.owner_generation
+            || binding.workload != process_identity(child.id())?
+        {
+            return Err(fail("supervisor workload binding mismatch"));
         }
+        let digest = binding.digest()?;
+        publisher.bind(binding)?;
+        send(&mut connection, &digest)
     })();
     if committed.is_err() {
         eprintln!(
@@ -286,16 +335,54 @@ pub fn run_supervisor(path: &Path) -> io::Result<i32> {
         );
     }
     drop(connection);
+    let mut terminal = None;
+    let mut control_issue_reported = false;
     loop {
-        if let Some(status) = observe_child(child.id(), false)? {
-            child.wait()?;
-            return Ok(match status {
-                ExitObservation::Exited(code) => code,
-                ExitObservation::Signaled(number) => 128 + number,
+        if terminal.is_none()
+            && let Some(status) = observe_child(child.id(), false)?
+        {
+            use std::os::unix::process::ExitStatusExt;
+            let waited = child.wait()?;
+            let actual = if let Some(code) = waited.code() {
+                ExitObservation::Exited(code)
+            } else if let Some(signal) = waited.signal() {
+                ExitObservation::Signaled(signal)
+            } else {
+                return Err(fail("missing actual terminal wait status"));
+            };
+            if status != actual {
+                return Err(fail("retained workload observe/wait mismatch"));
+            }
+            let exit = match status {
+                ExitObservation::Exited(code) => super::completion::WorkloadExit::Exited(code),
+                ExitObservation::Signaled(signal) => {
+                    super::completion::WorkloadExit::Signaled(signal)
+                }
                 _ => return Err(fail("unexpected workload wait status")),
-            });
+            };
+            terminal = Some(exit);
+            if committed.is_err() {
+                return exit.mapped();
+            }
+            if let Err(error) = publisher.publish(exit) {
+                eprintln!("supervisor terminal publication unknown; retained publisher: {error}");
+            }
         }
-        thread::sleep(Duration::from_millis(10));
+        match publisher.poll() {
+            Ok(true) => {
+                return terminal
+                    .ok_or_else(|| fail("cannot retire a live workload"))?
+                    .mapped();
+            }
+            Ok(false) => (),
+            Err(error) => {
+                if !control_issue_reported {
+                    eprintln!("supervisor control service issue; owner retained: {error}");
+                    control_issue_reported = true;
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(2));
     }
 }
 

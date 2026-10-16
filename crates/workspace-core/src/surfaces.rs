@@ -21,6 +21,7 @@ pub struct Surface {
     pub remote: Option<zmux_remote_runtime::SshConnectionConfig>,
     pub local_tmux: Option<zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity>,
     pub local_zellij: Option<LocalZellijIdentity>,
+    pub local_zellij_completion: Option<Box<LocalZellijCompletion>>,
 }
 impl Surface {
     pub(crate) fn terminal(id: SurfaceId, session_id: SessionId) -> Self {
@@ -36,6 +37,7 @@ impl Surface {
             remote: None,
             local_tmux: None,
             local_zellij: None,
+            local_zellij_completion: None,
         }
     }
 }
@@ -217,6 +219,7 @@ impl WorkspaceStore {
                     remote: None,
                     local_tmux: None,
                     local_zellij: None,
+                    local_zellij_completion: None,
                 };
                 let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
                 pane.surfaces.push(surface);
@@ -492,6 +495,9 @@ impl WorkspaceStore {
         Ok(())
     }
     fn start(pane_id: PaneId, surface: &Surface, effects: &mut Vec<Effect>) {
+        if surface.local_zellij_completion.is_some() {
+            return;
+        }
         if let Some(session_id) = surface.session_id {
             if let Some(identity) = &surface.local_zellij {
                 effects.push(Effect::AttachLocalZellijSession {
@@ -656,7 +662,10 @@ impl WorkspaceStore {
             id: SurfaceId(ids),
             kind: old.kind.clone(),
             browser_profile_id: old.browser_profile_id,
-            session_id: old.session_id.map(|_| SessionId(ids + 1)),
+            session_id: old
+                .session_id
+                .filter(|_| old.local_zellij_completion.is_none())
+                .map(|_| SessionId(ids + 1)),
             url: old.url.clone(),
             navigation: 0,
             title: old.title.clone(),
@@ -664,6 +673,7 @@ impl WorkspaceStore {
             remote: old.remote.as_ref().map(|remote| remote.for_restore()),
             local_tmux: old.local_tmux.clone(),
             local_zellij: old.local_zellij.clone(),
+            local_zellij_completion: old.local_zellij_completion.clone(),
         };
         Self::start(pane_id, &surface, effects);
         Ok(surface)

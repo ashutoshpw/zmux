@@ -96,6 +96,33 @@ pub struct TransportReport {
     pub errors: Vec<String>,
     pub input_loss: Vec<InputLoss>,
 }
+impl TransportReport {
+    fn confirm_detach(
+        &self,
+        requested: bool,
+        outcome: ExitObservation,
+        owner_confirmed: bool,
+    ) -> io::Result<()> {
+        if self.pending_to_server_on_cleanup > 0 {
+            return Err(fail(format!(
+                "opaque pending input at cleanup: {}bytes; outcome unknown; receipt={:?}",
+                self.pending_to_server_on_cleanup, self.input_loss
+            )));
+        }
+        if self.rejected_to_server > 0
+            && !(requested
+                && outcome == ExitObservation::Exited(0)
+                && owner_confirmed
+                && self.rejected_to_server == self.rejected_during_requested_cancel)
+        {
+            return Err(fail(format!(
+                "unconfirmed opaque input loss: {}bytes rejected; outcome unknown, command not replayed; receipt={:?}",
+                self.rejected_to_server, self.input_loss
+            )));
+        }
+        Ok(())
+    }
+}
 struct Connection {
     client: UnixStream,
     backend: UnixStream,
@@ -469,6 +496,28 @@ pub(super) fn connect_while(
     }
 }
 
+fn acknowledge_completion(
+    owner: &LocalZellij,
+    record: &Record,
+    receipt: &super::completion::TerminalReceiptV1,
+    terminal: &mut ForegroundTerminal,
+    observer: &mut Option<super::observer::Observer>,
+    client: &mut super::completion_control::Client,
+    mut tick: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    receipt.matches(record)?;
+    let revision = if let Some(observer) = observer {
+        observer.completed(receipt, Instant::now() + Duration::from_secs(10), || {
+            terminal.startup_events()?;
+            tick()
+        })?
+    } else {
+        owner.consume_terminal(record, receipt)?;
+        1
+    };
+    client.consumed(receipt, revision)
+}
+
 pub(super) fn attach(
     owner: &LocalZellij,
     record: Record,
@@ -477,6 +526,47 @@ pub(super) fn attach(
     startup_deadline: Instant,
 ) -> io::Result<i32> {
     terminal.startup_events()?;
+    let mut completion = if record.completion.is_some() {
+        let mut client = super::completion_control::Client::connect(&record, startup_deadline)?;
+        let already = client.subscribe(
+            observer.as_ref().map(|o| o.context()),
+            observer.as_ref().map(|o| o.launcher()),
+        )?;
+        if let Some(receipt) = already {
+            acknowledge_completion(
+                owner,
+                &record,
+                &receipt,
+                terminal,
+                &mut observer,
+                &mut client,
+                || Ok(()),
+            )?;
+            terminal.restore()?;
+            if let Some(observer) = &mut observer {
+                observer.finished(
+                    record.id,
+                    FrontendReceipt {
+                        owned_client_exit: ExitObservation::Exited(0),
+                        requested_cancel: false,
+                        original_owner_preserved: false,
+                        workers_joined: true,
+                        transport: TransportReport::default(),
+                        owner_outcome: Some(
+                            super::observer_protocol::OwnerOutcome::WorkloadCompleted(Box::new(
+                                receipt.clone(),
+                            )),
+                        ),
+                    },
+                )?;
+            }
+            client.release()?;
+            return receipt.workload_exit.mapped();
+        }
+        Some(client)
+    } else {
+        None
+    };
     record.verify_live()?;
     let mut attachment = Attachment {
         broker: Broker::start(&record)?,
@@ -513,6 +603,7 @@ pub(super) fn attach(
     let mut requested_cancel = false;
     let mut cancel_deadline = None;
     let mut connected = false;
+    let mut completed = None;
     while child.observe(false)?.is_none() {
         if terminal.events(child, || {
             broker.cancel.store(true, Ordering::Release);
@@ -531,7 +622,28 @@ pub(super) fn attach(
             .lock()
             .map_err(|_| fail("transport report poisoned"))?
             .clone();
-        if let Some(observer) = &mut observer {
+        if completed.is_none()
+            && let Some(client) = &mut completion
+            && let Some(receipt) = client.query()?
+        {
+            acknowledge_completion(
+                owner,
+                &record,
+                &receipt,
+                terminal,
+                &mut observer,
+                client,
+                || Ok(()),
+            )?;
+            broker.cancel.store(true, Ordering::Release);
+            requested_cancel = true;
+            child.signal(nix::sys::signal::Signal::SIGTERM)?;
+            cancel_deadline.get_or_insert(Instant::now() + Duration::from_secs(3));
+            completed = Some(receipt);
+        }
+        if completed.is_none()
+            && let Some(observer) = &mut observer
+        {
             observer.poll()?;
             if !connected {
                 super::check_deadline(startup_deadline, "observer authenticated transport")?;
@@ -568,11 +680,22 @@ pub(super) fn attach(
         original_owner_preserved: preservation.is_ok(),
         workers_joined: true,
         transport: report.clone(),
+        owner_outcome: Some(match &completed {
+            Some(receipt) => {
+                super::observer_protocol::OwnerOutcome::WorkloadCompleted(Box::new(receipt.clone()))
+            }
+            None => super::observer_protocol::OwnerOutcome::LivePreserved,
+        }),
     };
-    eprintln!(
-        "zmux local-zellij attachment receipt: {}",
-        serde_json::to_string(&receipt).map_err(io::Error::other)?
-    );
+    if observer
+        .as_ref()
+        .is_none_or(|observer| observer.version() != 2)
+    {
+        eprintln!(
+            "zmux local-zellij attachment receipt: {}",
+            serde_json::to_string(&receipt).map_err(io::Error::other)?
+        );
+    }
     if let Some(observer) = &mut observer {
         observer.finished(record.id, receipt)?;
     }
@@ -582,28 +705,28 @@ pub(super) fn attach(
     if report.authenticated_connections == 0 {
         return Err(fail("client ended without any authenticated transport"));
     }
-    if report.pending_to_server_on_cleanup > 0 {
-        return Err(fail(format!(
-            "opaque pending input at cleanup: {}bytes; outcome unknown; receipt={:?}",
-            report.pending_to_server_on_cleanup, report.input_loss
-        )));
-    }
-    if report.rejected_to_server > 0
-        && !(requested_cancel
-            && outcome == ExitObservation::Exited(0)
-            && preservation.is_ok()
-            && report.rejected_to_server == report.rejected_during_requested_cancel)
-    {
-        return Err(fail(format!(
-            "unconfirmed opaque input loss: {}bytes rejected; outcome unknown, command not replayed; receipt={:?}",
-            report.rejected_to_server, report.input_loss
-        )));
-    }
+    let completed_authenticated = if let Some(receipt) = &completed {
+        super::completion::authenticate(&record, Instant::now() + Duration::from_secs(2))?.as_ref()
+            == Some(receipt)
+    } else {
+        false
+    };
+    report.confirm_detach(
+        requested_cancel,
+        outcome,
+        preservation.is_ok() || completed_authenticated,
+    )?;
     if report.rejected_to_server > 0 {
         eprintln!(
-            "zmux attachment canceled with{} undeliverable opaque bytes; original owner identities preserved; receipt={:?}",
+            "zmux requested frontend detach rejected{} opaque bytes; delivery remains unknown and is never replayed; original live owner or exact completed publisher confirmed; receipt={:?}",
             report.rejected_to_server, report.input_loss
         );
+    }
+    if let Some(client) = &mut completion {
+        client.release()?;
+    }
+    if let Some(receipt) = completed {
+        return receipt.workload_exit.mapped();
     }
     match outcome {
         ExitObservation::Exited(code) => Ok(code),
@@ -666,6 +789,13 @@ mod tests {
                 "actual socket never reached bounded relay backpressure"
             );
         }
+        let mut interrupted = report.clone();
+        interrupted.pending_to_server_on_cleanup = connection.to_server.len() as u64;
+        assert!(
+            interrupted
+                .confirm_detach(true, ExitObservation::Exited(0), true)
+                .is_err()
+        );
         let mut received = Vec::new();
         let mut source_closed = false;
         let mut target_eof = false;
@@ -742,6 +872,27 @@ mod tests {
             assert_eq!(loss.requested_cancel_before_send, canceled);
             assert_eq!(loss.content, "opaque_not_interpreted");
             assert!(loss.errno.is_some());
+            assert_eq!(
+                report
+                    .confirm_detach(true, ExitObservation::Exited(0), true)
+                    .is_ok(),
+                canceled
+            );
+            assert!(
+                report
+                    .confirm_detach(true, ExitObservation::Exited(0), false)
+                    .is_err()
+            );
+            assert!(
+                report
+                    .confirm_detach(false, ExitObservation::Exited(0), true)
+                    .is_err()
+            );
+            assert!(
+                report
+                    .confirm_detach(true, ExitObservation::Exited(7), true)
+                    .is_err()
+            );
         }
     }
 
@@ -753,6 +904,7 @@ mod tests {
         let mut child = OwnedChild::spawn(&mut sleeper).unwrap();
         let expected = process_identity(child.child.id()).unwrap();
         let record = Record {
+            completion: None,
             id: Uuid::new_v4(),
             name: "peer-negative".into(),
             state: "bound".into(),

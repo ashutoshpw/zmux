@@ -5,8 +5,8 @@ use thiserror::Error;
 mod local_zellij;
 mod navigation;
 pub use local_zellij::{
-    LocalZellijIdentity, LocalZellijReservation, MAX_LOCAL_ZELLIJ_RESERVATIONS,
-    PreparedLocalZellijSurface,
+    LocalZellijCompletion, LocalZellijIdentity, LocalZellijReservation, LocalZellijViewport,
+    MAX_LOCAL_ZELLIJ_RESERVATIONS, MAX_LOCAL_ZELLIJ_VIEWPORT_BYTES, PreparedLocalZellijSurface,
 };
 mod restore;
 pub mod surface_order;

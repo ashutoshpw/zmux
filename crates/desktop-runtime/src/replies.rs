@@ -64,10 +64,8 @@ impl Worker {
         let input = if Instant::now() >= deadline {
             Err("reply_write_deadline".into())
         } else {
-            self.slots
-                .get(&session_id)
-                .and_then(|slot| slot.session.as_ref())
-                .ok_or_else(|| "original terminal session is unavailable".to_owned())
+            self.writable_session(session_id)
+                .map_err(|error| error.to_string())
                 .and_then(|session| {
                     session
                         .send_input_with_receipt(&bytes, deadline)

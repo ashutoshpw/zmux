@@ -362,6 +362,24 @@ while time.monotonic()<end:
     }
     cleanup.send(b"exit-workload\r");
     assert_eq!(cleanup.finish(), 0);
+    let cleaned = fixture.output(&[
+        "local-zellij",
+        "cleanup",
+        "--id",
+        &owner.to_string(),
+        "--generation",
+        &record
+            .completion
+            .as_ref()
+            .unwrap()
+            .owner_generation
+            .to_string(),
+    ]);
+    assert!(
+        cleaned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
     let deadline = Instant::now() + Duration::from_secs(5);
     while [&record.server, &record.supervisor, &record.workload]
         .iter()
@@ -518,7 +536,15 @@ fn actual_native_start_refuses_without_persistence_and_writer_failure_never_star
 fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend() {
     // The actual selected shell remains live until one real input line arrives,
     // so this protects bound finite completion, not the separate fast-exit race.
-    for code in [0, 7] {
+    for (finish, expected, code) in [
+        ("exit 0", serde_json::json!({"kind":"exited","value":0}), 0),
+        ("exit 7", serde_json::json!({"kind":"exited","value":7}), 7),
+        (
+            r#"kill -TERM "$$""#,
+            serde_json::json!({"kind":"signaled","value":15}),
+            143,
+        ),
+    ] {
         let fixture = Fixture::new();
         let state = fixture.root.join("desktop");
         fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
@@ -539,7 +565,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
                     name: "bound-finite".into(),
                     cwd: fixture.root.clone(),
                     command: Some(format!(
-                        "printf 'R03_FINITE_READY\\n'; IFS= read -r finite_input; [ \"$finite_input\" = 'finish-once' ] || exit 99; exit {code}"
+                        r#"printf 'R03_FINITE_READY\n'; IFS= read -r finite_input; [ "$finite_input" = 'finish-once' ] || exit 99; {finish}"#
                     )),
                     focus: true,
                 },
@@ -579,7 +605,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
         let value = serde_json::to_value(operation).unwrap();
         assert_eq!(
             value.get("workload_exit"),
-            Some(&serde_json::json!({"kind":"exited","value":code})),
+            Some(&expected),
             "actual bound finite workload lacks its authenticated terminal receipt: {value}"
         );
         assert!(
@@ -597,9 +623,291 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
             "{value}"
         );
         desktop.shutdown(Duration::from_secs(5)).unwrap();
+        let saved: Value =
+            serde_json::from_slice(&fs::read(state.join("session.json")).unwrap()).unwrap();
+        fn completed_descriptors(value: &Value, out: &mut Vec<Value>) {
+            match value {
+                Value::Object(object) => {
+                    if object.get("kind").and_then(Value::as_str)
+                        == Some("completed_local_zellij_terminal")
+                    {
+                        out.push(value.clone());
+                    }
+                    for v in object.values() {
+                        completed_descriptors(v, out);
+                    }
+                }
+                Value::Array(array) => {
+                    for v in array {
+                        completed_descriptors(v, out);
+                    }
+                }
+                _ => (),
+            }
+        }
+        let mut descriptors = Vec::new();
+        completed_descriptors(&saved, &mut descriptors);
+        assert_eq!(descriptors.len(), 1, "{saved}");
+        let visible = descriptors[0]["history"]["viewport"]["contents"]
+            .as_str()
+            .unwrap();
+        assert!(
+            visible.contains("R03_FINITE_READY"),
+            "completed history lost its last visible workload frame: {visible}"
+        );
+        assert!(
+            !visible.contains("zmux local-zellij attachment receipt:"),
+            "internal lifecycle JSON must not overwrite workload history"
+        );
+        assert_eq!(
+            descriptors[0]["history"]["receipt"]["workload_exit"],
+            expected
+        );
+        // A fresh explicit Attach to an already completed retained owner uses
+        // a real CLI Session but never launches a Zellij frontend or workload.
+        let attach_state = fixture.root.join("completed-attach-desktop");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&attach_state)
+            .unwrap();
+        let attach = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(attach_state));
+        let initial_attach = wait(&attach, |s| {
+            !s.persistence.startup_pending
+                && s.pending_launches == 0
+                && !s.model.workspaces.is_empty()
+        });
+        send(
+            &attach,
+            22,
+            DesktopCommand::LocalZellij {
+                request: ZellijRequest::Attach {
+                    profile_id: profile,
+                    owner_uuid: owner,
+                    pane_id: initial_attach.model.workspaces[0].focused_pane,
+                    focus: true,
+                },
+            },
+        );
+        let attached = wait(&attach, |s| {
+            s.local_zellij_operations.iter().any(|r| r.session_joined)
+        });
+        let attached_receipt = attached.local_zellij_operations.last().unwrap();
+        let attached_value = serde_json::to_value(attached_receipt).unwrap();
+        assert_eq!(attached_value["workload_exit"], expected);
+        assert!(
+            attached_receipt.frontend_pid.is_none() && attached_receipt.error.is_none(),
+            "{attached_value}"
+        );
+        assert!(
+            attached_value["completion_saved_revision"]
+                .as_u64()
+                .is_some_and(|r| r > 0)
+        );
+        attach.shutdown(Duration::from_secs(5)).unwrap();
+        let restored = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(state));
+        let history = wait(&restored, |s| {
+            !s.persistence.startup_pending && s.pending_launches == 0
+        });
+        let surface = history
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .find(|s| {
+                s.local_zellij
+                    .as_ref()
+                    .is_some_and(|i| i.owner_uuid == owner)
+            })
+            .unwrap();
+        assert!(surface.session_id.is_none() && surface.local_zellij_completion.is_some());
+        assert!(
+            history.local_zellij_operations.is_empty(),
+            "restored history must not Attach or Start"
+        );
+        restored.shutdown(Duration::from_secs(5)).unwrap();
+        let authenticated = zmux_remote_runtime::local_zellij::completion::authenticate(
+            &record,
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(authenticated.workload_exit.mapped().unwrap(), code);
+        // A plausible disk receipt cannot replace the original live endpoint.
+        // Restore only the exact retained socket inode after this denial.
+        let runtime = zmux_remote_runtime::local_zellij::observer_protocol::runtime_base()
+            .unwrap()
+            .join(format!("z{}", owner.simple()));
+        let endpoint = runtime.join("completion.sock");
+        let retained_endpoint = runtime.join("completion.sock.retained-test");
+        fs::rename(&endpoint, &retained_endpoint).unwrap();
+        std::os::unix::fs::symlink(&retained_endpoint, &endpoint).unwrap();
+        assert!(
+            zmux_remote_runtime::local_zellij::completion::authenticate(
+                &record,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        fs::remove_file(&endpoint).unwrap();
+        fs::rename(&retained_endpoint, &endpoint).unwrap();
+        let wrong_generation = fixture.output(&[
+            "local-zellij",
+            "cleanup",
+            "--id",
+            &owner.to_string(),
+            "--generation",
+            &uuid::Uuid::new_v4().to_string(),
+        ]);
+        assert!(!wrong_generation.status.success());
+        assert!(
+            zmux_remote_runtime::local_zellij::completion::authenticate(
+                &record,
+                Instant::now() + Duration::from_secs(1)
+            )
+            .unwrap()
+            .is_some()
+        );
+        let cleanup = fixture.output(&[
+            "local-zellij",
+            "cleanup",
+            "--id",
+            &owner.to_string(),
+            "--generation",
+            &authenticated.binding.owner_generation.to_string(),
+        ]);
+        assert!(
+            cleanup.status.success(),
+            "{}",
+            String::from_utf8_lossy(&cleanup.stderr)
+        );
+        assert!(fixture.records().unwrap().as_array().unwrap().is_empty());
+        assert!(
+            [&record.server, &record.supervisor, &record.workload]
+                .iter()
+                .all(|i| departed(i.as_ref().unwrap()))
+        );
         eprintln!(
             "R03 bound finite receipt: {}",
             serde_json::json!({"workload_exit":code,"owner_uuid":owner,"actual_input_once":true,"actual_saved_completion":true,"physical_frontend_joined":true,"fast_prebound_exit_covered":false})
         );
     }
+}
+
+#[test]
+fn actual_completion_writer_failure_retains_live_unconsumed_publisher() {
+    let fixture = Fixture::new();
+    let state = fixture.root.join("desktop");
+    fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+    let profile = uuid::Uuid::new_v4();
+    let desktop = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(state.clone()));
+    let initial = wait(&desktop, |s| {
+        !s.persistence.startup_pending && s.pending_launches == 0 && !s.model.workspaces.is_empty()
+    });
+    send(&desktop,30,DesktopCommand::LocalZellij{request:ZellijRequest::Start{profile_id:profile,pane_id:initial.model.workspaces[0].focused_pane,name:"failed-finite-save".into(),cwd:fixture.root.clone(),command:Some(r#"printf 'R03_FAILED_COMPLETION_READY\n'; IFS= read -r finish; [ "$finish" = 'finish-once' ] || exit 99; exit 0"#.into()),focus:true}});
+    let running = wait(&desktop, |s| {
+        s.local_zellij_operations
+            .iter()
+            .any(|r| r.state == "transport_connected")
+            && s.control_frames.iter().any(|f| {
+                f.snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.viewport.contents.contains("R03_FAILED_COMPLETION_READY"))
+            })
+    });
+    let owner = running
+        .local_zellij_operations
+        .last()
+        .unwrap()
+        .owner_uuid
+        .unwrap();
+    let (_, session) = terminal(&running, owner);
+    let record: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+    record.verify_live().unwrap();
+    let sentinel = fixture.root.join("completion-save-sentinel");
+    fs::write(&sentinel, b"completion save must not modify me").unwrap();
+    fs::remove_file(state.join("session.json")).unwrap();
+    std::os::unix::fs::symlink(&sentinel, state.join("session.json")).unwrap();
+    send(
+        &desktop,
+        31,
+        DesktopCommand::Input {
+            session_id: session,
+            text: "finish-once\r".into(),
+        },
+    );
+    let failed = wait(&desktop, |s| {
+        s.local_zellij_operations.iter().any(|r| r.session_joined)
+            && s.persistence.operations.iter().any(|op| {
+                op.kind == "local_zellij_completion"
+                    && op
+                        .error
+                        .as_ref()
+                        .is_some_and(|e| e.contains("open private session file"))
+            })
+    });
+    assert!(!failed.persistence.autosave_enabled);
+    let receipt = serde_json::to_value(failed.local_zellij_operations.last().unwrap()).unwrap();
+    assert_eq!(
+        receipt["workload_exit"],
+        serde_json::json!({"kind":"exited","value":0})
+    );
+    assert!(receipt["completion_saved_revision"].is_null());
+    assert_eq!(
+        fs::read(&sentinel).unwrap(),
+        b"completion save must not modify me"
+    );
+    let status = fixture.output(&["local-zellij", "status", "--id", &owner.to_string()]);
+    assert!(status.status.success());
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["completion_authenticated"], true);
+    assert_eq!(
+        status["consumption_confirmed"], false,
+        "failed native save must not ACK: {status}"
+    );
+    assert!(
+        !fixture
+            .root
+            .join("profile")
+            .join(format!("consumed-{owner}.json"))
+            .exists()
+    );
+    assert_eq!(
+        process_identity(record.supervisor.as_ref().unwrap().pid).unwrap(),
+        *record.supervisor.as_ref().unwrap()
+    );
+    fs::remove_file(state.join("session.json")).unwrap();
+    let ticket = desktop
+        .begin_shutdown(Duration::from_secs(5), false)
+        .unwrap()
+        .ticket;
+    let shutdown = desktop
+        .wait_shutdown(ticket, Duration::from_secs(5))
+        .unwrap();
+    assert!(
+        shutdown.physical_cleanup_complete && !shutdown.issues.is_empty(),
+        "{shutdown:?}"
+    );
+    let cleaned = fixture.output(&[
+        "local-zellij",
+        "cleanup",
+        "--id",
+        &owner.to_string(),
+        "--generation",
+        &record
+            .completion
+            .as_ref()
+            .unwrap()
+            .owner_generation
+            .to_string(),
+    ]);
+    assert!(
+        cleaned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
+    eprintln!(
+        "R03 actual failed completion save: {}",
+        serde_json::json!({"owner_uuid":owner,"workload_exit":0,"real_S01_writer_failed":true,"sentinel_unchanged":true,"native_ack_sent":false,"original_publisher_retained_until_explicit_cleanup":true,"physical_session_cleanup_complete":true})
+    );
 }

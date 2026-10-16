@@ -292,6 +292,23 @@ impl Client {
             thread::sleep(Duration::from_millis(5));
         }
     }
+    fn rendered(&mut self, marker: &str) {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !String::from_utf8_lossy(&self.output).contains(marker) {
+            self.pump(true);
+            assert!(
+                observe_child(self.pid(), false).unwrap().is_none(),
+                "CLI ended before rendered marker: {}",
+                String::from_utf8_lossy(&self.output)
+            );
+            assert!(
+                Instant::now() < deadline,
+                "actual render deadline: {}",
+                String::from_utf8_lossy(&self.output)
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
     fn finish(&mut self) -> i32 {
         let deadline = Instant::now() + Duration::from_secs(8);
         let outcome = loop {
@@ -694,4 +711,102 @@ fn queued_cancellation_during_registry_wait_cannot_authorize_a_workload() {
     let records = f.records().unwrap();
     assert_eq!(records[0]["state"], "uncertain");
     assert!(records[0]["workload"].is_null());
+}
+
+#[test]
+fn two_actual_frontends_consume_one_retained_completion_and_cleanup_only_its_generation() {
+    let fixture = Fixture::new();
+    let count = fixture.root.join("finite-multiclient-count");
+    let script = format!(
+        r#"printf x >> '{}'; printf 'R03_MULTI_READY\n'; IFS= read -r finish; [ "$finish" = 'finish-once' ] || exit 99; exit 7"#,
+        count.display()
+    );
+    let mut first = Client::new(
+        &fixture,
+        &[
+            "local-zellij",
+            "start",
+            "multi-finite",
+            "--headless",
+            "--command",
+            &script,
+        ],
+    );
+    first.until(|| fixture.records().is_some_and(|r| r[0]["state"] == "bound"));
+    first.rendered("R03_MULTI_READY");
+    let record: zmux_remote_runtime::local_zellij::Record =
+        serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+    let owner = record.id.to_string();
+    let mut second = Client::new(
+        &fixture,
+        &["local-zellij", "attach", "--headless", "--id", &owner],
+    );
+    second.rendered("R03_MULTI_READY");
+    record.verify_live().unwrap();
+    assert!(
+        zmux_remote_runtime::local_zellij::completion::authenticate(
+            &record,
+            Instant::now() + Duration::from_secs(1)
+        )
+        .unwrap()
+        .is_none()
+    );
+    first.send(b"finish-once\r");
+    assert_eq!(first.finish(), 7);
+    assert_eq!(second.finish(), 7);
+    let terminal = zmux_remote_runtime::local_zellij::completion::authenticate(
+        &record,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        terminal.workload_exit,
+        zmux_remote_runtime::local_zellij::completion::WorkloadExit::Exited(7)
+    );
+    assert_eq!(
+        process_identity(record.supervisor.as_ref().unwrap().pid).unwrap(),
+        *record.supervisor.as_ref().unwrap()
+    );
+    assert_eq!(
+        process_identity(record.server.as_ref().unwrap().pid).unwrap(),
+        *record.server.as_ref().unwrap()
+    );
+    assert_eq!(fs::read(&count).unwrap(), b"x");
+    // A third consumer sees the same immutable terminal fact, with no workload
+    // restart and identical no-replace local durable consumption bytes.
+    let mut third = Client::new(
+        &fixture,
+        &["local-zellij", "attach", "--headless", "--id", &owner],
+    );
+    assert_eq!(third.finish(), 7);
+    assert_eq!(fs::read(&count).unwrap(), b"x");
+    let status = fixture.output(&["local-zellij", "status", "--id", &owner]);
+    assert!(status.status.success());
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["state"], "completed_retained");
+    assert_eq!(status["completion_authenticated"], true);
+    assert_eq!(
+        status["terminal_receipt"]["workload_exit"],
+        serde_json::json!({"kind":"exited","value":7})
+    );
+    let generation = terminal.binding.owner_generation.to_string();
+    let cleaned = fixture.output(&[
+        "local-zellij",
+        "cleanup",
+        "--id",
+        &owner,
+        "--generation",
+        &generation,
+    ]);
+    assert!(
+        cleaned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
+    assert!(fixture.records().unwrap().as_array().unwrap().is_empty());
+    eprintln!(
+        "R03 actual multi-client completion: {}",
+        serde_json::json!({"owner_uuid":owner,"owner_generation":generation,"workload_exit":7,"startup_count":1,"concurrent_frontends":2,"duplicate_consumption":true,"live_original_publisher_retained_until_explicit_cleanup":true,"registry_reclaimed":true})
+    );
 }
