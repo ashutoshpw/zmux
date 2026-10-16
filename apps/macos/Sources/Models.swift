@@ -77,8 +77,8 @@ struct UploadProgress: Decodable, Sendable {
 }
 struct CompletedLocalZellijHistory: Decodable, Sendable {
     struct Receipt: Decodable, Sendable {
-        struct Exit: Decodable, Sendable {
-            enum Kind: String, Decodable, Sendable { case exited, signaled }
+        struct Exit: Codable, Sendable {
+            enum Kind: String, Codable, Sendable { case exited, signaled }
             let kind: Kind
             let value: Int
             var label: String {
@@ -195,7 +195,7 @@ struct NativeLocalZellijIdentity: Decodable, Sendable {
 
 /// Presentation of the Rust owner's correlation and physical-join receipts.
 /// Decoding this projection does not authenticate readiness independently.
-struct NativeLocalZellijOperation: Decodable, Sendable {
+struct NativeLocalZellijOperation: Codable, Sendable {
     let inputReady: Bool
     let attachmentId: UUID?
     let epoch: UUID

@@ -6,11 +6,12 @@ from pathlib import Path
 import sys
 import tarfile
 
-from package_admission import Rejected, accept, verify_payload
+from package_admission import VARIANTS, Rejected, accept, verify_payload
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--variant", choices=VARIANTS, default="legacy")
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--target", required=True)
     parser.add_argument("--output", type=Path)
@@ -20,11 +21,11 @@ def main():
         parser.error("payload verification cannot extract")
     try:
         if args.verify_payload:
-            result = verify_payload(args.root)
+            result = verify_payload(args.root, args.variant)
             if result["target"] != args.target:
                 raise Rejected("packaged dependency target differs")
         else:
-            result = accept(args.root, args.target, args.output)
+            result = accept(args.root, args.target, args.output, args.variant)
         print(json.dumps(result))
     except (Rejected, OSError, ValueError, KeyError, TypeError, StopIteration, EOFError, tarfile.TarError) as error:
         print(f"optional Zellij package rejected: {error}", file=sys.stderr)

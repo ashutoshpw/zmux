@@ -2725,8 +2725,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // normal app context starts; never create two owners for one path.
                     try await NotificationPermissionSmoke.validate()
                 }
+                let localZellij: NativeLocalZellijBundle?
+                if let index = CommandLine.arguments.firstIndex(of: "--local-zellij-readiness-profile") {
+                    guard CommandLine.arguments.count > index + 2,
+                          CommandLine.arguments.filter({ $0 == "--local-zellij-readiness-profile" }).count == 1,
+                          let profile = UUID(uuidString: CommandLine.arguments[index + 1]),
+                          CommandLine.arguments[index + 2].hasPrefix("/") else {
+                        throw BridgeFailure(message: "Readiness opt-in requires PROFILE_UUID and a private absolute profile root")
+                    }
+                    localZellij = try await NativeLocalZellijBundle.resolve(bundle: Bundle.main.bundleURL,
+                        profile: profile, root: URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                } else { localZellij = nil }
                 let storage: NativeDesktopStorage
-                if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
+                if let index = CommandLine.arguments.firstIndex(of: "--local-zellij-readiness-smoke") {
+                    guard CommandLine.arguments.count > index + 2, localZellij != nil,
+                          CommandLine.arguments[index + 1].hasPrefix("/"), CommandLine.arguments[index + 2].hasPrefix("/") else {
+                        throw BridgeFailure(message: "Native readiness smoke requires REPORT STATE_DIRECTORY and explicit admitted profile opt-in")
+                    }
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                } else if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
                     storage = .transient
                 } else if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
@@ -2737,8 +2754,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
                 } else { storage = .applicationSupport }
                 WindowLifecycleSmoke.trace("before coordinator.start")
-                try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
+                try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"], localZellij: localZellij?.configuration)
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--local-zellij-readiness-smoke"), let localZellij {
+                    do {
+                        try await LocalZellijReadinessSmoke.run(coordinator: coordinator, admitted: localZellij,
+                            report: URL(fileURLWithPath: CommandLine.arguments[index + 1]),
+                            stateDirectory: URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native local Zellij readiness failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Native local Zellij cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     do {
                         try await CompletedTerminalHistorySmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
@@ -2815,7 +2846,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
+                if CommandLine.arguments.contains("--local-zellij-readiness-profile") || CommandLine.arguments.contains("--local-zellij-readiness-smoke") || CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }

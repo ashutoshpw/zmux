@@ -1,0 +1,204 @@
+{
+  "status": "passed",
+  "scope": "independently reviewed exact finite diagnostic readiness package; no native admission, AppKit or default activation",
+  "run_id": 38855036920,
+  "source_sha": "45f4d9ab1032276720c21521f69237909e41f232",
+  "notice_policy_sha256": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79",
+  "variant": "input-readiness-v1",
+  "inventory_sha256": "c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8",
+  "protocol_sha256": "6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4",
+  "diagnostic_only": true,
+  "hosts": [
+    {
+      "target": "aarch64-apple-darwin",
+      "archive_name": "DIAGNOSTIC-zellij-0.43.0-zmux-aarch64-apple-darwin-input-readiness-v1-c5b795096378-1dba7394d653.tar.gz",
+      "archive_bytes": 62788152,
+      "archive_sha256": "d9af85d6e299a7f6738af49c558884bede96ca574d59ffca3fb5df39ded9b11c",
+      "manifest_sha256": "e09d6c92cd97d87ca9c27613542fa91ad869c1fdaa1704d2f6fded3cfb87c842",
+      "binary_sha256": "8c4f10864b52f7be16ae8126d50be0742a2e9680e0804625c7755b3593b91bfc",
+      "payload_bytes": 96842169,
+      "files": 1255
+    }
+  ],
+  "download": {
+    "id": 12026404425,
+    "node_id": "MDg6QXJ0aWZhY3QxMjAyNjQwNDQyNQ==",
+    "name": "diagnostic-zellij-readiness-package-Darwin-ARM64-45f4d9ab1032276720c21521f69237909e41f232",
+    "size_in_bytes": 62749970,
+    "url": "https://api.github.com/repos/ashutoshpw/zmux/actions/artifacts/12026404425",
+    "archive_download_url": "https://api.github.com/repos/ashutoshpw/zmux/actions/artifacts/12026404425/zip",
+    "expired": false,
+    "digest": "sha256:a4d93dd90c1a26aeddcaa203ac140e1a424c69aa68dd0980c7016a2512b61b0a",
+    "created_at": "2026-10-16T05:37:27Z",
+    "updated_at": "2026-10-16T05:37:27Z",
+    "expires_at": "2026-10-23T05:37:24Z",
+    "workflow_run": {
+      "id": 38855036920,
+      "repository_id": 1419613042,
+      "head_repository_id": 1419613042,
+      "head_branch": "ci/input-readiness-promotion",
+      "head_sha": "45f4d9ab1032276720c21521f69237909e41f232"
+    }
+  },
+  "source_evidence_artifact_id": 12026653981,
+  "source_evidence_zip_sha256": "33795d00578603d6eddf75fcf0c3fc5fb84e1cb8b1878bb76398b638e84c0a5e",
+  "source_chain_review_sha256": "69643030b04ccb94672f04b8783dc2fe1474eda73265d3ebe9b620f46d26d54b",
+  "receipt_sha256": {
+    "producer": "623087d6b593997e2f630618c5c3a5d1f2ffed5d2fb5ffe13ead536ce00ef2a8",
+    "public_owner": "9bda5f9ee336467ea3fa0bc923029d795b70992b8c1bbbd7a53a7c4cce3a7b64",
+    "silent_owner": "812c1096cd0693283fd3ac54a201d50b4fc282d44657d9d2b78abb8ea3fdec1e",
+    "package": "a4ad297ed03b900f4d938bc21bfcdf32e26ef6f88b08d60d8986757fa37e8e61",
+    "gates": "c4daa8a2f1d853bdd7e1286391b86bf50534e75579c6722d8a38593f3b250e78"
+  },
+  "source_bundle": {
+    "path": "SOURCES/zellij-source.tar.gz",
+    "sha256": "81ebf7d1c4b31824344c4cb8fd4189e34633a508f9c91268002dbf9fa688584e",
+    "provenance_path": "SOURCES/upstream-source-provenance.json",
+    "provenance_sha256": "5a2c13a70f717f073fa2ef9c22313a8f1e8d766f56ab452c08d7aacc25fbdae9",
+    "retained_file_count": 1331,
+    "excluded_prebuilt_wasm_count": 15
+  },
+  "all_upstream_retained_files_verified_against_original": 1331,
+  "materialized_root_license_links": 12,
+  "exact_prebuilt_wasm_omissions": 15,
+  "corresponding_readiness_source": {
+    "SOURCES/input-readiness-v1/reporter.rs": "eb8511de6efd085d87ecdbf092fb2c336b3fe6723ab0575ca8d56f6c567708f8",
+    "SOURCES/input-readiness-v1/input-readiness.patch": "5de516602dea459870746b3c945ff814e09d9b4e6c62938bfa2f767f07898946",
+    "SOURCES/input-readiness-v1/protocol.json": "6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4",
+    "SOURCES/input-readiness-v1/source-inventory.json": "c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8"
+  },
+  "compiled_component_count": 409,
+  "registry_source_count": 393,
+  "notice_file_checks": 746,
+  "filtered_registry_sources_verified_against_originals": [
+    {
+      "name": "rustix-0.37.28",
+      "excluded": 16,
+      "original_sha256": "519165d378b97752ca44bbe15047d5d3409e875f39327546b42ac81d7e18c1b6",
+      "retained_sha256": "006f29c69de897d0685d13e568dacd76146ce57029b3e504f092cae8b8cd2bc2"
+    },
+    {
+      "name": "wit-parser-0.221.3",
+      "excluded": 1,
+      "original_sha256": "896112579ed56b4a538b07a3d16e562d101ff6265c46b515ce0c701eef16b2ac",
+      "retained_sha256": "652a6c12ca1cb69f6ec0a886b8323c062c3599f5758f48f87c2a18ad3c6bd1b6"
+    }
+  ],
+  "all_component_units_match_raw_compiler_evidence": true,
+  "all_registry_archives_bind_unchanged_Cargo_lock": true,
+  "all_notices_exact_source_or_reviewed_override": true,
+  "legacy_policy_unchanged": true,
+  "semantic_owner_contract": {
+    "executed": [
+      "native::actual_terminal_completion_before_input_ready_saves_and_joins_without_interactive_admission",
+      "native::actual_typed_input_ready_delivers_one_silent_first_line_per_attachment",
+      "native::unsupported_readiness_capability_refuses_before_any_owner_reservation"
+    ],
+    "silent_ready": {
+      "actual_frontend_session_joined": true,
+      "actual_saved_completion": true,
+      "first_attachment": "18aeaacd-a067-4049-87e0-81af3121e200",
+      "first_line_once": true,
+      "input_admission": "typed_input_ready",
+      "owner_uuid": "a0fe35e2-c83f-45f7-8a2d-ee46927ddf91",
+      "second_attachment": "dc6e012c-fdf7-4f6f-8c56-ad54cb58cce0",
+      "second_line_once": true,
+      "silent_workload": true,
+      "startup_count": 1,
+      "workload_exit": 7
+    },
+    "terminal_before_ready": [
+      {
+        "actual_frontend_session_joined": true,
+        "actual_saved_completion": true,
+        "input_ready": false,
+        "owner_uuid": "5455737d-3d9d-4a00-921d-c00e8916d8fa",
+        "startup_count": 1,
+        "workload_exit": 0
+      },
+      {
+        "actual_frontend_session_joined": true,
+        "actual_saved_completion": true,
+        "input_ready": false,
+        "owner_uuid": "b3693059-650c-47b7-b410-93f3db9d660e",
+        "startup_count": 1,
+        "workload_exit": 7
+      }
+    ]
+  },
+  "public_owner_passed": 59,
+  "silent_owner": {
+    "attachments": 2,
+    "one_line_each": true,
+    "startup_count": 1,
+    "accepted3_eof_same_live_frontend": true,
+    "frontend_exit_codes": [
+      0,
+      0
+    ],
+    "backend_workload_gone": true
+  },
+  "focused_negative_controls": [
+    {
+      "case": "missing actual readiness owner",
+      "rejected": true,
+      "reason": "readiness package: actual readiness owner receipt required"
+    },
+    {
+      "case": "different readiness executable producer",
+      "rejected": true,
+      "reason": "readiness package: actual owner did not test this exact producer executable"
+    },
+    {
+      "case": "missing accepted EOF semantic proof",
+      "rejected": true,
+      "reason": "readiness package: actual readiness/EOF/one-write/cleanup evidence differs"
+    },
+    {
+      "case": "missing-named-observer4",
+      "rejected": true,
+      "reason": "readiness package: named observer4 consumer behaviors did not execute"
+    },
+    {
+      "case": "transport-progress-instead-of-ready",
+      "rejected": true,
+      "reason": "readiness package: actual silent observer4 admission evidence differs"
+    },
+    {
+      "case": "unreviewed readiness retention",
+      "rejected": true,
+      "reason": "public packager rejected different reviewed source inventory",
+      "exit_code": 1,
+      "log": "unreviewed-retention.log",
+      "log_sha256": "5b5ac162b30332cc0bd0595cdf8911a0961b55341b6fb4b76d851951ba937bfb"
+    },
+    {
+      "case": "missing-reporter",
+      "rejected": true,
+      "reason": "readiness package: corresponding source missing: reporter.rs"
+    },
+    {
+      "case": "changed-protocol",
+      "rejected": true,
+      "reason": "readiness package: corresponding source differs: protocol.json"
+    },
+    {
+      "case": "wrong-variant",
+      "rejected": true,
+      "reason": "readiness package: archive variant differs"
+    },
+    {
+      "case": "wrong-promotion-state",
+      "rejected": true,
+      "reason": "readiness package: archive manifest or promotion state differs"
+    }
+  ],
+  "unproven": [
+    "exact admitted readiness tuple",
+    "actual final bundled/relocated binary execution and signature acceptance",
+    "actual AppKit start/attach/first line/completion",
+    "macOS14 runtime",
+    "Intel/universal",
+    "default/full parity"
+  ]
+}

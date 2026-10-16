@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "source_sha": "b15fb4737fe0572d64aad573f53831931589afb0",
+  "source_tree": "baf4227aabf0a381f910fdb49c5aa43daed55b81",
+  "run_id": 38849188824,
+  "receipt_path": "evidence/retained-legacy-native-owner-receipt.json",
+  "receipt_sha256": "396bce42c283a698e91858b6ec62ad0f95bb3ef562716c01e3be5314f2881d67",
+  "verifier_sha256": "468b433741e1898107cfcd712537be8ee737a4cbdb34bebed393ddf8ad9247a8",
+  "scope": "exact previously passing native legacy consumer source against unchanged final bundled legacy dependency; no observer4 fallback or omitted native cases",
+  "additional_inputs_sha256": {
+    "apps/cli/contracts/baseline/command-inventory.json": "f43fa020589e331f7d67a8094028bd946793cf83abfc5df611163eee62db759d",
+    "apps/cli/contracts/baseline/audit-reconciliation.json": "464aca6474c60e0ec54c27fe1746f2f7e3d8f1f730e3253db65b9a4b992321c3",
+    "apps/cli/src/registry/frozen-coverage.json": "ec17b5d79154a0fc2588fda7d51368f1fdf0f94d472005e943fc279712653791"
+  }
+}

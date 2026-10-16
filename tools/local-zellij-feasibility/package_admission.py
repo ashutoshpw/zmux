@@ -16,6 +16,7 @@ MAX_PAYLOAD = 512 * 1024 * 1024
 MAX_FILE = 64 * 1024 * 1024
 MAX_FILES = 10000
 TARGET = "aarch64-apple-darwin"
+VARIANTS = ("legacy", "input-readiness-v1")
 
 
 class Rejected(ValueError):
@@ -50,8 +51,11 @@ def document(data):
     return json.loads(data, object_pairs_hook=unique)
 
 
-def pin():
-    value = document(read_file(HERE / "retained-native-package.json", 65536))
+def pin(variant="legacy"):
+    if variant not in VARIANTS:
+        raise Rejected("unknown retained package variant; no fallback")
+    name = "retained-native-package.json" if variant == "legacy" else "retained-readiness-native-package.json"
+    value = document(read_file(HERE / name, 65536))
     review = value["independent_review"]
     name = safe_name(review["path"])
     raw = read_file(HERE / name, 65536)
@@ -64,6 +68,14 @@ def pin():
             or verified["notice_policy_sha256"] != value["notice_policy_sha256"]
             or any(host[key] != value[key] for key in ("archive_sha256", "manifest_sha256", "binary_sha256"))):
         raise Rejected("retained tuple differs from independently verified package")
+    if variant != "legacy":
+        if (value["variant"] != variant or value["diagnostic_only"] is not True
+                or any(verified[key] != value[key] for key in ("variant", "inventory_sha256", "protocol_sha256", "diagnostic_only"))
+                or any(host[key] != value[key] for key in ("archive_name", "archive_bytes", "payload_bytes", "files"))
+                or verified["corresponding_readiness_source"] != value["corresponding_source"]
+                or verified["receipt_sha256"]["silent_owner"] != value["readiness_owner_receipt_sha256"]):
+            raise Rejected("retained readiness tuple differs from independent review")
+        verify_download(verified["download"], value)
     return value
 
 
@@ -140,7 +152,35 @@ def verify_files(files, accepted):
             or len(binary) < 32 or binary[:4] != b"\xcf\xfa\xed\xfe"
             or struct.unpack_from("<I", binary, 4)[0] != 0x0100000C or struct.unpack_from("<I", binary, 12)[0] != 2):
         raise Rejected("retained native executable digest/architecture differs")
-    return {key: accepted[key] for key in ("target", "source_sha", "run_id", "archive_sha256", "manifest_sha256", "binary_sha256")}
+    result = {key: accepted[key] for key in ("target", "source_sha", "run_id", "archive_sha256", "manifest_sha256", "binary_sha256")}
+    if accepted.get("variant") == "input-readiness-v1":
+        verify_readiness(files, manifest, accepted, built_raw)
+        result.update({key: accepted[key] for key in ("variant", "inventory_sha256", "protocol_sha256", "diagnostic_only")})
+    return result
+
+
+def verify_readiness(files, manifest, accepted, producer_raw):
+    # Timeless admission binds the independently reviewed bytes. Do not call the
+    # evolving producer verifier or compare with today's producer source files.
+    readiness = manifest["input_readiness"]
+    if (manifest["variant"] != accepted["variant"] or manifest["diagnostic_only"] is not True
+            or readiness["protocol_sha256"] != accepted["protocol_sha256"]
+            or readiness["source_inventory_sha256"] != accepted["inventory_sha256"]
+            or readiness["asserted_reviewed_source_inventory_sha256"] != accepted["inventory_sha256"]
+            or readiness["corresponding_source"] != accepted["corresponding_source"]):
+        raise Rejected("readiness package variant/protocol/inventory differs from review")
+    for name, expected in accepted["corresponding_source"].items():
+        if name not in files or digest(files[name]) != expected:
+            raise Rejected("readiness corresponding source differs: " + name)
+    raw = files["PROVENANCE/readiness-owner-receipt.json"]
+    owner = document(raw)
+    if (digest(raw) != accepted["readiness_owner_receipt_sha256"]
+            or readiness["owner_receipt_sha256"] != digest(raw)
+            or owner["status"] != "passed" or owner["binary_sha256"] != accepted["binary_sha256"]
+            or owner["producer_receipt_sha256"] != digest(producer_raw)
+            or owner["producer_inventory_sha256"] != accepted["inventory_sha256"]
+            or owner["current_inventory_sha256"] != accepted["inventory_sha256"]):
+        raise Rejected("readiness actual owner differs from reviewed producer")
 
 
 def extract_files(files, destination):
@@ -155,8 +195,8 @@ def extract_files(files, destination):
         path.chmod(0o755 if name == "bin/zellij" else 0o644)
 
 
-def accept(root, target, output=None):
-    accepted = pin()
+def accept(root, target, output=None, variant="legacy"):
+    accepted = pin(variant)
     if target != accepted["target"]:
         raise Rejected("no retained package accepted for requested target")
     root = root.resolve(strict=True)
@@ -170,12 +210,12 @@ def accept(root, target, output=None):
     result = verify_files(files, accepted)
     if output is not None:
         extract_files(files, output)
-        verify_payload(output)
+        verify_payload(output, variant)
     return result
 
 
-def verify_payload(root):
-    accepted = pin()
+def verify_payload(root, variant="legacy"):
+    accepted = pin(variant)
     if root.is_symlink() or not root.is_dir():
         raise Rejected("packaged dependency must be a real directory")
     files, total, entries = {}, 0, 0
@@ -224,4 +264,4 @@ def unpack_download(archive, output, accepted):
             with (output / entry.filename).open("xb") as destination, zipped.open(entry) as source:
                 while chunk := source.read(65536):
                     destination.write(chunk)
-    return accept(output, accepted["target"])
+    return accept(output, accepted["target"], variant=accepted.get("variant", "legacy"))
