@@ -771,3 +771,240 @@ determinism table above is from the first round; its other rows were not rerun i
   (S2), and the CLI test only asserts that the CLI relays whatever the server returned.
 - The `markdown` registry entry is the dispatcher name; its usage reads `markdown open ...` and
   `zmux markdown` without `open` is an explicit error, as `browser` without a verb is.
+
+## S4 native panel: Swift/AppKit file editor and preview surface
+
+Base: `b135b7532331cebd89c8c16aaac7eb86fda6b4a6`.
+
+This machine is Linux with no Swift toolchain. Every line of Swift below was written but never
+compiled or run here; macOS CI (`scripts/check-macos-sources`, `scripts/build-macos-dev`,
+`scripts/check-macos-app`, the in-app smoke) is the only verifier and none of it has run.
+
+### What changed
+
+New Swift (all under `apps/macos/Sources`, system frameworks only: AppKit, PDFKit, ImageIO, Foundation):
+
+- `FileHostClient.swift`: `FileHostLimits` (mirrors `zmux.h`), `FileOwnerToken`, `FileHostRequest`
+  (frame codec `u32 BE header_len | header JSON | raw body`, header and per-op size checks before
+  anything is sent), `FileHostReply.decode` (an `ok:false` header becomes a `FileHostFailure` with
+  the stable code, `outcomeUnknown`, `opId` and the conflict detail; never a success), the
+  `FileOpenResult` shapes, and `NativeBridge.fileDetach` / `fileOpen`.
+- `FilePanelRendering.swift`: `FilePanelMode`, `FileImageDecoder` (ImageIO off the main actor,
+  100 megapixel guard, EXIF orientation applied, decode errors are explicit failures) and
+  `FileMarkdownRenderer` (`AttributedString(markdown:)` with `interpretedSyntax = .full`, mapped to
+  fonts and paragraph styles; headings, emphasis, strong, code, strikethrough, quotes, ordered and
+  bulleted lists; links clickable only for http, https, mailto; a parser failure shows the plain
+  source plus a visible message).
+- `FilePanelView.swift`: `FilePanelView` (one retained view per file surface) hosting a monospaced
+  editable `NSTextView` (substitutions, smart quotes and link detection off, undo on), a rendered
+  Markdown text view with a Preview/Source segmented control and a shared source toggle, an
+  `NSImageView`, a `PDFView`, and a status view for loading, error (stable code and Retry),
+  empty Markdown and unsupported mode. Header shows the name, "Edited", mode details, read-only and
+  worker-stall notes; a banner row carries the external-change, deleted, unreadable, save-unknown,
+  owner-lost and load-failure states with explicit buttons. The view owns the unsaved text, so its
+  own dirty bit is the truth; the model's `file.dirty` is reconciled by an `observe` loop (bounded
+  backoff 250 ms to 2 s, one in flight, stops on a non-retryable refusal and says so, gives up
+  visibly after 8 acknowledged-but-unconfirmed attempts). Save (`Cmd-S`) goes through the bridge
+  with `base_generation`; `conflict` opens Cancel / Reload from Disk / Overwrite (Recreate File for a
+  deleted file); `stale_view` and owner loss keep the text and offer Reload or Copy Text; a lost
+  acknowledgement (`outcome_unknown`) is never replayed, the banner waits for `last_op` in a later
+  snapshot. External change: a clean view reloads once per disk generation, a dirty view shows the
+  banner; if the person starts typing while an automatic reload is in flight the text is kept and
+  the next Save asks before overwriting (`externalPending`). Word wrap toggle (user default
+  `filePanel.wordWrap`). Accessibility labels on the editor, rendered view, image, PDF, header
+  controls and banner.
+- `FilePanelSmoke.swift`: the in-app journey (below).
+
+Changed Swift:
+
+- `Models.swift`: `FileOperationReceipt`, `FileEntrySnapshot`, `FileWorkerSnapshot`,
+  `FilesSnapshot`, `DesktopSnapshot.files`; `PaneTree.key` now includes the surface kind and
+  deliberately not dirty state or file mode.
+- `NativeBridge.swift`: actor method `file(_:body:)` (detached blocking call, `Self.consume`).
+- `ApplicationCoordinator.swift`: `files` registry, `reconcileFilePanels` (create, update, prune,
+  re-create when the path differs, reset on identity-namespace change), `FilePanelOwner`
+  conformance, `UICommand.fileOpen` and `.fileDetach` with `commandTask` arms, orphan handling
+  (a panel whose tab vanished while holding unsaved text is kept aside and the person chooses Copy
+  Text or Discard; quit is refused until then), `resolveFilesBeforeClose` / `resolveFilesBeforeQuit`
+  (Save / Don't Save / Cancel per dirty file, then a forced dirty-mirror sync, a failed save or
+  sync aborts the close), shutdown releases panels without calling the file service.
+- `App.swift`: `paneView` file branch before the browser fallback (an unknown kind still gets an
+  error label), `completePresentation` / `releaseContentResponder` / `toggleSidebar` focus
+  handling, `onFocus -> focus_pane`, header detail and `isDocumentEdited`, workspace-row subtitle
+  and window title for file tabs, presentation key includes the file panel host id, File menu
+  (below), Edit menu Undo / Redo / Cut through the responder chain, `validateMenuItem` arms, dirty
+  checks before Close Tab, Close Other Tabs, Close Pane, Close Workspace, Close Window and window
+  close, `confirmClose` copy that counts terminals, browsers and files separately and no longer
+  calls a file tab a terminal session, Quit hook in `applicationShouldTerminate`, smoke stage
+  `file_panel` and evidence key `file_panel`.
+- `WorkspaceViews.swift`: tab icon by mode (`doc.text`, `doc.richtext`, `photo`, `doc`), tooltip
+  shows the file path, in-place edited marker ("• ") and accessibility "edited" (no pane rebuild).
+- `docs/native-bridge.md`: a paragraph on the Swift client.
+- `crates/native-bridge/tests/swift_file_contract.rs` (new, Linux-runnable).
+
+Menus (existing key equivalents audited: n t l b U d D w { } 1-9 T [ ] r f + - 0 c v a q and the
+Command-Option arrows/braces/brackets; none of the new ones collide):
+
+| Item | Key | Notes |
+| --- | --- | --- |
+| File > Open File... | Cmd-O | `NSOpenPanel`, up to 16 files, then bridge `open` through `UICommand.fileOpen` |
+| File > Save | Cmd-S | enabled only for a dirty, writable, attached text or Markdown panel |
+| File > Reload from Disk | none | confirms when the buffer is dirty |
+| File > Toggle Word Wrap | Opt-Cmd-L | checkmark follows the preference |
+| File > Show Markdown Source / Show Rendered Markdown | Opt-Cmd-P | title follows state |
+| Edit > Undo / Redo / Cut | Cmd-Z / Shift-Cmd-Z / Cmd-X | no target: responder chain, disabled elsewhere |
+
+Copy, Paste and Select All already forward to the responder chain when the first responder is not a
+terminal, so they reach the file text views unchanged.
+
+### Audit: every place that tests `kind == "browser"` or assumes non-terminal means browser
+
+| Site | Before | Now for `kind == "file"` |
+| --- | --- | --- |
+| `App.swift` `paneView` (fallthrough `kind != "browser"` after terminal and history) | any other kind became a browser | explicit `file` arm first; an unknown kind shows an error label; a file without a panel shows an error label |
+| `WorkspaceViews.swift` `TerminalTabControl.symbolName` | `browser ? globe : terminal` | by mode; tooltip shows the path |
+| `App.swift` `updateHeader` detail | browser URL or terminal cwd | file arm shows the abbreviated path and "edited" |
+| `App.swift` `terminalTitle` | title unless it is the default "Terminal" | a file tab always shows its own title |
+| `App.swift` `updateWorkspaceRows` subtitle | cwd or "Local shell" | the file path for a selected file pane |
+| `App.swift` `presentationKey` browser hosts | selected browser host ids | unchanged; a parallel `file-hosts` part replaces a panel whose host id changed |
+| `App.swift` `confirmClose` | "closes N terminal session(s)" for every tab | terminals, browsers, files and saved-output tabs are counted separately; file tabs say the files are untouched |
+| `App.swift` `completePresentation`, `releaseContentResponder`, `toggleSidebar` | terminal, history, browser only | file branches; focus is restored to the editor, rendered view or PDF view |
+| `App.swift` `focusedBrowser`, `focusBrowserAddress` | browser dictionary lookups | a file tab is not in `browsers`; Cmd-L on a file tab opens a new browser tab like it does on a terminal |
+| `ApplicationCoordinator.swift` (4 sites: live set, view creation, profile `isNeeded`, update loop) | browser only | unchanged, correct: file surfaces are reconciled by `reconcileFilePanels` |
+| `App.swift` smoke wait and `SurfaceOrderSmoke`, `WorkspaceNumberSmoke`, `WorkspaceOrderSmoke` | select the browser the smoke created | unchanged: fixtures |
+| `Models.swift` `PaneTree.key` | surface id, session, completion digest | adds the kind; no dirty state, no mode |
+| `Pane.sessionId`, `focusedViewport`, `retainedHistories`, `NotificationDelivery` session checks | nil session means "not a terminal" | already correct for files (no session, no history) |
+
+`crates/native-bridge/tests/swift_file_contract.rs` pins this table: it counts the browser-kind
+tests per Swift file, asserts the `file` arm precedes the fallthrough, the tab-icon `file` case and
+that `PaneTree.key` carries no dirty state; adding a site fails it with instructions.
+
+### Red then green
+
+Swift cannot be compiled or executed here, so there is no red-then-green for the Swift itself and
+none is claimed. The Linux-testable part is the contract between Rust and Swift:
+`crates/native-bridge/tests/swift_file_contract.rs`, three tests, all green:
+
+- `swift_decodables_name_exactly_the_fields_the_real_rust_wire_carries`: runs a real Desktop
+  (open with one good and one missing path, attach, save, observe, a content conflict, a refused
+  detach), then asserts the Swift `Decodable` field sets equal the real JSON keys (converted with
+  `convertFromSnakeCase`) for `FilesSnapshot`, `FileWorkerSnapshot`, `FileEntrySnapshot`,
+  `FileOperationReceipt`, `FileSurface`, `FileOwnerToken`, `FileConflict`, `FileHostReplyHeader`
+  (union of every reply kind), its error body, `FileOpenResult`, `FileOpenItem` and its failure,
+  and that `Surface.file` and `DesktopSnapshot.files` exist.
+- `swift_frame_limits_and_operations_match_the_rust_channel`: Swift `FileHostLimits` equal the Rust
+  constants and the file service caps; every op and request key is written by the Swift codec.
+- `every_browser_kind_test_in_the_swift_sources_is_audited`: see above.
+
+The tests were written after the Swift (they test a contract, not behaviour), so their strength is
+shown by mutation. Each mutation was applied to the Swift, the test run, then the file restored
+(byte-identical, checked with `cmp`):
+
+| Mutation | Result |
+| --- | --- |
+| rename `FileEntrySnapshot.diskGeneration` to `diskGen` | decodables test FAILED (field sets differ) |
+| `maxSaveBody` 2_097_152 -> 2_097_153 | limits test FAILED (`2097153` vs `2097152`) |
+| add one more `kind == "browser"` site to `ApplicationCoordinator.swift` | audit test FAILED |
+| add `dirty` to the `PaneTree.key` string | audit test FAILED |
+
+### Determinism
+
+The new test binary (`swift_file_contract`, 3 tests, one real Desktop, unique temp directories, the
+usual bounded snapshot poll) was executed against the final sources: 20 serial runs, 0 failures;
+then 5 rounds of 8 concurrent copies (40 runs) beside 24 busy-loop CPU hogs on a 24-core machine,
+0 failures, every log carrying the 3-passed line. No other Rust test changed in this slice.
+
+### In-app smoke (`FilePanelSmoke`, UNAVAILABLE here)
+
+Stage `file_panel` at the end of `runSmokeTest` (after the browser download checks), driven through
+the real bundled CLI, the real File menu key equivalents and a real directory; only the conflict
+and close sheets are answered through the panel's own seams (`conflictChooser`,
+`fileCloseChoiceOverride`) so no human is needed:
+1. `zmux open` of md, txt, png, pdf, a binary, a folder and a missing path: exit failure with seven
+   per-item results, four tabs, error codes `binary_file`, `is_directory`, `not_found`.
+2. Rendered Markdown shows no syntax and an https link; Source toggle shows the exact source;
+   image decodes to 3x2; PDF decodes to 1 page.
+3. Opening an open file again reports `deduplicated`, no new tab.
+4. Select the text tab, type: dirty marker in the tab, model dirty mirror true, first responder
+   unchanged, and `zmux close-surface` on the dirty tab is refused ("unsaved").
+5. Cmd-S through the menu writes the file and clears dirty (panel and model).
+6. External write while clean reloads the panel by itself.
+7. External write while dirty keeps the edits and shows the banner; Cmd-S gives the conflict
+   prompt: Cancel changes nothing, Overwrite writes the buffer, then (second round) Reload adopts
+   the disk version.
+8. Close of a dirty tab: Cancel keeps it and the edits, Don't Save closes it with no orphan; Reopen
+   Closed restores the tab from disk.
+9. Deleting an open image shows the deleted banner and keeps the last good preview.
+Cleanup closes the tabs, removes the directory and restores the original selection and responder.
+`scripts/check-macos-app` does not yet list `file_panel` among its required evidence keys (scripts
+are outside this slice); the key is emitted.
+
+### UNAVAILABLE gates
+
+Not run, because there is no Swift toolchain or macOS here; none of these is recorded as passed:
+
+- `scripts/check-macos-sources` (Swift 6 strict-concurrency, warnings-as-errors type check of all
+  sources), `scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke stage and
+  `.github/workflows/macos-development.yml` / the macOS job of `check.yml`.
+- Behaviour that only a Mac can show: first-responder retention across the first keystroke, real
+  Cmd-S / Cmd-O / Cmd-Z handling, `NSOpenPanel`, the Save / Don't Save and conflict sheets, the
+  quit-with-dirty prompt, IME composition, VoiceOver and the accessibility labels, large-file
+  `NSTextView` performance, ImageIO and PDFKit decode of real files, `AttributedString(markdown:)`
+  fidelity (fonts, list markers, quotes), word wrap layout, dark-appearance contrast of the banner.
+- Hosted GitHub Actions results of any kind (no push in this phase).
+
+Swift API names used without a compiler that CI must confirm first, in the order most likely to
+need a one-line fix: `PresentationIntent.components` / `.kind` / `.identity` and the `Kind` cases
+(`header(level:)`, `codeBlock`, `blockQuote`, `listItem(ordinal:)`, `orderedList`, `unorderedList`,
+`tableCell`, `tableRow`, `tableHeaderRow`) in `FileMarkdownRenderer`; `NSTextViewDelegate`
+conformance isolation on the MainActor view; building `NSFont` / `NSColor` / `NSParagraphStyle`
+inside a detached task; autolinking of `import PDFKit` (see deviations); `withCheckedContinuation`
+around `beginSheetModal` in `presentSheet`.
+
+### Deviations from the design and the task, with reasons
+
+- Markdown uses `AttributedString(markdown:)` (design D20) rather than `NSAttributedString(markdown:)`
+  named in the task. It is the same system parser; the typed `presentationIntent` and
+  `inlinePresentationIntent` runs are what the style mapping needs, and the result is converted to
+  `NSAttributedString` for the text view. No dependency either way.
+- Word wrap was listed as deferred in design section 7 but the task requires it: implemented as a
+  global user default (`filePanel.wordWrap`), not stored per file and not in the session document.
+- Rendered Markdown known gaps (design section 7, unchanged): tables degrade to tab-separated text,
+  thematic breaks, images and raw HTML are not drawn, relative links are inert, only http, https and
+  mailto links open. Scroll position is not kept across a reload (selection is clamped and kept).
+- `UICommand` only gained `fileOpen` and `fileDetach`. Save, reload and observe need their reply
+  (conflict, generation, op id) so the panel awaits `NativeBridge.file` through the
+  `FilePanelOwner` protocol instead of a fire-and-forget command.
+- The smoke is a stage of the existing `--smoke-test` run instead of a new launch flag, so it needs
+  no new workflow, `AppStartup` argument list or storage case. `scripts/check-macos-app` was not
+  edited (scripts are outside this slice), so it does not yet require the `file_panel` evidence
+  key; adding it to its key list is a one-line follow-up for S5 or CI hardening.
+- `-framework PDFKit` was not added to `scripts/build-macos-dev` for the same reason. `swiftc`
+  autolinks imported system frameworks, as it does for the other imports there; if the macOS link
+  step reports undefined `PDFView` / `PDFDocument` symbols, add the flag.
+- The detach command bypasses `enqueue`'s "clear the last error" step so an automatic release
+  cannot erase an error message the person has not read; a full command queue is reported.
+- Tab dirty marker and header edited state read the view's own dirty bit first and the model
+  mirror second, so they react before the `observe` acknowledgement (design D7a).
+- Orphan sheet: Copy Text and Discard only. Save As does not exist in v1, as designed.
+- `Open File...` is capped at 16 selections with a visible message instead of splitting requests.
+
+### Known limits and risks carried forward (not hidden)
+
+- The window between the first keystroke and the acknowledged `observe(true)` (D7a) still lets a
+  socket `close-surface` through; the orphan sheet then offers Copy Text. Not testable here.
+- If the file service is stalled, Save, Reload and `observe` surface `file_worker_unavailable`
+  or `busy`; `observe` retries at a bounded rate, the others show a banner and wait for the person.
+- The Swift cannot prove first-responder retention, sheet flows or decode; CI is the verifier.
+
+### Checks run
+
+- `scripts/check` (fmt, `cargo test --workspace --locked`, clippy `-D warnings`,
+  `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 549 tests
+  passed, 0 failed, 2 ignored, 79 test binaries (546 before the slice plus the 3 new tests). The
+  license inventory and `THIRD_PARTY_NOTICES.md` are unchanged (no dependency was added).
+- `cargo test -p zmux-native-bridge --test swift_file_contract`: 3 passed; mutation and
+  determinism evidence above.
+- `cargo fmt --all` reformatted the new test file once; clippy found nothing to fix.
+- Brace, bracket and string balance of every touched Swift file was checked with a script (all
+  balanced). This is not a type check and is not evidence that the Swift compiles.

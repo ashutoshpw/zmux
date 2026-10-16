@@ -78,6 +78,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var terminals: [UInt64: TerminalView] { coordinator.terminals }
     private var completedHistories: [UInt64: CompletedTerminalHistoryView] { coordinator.completedHistories }
     private var browsers: [UInt64: BrowserView] { coordinator.browsers }
+    private var files: [UInt64: FilePanelView] { coordinator.files }
+    private var closePromptActive = false
     var browserViewportSize: NSSize { canvas.bounds.size }
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
@@ -165,9 +167,40 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     func closeAuthorized() { authorizedClose = true; nativeReady = false; window.close(); finishPresentation() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard !authorizedClose else { return true }
-        if let identity { coordinator.enqueue(.window("close", identity.windowId, nil)) }
+        requestWindowClose()
         return false
     }
+    /// A window close asks about unsaved file text in every tab of the window first.
+    private func requestWindowClose() {
+        guard let identity else { return }
+        let windowId = identity.windowId
+        guard let snapshot else { enqueue(.window("close", windowId, nil)); return }
+        var surfaces: [UInt64] = []
+        let workspaceIds = snapshot.model.windows.first(where: { $0.id == windowId })?.workspaceIds ?? []
+        for workspace in snapshot.model.workspaces where workspaceIds.contains(workspace.id) {
+            for pane in workspace.root.panes { surfaces.append(contentsOf: pane.surfaces.map(\.id)) }
+        }
+        closeAfterFileCheck(surfaces) { [weak self] in self?.enqueue(.window("close", windowId, nil)) }
+    }
+    /// Settles file panels among `surfaces` (unsaved-changes prompt, dirty-mirror sync) before an
+    /// app-initiated close. Without file panels the close proceeds synchronously.
+    private func closeAfterFileCheck(_ surfaces: [UInt64], proceed: @escaping @MainActor () -> Void) {
+        guard !coordinator.filePanels(for: surfaces).isEmpty else { proceed(); return }
+        guard !closePromptActive else { return }
+        closePromptActive = true
+        Task { [weak self] in
+            guard let self else { return }
+            let allowed = await self.coordinator.resolveFilesBeforeClose(surfaces, window: self.window)
+            self.closePromptActive = false
+            if allowed { proceed() }
+        }
+    }
+    func refreshFileChrome() {
+        guard let snapshot else { return }
+        updateHeader(snapshot)
+        updateTabAttention(canvas, snapshot: snapshot)
+    }
+    func isFileEdited(_ id: UInt64) -> Bool { files[id]?.hasUnsavedChanges ?? false }
     func detachLayoutIfNeeded(_ snapshot: DesktopSnapshot, identity: MainWindowIdentity) {
         guard layoutKey != presentationKey(for: snapshot) || self.identity != identity || self.snapshot?.browserEpoch != snapshot.browserEpoch else { return }
         releaseContentResponder()
@@ -179,8 +212,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         // Capture before detaching shared views, including the window's field
         // editor, which need not be a descendant of the browser's own view.
         let browserOwned = browsers.values.contains { $0.rememberOwnedFocus(in: window) }
+        // A file editor keeps its selection while detached; completePresentation hands focus back.
+        let fileOwned = files.values.contains { $0.ownsFocus(in: window) }
         let contentOwned = (window.firstResponder as? NSView)?.isDescendant(of: canvas) == true
-        detachedContentResponder = browserOwned || contentOwned
+        detachedContentResponder = browserOwned || fileOwned || contentOwned
         if detachedContentResponder { window.makeFirstResponder(nil) }
     }
     func detachContent() {
@@ -353,6 +388,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             if let terminal = focusedTerminal { window.makeFirstResponder(terminal) }
             else if let surface = focusedPane?.selectedSurface, let history = completedHistories[surface] {
                 window.makeFirstResponder(history.outputResponder)
+            }
+            else if let surface = focusedPane?.selectedSurface, let panel = files[surface] {
+                window.makeFirstResponder(panel.preferredResponder)
             }
             else if let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
                 window.makeFirstResponder(browser.webView)
@@ -576,6 +614,24 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         appMenu.addItem(withTitle: "Quit zmux", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        menu.addItem(fileItem)
+        let fileMenu = NSMenu(title: "File")
+        let fileItems: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("Open File…", #selector(openFile(_:)), "o", .command),
+            ("Save", #selector(saveFile(_:)), "s", .command),
+            ("Reload from Disk", #selector(reloadFile(_:)), "", .command),
+            ("Toggle Word Wrap", #selector(toggleFileWordWrap(_:)), "l", [.command, .option]),
+            ("Show Markdown Source", #selector(toggleMarkdownSource(_:)), "p", [.command, .option])
+        ]
+        for (title, action, key, modifiers) in fileItems {
+            if title == "Toggle Word Wrap" { fileMenu.addItem(.separator()) }
+            let item = fileMenu.addItem(withTitle: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = self
+        }
+        fileItem.submenu = fileMenu
+
         let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
         menu.addItem(workspaceItem)
         let workspaceMenu = NSMenu(title: "Workspace")
@@ -674,6 +730,16 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
         menu.addItem(editItem)
         let edit = NSMenu(title: "Edit")
+        // Undo, Redo and Cut have no target: they travel the responder chain to a focused file
+        // editor and stay disabled everywhere else.
+        let responderItems: [(String, String, String, NSEvent.ModifierFlags)] = [
+            ("Undo", "undo:", "z", .command), ("Redo", "redo:", "Z", .command), ("Cut", "cut:", "x", .command)
+        ]
+        for (title, selector, key, modifiers) in responderItems {
+            let item = edit.addItem(withTitle: title, action: NSSelectorFromString(selector), keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+        }
+        edit.addItem(.separator())
         for (title, action, key) in [
             ("Copy", #selector(copySelection), "c"),
             ("Paste", #selector(pasteText), "v"),
@@ -722,6 +788,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             pendingBrowserFocus = nil
             if selectionChanged || !didSetInitialTerminalFocus {
                 window.makeFirstResponder(history.outputResponder)
+                didSetInitialTerminalFocus = true
+            }
+        } else if let pane = focusedPane, let panel = files[pane.selectedSurface] {
+            pendingBrowserFocus = nil
+            if selectionChanged || !didSetInitialTerminalFocus || (layoutChanged && detachedContentResponder) {
+                window.makeFirstResponder(panel.preferredResponder)
                 didSetInitialTerminalFocus = true
             }
         } else if let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
@@ -795,6 +867,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let subtitle: String
             if isSelected, let workingDirectory = focusedViewport(in: snapshot)?.workingDirectory, !workingDirectory.isEmpty {
                 subtitle = (workingDirectory as NSString).abbreviatingWithTildeInPath
+            } else if isSelected, let file = workspace.root.panes.first(where: { $0.id == workspace.focusedPane })?.selected.file {
+                subtitle = (file.path as NSString).abbreviatingWithTildeInPath
             } else {
                 let panes = workspace.root.panes.count
                 subtitle = workspace.root.panes.flatMap { $0.surfaces }.compactMap { $0.remote?.destination }.first.map { "SSH · \($0)" } ?? (panes == 1 ? "Local shell" : "\(panes) local terminals")
@@ -854,6 +928,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             detail = error
         } else if let pane = focusedPane, pane.selected.kind == "browser" {
             detail = pane.selected.url == "about:blank" ? "Private browser" : (pane.selected.url ?? "Private browser")
+        } else if let pane = focusedPane, pane.selected.kind == "file", let file = pane.selected.file {
+            let edited = files[pane.selectedSurface]?.hasUnsavedChanges ?? file.dirty
+            detail = (file.path as NSString).abbreviatingWithTildeInPath + (edited ? " — edited" : "")
         } else if let completion = focusedPane?.selected.localZellijCompletion {
             detail = completion.receipt.statusLabel
         } else if let workingDirectory = focusedViewport(in: snapshot)?.workingDirectory, !workingDirectory.isEmpty {
@@ -868,6 +945,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
         mainHeader.update(title: title, detail: detail, error: isError)
         window.title = title
+        window.isDocumentEdited = focusedPane.flatMap { files[$0.selectedSurface]?.hasUnsavedChanges } ?? false
     }
 
     @objc private func cancelActiveUpload(_ sender: Any?) {
@@ -875,7 +953,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     private func terminalTitle(in snapshot: DesktopSnapshot) -> String {
-        if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }), pane.selected.title != "Terminal" { return pane.selected.title }
+        if let pane = snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane }),
+           pane.selected.title != "Terminal" || pane.selected.kind == "file" { return pane.selected.title }
         if let title = focusedViewport(in: snapshot)?.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             return title
         }
@@ -903,7 +982,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let host = browsers[pane.selectedSurface]?.hostID.uuidString ?? "pending"
             return "\(pane.id):\(pane.selectedSurface):\(host)"
         }.joined(separator: ",") ?? ""
-        return (snapshot.workspace?.root.key ?? "empty") + "|browser-hosts:" + hosts
+        // The same applies to a file tab: its retained panel is created in reconcile, and a
+        // replaced panel (new host id) must replace the one mounted in the pane.
+        let fileHosts = snapshot.workspace?.root.panes.filter { $0.selected.kind == "file" }.map { pane in
+            "\(pane.id):\(pane.selectedSurface):" + (files[pane.selectedSurface]?.hostID.uuidString ?? "pending")
+        }.joined(separator: ",") ?? ""
+        return (snapshot.workspace?.root.key ?? "empty") + "|browser-hosts:" + hosts + "|file-hosts:" + fileHosts
     }
 
     private func updateTerminalLayoutIfNeeded(_ snapshot: DesktopSnapshot) {
@@ -972,11 +1056,16 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 }
                 view = coordinator.completedHistory(surface: pane.selectedSurface, history: completion, onFocus: focus)
             } else if pane.selected.kind == "file" {
-                // The file panel arrives with the native slice; never mistake it for a browser.
-                let unavailable = NSTextField(wrappingLabelWithString: "File panel is not available in this build")
-                unavailable.textColor = .secondaryLabelColor
-                unavailable.alignment = .center
-                view = unavailable
+                // Reconciliation owns panel creation; presentation never builds one itself.
+                if let panel = files[pane.selectedSurface] {
+                    panel.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
+                    view = panel
+                } else {
+                    let unavailable = NSTextField(wrappingLabelWithString: "This file tab has no usable file description, so it could not be opened.")
+                    unavailable.textColor = .secondaryLabelColor
+                    unavailable.alignment = .center
+                    view = unavailable
+                }
             } else if pane.selected.kind != "browser" {
                 let unknown = NSTextField(wrappingLabelWithString: "This tab type is not supported by this version of Zmux.")
                 unknown.textColor = .secondaryLabelColor
@@ -1186,7 +1275,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         enqueue(.workspaceMove(target.workspace, target.destination, target.focus))
     }
     @objc private func newMainWindow() { enqueue(.window("new", nil, true)) }
-    @objc private func closeMainWindow() { if let identity { enqueue(.window("close", identity.windowId, nil)) } }
+    @objc private func closeMainWindow() { requestWindowClose() }
 
     private var focusedPane: Pane? {
         snapshot?.workspace?.root.panes.first { $0.id == snapshot?.workspace?.focusedPane }
@@ -1196,6 +1285,31 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let pane = focusedPane else { return nil }
         return browsers[pane.selectedSurface]
     }
+    private var focusedFilePanel: FilePanelView? {
+        guard let pane = focusedPane else { return nil }
+        return files[pane.selectedSurface]
+    }
+    @objc private func openFile(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose files to open as tabs"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let self else { return }
+            let paths = panel.urls.map(\.path)
+            guard !paths.isEmpty else { return }
+            guard paths.count <= FileHostLimits.maxOpenItems else {
+                self.showError("Choose at most \(FileHostLimits.maxOpenItems) files at a time")
+                return
+            }
+            self.enqueue(.fileOpen(paths, true, false))
+        }
+    }
+    @objc private func saveFile(_ sender: Any?) { focusedFilePanel?.save() }
+    @objc private func reloadFile(_ sender: Any?) { focusedFilePanel?.reloadFromDisk() }
+    @objc private func toggleFileWordWrap(_ sender: Any?) { focusedFilePanel?.toggleWordWrap() }
+    @objc private func toggleMarkdownSource(_ sender: Any?) { focusedFilePanel?.toggleMarkdownSource() }
     @objc private func browserBack() { focusedBrowser?.requestNavigation(.back(snapshotAfter: false)) }
     @objc private func browserForward() { focusedBrowser?.requestNavigation(.forward(snapshotAfter: false)) }
     @objc private func browserReload() { focusedBrowser?.requestNavigation(.reload(snapshotAfter: false)) }
@@ -1253,7 +1367,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         else { newBrowser() }
     }
     func selectTab(_ id: UInt64) { enqueue(.surface("select_surface", id, nil, nil, nil)) }
-    func closeTerminalTab(_ id: UInt64) { enqueue(.surface("close_surface", id, nil, nil, nil)) }
+    func closeTerminalTab(_ id: UInt64) {
+        closeAfterFileCheck([id]) { [weak self] in self?.enqueue(.surface("close_surface", id, nil, nil, nil)) }
+    }
     func newTerminalInPane(_ paneID: UInt64) { enqueue(.surface("create_surface", nil, paneID, nil, nil)) }
     @objc func newTerminal() {
         if let pane = focusedPane { newTerminalInPane(pane.id) } else { newWorkspace() }
@@ -1302,7 +1418,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     func renameTerminalTab(_ id: UInt64) {
         guard let surface = snapshot?.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }).first(where: { $0.id == id }) else { return }
         let alert = NSAlert()
-        alert.messageText = "Rename terminal tab"
+        alert.messageText = "Rename tab"
         let field = NSTextField(string: surface.title)
         field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
         alert.accessoryView = field
@@ -1315,15 +1431,27 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
     }
     func closeOtherTabs(_ id: UInt64) {
-        guard let pane = snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.surfaces.contains(where: { $0.id == id }) }),
-              confirmClose(title: "Close other tabs?", count: pane.surfaces.count - 1) else { return }
-        enqueue(.surface("close_other_surfaces", id, nil, nil, nil))
+        guard let pane = snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.surfaces.contains(where: { $0.id == id }) }) else { return }
+        let others = pane.surfaces.filter { $0.id != id }
+        guard confirmClose(title: "Close other tabs?", surfaces: others) else { return }
+        closeAfterFileCheck(others.map(\.id)) { [weak self] in self?.enqueue(.surface("close_other_surfaces", id, nil, nil, nil)) }
     }
-    private func confirmClose(title: String, count: Int) -> Bool {
-        guard count > 0 else { return false }
+    /// Only live terminal sessions are described as sessions; file and browser tabs are counted
+    /// separately so the copy never claims a file tab ends a shell.
+    private func confirmClose(title: String, surfaces: [Surface]) -> Bool {
+        guard !surfaces.isEmpty else { return false }
+        let terminals = surfaces.filter { $0.sessionId != nil }.count
+        let browsers = surfaces.filter { $0.kind == "browser" }.count
+        let fileTabs = surfaces.filter { $0.kind == "file" }.count
+        let others = surfaces.count - terminals - browsers - fileTabs
+        var details: [String] = []
+        if terminals > 0 { details.append("This closes \(terminals) terminal session(s). Reopening starts fresh shells; running jobs cannot be recovered.") }
+        if browsers > 0 { details.append("It closes \(browsers) browser tab(s); their pages are discarded.") }
+        if fileTabs > 0 { details.append("It closes \(fileTabs) file tab(s) without changing the files on disk. You are asked about unsaved changes first.") }
+        if others > 0 { details.append("It closes \(others) saved terminal output tab(s).") }
         let alert = NSAlert()
         alert.messageText = title
-        alert.informativeText = "This closes \(count) terminal session(s). Reopening starts fresh shells; running jobs cannot be recovered."
+        alert.informativeText = details.joined(separator: "\n")
         alert.addButton(withTitle: "Close"); alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
     }
@@ -1383,6 +1511,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             guard let id = item.representedObject as? NSNumber else { return false }
             return snapshot?.model.closedItems.contains { $0.id == id.uint64Value && !$0.restoring } ?? false
         case #selector(closeTab), #selector(closePane), #selector(renameTab), #selector(splitRight), #selector(splitDown), #selector(splitLeft), #selector(splitUp): return focusedPane != nil
+        case #selector(saveFile(_:)): return focusedFilePanel?.canSave == true
+        case #selector(reloadFile(_:)): return focusedFilePanel?.canReload == true
+        case #selector(toggleFileWordWrap(_:)):
+            item.state = focusedFilePanel?.wordWrap == true ? .on : .off
+            return focusedFilePanel?.supportsWordWrap == true
+        case #selector(toggleMarkdownSource(_:)):
+            let panel = focusedFilePanel
+            item.title = panel?.markdownShowsSource == true ? "Show Rendered Markdown" : "Show Markdown Source"
+            return panel?.isMarkdown == true && panel?.isLoaded == true
         case #selector(browserBack): return focusedBrowser?.webView.canGoBack == true
         case #selector(browserForward): return focusedBrowser?.webView.canGoForward == true
         case #selector(browserReload), #selector(browserFind), #selector(browserZoomIn), #selector(browserZoomOut), #selector(browserZoomReset): return focusedBrowser != nil
@@ -1410,9 +1547,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     @objc func closePane() {
-        if let pane = snapshot?.workspace?.focusedPane {
-            enqueue(.action("close_pane", pane, nil, nil, nil))
-        }
+        guard let paneID = snapshot?.workspace?.focusedPane else { return }
+        let surfaces = snapshot?.workspace?.root.panes.first(where: { $0.id == paneID })?.surfaces.map(\.id) ?? []
+        closeAfterFileCheck(surfaces) { [weak self] in self?.enqueue(.action("close_pane", paneID, nil, nil, nil)) }
     }
 
     @objc func workspaceSelected(_ sender: WorkspaceRowView) {
@@ -1462,8 +1599,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     @objc private func closeWorkspaceFromMenu(_ sender: NSMenuItem) {
         guard let number = sender.representedObject as? NSNumber,
               let workspace = snapshot?.model.workspaces.first(where: { $0.id == number.uint64Value }) else { return }
-        guard confirmClose(title: "Close workspace?", count: workspace.root.panes.reduce(0) { $0 + $1.surfaces.count }) else { return }
-        enqueue(.action("close_workspace", nil, nil, nil, workspace.id))
+        let surfaces = workspace.root.panes.flatMap { $0.surfaces }
+        guard confirmClose(title: "Close workspace?", surfaces: surfaces) else { return }
+        let workspaceID = workspace.id
+        closeAfterFileCheck(surfaces.map(\.id)) { [weak self] in self?.enqueue(.action("close_workspace", nil, nil, nil, workspaceID)) }
     }
 
     private func setSidebarDocument(_ view: NSView) {
@@ -1996,6 +2135,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let downloadsWindow = NSApp.windows.first(where: { $0.title == "Downloads" && $0.isVisible }) else { throw BridgeFailure(message: "Downloads menu did not open its native history") }
         downloadsWindow.close()
         try await stages.complete("browser_download_checks")
+        try await stages.begin("file_panel")
+        @MainActor func nativeTabControls(_ view: NSView) -> [TerminalTabControl] {
+            if let tab = view as? TerminalTabControl { return [tab] }
+            return view.subviews.flatMap { nativeTabControls($0) }
+        }
+        try await FilePanelSmoke.validate(window: window, host: self, coordinator: coordinator, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, tabs: { nativeTabControls(self.canvas) })
+        try await stages.complete("file_panel")
         let evidence: [String: Any] = [
             "success": true,
             "notification_permission_ordering": true,
@@ -2034,6 +2180,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "workspace_switch": true,
             "workspace_order": true,
             "surface_order": true,
+            "file_panel": true,
             "workspace_number": true,
             "pane_close": true,
             "terminal_tab_shortcut": true,
@@ -3021,6 +3168,7 @@ emit("done")
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var coordinator: ApplicationCoordinator?
     private var terminating = false
+    private var resolvingUnsavedFiles = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         WindowLifecycleSmoke.trace("delegate entered before coordinator construction")
@@ -3183,6 +3331,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let coordinator else { return .terminateNow }
         if terminating { return .terminateLater }
+        if coordinator.hasUnsavedFiles {
+            // Unsaved file text is the one thing quitting cannot recover: ask before any shutdown
+            // work starts, and quit again only once every file was saved or knowingly discarded.
+            guard !resolvingUnsavedFiles else { return .terminateCancel }
+            resolvingUnsavedFiles = true
+            Task {
+                let proceed = await coordinator.resolveFilesBeforeQuit()
+                self.resolvingUnsavedFiles = false
+                sender.reply(toApplicationShouldTerminate: false)
+                if proceed { coordinator.requestApplicationTermination() }
+            }
+            return .terminateLater
+        }
         terminating = true
         WindowLifecycleSmoke.trace("application termination requested; before shared shutdown")
         Task {

@@ -348,6 +348,28 @@ actor NativeBridge {
         }
         try await acknowledgement.value
     }
+    /// Trusted native file channel: attach, reload, save, observe, detach and open. The blocking C
+    /// call (up to two seconds, five for save) runs on a detached worker, never on the main actor
+    /// or this actor's executor, so snapshot polling and input keep flowing. A failure whose
+    /// `outcomeUnknown` is true is never replayed; only `observe` is retried by its owner view.
+    func file(_ request: FileHostRequest, body: Data = Data()) async throws -> FileHostReply {
+        guard handle != 0 else { throw FileHostFailure(code: "closed", message: "Desktop is closed") }
+        let frame = try request.frame(body: body)
+        let desktop = handle
+        return try await Task.detached(priority: .userInitiated) {
+            let result = frame.withUnsafeBytes { bytes in
+                zmux_desktop_file(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else {
+                // -2 is a malformed frame that Rust refused before doing any work; any other
+                // status leaves the effect unknown.
+                throw FileHostFailure(code: "transport",
+                    message: "The file channel returned status \(result.status); the operation was not replayed",
+                    outcomeUnknown: result.status != -2)
+            }
+            return try FileHostReply.decode(Self.consume(result.value))
+        }.value
+    }
     /// Wait for the attributable executor receipt on a separate worker. Actor reentrancy
     /// keeps normal input and snapshot polling flowing while this call awaits admission.
     func pastePreparedImage(surface: UInt64, session: UInt64, path: String) async throws -> ImageTransferAdmission {

@@ -1,0 +1,299 @@
+import AppKit
+import Darwin
+
+private struct FilePanelFixture: Sendable {
+    let directory: String
+    var markdown: String { directory + "/notes.md" }
+    var text: String { directory + "/plain.txt" }
+    var image: String { directory + "/pixel.png" }
+    var pdf: String { directory + "/page.pdf" }
+    var binary: String { directory + "/blob.bin" }
+    var folder: String { directory + "/folder" }
+    var missing: String { directory + "/absent.txt" }
+}
+
+/// Native journey for the file panel: the real CLI (`zmux open`), the production File menu key
+/// equivalents, the real bridge and a real directory. It checks observable behaviour only:
+/// per-item open results, rendered Markdown, image and PDF decode, dirty marker without losing
+/// the first responder, Cmd-S, external change (auto reload when clean, banner when dirty), the
+/// conflict prompt's Cancel / Overwrite / Reload, dirty-close protection, reopen from disk and
+/// dedupe. Conflict and close sheets are answered through the panel's own test seams so the
+/// smoke needs no human; every other path is the production one.
+@MainActor
+enum FilePanelSmoke {
+    private static let markdownSource = "# Zmux heading\n\nSome *emphasis* and a [link](https://example.org).\n\n- one\n- two\n"
+    private static let textSource = "alpha\nbeta\n"
+    // A 3x2 RGBA PNG and a one-page PDF, generated independently of the app under test.
+    private static let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAI0lEQVR4nGOwqTjxP6XixP+eihP/GWwqev6nVPT876no+Q8AwKkPHw7lAhQAAAAASUVORK5CYII="
+    private static let pdfBase64 = "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAyMDAgMTAwXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAzOCA+PgpzdHJlYW0KQlQgL0YxIDE4IFRmIDIwIDUwIFRkIChabXV4IFBERikgVGogRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzMjkgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgozOTkKJSVFT0YK"
+
+    @MainActor
+    private final class ConflictScript {
+        private var choices: [FileConflictChoice]
+        private(set) var seen: [String] = []
+        init(_ choices: [FileConflictChoice]) { self.choices = choices }
+        func next(_ kind: String) -> FileConflictChoice {
+            seen.append(kind)
+            return choices.isEmpty ? .cancel : choices.removeFirst()
+        }
+    }
+
+    @MainActor
+    private final class CloseScript {
+        private var choices: [FileCloseChoice]
+        private(set) var count = 0
+        init(_ choices: [FileCloseChoice]) { self.choices = choices }
+        func next() -> FileCloseChoice {
+            count += 1
+            return choices.isEmpty ? .cancel : choices.removeFirst()
+        }
+    }
+
+    static func validate(
+        window: NSWindow,
+        host: MainWindowHost,
+        coordinator: ApplicationCoordinator,
+        cli: @escaping @MainActor ([String], Bool) async throws -> Data,
+        tabs: @MainActor () -> [TerminalTabControl]
+    ) async throws {
+        guard let before = coordinator.snapshot, let workspace = before.workspace,
+              let originalPane = workspace.root.panes.first(where: { $0.id == workspace.focusedPane }),
+              fileSurfaces(before).isEmpty else {
+            throw failure("needs a focused pane and no file tab opened before the journey")
+        }
+        let originalSelection = originalPane.selectedSurface
+        let savedResponder = window.firstResponder
+        guard let png = Data(base64Encoded: pngBase64), let pdf = Data(base64Encoded: pdfBase64) else {
+            throw failure("embedded image fixtures are not valid base64")
+        }
+        let fixture = try await makeFilePanelFixture(png: png, pdf: pdf, markdown: markdownSource, text: textSource)
+        do {
+            try await journey(fixture, window: window, host: host, coordinator: coordinator, cli: cli, tabs: tabs)
+        } catch {
+            do { try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window) }
+            catch let secondary { throw BridgeFailure(message: "\(error); cleanup also failed: \(secondary)") }
+            throw error
+        }
+        try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window)
+        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, reopen from disk and dedupe passed\n".utf8))
+    }
+
+    private static func journey(
+        _ f: FilePanelFixture, window: NSWindow, host: MainWindowHost, coordinator: ApplicationCoordinator,
+        cli: @escaping @MainActor ([String], Bool) async throws -> Data, tabs: @MainActor () -> [TerminalTabControl]
+    ) async throws {
+        // 1. A mixed batch through the real CLI: four tabs open, three items fail explicitly.
+        let opened = try openResult(try await cli(["open", f.markdown, f.text, f.image, f.pdf, f.binary, f.folder, f.missing], true))
+        guard opened["ok"] as? Bool == false, let items = opened["items"] as? [[String: Any]], items.count == 7 else {
+            throw failure("a mixed open did not report seven per-item results")
+        }
+        let expectedOK = [true, true, true, true, false, false, false]
+        let expectedCodes: [Int: String] = [4: "binary_file", 5: "is_directory", 6: "not_found"]
+        for (index, item) in items.enumerated() {
+            guard item["ok"] as? Bool == expectedOK[index] else { throw failure("item \(index) had the wrong outcome: \(item)") }
+            if let code = expectedCodes[index], (item["error"] as? [String: Any])?["code"] as? String != code {
+                throw failure("item \(index) should fail with \(code): \(item)")
+            }
+        }
+        var ids: [String: UInt64] = [:]
+        try await wait("four file tabs with loaded panels") {
+            guard let snapshot = coordinator.snapshot else { return false }
+            let surfaces = fileSurfaces(snapshot)
+            guard surfaces.count == 4 else { return false }
+            for surface in surfaces { if let path = surface.file?.path { ids[path] = surface.id } }
+            return ids.count == 4 && surfaces.allSatisfy { coordinator.files[$0.id]?.isLoaded == true }
+        }
+        guard let markdownID = ids[f.markdown], let textID = ids[f.text], let imageID = ids[f.image], let pdfID = ids[f.pdf],
+              let markdownPanel = coordinator.files[markdownID], let text = coordinator.files[textID],
+              let image = coordinator.files[imageID], let pdf = coordinator.files[pdfID] else {
+            throw failure("opened tabs do not map to the fixture paths")
+        }
+
+        // 2. Each mode presents its own content, with no placeholder standing in for a failure.
+        try await wait("Markdown rendered") { markdownPanel.presentationSummary == "markdown:rendered" }
+        let rendered = markdownPanel.markdownTextView.string
+        guard rendered.contains("Zmux heading"), rendered.contains("emphasis"), !rendered.contains("# Zmux"), !rendered.contains("*emphasis*") else {
+            throw failure("rendered Markdown still shows its syntax: \(rendered)")
+        }
+        let linkAt = (rendered as NSString).range(of: "link")
+        guard linkAt.location != NSNotFound,
+              markdownPanel.markdownTextView.textStorage?.attribute(.link, at: linkAt.location, effectiveRange: nil) as? URL == URL(string: "https://example.org") else {
+            throw failure("an https link was not made clickable in rendered Markdown")
+        }
+        markdownPanel.toggleMarkdownSource()
+        guard markdownPanel.presentationSummary == "markdown:source", markdownPanel.editorTextView.string == markdownSource else {
+            throw failure("the Markdown source toggle did not show the exact source")
+        }
+        markdownPanel.toggleMarkdownSource()
+        try await wait("Markdown rendered again") { markdownPanel.presentationSummary == "markdown:rendered" }
+        try await wait("image decoded") { image.presentationSummary == "image:3x2" }
+        try await wait("PDF decoded") { pdf.presentationSummary == "pdf:1" }
+
+        // 3. Opening an open file again focuses it instead of creating a second tab.
+        let again = try openResult(try await cli(["open", "--no-focus", f.text], false))
+        guard again["ok"] as? Bool == true, (again["items"] as? [[String: Any]])?.first?["deduplicated"] as? Bool == true,
+              coordinator.snapshot.map({ fileSurfaces($0).count }) == 4 else {
+            throw failure("opening an open file did not deduplicate")
+        }
+
+        // 4. Editing marks the tab dirty without rebuilding the pane or dropping focus.
+        host.selectTab(textID)
+        let editor = text.editorTextView
+        try await wait("text editor focused") { window.isKeyWindow && window.firstResponder === editor }
+        guard editor.string == textSource, editor.isEditable else { throw failure("the text editor does not show the file or is read-only") }
+        typeText("X", into: editor)
+        try await wait("dirty marker with retained focus") {
+            text.isDirty && modelDirty(coordinator, textID) == true && window.firstResponder === editor
+                && tabs().contains { $0.surface.id == textID && labels(in: $0).contains { $0.hasPrefix("• ") } }
+        }
+        let refused = String(decoding: try await cli(["close-surface", "--surface", String(textID)], true), as: UTF8.self)
+        guard refused.contains("unsaved"), coordinator.files[textID] === text else {
+            throw failure("closing a dirty file from the CLI was not refused: \(refused)")
+        }
+
+        // 5. Cmd-S writes the file through the file service.
+        try command("s", code: 1, window: window)
+        try await wait("saved and clean") { !text.isDirty && modelDirty(coordinator, textID) == false }
+        guard try await read(f.text) == "X" + textSource else { throw failure("Cmd-S did not write the edited text") }
+
+        // 6. A clean panel adopts an external write on its own.
+        try await write("gamma\n", to: f.text)
+        try await wait("clean panel reloaded the external write") { editor.string == "gamma\n" && !text.isDirty }
+
+        // 7. A dirty panel keeps its edits, says so, and asks before overwriting.
+        typeText("Y", into: editor)
+        try await wait("dirty again") { text.isDirty && modelDirty(coordinator, textID) == true }
+        try await write("delta\n", to: f.text)
+        try await wait("changed-on-disk banner") { if case .changedOnDisk = text.banner { return true } else { return false } }
+        guard editor.string == "Ygamma\n" else { throw failure("an external change overwrote unsaved edits") }
+        let conflicts = ConflictScript([.cancel, .overwrite, .reload])
+        text.conflictChooser = { conflict in conflicts.next(conflict.kind) }
+        try command("s", code: 1, window: window)
+        try await wait("first conflict prompt") { conflicts.seen == ["modified"] }
+        _ = try await cli(["status"], false)
+        guard text.isDirty, try await read(f.text) == "delta\n" else { throw failure("Cancel in the conflict prompt changed the buffer or the file") }
+        try command("s", code: 1, window: window)
+        try await wait("Overwrite saved") { !text.isDirty && conflicts.seen.count == 2 }
+        guard try await read(f.text) == "Ygamma\n" else { throw failure("Overwrite did not write the buffer") }
+        typeText("Z", into: editor)
+        try await wait("dirty for the reload choice") { text.isDirty && modelDirty(coordinator, textID) == true }
+        try await write("epsilon\n", to: f.text)
+        try await wait("banner before the reload choice") { if case .changedOnDisk = text.banner { return true } else { return false } }
+        try command("s", code: 1, window: window)
+        try await wait("Reload adopted the disk version") { editor.string == "epsilon\n" && !text.isDirty && conflicts.seen.count == 3 }
+        guard try await read(f.text) == "epsilon\n" else { throw failure("Reload changed the file on disk") }
+        text.conflictChooser = nil
+
+        // 8. A dirty tab cannot be closed without a decision; reopening reads the disk.
+        typeText("Q", into: editor)
+        try await wait("dirty before closing") { text.isDirty && modelDirty(coordinator, textID) == true }
+        let closing = CloseScript([.cancel, .discard])
+        coordinator.fileCloseChoiceOverride = { _ in closing.next() }
+        host.closeTerminalTab(textID)
+        try await wait("Cancel consulted") { closing.count == 1 }
+        _ = try await cli(["status"], false)
+        guard coordinator.files[textID] === text, text.isDirty, coordinator.snapshot.flatMap({ fileSurface($0, textID) }) != nil else {
+            throw failure("Cancel in the close sheet closed the tab or dropped the edits")
+        }
+        host.closeTerminalTab(textID)
+        try await wait("Don't Save closed the tab") { coordinator.snapshot.flatMap({ fileSurface($0, textID) }) == nil }
+        guard coordinator.orphanedFiles.isEmpty else { throw failure("a closed tab left an orphaned panel") }
+        coordinator.fileCloseChoiceOverride = nil
+        host.reopenClosed()
+        try await wait("reopened tab reloaded from disk") {
+            guard let snapshot = coordinator.snapshot,
+                  let reopened = fileSurfaces(snapshot).first(where: { $0.file?.path == f.text }),
+                  let view = coordinator.files[reopened.id] else { return false }
+            return view.isLoaded && view.editorTextView.string == "epsilon\n" && !view.isDirty
+        }
+
+        // 9. A preview whose file disappears says so and keeps the last good content.
+        try await remove(f.image)
+        try await wait("deleted banner on the image preview") { image.banner == .deletedOnDisk }
+        guard image.presentationSummary == "image:3x2" else { throw failure("a deleted image replaced its last good preview with a placeholder") }
+    }
+
+    private static func cleanup(_ f: FilePanelFixture, host: MainWindowHost, coordinator: ApplicationCoordinator, selection: UInt64,
+                                responder: NSResponder?, window: NSWindow) async throws {
+        coordinator.fileCloseChoiceOverride = nil
+        for panel in coordinator.files.values { panel.conflictChooser = nil }
+        for surface in coordinator.snapshot.map({ fileSurfaces($0) }) ?? [] { host.closeTerminalTab(surface.id) }
+        try await wait("fixture file tabs closed") { coordinator.snapshot.map { fileSurfaces($0).isEmpty } == true && coordinator.files.isEmpty }
+        host.selectTab(selection)
+        try await wait("original tab selected") {
+            coordinator.snapshot?.workspace?.root.panes.contains { $0.selectedSurface == selection } == true
+        }
+        if let responder { window.makeFirstResponder(responder) }
+        try await remove(f.directory)
+    }
+
+    // MARK: - Helpers
+
+    private static func fileSurfaces(_ snapshot: DesktopSnapshot) -> [Surface] {
+        snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "file" }
+    }
+    private static func fileSurface(_ snapshot: DesktopSnapshot, _ id: UInt64) -> Surface? {
+        fileSurfaces(snapshot).first { $0.id == id }
+    }
+    private static func modelDirty(_ coordinator: ApplicationCoordinator, _ id: UInt64) -> Bool? {
+        coordinator.snapshot.flatMap { fileSurface($0, id) }?.file?.dirty
+    }
+    private static func labels(in view: NSView) -> [String] {
+        (view as? NSTextField).map { [$0.stringValue] } ?? view.subviews.flatMap { labels(in: $0) }
+    }
+    private static func typeText(_ text: String, into editor: NSTextView) {
+        editor.setSelectedRange(NSRange(location: 0, length: 0))
+        editor.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+    private static func command(_ key: String, code: UInt16, window: NSWindow) throws {
+        NSApp.mainMenu?.items.forEach { $0.submenu?.update() }
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: code),
+              NSApp.mainMenu?.performKeyEquivalent(with: event) == true else {
+            throw failure("Command-\(key.uppercased()) was not handled by an enabled File menu item")
+        }
+    }
+    private static func openResult(_ data: Data) throws -> [String: Any] {
+        let text = String(decoding: data, as: UTF8.self)
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+              let object = try JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any] else {
+            throw failure("zmux open printed no JSON result: " + text)
+        }
+        return object
+    }
+    private static func wait(_ message: String, _ predicate: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(15)
+        while !predicate() {
+            guard ContinuousClock.now < deadline else { throw failure("timed out waiting for " + message) }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
+    private static func makeFilePanelFixture(png: Data, pdf: Data, markdown: String, text: String) async throws -> FilePanelFixture {
+        try await Task.detached {
+            let base = FileManager.default.temporaryDirectory.appendingPathComponent("zmux-file-panel-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: false)
+            // The file service canonicalizes paths; compare against the same realpath.
+            guard let resolved = realpath(base.path, nil) else { throw BridgeFailure(message: "Native file panel: fixture directory has no realpath") }
+            defer { free(resolved) }
+            let directory = String(cString: resolved)
+            try Data(markdown.utf8).write(to: URL(fileURLWithPath: directory + "/notes.md"))
+            try Data(text.utf8).write(to: URL(fileURLWithPath: directory + "/plain.txt"))
+            try png.write(to: URL(fileURLWithPath: directory + "/pixel.png"))
+            try pdf.write(to: URL(fileURLWithPath: directory + "/page.pdf"))
+            try Data([0x00, 0x01, 0x02, 0xff, 0x00]).write(to: URL(fileURLWithPath: directory + "/blob.bin"))
+            try FileManager.default.createDirectory(atPath: directory + "/folder", withIntermediateDirectories: false)
+            return FilePanelFixture(directory: directory)
+        }.value
+    }
+    private static func write(_ text: String, to path: String) async throws {
+        try await Task.detached { try Data(text.utf8).write(to: URL(fileURLWithPath: path), options: .atomic) }.value
+    }
+    private static func read(_ path: String) async throws -> String {
+        try await Task.detached { String(decoding: try Data(contentsOf: URL(fileURLWithPath: path)), as: UTF8.self) }.value
+    }
+    private static func remove(_ path: String) async throws {
+        try await Task.detached { try FileManager.default.removeItem(atPath: path) }.value
+    }
+    private static func failure(_ text: String) -> BridgeFailure { BridgeFailure(message: "Native file panel: " + text) }
+}

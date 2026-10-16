@@ -634,10 +634,16 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     private var mouseOrigin: NSPoint?
     private let titleLabel = NSTextField(labelWithString: "")
 
-    private static func symbolName(for kind: String) -> String {
-        switch kind {
+    private static func symbolName(for surface: Surface) -> String {
+        switch surface.kind {
         case "browser": return "globe"
-        case "file": return "doc.text"
+        case "file":
+            switch surface.file?.mode {
+            case "markdown"?: return "doc.richtext"
+            case "image"?: return "photo"
+            case "pdf"?: return "doc"
+            default: return "doc.text"
+            }
         default: return "terminal"
         }
     }
@@ -648,7 +654,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         self.namespace = namespace
         self.owner = owner
         super.init(color: selected ? ZmuxPalette.terminal : ZmuxPalette.chrome)
-        let icon = NSImageView(image: NSImage(systemSymbolName: Self.symbolName(for: surface.kind), accessibilityDescription: nil) ?? NSImage())
+        let icon = NSImageView(image: NSImage(systemSymbolName: Self.symbolName(for: surface), accessibilityDescription: nil) ?? NSImage())
         icon.contentTintColor = selected ? .labelColor : ZmuxPalette.subdued
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         let title = titleLabel
@@ -666,7 +672,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
             close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4), close.centerYAnchor.constraint(equalTo: centerYAnchor),
             close.widthAnchor.constraint(equalToConstant: 22), close.heightAnchor.constraint(equalToConstant: 22)
         ])
-        toolTip = surface.cwd.map { "\(surface.title)\n\($0)" } ?? surface.title
+        toolTip = (surface.cwd ?? surface.file?.path).map { "\(surface.title)\n\($0)" } ?? surface.title
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityLabel(surface.title)
@@ -710,9 +716,11 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         context == .withinApplication ? .move : []
     }
     func updateAttention(_ unread: Int) {
-        titleLabel.stringValue = (unread > 0 ? "● " : "") + surface.title
+        // The editor's own text is the truth for "edited"; the model bit only mirrors it.
+        let edited = owner?.isFileEdited(surface.id) == true || surface.file?.dirty == true
+        titleLabel.stringValue = (unread > 0 ? "● " : "") + (edited ? "• " : "") + surface.title
         titleLabel.textColor = unread > 0 ? .systemOrange : .labelColor
-        setAccessibilityLabel(surface.title + (unread > 0 ? ", \(unread) unread" : ""))
+        setAccessibilityLabel(surface.title + (edited ? ", edited" : "") + (unread > 0 ? ", \(unread) unread" : ""))
     }
     @objc private func moveTabLeft() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: -1) }
     @objc private func moveTabRight() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: 1) }

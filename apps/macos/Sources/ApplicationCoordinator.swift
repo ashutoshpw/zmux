@@ -28,12 +28,15 @@ enum UICommand: Sendable {
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
     case pointer(UInt64, TerminalPointerEvent)
+    /// Paths chosen in `File > Open...`, whether to focus the first, and whether to force Markdown.
+    case fileOpen([String], Bool, Bool)
+    case fileDetach(FileOwnerToken)
 }
 
 /// Application lifetime owns one Rust Desktop. Main-window presenters borrow its
 /// views and command routes; constructing a presenter cannot start another owner.
 @MainActor
-final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
+final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, FilePanelOwner {
     private(set) var snapshot: DesktopSnapshot?
     private(set) var mainWindowHosts: [MainWindowIdentity: MainWindowHost] = [:]
     private lazy var initialWindowHost = MainWindowHost(coordinator: self)
@@ -97,6 +100,14 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private var completedHistoryNamespace: UUID?
     private(set) var browsers: [UInt64: BrowserView] = [:]
     private lazy var browserProfileStores = BrowserProfileStores(bridge: bridge)
+    /// One retained file panel per file surface, created and pruned in `reconcile` like `browsers`.
+    private(set) var files: [UInt64: FilePanelView] = [:]
+    private var filesNamespace: UUID?
+    /// Panels whose tab vanished while they held unsaved text. They are never silently dropped.
+    private(set) var orphanedFiles: [FilePanelView] = []
+    private var presentingOrphan = false
+    /// Replaces the Save / Don't Save / Cancel sheet; used by the in-app smoke only.
+    var fileCloseChoiceOverride: (@MainActor (FilePanelView) async -> FileCloseChoice)?
 
     init() {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
@@ -181,6 +192,15 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         try await self.bridge.pointer(session: session, event: event)
                     case .scroll(let session, let lines):
                         try await self.bridge.scroll(session: session, lines: lines)
+                    case .fileOpen(let paths, let focus, let forceMarkdown):
+                        let result = try await self.bridge.fileOpen(paths: paths, focus: focus, forceMarkdown: forceMarkdown)
+                        let failures = result.items.filter { !$0.ok }.map { item -> String in
+                            let operand = item.path ?? item.url ?? "item \(item.index)"
+                            return operand + ": " + (item.error?.message ?? "could not be opened") + " (" + (item.error?.code ?? "unknown") + ")"
+                        }
+                        if !failures.isEmpty { self.reportError(failures.prefix(3).joined(separator: "; ")) }
+                    case .fileDetach(let owner):
+                        try await self.bridge.fileDetach(owner)
                     case .resize(let session, let rows, let cols):
                         try await self.bridge.resize(session: session, rows: rows, cols: cols)
                     }
@@ -244,6 +264,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         windowTasks.removeAll()
         browsers.values.forEach { $0.close() }
         browsers.removeAll()
+        // Shutdown does not talk to the file service: its own shutdown joins the file worker.
+        files.values.forEach { $0.shutdown() }
+        orphanedFiles.forEach { $0.shutdown() }
+        files.removeAll()
+        orphanedFiles.removeAll()
         browserDownloads.beginShutdown()
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
@@ -402,6 +427,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         retainCompletedHistories(retainedHistories, namespace: snapshot.model.identityNamespace)
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
+        reconcileFilePanels(snapshot)
         let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
         browsers = browsers.filter { key, value in
             if liveBrowsers.contains(key) { return true }
@@ -497,6 +523,134 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                     } catch { self.reportError("Native window failure acknowledgement uncertain: " + error.localizedDescription) }
                 } catch { self.reportError("Native window acknowledgement retained without replay: " + error.localizedDescription) }
             }
+        }
+    }
+
+    /// Creates, updates and prunes file panels before any window presents them, so `paneView`
+    /// always finds the retained view of a selected file tab.
+    private func reconcileFilePanels(_ snapshot: DesktopSnapshot) {
+        let surfaces = snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "file" }
+        if filesNamespace != snapshot.model.identityNamespace {
+            for (id, view) in files { files.removeValue(forKey: id); retireFilePanel(view) }
+            filesNamespace = snapshot.model.identityNamespace
+        }
+        let live = Set(surfaces.map(\.id))
+        for (id, view) in files where !live.contains(id) {
+            files.removeValue(forKey: id)
+            retireFilePanel(view)
+        }
+        for surface in surfaces {
+            guard let file = surface.file else {
+                reportError("File tab \(surface.id) has no file description; it was not opened")
+                continue
+            }
+            let view: FilePanelView
+            if let existing = files[surface.id], existing.path == file.path { view = existing }
+            else {
+                if let stale = files.removeValue(forKey: surface.id) { retireFilePanel(stale) }
+                view = FilePanelView(surface: surface, file: file, owner: self)
+                files[surface.id] = view
+            }
+            view.update(surface: surface, files: snapshot.files)
+        }
+    }
+
+    /// A clean panel is released at once. One that still holds unsaved text is kept aside and the
+    /// person is asked what to do with it; its text is never discarded silently.
+    private func retireFilePanel(_ view: FilePanelView) {
+        if view.hasUnsavedChanges {
+            orphanedFiles.append(view)
+            presentNextOrphan()
+        } else {
+            view.close()
+        }
+    }
+
+    private func presentNextOrphan() {
+        guard !presentingOrphan, let view = orphanedFiles.first else { return }
+        presentingOrphan = true
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Unsaved changes to “" + view.displayName + "” have no tab"
+        alert.informativeText = "The tab was closed while it had unsaved changes, and this app cannot save them any more. Copy the text to keep it, or discard it."
+        alert.addButton(withTitle: "Copy Text")
+        alert.addButton(withTitle: "Discard")
+        Task { [weak self] in
+            let response = await presentSheet(alert, in: self?.mainWindowHost.window)
+            guard let self else { return }
+            if response == .alertFirstButtonReturn { view.copyTextToPasteboard() }
+            self.orphanedFiles.removeAll { $0 === view }
+            view.close()
+            self.presentingOrphan = false
+            self.presentNextOrphan()
+        }
+    }
+
+    var hasUnsavedFiles: Bool { !orphanedFiles.isEmpty || files.values.contains { $0.hasUnsavedChanges } }
+
+    func filePanels(for surfaces: [UInt64]) -> [FilePanelView] {
+        surfaces.compactMap { files[$0] }
+    }
+
+    /// Settles every file among `surfaces` before an app-initiated close: asks about unsaved text
+    /// (Save / Don't Save / Cancel) and makes the model's dirty bit match each panel. False means
+    /// the close must not proceed.
+    func resolveFilesBeforeClose(_ surfaces: [UInt64], window: NSWindow?) async -> Bool {
+        let panels = filePanels(for: surfaces)
+        for view in panels where view.hasUnsavedChanges {
+            let choice: FileCloseChoice
+            if let override = fileCloseChoiceOverride { choice = await override(view) }
+            else {
+                let alert = NSAlert()
+                alert.messageText = "Do you want to save the changes to “" + view.displayName + "”?"
+                alert.informativeText = "Your changes will be lost if you don’t save them."
+                alert.addButton(withTitle: "Save")
+                alert.addButton(withTitle: "Don’t Save")
+                alert.addButton(withTitle: "Cancel")
+                let response = await presentSheet(alert, in: window)
+                switch response {
+                case .alertFirstButtonReturn: choice = .save
+                case .alertSecondButtonReturn: choice = .discard
+                default: choice = .cancel
+                }
+            }
+            switch choice {
+            case .cancel: return false
+            case .save: guard await view.performSave(force: false) else { return false }
+            case .discard: view.discardLocalChanges()
+            }
+        }
+        for view in panels {
+            guard await view.settleDirtyMirror() else { return false }
+        }
+        return true
+    }
+
+    /// Quit: resolves every dirty panel, and refuses to quit while an orphan still holds text.
+    func resolveFilesBeforeQuit() async -> Bool {
+        guard orphanedFiles.isEmpty else {
+            presentNextOrphan()
+            return false
+        }
+        return await resolveFilesBeforeClose(Array(files.keys), window: mainWindowHost.window)
+    }
+
+    func refreshFileChrome() {
+        for host in mainWindowHosts.values { host.refreshFileChrome() }
+    }
+
+    func fileCall(_ request: FileHostRequest, body: Data) async throws -> FileHostReply {
+        try await bridge.file(request, body: body)
+    }
+    func filePanelFocused(_ surface: UInt64) {}
+    func filePanelStateChanged(_ surface: UInt64) { refreshFileChrome() }
+    func filePanelReport(_ message: String) { reportError(message) }
+    func filePanelDetach(_ owner: FileOwnerToken) {
+        // Not `enqueue`: an automatic release must not clear an error the person has not read.
+        switch continuation.yield(.fileDetach(owner)) {
+        case .enqueued, .terminated: break
+        case .dropped: reportError("Command queue is full; a closed file’s binding stays until Zmux restarts")
+        @unknown default: break
         }
     }
 
