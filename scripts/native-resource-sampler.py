@@ -46,7 +46,18 @@ def command_value(arguments):
 
 
 class NativeResourceSampler:
-    def __init__(self, executable, cli, output, source_sha):
+    def __init__(self, executable, cli, output, source_sha, *,
+                 maximum_samples=MAX_SAMPLES, maximum_duration=MAX_DURATION_SECONDS,
+                 maximum_descendants=MAX_DESCENDANTS, probe_environment=None):
+        if (type(maximum_samples) is not int or not 1 <= maximum_samples <= 1300
+                or type(maximum_duration) not in (int, float)
+                or not 1 <= maximum_duration <= 1300
+                or type(maximum_descendants) is not int or not 1 <= maximum_descendants <= MAX_DESCENDANTS):
+            raise ValueError("Resource observation bounds must be finite and at most1300")
+        self.maximum_samples = maximum_samples
+        self.maximum_duration = maximum_duration
+        self.maximum_descendants = maximum_descendants
+        self.probe_environment = dict(probe_environment) if probe_environment is not None else None
         self.executable = str(Path(executable).resolve())
         self.cli = str(cli)
         self.output = Path(output)
@@ -61,6 +72,7 @@ class NativeResourceSampler:
         self.previous = None
         self.finalized = threading.Event()
         self.publication_lock = threading.Lock()
+        self.phase = None
         self.document = {
             "schema_version": 1, "source_sha": source_sha,
             "scope": "whole_packaged_smoke_journey", "state": "starting",
@@ -73,9 +85,10 @@ class NativeResourceSampler:
                      "image_os": os.environ.get("ImageOS"),
                      "image_version": os.environ.get("ImageVersion")},
             "instrumentation": {
-                "interval_seconds": INTERVAL_SECONDS, "maximum_samples": MAX_SAMPLES,
-                "maximum_duration_seconds": MAX_DURATION_SECONDS,
+                "interval_seconds": INTERVAL_SECONDS, "maximum_samples": maximum_samples,
+                "maximum_duration_seconds": maximum_duration,
                 "probe_timeout_seconds": PROBE_TIMEOUT_SECONDS,
+                "maximum_descendants": maximum_descendants,
                 "sampler_join_timeout_seconds": JOIN_TIMEOUT_SECONDS,
                 "maximum_cli_probes_per_second": 1,
                 "latency_scope": "bundled_cli_process_launch_plus_status_round_trip",
@@ -88,6 +101,37 @@ class NativeResourceSampler:
                                 "Descendant RSS may double-count shared pages"]},
             "samples": [],
         }
+
+    def set_phase(self, phase):
+        """Attach a validated workload owner's current phase, never terminal content."""
+        if (not isinstance(phase, dict)
+                or set(phase) != {"name", "repetition", "stage", "sequence"}
+                or phase["name"] not in ("idle1", "idle8")
+                or type(phase["repetition"]) is not int or not 1 <= phase["repetition"] <= 3
+                or phase["stage"] not in ("warmup", "measure", "complete")
+                or type(phase["sequence"]) is not int or not 1 <= phase["sequence"] <= 18):
+            raise ValueError("Invalid controlled workload phase")
+        with self.publication_lock:
+            if not self.finalized.is_set():
+                self.phase = dict(phase)
+                self.document["scope"] = "controlled_native_idle_workloads"
+                self.document["instrumentation"]["phase_tag_scope"] = "phase observed by external runner; handoff lag recorded separately"
+                self.document["instrumentation"]["limitations"][0] = "No performance budgets"
+
+    def latest_observation(self):
+        """Return the last actual process observation for an independent workload owner."""
+        with self.publication_lock:
+            for sample in reversed(self.document["samples"]):
+                if sample["state"] == "available":
+                    return {"app_pid": sample["app_pid"],
+                            "elapsed_seconds": sample["elapsed_seconds"],
+                            "sample_wall_unix_seconds": sample["sample_wall_unix_seconds"],
+                            "processes": [dict(process) for process in sample["processes"]]}
+        return None
+
+    def process_identities(self):
+        """Read a fresh bounded process table; never grants signal authority."""
+        return self._processes()
 
     def start(self):
         try:
@@ -186,7 +230,11 @@ class NativeResourceSampler:
 
     def _sample(self):
         began = time.monotonic()
-        item = {"elapsed_seconds": round(began - self.started, 6)}
+        item = {"elapsed_seconds": round(began - self.started, 6),
+                "sample_wall_unix_seconds": time.time()}
+        with self.publication_lock:
+            if self.phase is not None:
+                item["phase"] = dict(self.phase)
         processes = self._processes()
         if self.root is None:
             candidates = [identity for identity in self._matching(processes) if identity not in self.existing]
@@ -199,9 +247,9 @@ class NativeResourceSampler:
             item.update(state="unavailable", reason="identified_app_exited")
             return item
         descendants = {root["pid"]}
-        for _ in range(MAX_DESCENDANTS):
+        for _ in range(self.maximum_descendants):
             expanded = descendants | {pid for pid, process in processes.items() if process["parent_pid"] in descendants}
-            if len(expanded) > MAX_DESCENDANTS:
+            if len(expanded) > self.maximum_descendants:
                 item.update(state="unavailable", reason="descendant_limit")
                 return item
             if expanded == descendants:
@@ -225,7 +273,8 @@ class NativeResourceSampler:
             try:
                 completed = subprocess.run([self.cli, "--socket", str(self.socket), "--timeout", "500", "status"],
                                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                           stderr=subprocess.DEVNULL, timeout=PROBE_TIMEOUT_SECONDS, check=False)
+                                           stderr=subprocess.DEVNULL, timeout=PROBE_TIMEOUT_SECONDS, check=False,
+                                           env=self.probe_environment)
                 item["cli_status"] = {"state": "available" if completed.returncode == 0 else "unavailable",
                                       "attempted": True,
                                       "return_code": completed.returncode,
@@ -239,14 +288,15 @@ class NativeResourceSampler:
 
     def _run(self):
         try:
-            while (not self.stop_requested.is_set() and len(self.document["samples"]) < MAX_SAMPLES
-                   and time.monotonic() - self.started < MAX_DURATION_SECONDS):
+            while (not self.stop_requested.is_set() and len(self.document["samples"]) < self.maximum_samples
+                   and time.monotonic() - self.started < self.maximum_duration):
                 began = time.monotonic()
                 sample = self._sample()
                 with self.publication_lock:
                     if self.finalized.is_set():
                         return
                     sample.setdefault("observer_wall_ms", round((time.monotonic() - began) * 1000, 3))
+                    sample["observer_finished_wall_unix_seconds"] = time.time()
                     self.document["samples"].append(sample)
                 self._save()
                 # A full interval after each probe limits the actual CLI rate to <=1Hz.

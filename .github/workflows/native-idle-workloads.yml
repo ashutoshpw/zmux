@@ -1,0 +1,57 @@
+name: Controlled native idle workloads
+
+on:
+  workflow_dispatch:
+    inputs:
+      repetitions:
+        description: Explicit idle-one/idle-eight repetitions (CI observations, no product budget)
+        type: choice
+        options: ['1', '2', '3']
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-idle-workloads-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  idle-baseline:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned host Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin
+      - name: Validate finite workload inputs
+        run: python3 -B tools/native-idle-workloads/run.py --check-inputs
+      - name: Build and observe owned baseline idle phases
+        env:
+          WORKLOAD_REPETITIONS: ${{ inputs.repetitions }}
+        run: python3 -B tools/native-idle-workloads/run.py --repetitions "$WORKLOAD_REPETITIONS" --output "$RUNNER_TEMP/native-idle-workloads"
+      - name: Retain exact sources, app and partial or complete observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-idle-workloads-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-idle-workloads/receipt.json
+            ${{ runner.temp }}/native-idle-workloads/configuration.json
+            ${{ runner.temp }}/native-idle-workloads/native-idle.json
+            ${{ runner.temp }}/native-idle-workloads/resources.json
+            ${{ runner.temp }}/native-idle-workloads/child-*.json
+            ${{ runner.temp }}/native-idle-workloads/idle-child.py
+            ${{ runner.temp }}/native-idle-workloads/*.log
+            ${{ runner.temp }}/native-idle-workloads/*.zip
+            ${{ runner.temp }}/native-idle-workloads/source/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
