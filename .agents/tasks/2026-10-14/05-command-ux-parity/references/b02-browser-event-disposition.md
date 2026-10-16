@@ -17,8 +17,8 @@ Introduce an explicit rejected-obsolete outcome, never ordinary applied success.
 Keep exact epoch/namespace/current-host/operation owner checks. Retain at most256
 exact retired-owner receipts when logical removal prunes a registered host; reset
 clears them and eviction fails closed. Only known exact retired detaches qualify.
-An already-terminal retained operation can reject a matching late receipt without
-changing its original outcome or redispatching. Unknown, malformed, wrong-owner,
+An already-terminal retained operation that was actually dispatched can reject a
+matching late receipt without changing its original outcome or redispatching. Unknown, malformed, wrong-owner,
 not-yet-dispatched and size failures remain errors. Rejected detach must return
 before downstream download cancellation. Swift recognizes only the typed outcome;
 all genuine errors keep existing guards/recovery and no extra retries are added.
@@ -81,7 +81,7 @@ CARGO_TARGET_DIR=target/agent-validation/browser-event-disposition/cargo cargo t
 
 Scoped all-target Clippy and `scripts/check-native-bridge` passed; logs are
 `/tmp/zmux-browser-event-clippy.log` and
-`/tmp/zmux-browser-event-foreign-c-green.log`. The final repository check passed
+`/tmp/zmux-browser-event-foreign-c-green.log`. The initial repository check passed
 exit 0 after the first-late-Fail deadline assertion and wording refinement:
 
 ```sh
@@ -106,3 +106,37 @@ both consume the typed disposition; fixed smoke-only traces contain no payload.
 macOS Swift/C import compilation and a frozen native run remain pending parent
 source review. No push or native rerun was performed, and this portable evidence
 does not establish native cleanup, cookie durability or complete parity.
+
+
+## Independent review repair: dispatch evidence
+
+Independent review of the initial freeze found that expiry of a never-dispatched
+operation could mark it terminal before classification, incorrectly yielding the
+obsolete disposition. A matching owner is insufficient: a real dispatch must also
+have occurred. `pending_dispatched` now rejects `dispatched == false` before
+classifying terminal receipts. Both pending and expired never-issued operations
+remain `NotDispatched`; genuinely dispatched timed-out operations retain the
+obsolete disposition and their authoritative outcomes.
+
+Regression commit `8811df7` adds eight production-owner cases: read/mutation,
+Complete/Fail, pending/expired. No drain precedes the native callback. The tests
+verify the rejection, absence of incoming result/error/outcome application,
+authoritative timeout with `outcome_unknown == false`, and continued normal
+first dispatch for pending work. The exact focused command failed on the reviewed
+source and passes after the guard repair:
+
+```sh
+CARGO_TARGET_DIR=target/agent-validation/browser-event-disposition/cargo cargo test --locked -p zmux-desktop-runtime --test browser never_dispatched_receipts_ -- --nocapture
+```
+
+Logs: `/tmp/zmux-browser-event-never-dispatched-red.log` and
+`/tmp/zmux-browser-event-never-dispatched-green.log`. The original dispatched
+successful/timeout late-receipt assertions are unchanged.
+
+
+The repaired repository `scripts/check` passed exit 0; the browser owner suite now
+has 19 passing tests, including unchanged dispatched-timeout controls. Workspace
+tests, strict all-target Clippy, formatting, license inventory, C ABI and profile
+lease checks passed. Log: `/tmp/zmux-browser-event-repository-check-v2.log`.
+The revised freeze supersedes the initial source review candidate; macOS/native
+and parent-review gates remain pending, with no push or native rerun.
