@@ -34,6 +34,22 @@ private struct SelectionWrapPhase: Codable, Sendable {
     }
 }
 
+private struct SelectionPointerCapture: Codable, Sendable {
+    let pid: Int32
+    let parentPID: Int32
+    let nonce: String
+    let rows: Int
+    let columns: Int
+    let phase: String
+    let capturedHex: String
+    let sentinelHex: String
+    let trailingHex: String
+    enum CodingKeys: String, CodingKey {
+        case pid, parentPID = "parent_pid", nonce, rows, columns, phase
+        case capturedHex = "captured_hex", sentinelHex = "sentinel_hex", trailingHex = "trailing_hex"
+    }
+}
+
 private struct SelectionCopyRows: Codable, Sendable {
     let phase: String
     let scrollbackOffset: Int
@@ -69,6 +85,7 @@ private struct SelectionNativeReport: Codable, Sendable {
     var additionalPhases: [SelectionWrapPhase]
     var parkedOffset: Int?
     var copyRows: [SelectionCopyRows]
+    var pointerCapture: SelectionPointerCapture?
     var state: String
     var publicWordReferences: [SelectionWordReference]
     var cases: [SelectionNativeCase]
@@ -143,7 +160,7 @@ enum TerminalSelectionSmoke {
             keyWindow: window.isKeyWindow && NSApp.keyWindow === window,
             terminalFirstResponder: window.firstResponder === view,
             activationRequestProcessID: activationRequestProcessID, activationFailure: activationFailure,
-            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], parkedOffset: nil, copyRows: [], state: "running", publicWordReferences: [], cases: [])
+            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], parkedOffset: nil, copyRows: [], pointerCapture: nil, state: "running", publicWordReferences: [], cases: [])
         // Public system behavior is recorded separately from the independently
         // specified regression literal below. Punctuation is not guessed.
         let reference = NSTextView(frame: .zero)
@@ -318,6 +335,52 @@ enum TerminalSelectionSmoke {
                 try click(view, window: window, row: row, col: column, count: 2, viewport: unicodeWord)
             }
         }
+        let pointer = try await beginCopyPhase(key: "t", code: 17, marker: "POINTER_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        // These are actual mounted AppKit handlers and the same bounded native
+        // queue as keyboard input. Expected bytes below are public SGR literals,
+        // independently captured by the raw PTY child, never returned by an encoder.
+        for (type, cell, modifiers) in [
+            (NSEvent.EventType.leftMouseDown, (0, 2), NSEvent.ModifierFlags()),
+            (.leftMouseDragged, (0, 2), []),
+            (.leftMouseDragged, (1, 4), []),
+            (.leftMouseUp, (1, 4), [])
+        ] {
+            try pointerEvent(type, cell: cell, modifiers: modifiers, view: view, window: window, viewport: pointer)
+        }
+        try await check("pointer_shift_selection", expected: "pointer", window: window, result: &result, report: report) {
+            for (type, cell, modifiers) in [
+                (NSEvent.EventType.leftMouseDown, (0, 0), NSEvent.ModifierFlags.shift),
+                (.leftMouseDragged, (0, 7), []),
+                (.leftMouseUp, (0, 7), [])
+            ] {
+                try pointerEvent(type, cell: cell, modifiers: modifiers, view: view, window: window, viewport: pointer)
+            }
+        }
+        try sendKey("x", code: 7, modifiers: [.control], window: window)
+        guard let root = ProcessInfo.processInfo.environment["ZMUX_SELECTION_ROOT"] else { throw failure("Pointer capture root unavailable") }
+        let captureURL = URL(fileURLWithPath: root).appendingPathComponent("pointer-child.json")
+        let pointerDeadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < pointerDeadline {
+            if coordinator.snapshot?.frames.first(where: { $0.sessionId == result.sessionID })?.snapshot?.viewport.contents.contains("POINTER_CAPTURED_" + result.nonce) == true { break }
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        let capture = try await Task.detached {
+            let data = try Data(contentsOf: captureURL)
+            guard data.count <= 8192 else { throw BridgeFailure(message: "Pointer capture exceeds byte bound") }
+            return try JSONDecoder().decode(SelectionPointerCapture.self, from: data)
+        }.value
+        result.pointerCapture = capture
+        guard UInt32(exactly: capture.pid) == result.childPID, capture.parentPID == getpid(), capture.nonce == result.nonce,
+              capture.rows == pointer.size.rows, capture.columns == pointer.size.cols, capture.phase == "t",
+              capture.sentinelHex == "18", capture.trailingHex.isEmpty else { throw failure("Pointer capture child identity, grid or native key sentinel differs") }
+        let expectedPointer = "\u{1b}[<0;3;1M\u{1b}[<32;5;2M\u{1b}[<0;5;2m".utf8.map { String(format: "%02x", $0) }.joined()
+        result.cases.append(SelectionNativeCase(name: "application_pointer_capture", expected: expectedPointer, observed: capture.capturedHex))
+        if capture.capturedHex != expectedPointer {
+            result.state = "failed"
+            try await save(result, to: report)
+            throw failure("Actual PTY did not receive the exact native pointer reports; observed \(capture.capturedHex)")
+        }
         result.state = "completed_cases"
         try await save(result, to: report)
         try await coordinator.shutdown()
@@ -458,6 +521,16 @@ enum TerminalSelectionSmoke {
             }
             window.sendEvent(event)
         }
+    }
+
+    private static func pointerEvent(_ type: NSEvent.EventType, cell: (Int, Int), modifiers: NSEvent.ModifierFlags,
+                                     view: TerminalView, window: NSWindow, viewport: Viewport) throws {
+        guard let event = NSEvent.mouseEvent(with: type, location: try point(view, row: cell.0, col: cell.1, viewport: viewport),
+            modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1) else {
+            throw failure("Cannot construct actual native pointer event")
+        }
+        window.sendEvent(event)
     }
 
     private static func gridGeometry(_ view: TerminalView, viewport: Viewport) throws -> NSRect {
