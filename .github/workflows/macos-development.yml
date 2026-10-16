@@ -145,6 +145,7 @@ jobs:
             ${{ runner.temp }}/native-terminal-selection/receipt.json
             ${{ runner.temp }}/native-terminal-selection/native-selection.json
             ${{ runner.temp }}/native-terminal-selection/child.json
+            ${{ runner.temp }}/native-terminal-selection/wrap-child.json
             ${{ runner.temp }}/native-terminal-selection/selection-child.py
             ${{ runner.temp }}/native-terminal-selection/*.log
             ${{ runner.temp }}/native-terminal-selection/*.zip
