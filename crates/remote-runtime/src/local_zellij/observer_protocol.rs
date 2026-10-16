@@ -62,8 +62,23 @@ pub struct Acknowledgment {
     pub event: String,
     pub owner_uuid: Uuid,
     pub document_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_generation: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_digest: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "receipt",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum OwnerOutcome {
+    LivePreserved,
+    WorkloadCompleted(Box<super::completion::TerminalReceiptV1>),
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrontendReceipt {
@@ -72,11 +87,17 @@ pub struct FrontendReceipt {
     pub original_owner_preserved: bool,
     pub workers_joined: bool,
     pub transport: TransportReport,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_outcome: Option<OwnerOutcome>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    WorkloadFinished {
+        owner_uuid: Uuid,
+        receipt: super::completion::TerminalReceiptV1,
+    },
     OwnerReserved {
         owner_uuid: Uuid,
     },
@@ -115,6 +136,7 @@ impl Frame {
             .as_object()
             .ok_or_else(|| super::fail("observer frame is not an object"))?;
         let fields: &[&str] = match object.get("event").and_then(|v| v.as_str()) {
+            Some("workload_finished") => &["owner_uuid", "receipt"],
             Some("owner_reserved") => &["owner_uuid"],
             Some("owner_bound") => &["record"],
             Some("transport_connected") => &["owner_uuid", "frontend"],
@@ -129,10 +151,15 @@ impl Frame {
             _ => return Err(super::fail("unknown observer lifecycle event")),
         };
         let common = ["version", "context", "nonce", "sequence", "event"];
-        if object.len() != common.len() + fields.len()
-            || object
-                .keys()
-                .any(|key| !common.contains(&key.as_str()) && !fields.contains(&key.as_str()))
+        let optional_outcome = object.get("event").and_then(|v| v.as_str())
+            == Some("frontend_finished")
+            && object.contains_key("owner_outcome");
+        if object.len() != common.len() + fields.len() + usize::from(optional_outcome)
+            || object.keys().any(|key| {
+                !(common.contains(&key.as_str())
+                    || fields.contains(&key.as_str())
+                    || optional_outcome && key == "owner_outcome")
+            })
         {
             return Err(super::fail("unknown or missing observer frame field"));
         }

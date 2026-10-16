@@ -25,6 +25,8 @@ pub struct Record {
     pub supervisor: Option<ProcessIdentity>,
     pub workload: Option<ProcessIdentity>,
     pub namespace: Option<NamespaceIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<super::completion::Capability>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +64,39 @@ impl Record {
     }
     pub(super) fn backend(&self) -> io::Result<PathBuf> {
         Ok(self.runtime()?.join("s/0.43.0").join(self.session_name()))
+    }
+    /// Pure original binding reconstruction; this is not live authentication.
+    pub fn committed_binding(&self) -> io::Result<super::completion::CommittedBinding> {
+        let capability = self
+            .completion
+            .as_ref()
+            .ok_or_else(|| fail("owner has no completion capability"))?;
+        let binding = super::completion::CommittedBinding {
+            version: 1,
+            owner_uuid: self.id,
+            owner_generation: capability.owner_generation,
+            namespace: self
+                .namespace
+                .clone()
+                .ok_or_else(|| fail("missing owner namespace"))?,
+            completion_socket: capability.completion_socket,
+            server: self
+                .server
+                .clone()
+                .ok_or_else(|| fail("missing owner server"))?,
+            supervisor: self
+                .supervisor
+                .clone()
+                .ok_or_else(|| fail("missing owner supervisor"))?,
+            workload: self
+                .workload
+                .clone()
+                .ok_or_else(|| fail("missing owner workload"))?,
+        };
+        if binding.digest()? != capability.binding_digest {
+            return Err(fail("owner completion binding digest mismatch"));
+        }
+        Ok(binding)
     }
     /// Revalidate the original owner without adopting or signalling its processes.
     pub fn verify_live(&self) -> io::Result<()> {
@@ -270,9 +305,14 @@ impl LocalZellij {
             self.lock()?
         };
         let mut records = self.records()?;
-        if records.len() >= 64 || records.iter().any(|record| record.name == name) {
+        if records.len() >= 64 {
             return Err(fail(
-                "session name exists or registry is full; do not replay start",
+                "registry is full (64 owner slots); inspect list/status and reclaim only completed generations with cleanup --id UUID --generation UUID; do not replay start",
+            ));
+        }
+        if records.iter().any(|record| record.name == name) {
+            return Err(fail(
+                "session name exists; inspect list/status, do not replay start",
             ));
         }
         let mut record = Record {
@@ -283,6 +323,7 @@ impl LocalZellij {
             supervisor: None,
             workload: None,
             namespace: None,
+            completion: None,
         };
         records.push(record.clone());
         self.save(&records)?;
@@ -340,6 +381,25 @@ impl LocalZellij {
         };
         self.attach_record(record, terminal, observer, deadline)
     }
+    pub(super) fn consume_terminal(
+        &self,
+        record: &Record,
+        receipt: &super::completion::TerminalReceiptV1,
+    ) -> io::Result<()> {
+        receipt.matches(record)?;
+        let _lock = self.lock()?;
+        let current = self
+            .records()?
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .ok_or_else(|| fail("completion owner missing from profile"))?;
+        receipt.matches(&current)?;
+        super::completion_control::publish(
+            &self.root,
+            &format!("consumed-{}.json", record.id),
+            &serde_json::to_vec(receipt).map_err(io::Error::other)?,
+        )
+    }
     fn attach_record(
         &self,
         record: Record,
@@ -347,7 +407,9 @@ impl LocalZellij {
         mut observer: Option<super::observer::Observer>,
         deadline: Instant,
     ) -> io::Result<i32> {
-        record.verify_live()?;
+        if record.completion.is_none() {
+            record.verify_live()?;
+        }
         if record
             .server
             .as_ref()

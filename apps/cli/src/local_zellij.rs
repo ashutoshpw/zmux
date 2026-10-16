@@ -10,6 +10,10 @@ pub(super) enum Invocation {
         command: Option<String>,
     },
     Attach(uuid::Uuid),
+    Cleanup {
+        id: uuid::Uuid,
+        generation: uuid::Uuid,
+    },
     Supervisor(PathBuf),
 }
 
@@ -20,6 +24,16 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     }
     let invocation = match args[0].as_str() {
         "list" if args.len() == 1 => Invocation::List,
+        "cleanup" if args.len() == 5 && args[1] == "--id" && args[3] == "--generation" => {
+            Invocation::Cleanup {
+                id: args[2]
+                    .parse()
+                    .map_err(|_| CliError("--id requires a UUID".into()))?,
+                generation: args[4]
+                    .parse()
+                    .map_err(|_| CliError("--generation requires a UUID".into()))?,
+            }
+        }
         "status" | "attach" if args.len() == 3 && args[1] == "--id" => {
             if args[0] == "status" {
                 Invocation::Status(
@@ -93,11 +107,11 @@ pub(super) fn run(invocation: Invocation) -> Result<u8, Box<dyn Error>> {
     let owner = LocalZellij::from_environment(terminal.as_mut())?;
     let code = match invocation {
         Invocation::List => {
-            println!("{}", serde_json::to_string_pretty(&owner.list()?)?);
+            println!("{}", serde_json::to_string_pretty(&owner.inspect_all()?)?);
             0
         }
         Invocation::Status(id) => {
-            println!("{}", serde_json::to_string_pretty(&owner.status(id)?)?);
+            println!("{}", serde_json::to_string_pretty(&owner.inspect(id)?)?);
             0
         }
         Invocation::Start { name, cwd, command } => owner.start(
@@ -108,6 +122,13 @@ pub(super) fn run(invocation: Invocation) -> Result<u8, Box<dyn Error>> {
         )?,
         Invocation::Attach(id) => {
             owner.attach(id, terminal.as_mut().expect("foreground terminal"))?
+        }
+        Invocation::Cleanup { id, generation } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&owner.cleanup_completed(id, generation)?)?
+            );
+            0
         }
         Invocation::Supervisor(_) => unreachable!(),
     };

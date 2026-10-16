@@ -1,13 +1,17 @@
 //! Exact process-bound, foreground-only local Zellij ownership.
 //! No arbitrary socket adoption, automatic owner close, or GUI readiness receipt.
 mod broker;
+pub mod completion;
+mod completion_cleanup;
+mod completion_control;
+pub use completion_cleanup::{CleanupReceipt, CompletionStatus};
 mod files;
 mod observer;
 pub mod observer_protocol;
 mod process;
 mod supervisor;
 
-pub use files::{LocalZellij, Record};
+pub use files::{LocalZellij, NamespaceIdentity, Record};
 pub use process::ForegroundTerminal;
 pub use supervisor::run_supervisor;
 

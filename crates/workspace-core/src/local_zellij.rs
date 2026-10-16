@@ -22,6 +22,53 @@ impl LocalZellijIdentity {
     }
 }
 
+pub const MAX_LOCAL_ZELLIJ_VIEWPORT_BYTES: usize = 16 * 1024;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalZellijViewport {
+    pub contents: String,
+    pub truncated: bool,
+}
+impl LocalZellijViewport {
+    pub fn capture(contents: &str) -> Self {
+        let mut end = contents.len().min(MAX_LOCAL_ZELLIJ_VIEWPORT_BYTES);
+        while !contents.is_char_boundary(end) {
+            end -= 1;
+        }
+        Self {
+            contents: contents[..end].into(),
+            truncated: end < contents.len(),
+        }
+    }
+}
+/// An authenticated terminal fact and bounded screen for completed history.
+/// Deserializing this value is never authority to acknowledge or retire a live
+/// supervisor; storage and live consumption acknowledgments are separate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalZellijCompletion {
+    pub receipt: zmux_remote_runtime::local_zellij::completion::TerminalReceiptV1,
+    pub viewport: Option<LocalZellijViewport>,
+}
+impl LocalZellijCompletion {
+    pub fn validate(&self, identity: &LocalZellijIdentity) -> Result<(), ActionError> {
+        identity.validate()?;
+        self.receipt
+            .validate()
+            .map_err(|error| ActionError::InvalidOperation(error.to_string()))?;
+        if self.receipt.binding.owner_uuid != identity.owner_uuid
+            || self
+                .viewport
+                .as_ref()
+                .is_some_and(|viewport| viewport.contents.len() > MAX_LOCAL_ZELLIJ_VIEWPORT_BYTES)
+        {
+            return Err(ActionError::InvalidOperation(
+                "completed local Zellij history has mismatched owner or unbounded viewport".into(),
+            ));
+        }
+        Ok(())
+    }
+}
 /// Not serialized or constructible from a public action. Cancellation burns its IDs.
 #[derive(Debug)]
 pub struct LocalZellijReservation {
@@ -59,6 +106,91 @@ impl PreparedLocalZellijSurface {
 }
 
 impl WorkspaceStore {
+    /// The serialized runtime authenticates the live publisher before calling
+    /// this pure preparation API. All validation precedes S01 queue acceptance.
+    pub fn prepare_local_zellij_completion(
+        &self,
+        surface_id: SurfaceId,
+        session_id: SessionId,
+        identity: &LocalZellijIdentity,
+        history: LocalZellijCompletion,
+    ) -> Result<WorkspaceStore, ActionError> {
+        history.validate(identity)?;
+        let (wi, pane_id, index) = self.location(surface_id)?;
+        let surface = &self.pane(pane_id)?.surfaces[index];
+        if surface.session_id != Some(session_id) || surface.local_zellij.as_ref() != Some(identity)
+        {
+            return Err(ActionError::InvalidOperation(
+                "completed local Zellij target changed".into(),
+            ));
+        }
+        if let Some(previous) = &surface.local_zellij_completion
+            && previous.receipt != history.receipt
+        {
+            return Err(ActionError::InvalidOperation(
+                "completed local Zellij receipt is immutable".into(),
+            ));
+        }
+        self.ensure_settled(&[surface_id])?;
+        let mut candidate = self.clone();
+        candidate.state.workspaces[wi]
+            .root
+            .pane_mut(pane_id)
+            .expect("located pane")
+            .surfaces[index]
+            .local_zellij_completion = Some(Box::new(history));
+        candidate.state.revision = candidate
+            .state
+            .revision
+            .checked_add(1)
+            .ok_or(ActionError::Exhausted)?;
+        candidate.validate_terminal_descriptors()?;
+        Ok(candidate)
+    }
+    /// Release the completed logical session only after actual outer Session
+    /// join. Preserve the workload viewport captured before frontend cleanup.
+    pub fn finish_local_zellij_completion(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<(), ActionError> {
+        let changed = self
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .any(|surface| {
+                surface.session_id == Some(session_id) && surface.local_zellij_completion.is_some()
+            });
+        if !changed {
+            return Ok(());
+        }
+        let revision = self
+            .state
+            .revision
+            .checked_add(1)
+            .ok_or(ActionError::Exhausted)?;
+        for workspace in &mut self.state.workspaces {
+            for pane_id in workspace
+                .root
+                .panes()
+                .iter()
+                .map(|pane| pane.id)
+                .collect::<Vec<_>>()
+            {
+                let pane = workspace.root.pane_mut(pane_id).expect("known pane");
+                for surface in &mut pane.surfaces {
+                    if surface.session_id == Some(session_id)
+                        && surface.local_zellij_completion.is_some()
+                    {
+                        surface.session_id = None;
+                    }
+                }
+            }
+        }
+        self.state.revision = revision;
+        Ok(())
+    }
     /// The runtime first checks this candidate's allocator against its durable
     /// reserved block, then commits the allocator advance before any CLI spawn.
     /// Reserve on the live owner (or immediately install the checked clone), never
@@ -185,6 +317,13 @@ impl Surface {
         }
         if let Some(identity) = &self.local_zellij {
             identity.validate()?;
+            if let Some(history) = &self.local_zellij_completion {
+                history.validate(identity)?;
+            }
+        } else if self.local_zellij_completion.is_some() {
+            return Err(ActionError::InvalidOperation(
+                "completed local Zellij history requires its exact descriptor".into(),
+            ));
         }
         Ok(())
     }

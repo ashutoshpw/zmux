@@ -1,6 +1,6 @@
 use super::{
-    AuthorizationReceiver, ClientLaunchFailure, ClientReady, EventSender, LaunchEvent,
-    LaunchOperation, LaunchRequest, Observation, ObserverHandle,
+    Authorization, AuthorizationReceiver, ClientLaunchFailure, ClientReady, EventSender,
+    LaunchEvent, LaunchOperation, LaunchRequest, Observation, ObserverHandle,
     namespace::{Namespace, View},
 };
 use std::{
@@ -21,8 +21,8 @@ use std::{
     time::{Duration, Instant},
 };
 use zmux_remote_runtime::local_zellij::{
-    Record,
-    observer_protocol::{self as wire, Acknowledgment, Event, Frame},
+    Record, completion,
+    observer_protocol::{self as wire, Acknowledgment, Event, Frame, OwnerOutcome},
 };
 use zmux_session_runtime::{
     Launch, SessionError, ShutdownPolicy,
@@ -181,7 +181,7 @@ impl Drop for Resource {
 }
 struct Ready {
     record: Record,
-    frontend: ProcessIdentity,
+    frontend: Option<ProcessIdentity>,
 }
 
 pub(crate) fn launch_client(
@@ -506,9 +506,10 @@ impl Monitor {
         };
         let mut record: Option<Record> = None;
         let mut connected = false;
+        let mut completed = None;
         loop {
             let frame = receive(&mut stream, &request, stopped, !connected)?;
-            if frame.version != 1
+            if frame.version != 2
                 || frame.context != request.correlation
                 || frame.nonce != nonce
                 || frame.sequence != sequence + 1
@@ -535,7 +536,12 @@ impl Monitor {
                     let saved = loop {
                         startup(&request, stopped)?;
                         match authorization.try_recv() {
-                            Ok(saved) => break saved,
+                            Ok(Authorization::Reservation(saved)) => break saved,
+                            Ok(Authorization::Completion(_)) => {
+                                return Err(fail(
+                                    "unexpected completion authorization before reservation",
+                                ));
+                            }
                             Err(TryRecvError::Disconnected) => {
                                 return Err(fail(
                                     "native checkpoint authorization lost; reservation retained",
@@ -556,13 +562,15 @@ impl Monitor {
                     send_ack(
                         &mut stream,
                         Acknowledgment {
-                            version: 1,
+                            version: 2,
                             context: request.correlation.clone(),
                             nonce: nonce.clone(),
                             sequence: 2,
                             event: "reservation_committed".into(),
                             owner_uuid,
                             document_revision: saved.document_revision,
+                            owner_generation: None,
+                            receipt_digest: None,
                         },
                         &request,
                         stopped,
@@ -573,7 +581,13 @@ impl Monitor {
                 Event::OwnerBound { record: bound }
                     if !connected && record.is_none() && Some(bound.id) == owner =>
                 {
-                    bound.verify_live()?;
+                    if bound.verify_live().is_err()
+                        && completion::authenticate(&bound, request.startup_deadline)?.is_none()
+                    {
+                        return Err(fail(
+                            "bound owner is neither live nor authenticated completed",
+                        ));
+                    }
                     if bound
                         .server
                         .as_ref()
@@ -609,21 +623,134 @@ impl Monitor {
                     ready
                         .try_send(Ok(Ready {
                             record: record.as_ref().expect("checked record").clone(),
-                            frontend,
+                            frontend: Some(frontend),
                         }))
                         .map_err(|_| {
                             fail("native retained-Session readiness receiver unavailable")
                         })?;
                     connected = true;
                 }
+                Event::WorkloadFinished {
+                    owner_uuid,
+                    receipt,
+                } if Some(owner_uuid) == owner && record.is_some() && completed.is_none() => {
+                    let bound = record.as_ref().expect("bound owner");
+                    receipt.matches(bound)?;
+                    let authenticated =
+                        completion::authenticate(bound, Instant::now() + Duration::from_secs(2))?;
+                    if authenticated.as_ref() != Some(&receipt) {
+                        return Err(fail(
+                            "completion differs from independent live publisher proof",
+                        ));
+                    }
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    if !connected {
+                        startup(&request, stopped)?;
+                        ready
+                            .try_send(Ok(Ready {
+                                record: bound.clone(),
+                                frontend: None,
+                            }))
+                            .map_err(|_| {
+                                fail("completed retained Session readiness unavailable")
+                            })?;
+                        connected = true;
+                    }
+                    events
+                        .try_send(LaunchEvent::WorkloadFinished {
+                            correlation: request.correlation.clone(),
+                            receipt: Box::new(receipt.clone()),
+                            deadline,
+                        })
+                        .map_err(|_| fail("native completion event queue unavailable"))?;
+                    let saved = loop {
+                        if stopped.load(Ordering::Acquire)
+                            || request.cancellation.load(Ordering::Acquire)
+                            || Instant::now() >= deadline
+                        {
+                            return Err(fail(
+                                "completion authorization cancelled or deadline; publisher retained",
+                            ));
+                        }
+                        match authorization.try_recv() {
+                            Ok(Authorization::Completion(saved)) => break saved,
+                            Ok(Authorization::Reservation(_)) => {
+                                return Err(fail(
+                                    "unexpected reservation authorization after completion",
+                                ));
+                            }
+                            Err(TryRecvError::Disconnected) => {
+                                return Err(fail("completion authorization source unavailable"));
+                            }
+                            Err(TryRecvError::Empty) => thread::sleep(POLL),
+                        }
+                    };
+                    if saved.correlation != request.correlation
+                        || saved.owner_generation != receipt.binding.owner_generation
+                        || saved.receipt_digest != receipt.digest()?
+                        || saved.document_revision == 0
+                        || saved.io_id == 0
+                    {
+                        return Err(fail(
+                            "native completion Saved authorization correlation rejected",
+                        ));
+                    }
+                    view.validate()?;
+                    let ack = Acknowledgment {
+                        version: 2,
+                        context: request.correlation.clone(),
+                        nonce: nonce.clone(),
+                        sequence: sequence + 1,
+                        event: "completion_committed".into(),
+                        owner_uuid,
+                        document_revision: saved.document_revision,
+                        owner_generation: Some(saved.owner_generation),
+                        receipt_digest: Some(saved.receipt_digest),
+                    };
+                    let bytes = serde_json::to_vec(&ack).map_err(io::Error::other)?;
+                    let mut frame = (bytes.len() as u32).to_le_bytes().to_vec();
+                    frame.extend(bytes);
+                    let mut offset = 0;
+                    while offset < frame.len() {
+                        if stopped.load(Ordering::Acquire)
+                            || request.cancellation.load(Ordering::Acquire)
+                            || Instant::now() >= deadline
+                        {
+                            return Err(fail("completion acknowledgment deadline or cancellation"));
+                        }
+                        match stream.write(&frame[offset..]) {
+                            Ok(0) => return Err(fail("completion acknowledgment zero write")),
+                            Ok(n) => offset += n,
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => thread::sleep(POLL),
+                            Err(e) if e.kind() == io::ErrorKind::Interrupted => (),
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    sequence += 1;
+                    completed = Some(receipt);
+                }
                 Event::FrontendFinished {
                     owner_uuid,
                     receipt,
                 } if connected && Some(owner_uuid) == owner => {
-                    let preserved = record.as_ref().expect("connected record").verify_live();
-                    let valid = receipt.workers_joined
-                        && receipt.original_owner_preserved
-                        && preserved.is_ok();
+                    let bound = record.as_ref().expect("connected record");
+                    let outcome_valid = match &receipt.owner_outcome {
+                        Some(OwnerOutcome::WorkloadCompleted(terminal)) => {
+                            completed.as_ref() == Some(terminal.as_ref())
+                                && completion::authenticate(
+                                    bound,
+                                    Instant::now() + Duration::from_secs(2),
+                                )?
+                                .as_ref()
+                                    == Some(terminal)
+                        }
+                        Some(OwnerOutcome::LivePreserved) | None => {
+                            completed.is_none()
+                                && receipt.original_owner_preserved
+                                && bound.verify_live().is_ok()
+                        }
+                    };
+                    let valid = receipt.workers_joined && outcome_valid;
                     state
                         .lock()
                         .map_err(|_| fail("observer final publication poisoned"))?

@@ -526,3 +526,92 @@ fn changed_actual_launcher_identity_rejects_observation_before_reserving_an_owne
     assert!(!count.exists());
     assert!(f.records().is_none());
 }
+
+#[test]
+fn actual_registry_capacity_refuses_sixty_fifth_reservation_before_any_workload() {
+    // Actual failed one-use observer admissions reserve all slots. No registry
+    // fixture, fake backend or executable workload supplies the asserted bound.
+    let fixture = Fixture::new();
+    let marker = fixture.root.join("capacity-must-not-start");
+    let script = format!("printf started > '{}'", marker.display());
+    for index in 0..64 {
+        let host = Host::new();
+        let name = format!("capacity-{index}");
+        let mut client = Client::with_environment(
+            &fixture,
+            &[
+                "local-zellij",
+                "start",
+                &name,
+                "--headless",
+                "--command",
+                &script,
+            ],
+            &host.environment(),
+        );
+        let mut stream = host.accept(&mut client, &marker);
+        let reserved = host.receive(&mut stream, &mut client);
+        assert_eq!(reserved["event"], "owner_reserved");
+        let mut denied = host.acknowledgment(&reserved);
+        denied["document_revision"] = 0.into();
+        host.send(&mut stream, &denied);
+        assert_ne!(client.finish(), 0);
+        assert!(!marker.exists());
+    }
+    let before = fixture.records().unwrap();
+    assert_eq!(before.as_array().unwrap().len(), 64);
+    assert!(
+        before
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["server"].is_null() && r["supervisor"].is_null() && r["workload"].is_null())
+    );
+    let host = Host::new();
+    let mut denied = Client::with_environment(
+        &fixture,
+        &[
+            "local-zellij",
+            "start",
+            "capacity-65",
+            "--headless",
+            "--command",
+            &script,
+        ],
+        &host.environment(),
+    );
+    assert_ne!(denied.finish(), 0);
+    assert!(String::from_utf8_lossy(&denied.output).contains("registry is full"));
+    // The optional observer connects before registry admission. Capacity refusal
+    // may connect, but must emit no OwnerReserved frame or workload authority.
+    let (mut refused_observer, _) = host.listener.accept().unwrap();
+    refused_observer.set_nonblocking(false).unwrap();
+    refused_observer
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut byte = [0];
+    assert_eq!(refused_observer.read(&mut byte).unwrap(), 0);
+    assert_eq!(fixture.records().unwrap(), before);
+    assert!(!marker.exists());
+    let list = fixture.output(&["local-zellij", "list"]);
+    assert!(list.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&list.stdout)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        64
+    );
+    let status = fixture.output(&[
+        "local-zellij",
+        "status",
+        "--id",
+        before[0]["id"].as_str().unwrap(),
+    ]);
+    assert!(status.status.success());
+    eprintln!(
+        "R03 real registry cap: {}",
+        serde_json::json!({"actual_reserved_slots":64,"sixty_fifth_reservation":false,"workloads_spawned":0,"status_available":true,"list_available":true,"checkpoint_ack_origin":"synthetic_invalid_admission","native_durability_proven":false})
+    );
+}
