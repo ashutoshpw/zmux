@@ -165,7 +165,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         return false
     }
     func detachLayoutIfNeeded(_ snapshot: DesktopSnapshot, identity: MainWindowIdentity) {
-        guard layoutKey != (snapshot.workspace?.root.key ?? "empty") || self.identity != identity || self.snapshot?.browserEpoch != snapshot.browserEpoch else { return }
+        guard layoutKey != presentationKey(for: snapshot) || self.identity != identity || self.snapshot?.browserEpoch != snapshot.browserEpoch else { return }
         releaseContentResponder()
         canvas.subviews.forEach { rememberSplits($0); $0.removeFromSuperview() }
         layoutKey = ""
@@ -514,7 +514,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let selectionChanged = self.snapshot?.model.focusedWorkspace != snapshot.model.focusedWorkspace
             || self.snapshot?.workspace?.focusedPane != snapshot.workspace?.focusedPane
             || focusedPane?.selectedSurface != snapshot.workspace?.root.panes.first(where: { $0.id == snapshot.workspace?.focusedPane })?.selectedSurface
-        let layoutChanged = layoutKey != (snapshot.workspace?.root.key ?? "empty")
+        let layoutChanged = layoutKey != presentationKey(for: snapshot)
         if self.snapshot?.browserEpoch != snapshot.browserEpoch || self.identity != identity { layoutKey = "" }
         self.identity = identity
         self.snapshot = snapshot
@@ -692,8 +692,19 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         return snapshot.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport
     }
 
+    private func presentationKey(for snapshot: DesktopSnapshot) -> String {
+        // A selected persistent browser can acquire its native store after the
+        // model selection is published. Replace its pending placeholder when
+        // that exact native host becomes ready, or when its host is replaced.
+        let hosts = snapshot.workspace?.root.panes.filter { $0.selected.kind == "browser" }.map { pane in
+            let host = browsers[pane.selectedSurface]?.hostID.uuidString ?? "pending"
+            return "\(pane.id):\(pane.selectedSurface):\(host)"
+        }.joined(separator: ",") ?? ""
+        return (snapshot.workspace?.root.key ?? "empty") + "|browser-hosts:" + hosts
+    }
+
     private func updateTerminalLayoutIfNeeded(_ snapshot: DesktopSnapshot) {
-        let key = snapshot.workspace?.root.key ?? "empty"
+        let key = presentationKey(for: snapshot)
         guard key != layoutKey else { return }
         layoutKey = key
         didSetInitialTerminalFocus = false
