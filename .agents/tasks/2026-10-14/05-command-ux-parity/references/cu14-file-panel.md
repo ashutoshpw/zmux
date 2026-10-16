@@ -888,7 +888,7 @@ none is claimed. The Linux-testable part is the contract between Rust and Swift:
 `crates/native-bridge/tests/swift_file_contract.rs`, three contract tests in the original slice
 (eight tests after fix round 1, which added five structure tests; twelve after fix round 2, which
 added four more; sixteen after fix round 4; eighteen after fix round 5, which also renamed every
-source-text test with a `pin_` prefix, see below), all green. Test names quoted in earlier fix-round
+source-text test with a `pin_` prefix, see below; twenty after fix round 6), all green. Test names quoted in earlier fix-round
 sections are the names at the time; the structure tests now carry the `pin_` prefix:
 
 - `swift_decodables_name_exactly_the_fields_the_real_rust_wire_carries`: runs a real Desktop
@@ -945,10 +945,16 @@ close and (fix round 2) discard sheets are answered through the panel's own seam
 10. (fix round 1) Two dirty panels, `resolveFilesBeforeClose` answered Don't Save then Cancel: the
     close is refused and both panels keep their text, dirty marker and model dirty bit; then two
     back-to-back `closeTerminalTab` calls with Don't Save both close their tabs.
-    (fix round 4) Between those two, a two-file Don't Save close is resolved and the model must
+    (fix round 4) Between those two, a two-file Don't Save close is settled and the model must
     stay clean across four `status` polls for both panels, and new edits must mark both dirty again.
+    (fix round 6) That settled close is a pending settlement: the panels keep their text and edited
+    marker while the model reads clean; `finish(closeSucceeded: false)` (the core refused) leaves both
+    panels dirty and re-marks both in the model; a second settlement finished with `true` then clears
+    both.
 11. (fix round 2) A dirty panel with the changed-on-disk banner: pressing the banner's Reload button
-    asks first; Cancel keeps the text, Discard adopts the disk version.
+    asks first; Cancel keeps the text, Discard adopts the disk version. (fix round 6) The `zmux open`
+    that reopens the text file first is a plain successful open (`expectFailure` false); it had been
+    passed `true`, which makes the harness throw, so this step and step 12 could never run.
 12. (fix round 2) A closed clean tab whose file was deleted is reopened: the panel shows the
     `not_found` error state; the file is written back and `retry()` loads it.
     Cleanup then checks with `lsof` that this process holds no descriptor under the fixture
@@ -1045,7 +1051,7 @@ reverted, and by the strengthened in-app smoke, which is UNAVAILABLE here and ha
 | --- | --- | --- | --- |
 | 1 | `closeAfterFileCheck` silently dropped a close made while another check was pending (smoke cleanup closes four tabs in a row, so `file_panel` could never finish; Cmd-W twice) | Yes: `guard !closePromptActive else { return }` ran before the first Task could run | `App.swift`: a bounded FIFO (`pendingFileCloses`, 64) drained by one task; each request runs in order. A repeat of the same gesture (same `key`, for example `surface:<id>`) is folded into the one still waiting or being asked about, which is the only case that does not queue; a full queue shows an error. `hasPendingFileCloses` lets the smoke wait for a request to settle before repeating it. |
 | 2 | Keyboard focus stayed on the panel after an async load replaced the loading state | Yes: `present()` swapped the subview without touching the responder chain | `FilePanelView.present`: reads `ownsFocus(in:)` before the outgoing view leaves the window and calls `makeFirstResponder(preferredResponder)` afterwards; focus elsewhere is never taken. |
-| 3 | Don't Save was applied immediately, so a later Cancel or failed Save left an earlier file clean | Yes: `discardLocalChanges()` ran inside the per-file loop | `resolveFilesBeforeClose` only records discards, settles every mirror (a discarded panel reports clean while keeping its text, `settleDirtyMirror(assumingDiscarded:)`), and applies `discardLocalChanges()` last. If a settle fails, `resumeDirtyMirror()` on every panel restores the model's dirty bit. SUPERSEDED in part by fix round 4: this version still let a snapshot poll re-mark a discarded panel dirty between settles, and the decision now lives in `FileCloseResolution`. |
+| 3 | Don't Save was applied immediately, so a later Cancel or failed Save left an earlier file clean | Yes: `discardLocalChanges()` ran inside the per-file loop | `resolveFilesBeforeClose` only records discards, settles every mirror (a discarded panel reports clean while keeping its text, `settleDirtyMirror(assumingDiscarded:)`), and applies `discardLocalChanges()` last. If a settle fails, `resumeDirtyMirror()` on every panel restores the model's dirty bit. SUPERSEDED in part by fix round 4: this version still let a snapshot poll re-mark a discarded panel dirty between settles, and the decision now lives in `FileCloseResolution`. SUPERSEDED in part by fix round 6: `applyDiscard` is no longer reached from `resolve`; the settlement applies it only after the core closed the tab. |
 | 4 | Dirty detection used `String !=` (canonical equivalence) | Yes: `"\u{E9}" == "e\u{301}"` is true in Swift | `sameBytes` compares `utf8.elementsEqual`; used on every keystroke and after a save. |
 | 5 | The dirty observation gave up after 8 acknowledged-but-unconfirmed attempts | Yes, and it contradicted design D7a; it was also missing from this receipt's deviations | The count no longer stops the loop: the confirmation wait backs off 150 ms to 2 s with no limit, an informational banner (`dirtyUnconfirmed`, no action, clears when the model agrees) appears after 8 attempts. Non-retryable refusals still stop the loop and say so, as designed. |
 
@@ -1192,7 +1198,7 @@ Base of the round: `a06accb`. Swift still cannot be compiled or run here (no Swi
 
 | # | Finding | Verified | Fix |
 | --- | --- | --- | --- |
-| 1 | Don't Save raced the snapshot poll: `settleDirtyMirror(assumingDiscarded: true)` cancelled the dirty-mirror task and told Rust the file was clean while the panel kept the text, with no state to stop `update()` -> `reconcileDirty()` from restarting the loop. With two or more discarded panels a poll between panel 1's settle and the final discard re-marked panel 1 dirty (`observe(true)`); the core close guard then refused the close of a panel that already read clean, and a later close lost the edits silently. | Yes, by reading: `update()` calls `reconcileDirty()` on every snapshot; `observeNeeded` had no discard state; `resolveFilesBeforeClose` awaited one bridge call per panel before the single `discards.forEach`. A second, narrower hole of the same kind was found while fixing it: a cancelled loop can still have an `observe(true)` in flight on a detached worker that lands after the settle's `observe(false)`, and the `wanted == lastModelDirty` shortcut would then skip the write. | New `DirtyMirrorGate` (a counted hold) in `FileCloseResolution.swift`. `observeNeeded` is `dirtyGate.observationNeeded(...)`, which is false while a hold is taken, so neither `update()` nor the loop's own tail can restart the mirror. `holdDiscard()` takes the hold and cancels the task synchronously. The whole close decision moved out of the coordinator into `FileCloseResolution.resolve`: all Cancel/Save decisions first, then every discarded panel is held before the first awaited settle (nothing awaited in between), then settle, then `applyDiscard()` for every discarded panel. `applyDiscard()` drops the text from dirty tracking and lifts the hold in one synchronous step. On a failed settle every hold is released and every mirror resumed. `settleDirtyMirror` now waits for the cancelled loop (`if let running { await running.value }`) before it writes, and `closeWriteNeeded` forces a write when a loop ran or the panel is held, so a late `observe(true)` cannot land after (and undo) the settle. Holds are counted so two overlapping closes of one panel cannot release each other's. |
+| 1 | Don't Save raced the snapshot poll: `settleDirtyMirror(assumingDiscarded: true)` cancelled the dirty-mirror task and told Rust the file was clean while the panel kept the text, with no state to stop `update()` -> `reconcileDirty()` from restarting the loop. With two or more discarded panels a poll between panel 1's settle and the final discard re-marked panel 1 dirty (`observe(true)`); the core close guard then refused the close of a panel that already read clean, and a later close lost the edits silently. | Yes, by reading: `update()` calls `reconcileDirty()` on every snapshot; `observeNeeded` had no discard state; `resolveFilesBeforeClose` awaited one bridge call per panel before the single `discards.forEach`. A second, narrower hole of the same kind was found while fixing it: a cancelled loop can still have an `observe(true)` in flight on a detached worker that lands after the settle's `observe(false)`, and the `wanted == lastModelDirty` shortcut would then skip the write. | New `DirtyMirrorGate` (a counted hold) in `FileCloseResolution.swift`. `observeNeeded` is `dirtyGate.observationNeeded(...)`, which is false while a hold is taken, so neither `update()` nor the loop's own tail can restart the mirror. `holdDiscard()` takes the hold and cancels the task synchronously. The whole close decision moved out of the coordinator into `FileCloseResolution.resolve`: all Cancel/Save decisions first, then every discarded panel is held before the first awaited settle (nothing awaited in between), then settle, then (fix round 6: after the core has closed the tab, not at the end of `resolve`) `applyDiscard()` for every discarded panel. `applyDiscard()` drops the text from dirty tracking and lifts the hold in one synchronous step. On a failed settle every hold is released and every mirror resumed. `settleDirtyMirror` now waits for the cancelled loop (`if let running { await running.value }`) before it writes, and `closeWriteNeeded` forces a write when a loop ran or the panel is held, so a late `observe(true)` cannot land after (and undo) the settle. Holds are counted so two overlapping closes of one panel cannot release each other's. |
 | 2 | `dont_save_is_applied_only_after_the_whole_close_is_settled` could not detect a failed Save no longer aborting the close (D8). | Yes, reproduced as reported: replacing the Save guard with `_ = await view.performSave(force: false)` left the old test green (its `last_return_false` was found at the later settle failure). | The Save guard text is pinned exactly in the new `close_resolution_aborts_without_discarding_and_applies_dont_save_last`, together with the exact Cancel and Discard arms, hold before settle with no `await` between, release then resume on failure, `applyDiscard` last, and exactly three `return false` abort paths. Because the decision is now an ordinary generic function, a macOS fixture also executes it (below). |
 
 Tests added or strengthened:
@@ -1357,3 +1363,76 @@ inside the `@MainActor` view.
 Limits: the observe loop, `settleDirtyMirror`, `epochChanged`, the attach and reload plumbing and the
 sheets are still in the view and still only structure-pinned (plus the existing close fixture for the
 gate and the resolution); the extraction covers the decisions, not the asynchronous sequencing.
+
+### Fix round 6 (S4 review findings, two blocking, both verified valid and fixed)
+
+Base of the round: `58abc37`. Swift still cannot be compiled or run here (no Swift toolchain, Linux).
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | `FilePanelSmoke` step 11 called `cli(["open", f.text], true)`; the second argument is `expectFailure`, so a successful single-file open threw "Bundled browser CLI failed its expected outcome" and the stage could never pass. | Yes, by reading: `nativeCLI` has `guard (process.terminationStatus != 0) == expectFailure`; `apps/cli/tests/open.rs` asserts exit 0 for an all-success open (design D17); the text tab was closed in step 8 and its reopened copy in the step 10 burst, so nothing is deduplicated. The mixed batch (step 1, `true`) and the dedupe call (step 3, `false`) are consistent; this was the only successful open passed `true`. | The call passes `false`. New Linux-runnable `pin_the_smoke_expects_a_plain_open_of_a_valid_file_to_succeed` checks every `cli(["open", ...], X)` line in the smoke: only the batch containing `f.missing` may expect failure. |
+| 2 | Data loss: `FileCloseResolution.resolve` ended with `discards.forEach { $0.applyDiscard() }` before the core had closed anything, so a close the core refused (`ensure_settled`: "terminal restoration is in progress") or one that never reached the core (`enqueue` returns false on a full 256-slot queue; the result was ignored) left the tab open with its abandoned edits shown as clean, no model dirty bit and no prompt on the next close. | Yes, by reading: `drainFileCloses` called `next.proceed()` after `resolveFilesBeforeClose` returned true, and `proceed` was a `Void` closure around `enqueue`, whose `Bool` and the command's later failure (`reportError` in the command loop) were never seen by the close. `applyDiscard` -> `discardLocalChanges` -> `model.adopt(text:)` resets baseline and dirty bit. The receipt's "applied only once the whole close is settled" meant the sheets and mirror writes, not the core close. | Don't Save is now two phases. `FileCloseResolution.resolve` still asks, holds, and settles (the model reads clean so the core accepts the close), but returns a `FileCloseSettlement` (nil on Cancel, failed Save or failed settle, as before) and applies nothing. The settlement's `finish(closeSucceeded:)` decides once: `true` applies every discard, `false` releases every hold, which resumes the dirty mirror and re-marks the model dirty (the panel never lost its text or its edited marker). To know the answer, closes are sent as `UICommand.tracked(command, CommandOutcome)`: `ApplicationCoordinator.perform` (the extracted command switch) finishes the outcome `true` after the command ran and `false` when it threw (still reported to the person), `enqueueTracked` fails it when the queue refuses the command, and the command loop fails a tracked command it drops at shutdown so the close queue cannot hang. `MainWindowHost.drainFileCloses` awaits `next.proceed().wait()`, finishes the settlement, and only then dequeues, so a repeat of the gesture is still folded and a following close sees the settled state. All five close gestures (surface, other surfaces, pane, workspace, window) use the tracked send. A snapshot poll that sees the tab gone while Don't Save is in flight retires the panel quietly (`isDiscardPending`, no orphan prompt); `applyDiscard` on an already retired panel only gives its hold back. Quit still applies the discard before returning because termination cannot be refused by the core and the next `applicationShouldTerminate` must see no dirty panel. |
+
+Tests added or changed:
+
+- `tools/native-fixtures/file-close-resolution.swift` (UNAVAILABLE here, needs `xcrun swiftc`): the
+  scripted panel now counts applies and releases. New scenarios run the real `FileCloseResolution`,
+  `FileCloseSettlement` and `CommandOutcome`: a settled Don't Save leaves the text, edited marker and a
+  held gate on the panel with the model clean, and polls start no observation until the core answers;
+  a refused close releases (never applies), re-marks the model dirty and the next close prompts
+  again; the first resolution wins (a late success after a refusal cannot drop text, a late refusal
+  after a success cannot revive it, no hold underflow); two overlapping closes of one panel, first
+  refused and second accepted, keep the hold counted; Save answers leave nothing pending; the outcome
+  returns the first result, a failed outcome, and a waiter suspended before the answer. The wait uses
+  `Task.yield()` until the waiter is registered, no sleeps.
+- `crates/native-bridge/tests/swift_file_contract.rs` is 20 tests (18 before; fmt'd). Structure pins,
+  not behaviour: `pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last` was
+  renamed `pin_close_resolution_aborts_without_discarding_and_defers_dont_save_to_the_core` and now
+  pins that `resolve` returns nil on its three abort paths, never calls `applyDiscard`, and that the
+  settlement's `finish` guards once, then applies on success and releases on failure.
+  New `pin_a_close_the_core_refuses_gives_the_discard_back` (queue order: resolve, `wait()`, `finish`,
+  `removeFirst`; five tracked close gestures each with a `.failed()` fallback; `enqueueTracked`,
+  `perform` and the loop's shutdown path finish the outcome; retire-before-orphan; quit applies; the
+  fixture scenarios and the smoke's refuse-then-accept step exist) and
+  `pin_the_smoke_expects_a_plain_open_of_a_valid_file_to_succeed`. The dirty-mirror pin for
+  `applyDiscard` now accounts for the closed-panel guard. None of these runs the Swift; they keep the
+  fixture-covered structure from drifting.
+- `apps/macos/Sources/FilePanelSmoke.swift`: step 10 resolves the two-file Don't Save, checks the
+  panels still hold text and the model stays clean across four polls, finishes the settlement with
+  `false` and checks both panels keep their text and the model is dirty again, then resolves and
+  finishes with `true` and checks both are clean. Steps 8 and the burst already exercise the real
+  accepted close through `drainFileCloses` (no orphan panel, tab gone). Not run (no macOS).
+
+Mutation check on Linux for the structure pins (applied, run, restored): making `resolve` call
+`discards.forEach { $0.applyDiscard() }` before returning fails the renamed pin; dropping the
+`settlement.finish(closeSucceeded: closed)` line in `drainFileCloses` fails the new refusal pin. No
+mutation of the Swift behaviour is caught on Linux, by design.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test result
+lines, 567 passed, 0 failed, 2 ignored, the previous 565 plus 2 added; clippy `-D warnings`; license
+inventory; `scripts/check-native-bridge`). Determinism of the changed binary (`swift_file_contract`,
+20 tests, one real Desktop test among them): 20 serial runs, 0 failures; then 5 rounds of 8 copies
+each started together and waited for individually, beside 24 busy-loop CPU hogs, 40 runs, 0 failures;
+60 of 60 logs carry `20 passed; 0 failed`.
+
+Deviations and limits:
+
+- A close whose core command succeeds applies the discard even if the snapshot has not yet shown the
+  tab gone. The core reported the close done, so the tab is gone by contract; if a poll retires the
+  panel first, `isDiscardPending` closes it quietly, and the settlement later only gives back its hold.
+- If the application stops before a queued tracked close runs, the close fails and the discard is
+  released, then the app is closing anyway. A tracked close queued behind the first dropped one at
+  shutdown is not individually failed; its waiter ends with the process.
+- Text typed into a panel after its Don't Save answer and before the core closes the tab is dropped
+  with the tab (unchanged limit from fix rounds 2 and 4, now a slightly longer window).
+- The refusal path is exercised in the smoke by finishing the settlement with `false`, not by making
+  the core genuinely refuse a close (a pending terminal restore cannot be staged there). The
+  `perform` / `enqueueTracked` plumbing that produces that `false` is pinned and unrun.
+- Still UNAVAILABLE: `scripts/check-file-close-resolution`, `scripts/check-file-editor-model`,
+  `scripts/check-macos-sources` (type-checks the new `CommandOutcome` / `FileCloseSettlement` /
+  `indirect case tracked` and the extracted `perform`), `scripts/build-macos-dev`,
+  `scripts/check-macos-app`, the `file_panel` smoke and every hosted macOS workflow. New unconfirmed
+  Swift points for CI: `indirect case tracked(UICommand, CommandOutcome)` in a `Sendable` enum (a
+  `@MainActor` final class is Sendable), the `any FileCloseParticipant` array built from `[Panel]`,
+  `?? .failed()` on an optional `CommandOutcome`, and `withCheckedContinuation` storing its
+  continuation in a `@MainActor` property.

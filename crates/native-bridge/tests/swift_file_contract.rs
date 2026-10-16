@@ -597,17 +597,17 @@ fn at(haystack: &str, needle: &str) -> usize {
 // There is no Swift toolchain here, so the pins below can only check the exact statements the
 // decision is made of. They do not run it.
 #[test]
-fn pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
+fn pin_close_resolution_aborts_without_discarding_and_defers_dont_save_to_the_core() {
     let resolution = swift("FileCloseResolution.swift");
     let body = between(
         &resolution,
         "static func resolve<Panel: FileCloseParticipant>(",
         "\n    }\n}",
     );
-    let cancel = at(body, "case .cancel: return false");
+    let cancel = at(body, "case .cancel: return nil");
     let save = at(
         body,
-        "case .save: guard await panel.performSave(force: false) else { return false }",
+        "case .save: guard await panel.performSave(force: false) else { return nil }",
     );
     let discard = at(body, "case .discard: discards.append(panel)");
     let hold = at(body, "discards.forEach { $0.holdDiscard() }");
@@ -617,7 +617,7 @@ fn pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
     );
     let release = at(body, "discards.forEach { $0.releaseDiscard() }");
     let resume = at(body, "panels.forEach { $0.resumeDirtyMirror() }");
-    let apply = at(body, "discards.forEach { $0.applyDiscard() }");
+    let settlement = at(body, "return FileCloseSettlement(discards: discards)");
     assert!(
         cancel < hold && save < hold && discard < hold,
         "every Cancel and Save decision must be made before any panel is held"
@@ -631,33 +631,52 @@ fn pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
         "nothing may be awaited between holding the discarded panels and the first settle"
     );
     assert!(
-        settle < release && release < resume,
+        settle < release && release < resume && resume < settlement,
         "a failed settle must lift the holds, then resume the mirrors"
     );
-    let failure_arm = &body[settle..apply];
     assert!(
-        failure_arm.contains("return false"),
+        body[settle..settlement].contains("return nil"),
         "a failed settle must abort the close"
     );
-    assert!(
-        resume < apply && apply == body.rfind("discards.forEach").unwrap(),
-        "Don't Save is applied last, after every panel settled"
-    );
     assert_eq!(
-        body.matches("return false").count(),
+        body.matches("return nil").count(),
         3,
         "exactly three abort paths: Cancel, a failed Save and a failed settle"
     );
+    assert!(
+        !body.contains("applyDiscard") && !body.contains("discardLocalChanges"),
+        "resolve must never drop the text itself: only the core closing the tab may (data loss otherwise)"
+    );
     assert_eq!(
-        body.matches("holdDiscard()").count()
-            + body.matches("applyDiscard()").count()
-            + body.matches("releaseDiscard()").count(),
-        3,
-        "holds are taken, applied and released in one place each"
+        body.matches("holdDiscard()").count() + body.matches("releaseDiscard()").count(),
+        2,
+        "holds are taken and released in one place each"
     );
     assert!(
-        !body[..hold].contains("Discard()") && !body.contains("discardLocalChanges"),
+        !body[..hold].contains("Discard()"),
         "the per-panel decision loop must not touch dirty tracking"
+    );
+    // The settlement is the only place a Don't Save is applied or given back, and only once.
+    let finish = between(
+        &resolution,
+        "func finish(closeSucceeded: Bool) {",
+        "\n    }\n}",
+    );
+    let guard_once = at(finish, "guard !isResolved else { return }");
+    let mark = at(finish, "isResolved = true");
+    let apply = at(
+        finish,
+        "if closeSucceeded { discards.forEach { $0.applyDiscard() } }",
+    );
+    let give_back = at(finish, "else { discards.forEach { $0.releaseDiscard() } }");
+    assert!(
+        guard_once < mark && mark < apply && apply < give_back,
+        "the first outcome decides: apply on success, release on failure"
+    );
+    assert_eq!(
+        resolution.matches("$0.applyDiscard()").count(),
+        1,
+        "applyDiscard is called from the settlement only"
     );
     // The coordinator only asks the question; it cannot reorder the decision.
     let coordinator = swift("ApplicationCoordinator.swift");
@@ -667,11 +686,13 @@ fn pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
         "/// Quit: resolves every dirty panel",
     );
     assert!(
-        asks.contains("FileCloseResolution.resolve(filePanels(for: surfaces))")
+        asks.contains("-> FileCloseSettlement?")
+            && asks.contains("FileCloseResolution.resolve(filePanels(for: surfaces))")
             && !asks.contains("discardLocalChanges")
+            && !asks.contains("applyDiscard")
             && !asks.contains("settleDirtyMirror")
             && !asks.contains("performSave"),
-        "the coordinator must delegate the decision to FileCloseResolution"
+        "the coordinator must delegate the decision to FileCloseResolution and hand back its pending settlement"
     );
     assert!(
         swift("FilePanelView.swift").contains("extension FilePanelView: FileCloseParticipant {}"),
@@ -684,6 +705,174 @@ fn pin_close_resolution_aborts_without_discarding_and_applies_dont_save_last() {
             && smoke.contains("both models stay clean after Don't Save"),
         "the smoke must cancel after a Don't Save and settle two Don't Saves together"
     );
+}
+
+#[test]
+fn pin_a_close_the_core_refuses_gives_the_discard_back() {
+    let app = swift("App.swift");
+    let drain = between(
+        &app,
+        "private func drainFileCloses",
+        "func refreshFileChrome",
+    );
+    let resolve = at(drain, "host.coordinator.resolveFilesBeforeClose(");
+    let wait = at(drain, "await next.proceed().wait()");
+    let finish = at(drain, "settlement.finish(closeSucceeded: closed)");
+    let remove = at(drain, "pendingFileCloses.removeFirst()");
+    assert!(
+        resolve < wait && wait < finish && finish < remove,
+        "the queue must wait for the core's answer to the close, finish the settlement with it, and only then dequeue"
+    );
+    assert!(
+        !drain.contains("if allowed"),
+        "the close must not be fire-and-forget: its outcome decides the discard"
+    );
+    assert!(
+        app.contains("let proceed: @MainActor () -> CommandOutcome"),
+        "a close request must hand the queue the core's outcome"
+    );
+    // Every close the queue sends is tracked; a plain enqueue would discard on an unknown result.
+    let sends = app.matches("self?.sendClose(").count();
+    assert_eq!(
+        sends, 5,
+        "all five close gestures must send a tracked close"
+    );
+    assert_eq!(
+        app.matches("?? .failed()").count(),
+        5,
+        "a released host fails the close instead of dropping it"
+    );
+    for gesture in [
+        "close_surface",
+        "close_other_surfaces",
+        "close_pane",
+        "close_workspace",
+        ".window(\"close\"",
+    ] {
+        let line = app
+            .lines()
+            .find(|l| l.contains("closeAfterFileCheck(") && l.contains(gesture))
+            .unwrap_or_else(|| panic!("no closeAfterFileCheck call for {gesture}"));
+        assert!(
+            line.contains("self?.sendClose("),
+            "{gesture} must use the tracked close: {line}"
+        );
+    }
+    let coordinator = swift("ApplicationCoordinator.swift");
+    let tracked = between(
+        &coordinator,
+        "func enqueueTracked(",
+        "func refreshFileChrome",
+    );
+    assert!(
+        tracked.contains("enqueue(.tracked(command, outcome))")
+            && tracked.contains("outcome.finish(false)"),
+        "a command the queue refuses must fail its outcome: {tracked}"
+    );
+    let perform = between(
+        &coordinator,
+        "case .tracked(let inner, let outcome):",
+        "\n    }\n",
+    );
+    let ran = at(perform, "try await perform(inner)");
+    let ok = at(perform, "outcome.finish(true)");
+    let failed = at(perform, "outcome.finish(false)");
+    let rethrow = at(perform, "throw error");
+    assert!(
+        ran < ok && ok < failed && failed < rethrow,
+        "a tracked command reports success only after it ran and still surfaces its error: {perform}"
+    );
+    let command_loop = between(
+        &coordinator,
+        "commandTask = Task { [weak self, stream] in",
+        "try await self.perform(command)",
+    );
+    assert!(
+        command_loop
+            .contains("if case .tracked(_, let outcome) = command { outcome.finish(false) }"),
+        "a close the application stopped before running must fail, not hang the close queue"
+    );
+    // A tab that the core closed is retired without an orphan prompt; any other unsaved panel is
+    // never dropped silently.
+    let retire = between(
+        &coordinator,
+        "private func retireFilePanel(",
+        "private func presentNextOrphan",
+    );
+    let pending = at(retire, "if view.isDiscardPending {");
+    let orphan = at(retire, "} else if view.hasUnsavedChanges {");
+    assert!(
+        pending < orphan && retire[pending..orphan].contains("view.close()"),
+        "a panel whose Don't Save is in flight is closed quietly; others with text are orphaned: {retire}"
+    );
+    // Quitting cannot be refused by the core, so it applies the discard before terminating.
+    let quit = between(
+        &coordinator,
+        "func resolveFilesBeforeQuit() async -> Bool {",
+        "/// Sends a close command",
+    );
+    assert!(
+        quit.contains("settlement.finish(closeSucceeded: true)"),
+        "quit must apply the discard before the application asks again: {quit}"
+    );
+    // The panel keeps its text through the pending period and only drops it on apply.
+    let panel = swift("FilePanelView.swift");
+    let apply = between(&panel, "func applyDiscard() {", "\n    }\n");
+    assert!(
+        at(apply, "guard !closed else {") < at(apply, "discardLocalChanges()"),
+        "a panel retired with its tab must not touch dirty tracking again: {apply}"
+    );
+    assert!(
+        panel.contains("var isDiscardPending: Bool { dirtyGate.isDiscarding }"),
+        "the coordinator reads the pending state from the gate"
+    );
+    // The fixture and the smoke exercise the refused close.
+    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/native-fixtures/file-close-resolution.swift");
+    let fixture = std::fs::read_to_string(fixture_path).unwrap();
+    for scenario in [
+        "the text must stay on the panel until the core has closed the tab",
+        "a refused close must mark the model dirty again so a later close still asks",
+        "a refused close must leave the edited text and its marker",
+        "a late success must not drop text after a refusal",
+        "the first refusal must not lift the second close's hold",
+    ] {
+        assert!(
+            fixture.contains(scenario),
+            "fixture scenario `{scenario}` is missing"
+        );
+    }
+    let smoke = swift("FilePanelSmoke.swift");
+    assert!(
+        smoke.contains("pending.finish(closeSucceeded: false)")
+            && smoke.contains("a refused close discarded the edits or left the discard held")
+            && smoke.contains("applied.finish(closeSucceeded: true)"),
+        "the smoke must refuse one close and accept the next"
+    );
+}
+
+#[test]
+fn pin_the_smoke_expects_a_plain_open_of_a_valid_file_to_succeed() {
+    // `cli(args, expectFailure)`: only the batch that includes the missing path and the folder is
+    // expected to exit non-zero. A single valid, not-yet-open file succeeds (exit 0), so passing
+    // `true` there makes `nativeCLI` throw and the whole smoke fail before its later stages.
+    let smoke = swift("FilePanelSmoke.swift");
+    let opens: Vec<&str> = smoke
+        .lines()
+        .filter(|l| l.contains("cli([\"open\""))
+        .collect();
+    assert!(
+        opens.len() >= 3,
+        "the smoke opens files through the real CLI"
+    );
+    for line in opens {
+        let expects_failure = line.contains("], true))");
+        let mixed = line.contains("f.missing");
+        assert_eq!(
+            expects_failure, mixed,
+            "only the mixed batch may expect a failing exit status: {line}"
+        );
+    }
 }
 
 #[test]
@@ -767,9 +956,9 @@ fn pin_a_panel_being_discarded_cannot_restart_the_dirty_mirror() {
             && !hold.contains("await"),
         "holdDiscard must hold and cancel synchronously"
     );
-    let apply = between(&panel, "func applyDiscard() {", "}\n");
+    let apply = between(&panel, "func applyDiscard() {", "\n    }\n");
     assert!(
-        at(apply, "discardLocalChanges()") < at(apply, "dirtyGate.release()")
+        at(apply, "discardLocalChanges()") < apply.rfind("dirtyGate.release()").unwrap()
             && !apply.contains("await"),
         "the hold is lifted only after the text is dropped from dirty tracking, in one synchronous step"
     );

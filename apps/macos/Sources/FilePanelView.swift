@@ -973,23 +973,33 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     }
 
     /// Don't Save was chosen for this panel and is about to be settled. From here until
-    /// `releaseDiscard` or `applyDiscard` no snapshot may start a dirty-mirror observation: the
-    /// model is told the text is clean while the panel still holds it. Synchronous, so it can run
-    /// before the first awaited step of a multi-panel close.
+    /// `releaseDiscard` or `applyDiscard` (both wait for the core's answer to the close) no
+    /// snapshot may start a dirty-mirror observation: the model is told the text is clean while
+    /// the panel still holds it. Synchronous, so it can run before the first awaited step of a
+    /// multi-panel close.
     func holdDiscard() {
         dirtyGate.hold()
         observeTask?.cancel()
     }
 
-    /// The close was aborted: nothing is discarded, so the mirror resumes and re-marks the model.
+    /// True from Don't Save being settled until the core has closed the tab or refused to.
+    var isDiscardPending: Bool { dirtyGate.isDiscarding }
+
+    /// The close did not happen (the core refused it, or it never reached the core): nothing is
+    /// discarded, so the mirror resumes and re-marks the model dirty.
     func releaseDiscard() {
         dirtyGate.release()
         reconcileDirty()
     }
 
-    /// The close can no longer be aborted. The text is dropped from dirty tracking and the hold is
-    /// lifted in the same synchronous step, so no snapshot sees one without the other.
+    /// The core has closed the tab. The text is dropped from dirty tracking and the hold is
+    /// lifted in the same synchronous step, so no snapshot sees one without the other. A panel
+    /// that was already retired with its tab only gives its hold back.
     func applyDiscard() {
+        guard !closed else {
+            dirtyGate.release()
+            return
+        }
         discardLocalChanges()
         dirtyGate.release()
         reconcileDirty()

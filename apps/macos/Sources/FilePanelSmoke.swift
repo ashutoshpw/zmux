@@ -252,7 +252,7 @@ enum FilePanelSmoke {
         let partial = CloseScript([.discard, .cancel])
         coordinator.fileCloseChoiceOverride = { _ in partial.next() }
         let aborted = await coordinator.resolveFilesBeforeClose([markdownID, reopenedID], window: window)
-        guard !aborted, partial.count == 2 else { throw failure("a cancelled multi-file close was not refused") }
+        guard aborted == nil, partial.count == 2 else { throw failure("a cancelled multi-file close was not refused") }
         _ = try await cli(["status"], false)
         guard markdownPanel.isDirty, markdownPanel.hasUnsavedChanges, sourceEditor.string == "M" + markdownSource,
               reopened.isDirty, reopened.editorTextView.string == "Repsilon\n" else {
@@ -263,13 +263,41 @@ enum FilePanelSmoke {
         }
         // Two Don't Save answers settled together: a snapshot poll that lands between the first
         // file's settle and the end of the close must not mark the first file dirty in the model
-        // again, or the core would refuse the close of a panel that already reads as clean.
+        // again, or the core would refuse the close of a panel that already reads as clean. While
+        // the core has not answered the close, the panels still hold their text.
         let both = CloseScript([.discard, .discard])
         coordinator.fileCloseChoiceOverride = { _ in both.next() }
-        let applied = await coordinator.resolveFilesBeforeClose([markdownID, reopenedID], window: window)
+        let firstSettlement = await coordinator.resolveFilesBeforeClose([markdownID, reopenedID], window: window)
         coordinator.fileCloseChoiceOverride = nil
-        guard applied, both.count == 2 else { throw failure("a two-file Don't Save close was refused") }
-        guard !markdownPanel.isDirty, !reopened.isDirty else { throw failure("Don't Save left a panel dirty") }
+        guard let pending = firstSettlement, both.count == 2 else { throw failure("a two-file Don't Save close was refused") }
+        guard markdownPanel.isDirty, reopened.isDirty, markdownPanel.hasUnsavedChanges, reopened.hasUnsavedChanges else {
+            throw failure("Don't Save dropped the edits before the core closed the tab")
+        }
+        for _ in 0..<4 {
+            _ = try await cli(["status"], false)
+            guard modelDirty(coordinator, markdownID) == false, modelDirty(coordinator, reopenedID) == false,
+                  markdownPanel.isDirty, reopened.isDirty else {
+                throw failure("a snapshot poll re-marked a pending Don't Save dirty in the model, or the panel lost its edits")
+            }
+        }
+        // The core refused (or never received) the close: both panels keep their edits, and the
+        // model guards them again so a later close or quit still asks.
+        pending.finish(closeSucceeded: false)
+        guard markdownPanel.isDirty, reopened.isDirty, sourceEditor.string == "M" + markdownSource,
+              reopened.editorTextView.string == "Repsilon\n", !markdownPanel.isDiscardPending, !reopened.isDiscardPending else {
+            throw failure("a refused close discarded the edits or left the discard held")
+        }
+        try await wait("both panels guarded in the model after a refused close") {
+            modelDirty(coordinator, markdownID) == true && modelDirty(coordinator, reopenedID) == true
+        }
+        // The same answers, now with the core closing the tab: only then are the edits dropped.
+        let repeated = CloseScript([.discard, .discard])
+        coordinator.fileCloseChoiceOverride = { _ in repeated.next() }
+        let secondSettlement = await coordinator.resolveFilesBeforeClose([markdownID, reopenedID], window: window)
+        coordinator.fileCloseChoiceOverride = nil
+        guard let applied = secondSettlement, repeated.count == 2 else { throw failure("a repeated two-file Don't Save close was refused") }
+        applied.finish(closeSucceeded: true)
+        guard !markdownPanel.isDirty, !reopened.isDirty else { throw failure("Don't Save left a panel dirty after the core closed") }
         for _ in 0..<4 {
             _ = try await cli(["status"], false)
             guard modelDirty(coordinator, markdownID) == false, modelDirty(coordinator, reopenedID) == false,
@@ -306,7 +334,7 @@ enum FilePanelSmoke {
 
         // 11. A banner Reload replaces the buffer, so with unsaved text it asks first, exactly like
         // File > Reload from Disk: Cancel changes nothing, Discard adopts the disk version.
-        _ = try openResult(try await cli(["open", f.text], true))
+        _ = try openResult(try await cli(["open", f.text], false))
         var secondID: UInt64?
         try await wait("text tab opened again and loaded") {
             guard let snapshot = coordinator.snapshot,
