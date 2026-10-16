@@ -1455,3 +1455,173 @@ fn edit_normalization_and_scroll_bounds_are_owned_before_native_dispatch() {
     }
     assert_eq!(model.snapshot(), before);
 }
+
+#[test]
+fn obsolete_detach_requires_exact_retirement_and_preserves_live_hosts() {
+    let (mut model, retired) = fixture();
+    let pane = model.snapshot().workspaces[0].focused_pane;
+    model
+        .apply(Action::CreateBrowser {
+            profile_id: None,
+            focus: false,
+            pane_id: pane,
+            url: "https://example.org/other".into(),
+        })
+        .unwrap();
+    let live = model.snapshot().workspaces[0].root.panes()[0]
+        .surfaces
+        .iter()
+        .find(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser && s.id != retired)
+        .unwrap()
+        .id;
+    let now = Instant::now();
+    let mut runtime = BrowserRuntime::default();
+    let owner = attach(&mut runtime, &model, retired, now);
+    let live_owner = attach(&mut runtime, &model, live, now);
+    model
+        .apply(Action::CloseSurface {
+            surface_id: retired,
+        })
+        .unwrap();
+    runtime.reconcile(&model.snapshot(), now);
+    // Repeated exact retirement receipts remain rejected without application.
+    for _ in 0..2 {
+        let error = runtime
+            .host_event(
+                &model.snapshot(),
+                BrowserHostEvent::Detach {
+                    owner: owner.clone(),
+                },
+                now,
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), "obsolete_browser_event");
+    }
+    for field in [
+        "host",
+        "document",
+        "navigation",
+        "epoch",
+        "namespace",
+        "surface",
+    ] {
+        let mut forged = owner.clone();
+        match field {
+            "host" => forged.host_id = live_owner.host_id,
+            "document" => forged.document_generation += 1,
+            "navigation" => forged.model_navigation += 1,
+            "epoch" => forged.epoch = Uuid::new_v4(),
+            "namespace" => forged.identity_namespace = Uuid::new_v4(),
+            _ => forged.surface_id = SurfaceId(u64::MAX),
+        }
+        assert!(matches!(
+            runtime.host_event(
+                &model.snapshot(),
+                BrowserHostEvent::Detach { owner: forged },
+                now
+            ),
+            Err(BrowserError::StaleOwner)
+        ));
+    }
+    let id = runtime
+        .admit(&model.snapshot(), request(&model, live, read()), now)
+        .unwrap();
+    let batch = runtime.drain_requests(&model.snapshot(), now);
+    assert_eq!(batch.requests[0].operation_id, id);
+    assert_eq!(batch.requests[0].owner, live_owner);
+    runtime.reset("new epoch");
+    assert!(matches!(
+        runtime.host_event(&model.snapshot(), BrowserHostEvent::Detach { owner }, now),
+        Err(BrowserError::StaleOwner)
+    ));
+}
+
+#[test]
+fn obsolete_terminal_receipts_preserve_authoritative_outcomes_and_dispatch_guards() {
+    for action in [
+        read(),
+        BrowserAction::Zoom {
+            operation: BrowserZoom::Set { factor: 1.25 },
+        },
+    ] {
+        let (model, surface) = fixture();
+        let now = Instant::now();
+        let mut runtime = BrowserRuntime::default();
+        let owner = attach(&mut runtime, &model, surface, now);
+        let mut command = request(&model, surface, action);
+        command.timeout_ms = 10;
+        let id = runtime.admit(&model.snapshot(), command, now).unwrap();
+        let failure = || BrowserHostEvent::Fail {
+            operation_id: id,
+            owner: owner.clone(),
+            error: BrowserFailure {
+                code: "native_timeout".into(),
+                message: "late native receipt".into(),
+                outcome_unknown: true,
+            },
+        };
+        assert!(matches!(
+            runtime.host_event(&model.snapshot(), failure(), now),
+            Err(BrowserError::NotDispatched)
+        ));
+        runtime.drain_requests(&model.snapshot(), now);
+        let expired = now + Duration::from_millis(10);
+        runtime.reconcile(&model.snapshot(), expired);
+        let previous = serde_json::to_value(runtime.receipt(id).unwrap()).unwrap();
+        assert_eq!(previous["state"], "failed");
+        assert_eq!(previous["error"]["code"], "browser_timeout");
+        for event in [
+            failure(),
+            BrowserHostEvent::Complete {
+                operation_id: id,
+                owner: owner.clone(),
+                result: json!("late result"),
+            },
+        ] {
+            let error = runtime
+                .host_event(&model.snapshot(), event, expired)
+                .unwrap_err();
+            assert_eq!(error.code(), "obsolete_browser_event");
+            assert_eq!(
+                serde_json::to_value(runtime.receipt(id).unwrap()).unwrap(),
+                previous
+            );
+            assert!(
+                runtime
+                    .drain_requests(&model.snapshot(), expired)
+                    .requests
+                    .is_empty()
+            );
+        }
+        let mut foreign = owner.clone();
+        foreign.host_id = Uuid::new_v4();
+        assert!(matches!(
+            runtime.host_event(
+                &model.snapshot(),
+                BrowserHostEvent::Complete {
+                    operation_id: id,
+                    owner: foreign,
+                    result: json!(null)
+                },
+                expired
+            ),
+            Err(BrowserError::StaleOwner)
+        ));
+        assert!(matches!(
+            runtime.host_event(
+                &model.snapshot(),
+                BrowserHostEvent::Fail {
+                    operation_id: u64::MAX,
+                    owner,
+                    error: BrowserFailure {
+                        code: "unknown".into(),
+                        message: "unknown".into(),
+                        outcome_unknown: false
+                    }
+                },
+                expired
+            ),
+            Err(BrowserError::NotFound)
+        ));
+    }
+}

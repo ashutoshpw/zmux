@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [Native browser event dispositions](references/b02-browser-event-disposition.md) — exact retired owners and immutable late terminal receipts across runtime/ABI/Swift.
+
 - [Frontend input readiness](references/r03-input-readiness.md) — read-only two-condition client readiness and authenticated bounded channel proposal; independent of workload execution admission.
 
 - [Execution admission](references/r03-execution-admission.md) — reviewed pre-execution barrier design for fast-exiting workloads; isolated implementation underway.
