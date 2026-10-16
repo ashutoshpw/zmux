@@ -1,0 +1,37 @@
+name: Public WebKit profile lifecycle feasibility
+
+on:
+  push:
+    branches: [ci/browser-profile-lifecycle-probe]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: profile-lifecycle-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 8
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Probe public WebKit busy and removal callbacks in generated stores
+        env:
+          PROBE_OUTPUT: ${{ runner.temp }}/native-profile-lifecycle
+        run: python3 tools/native-profile-lifecycle/run.py
+      - name: Retain exact probe inputs, callbacks and owned cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: profile-lifecycle-probe-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-profile-lifecycle/receipt.json
+            ${{ runner.temp }}/native-profile-lifecycle/native-profile-lifecycle.json
+            ${{ runner.temp }}/native-profile-lifecycle/*.log
+            ${{ runner.temp }}/native-profile-lifecycle/*.zip
+            ${{ runner.temp }}/native-profile-lifecycle/source/
+          if-no-files-found: error
