@@ -25,6 +25,7 @@ mod bounded_command;
 mod browser;
 mod browser_download;
 mod buffers;
+mod hooks;
 mod inspection;
 mod local_multiplexer;
 mod local_zellij;
@@ -67,6 +68,7 @@ struct ClientOptions {
 }
 
 enum Parsed {
+    Hooks(hooks::Invocation),
     AgentMessages(agent_messages::Invocation),
     Buffers(buffers::Invocation),
     PullRequest(pull_request::Invocation),
@@ -106,6 +108,7 @@ fn main() -> ExitCode {
 fn run() -> Result<u8, Box<dyn Error>> {
     let (parsed, socket_override, timeout, password) = parse(env::args_os().skip(1).collect())?;
     match parsed {
+        Parsed::Hooks(invocation) => hooks::run(invocation, socket_override, timeout, password),
         Parsed::AgentMessages(invocation) => {
             let options = client_options(socket_override, timeout, password)?;
             println!(
@@ -280,6 +283,9 @@ fn parse(
     let tail = &args[(index + 1).min(args.len())..];
     if let Some(command @ ("set-buffer" | "list-buffers" | "paste-buffer")) = command {
         return Ok((buffers::parse(command, tail)?, socket, timeout, password));
+    }
+    if command == Some("hooks") {
+        return Ok((hooks::parse(tail)?, socket, timeout, password));
     }
     if command == Some("agent") {
         return Ok((agent_messages::parse(tail)?, socket, timeout, password));

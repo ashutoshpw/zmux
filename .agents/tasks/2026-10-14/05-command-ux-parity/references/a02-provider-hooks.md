@@ -335,3 +335,128 @@ was independently red for both mutations (`retained-mutation-red.log`); the fina
 worker carries the fresh/retained distinction so receipt retrieval never invalidates
 a newer handoff. Register now returns additive namespace/SessionId fields for exact
 adapter route comparison, without authenticating a provider.
+
+## Session-local adapter implementation and evidence boundary
+
+`hooks claude install --directory DIR --provider ABSOLUTE_PATH`, `status`,
+`uninstall`, and `run --directory DIR --surface UUID -- [PROVIDER_ARGS]` implement
+the explicit local adapter. DIR is a dedicated private owned plugin directory,
+not provider settings. No user/project/managed provider configuration is edited.
+Installation runs only `--version`, requires the exact `2.1.301 (Claude Code)`
+version string, and pins executable path/SHA256/device/inode/size/mtime. Files above
+512 MiB and group/other-writable executable files are rejected. Run preserves the
+supported interactive argument subset, respects literal `--`, and rejects headless,
+resume, arbitrary settings/plugins and unknown modes before starting the provider.
+
+The wrapper must itself descend from the full live process identity of the exact
+Desktop-published local terminal child, not merely name an ambient or explicit
+surface UUID. It pins namespace/surface/SessionId, uses a fresh explicit provider
+session UUID, retains the provider Child, and binds exec-form hook peers by kernel
+UID/PID, full image and exact provider parent identity. It compares Register's
+namespace/SessionId result and rechecks current route before exposure. Consumer
+bearer stays in wrapper memory; all ambient ZMUX variables, including any control
+password, are removed from the provider environment except the private event
+socket route. Sender/message bodies are serialized as data; no shell, PTY input,
+model callback or continuation carries them.
+
+This is **local process correlation**, not cryptographic provider authentication.
+A same-user provider tool deliberately exec'ing the hook client can imitate local
+hook input. The adapter remains opt-in and always reports
+`provider_authenticated=false`; no such event, output flush, successful exit or
+transport report establishes acceptance, Ack or ReadTurn.
+
+Official source evidence, fetched 2026-10-16:
+<https://code.claude.com/docs/en/hooks#exec-form-and-shell-form> says, “A command
+hook runs as exec form when `args` is set” and “spawns it directly with `args` as
+the argument vector. There is no shell”. The command-hook fields table describes
+`command` with `args` as “the executable to spawn directly”. This establishes the
+exec/argv/no-shell configuration contract. It does **not** establish the exact
+installed provider's OS parent PID topology; the adapter's strict direct-parent
+requirement remains an actual-provider compatibility gate.
+
+The same reference's [common input fields](https://code.claude.com/docs/en/hooks#common-input-fields)
+describes `prompt_id` as “UUID identifying the user prompt currently being
+processed” and “Absent until the first user input”. The adapter requires a nonnil
+UUID prompt ID and matching owned root session; missing, malformed, subagent and
+wrong-root events no-op. These docs establish the intended schema, not execution
+by installed Claude Code 2.1.301. The actual-provider run remains unperformed.
+
+The synchronous hook client has one original 2.7s budget within the plugin's 3s
+provider timeout and original 10s message lease. IPC frames and input are bounded
+at 64 KiB. Every hook-triggered Claim/Poll/retirement uses the original remaining
+budget. Failure before output returns `{}`/exit0. Once stdout may have begun, no
+fallback bytes are appended; uncertainty stays durable. A final local transport
+report can set `submission_reported_at` without changing `delivery_unknown`.
+
+Stop never claims, continues or calls Ack/ReadTurn. Typed PermissionRequest,
+Elicitation, AskUserQuestion and EnterPlanMode set a conservative hold; launch plan
+mode also starts held. No generic completion clears it. This slice supports only
+a fresh explicit launch to resume; no explicit held-resume command or proof-based
+resolution protocol is implemented. Draft terminal bytes and human input remain
+outside this path.
+
+Idle wrappers wait in listener poll, with a 250ms cap on child/disable publication
+checks (at most 4 per second while idle), not 100Hz file verification. Full owned
+artifact, executable metadata and route checks run immediately for hook exposure.
+Idle checks never Claim or launch a provider turn. Active uninstall publishes
+admission-disabled state before cleanup. A wrapper observes it, retires its exact
+capability and retains the provider Child; a shared generation lease retains plugin
+files until provider exit. Only verified owned device/inode/content files are
+removed. Changed/symlink/inode replacements and unknown staging files remain.
+Interrupted uninstall tolerates absent previously owned files while revalidating
+every surviving file. No recursive removal or provider termination occurs.
+
+Helper SIGKILL, machine loss or exhausted retirement can leave stale registration
+evidence. `recipient_has_agent` means retained registration, not live provider,
+liveness, acceptance or automatic-wake evidence. No process is adopted or killed
+to clean it up. Unknown attempts survive independently. The native inbox owner
+has been notified of this projection boundary.
+
+Installation retains at most 8 owned generations and refuses further updates at
+capacity. Publication is atomic after complete generation validation; pre-publication
+failure leaves the previous publication and potentially unreferenced staging files.
+Tests preserve unknown staging evidence and exercise interrupted unlink recovery;
+power-loss/filesystem fault injection was not performed. Safe rollback uses a new
+private directory after reviewing retained artifacts and never restores old tokens
+or unconfirmed attempts.
+
+The synthetic native C provider prints the version fixture string and drives the
+public hook CLI inside the actual Desktop shell/PTY. It is **not Claude Code** and
+makes no model call. Tests cover root registration, missing/wrong/subagent input,
+UUID prompt replay, complete bounded context, permission/question/plan holds,
+Stop no-op, idle queued messages, ambient credential stripping, active uninstall,
+provider retention, exact retirement and final artifact cleanup. Linux idle samples
+recorded 0 to 1 CPU ticks over 750ms windows; this is a small synthetic sample, not a
+native/macOS or production resource benchmark.
+
+Remaining gate: one separately authorized actual Claude Code 2.1.301 interactive
+run must establish real plugin loading, event schema/UUIDs, process ancestry and
+complete context observation. Existing hooks may veto processing. No documented
+independent stable interactive acceptance receipt exists, so even that observed
+context cannot by itself enable Ack/ReadTurn. Native inbox execution, Codex,
+headless/resume, wake and full A02 parity remain separate/open.
+
+Event-retirement failure preserves the exact in-memory capability and original
+Retire request UUID while disabling context admissions. Standalone shutdown may
+retry only that idempotent retirement. One stored 2s cleanup deadline is shared by
+explicit cleanup and Drop, so neither renews a failed cleanup budget. The actual
+journal-lock regression was red when the event path consumed the capability on
+failure; after repair, release during the bounded shutdown reserve retires the
+consumer without Register, message replay or a renewed event deadline. The
+synthetic fixture exercises permission, question, plan-entry, plan-launch and this
+retirement-failure case through the public CLI and actual terminal owner.
+
+Final adapter validation: `scripts/check` passed sequentially with
+394 tests in 72 groups, 1 existing ignored subprocess entrypoint, strict workspace
+Clippy, notices and C ABI checks. Primary boundaries: 25 message worker tests,
+five CLI/socket/PTY message tests (one exercises all five synthetic provider
+scenarios), and six plugin/ingress CLI tests. Log:
+`/tmp/zmux-a02-adapter-scripts-check-r2.log`.
+
+Red evidence: `/tmp/zmux-a02-plugin-ingress-red.log` and
+`/tmp/zmux-a02-adapter-pty-red.log` fail on the missing hook command;
+`/tmp/zmux-a02-uninstall-identity-red.log` fails on replacement-inode deletion and
+interrupted cleanup; `/tmp/zmux-a02-adapter-retirement-red.log` fails on losing the
+capability after actual journal-lock failure. Independent synthetic execution and
+idle samples: `/tmp/zmux-a02-adapter-pty-green-final.log`. No actual Claude turn,
+provider installation into user configuration, or native UI run occurred.

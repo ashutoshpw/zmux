@@ -40,12 +40,20 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "hooks",
+        "agents",
+        false,
+        false,
+        "hooks claude install --directory DIR --provider PATH | status|uninstall --directory DIR | run --directory DIR --surface UUID -- [PROVIDER_ARGS]",
+        "Opt-in session-only local Claude Code2.1.301 plugin. Install writes only private zmux-owned artifacts and never edits provider settings. Run requires the exact Desktop terminal process/session and an interactive terminal. A synchronous root UserPromptSubmit may prepare one bounded context; unknown submission stays queued and never authorizes Ack/ReadTurn. Permission/question/plan holds persist until a fresh explicit launch. No idle wake, Codex, headless, resume or actual-provider acceptance claim. A local hook process binding is not provider authentication. Uninstall disables admissions and retains changed or active artifacts."
+    ),
+    command!(
         "agent",
         "agents",
         false,
         true,
         "agent message|msg TARGET [--from LABEL] [--thread UUID] [--request-id UUID] [--] TEXT|- | agent message --reply-to UUID TEXT|- | agent inbox [--surface HANDLE] [--state queued|delivered|read|failed] [--limit 1..32] [--cursor N] [--mark-read] | agent messages [on|off|status] [TARGET] [--workspace|--global] | agent retry --surface UUID --accept-duplicate MESSAGE_ID...",
-        "Durable local agent messages, replies, inbox and opt-out settings. Bodies preserve UTF-8 whitespace and are limited to 4096 bytes; - reads bounded stdin. Message/msg is an alias. Recipient targets and caller sender attribution resolve independently. A successful send means saved in the local journal, not delivered to a provider; no terminal input is injected. --mark-read marks only the exact listed message IDs. Results are JSON. One client deadline covers persistence and selected-ID marking; timeout never retries a send. Unknown provider submissions remain queued and are excluded from automatic delivery. Explicit retry preserves the original IDs and may duplicate a prior submission. Provider hooks/wake, native Agent Inbox and full reference size/output parity remain unavailable."
+        "Durable local agent messages, replies, inbox and opt-out settings. Bodies preserve UTF-8 whitespace and are limited to 4096 bytes; - reads bounded stdin. Message/msg is an alias. Recipient targets and caller sender attribution resolve independently. A successful send means saved in the local journal, not delivered to a provider; no terminal input is injected. --mark-read marks only the exact listed message IDs. Results are JSON. One client deadline covers persistence and selected-ID marking; timeout never retries a send. Unknown provider submissions remain queued and are excluded from automatic delivery. Explicit retry preserves the original IDs and may duplicate a prior submission. The opt-in local Claude hook wrapper reports unconfirmed submission only. Provider wake, native Agent Inbox and full reference size/output parity remain unavailable."
     ),
     command!(
         "set-buffer",
