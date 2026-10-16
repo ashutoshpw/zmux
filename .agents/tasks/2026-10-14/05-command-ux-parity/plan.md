@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [A02 provider hooks](references/a02-provider-hooks.md) — approved bounded Claude adapter, durable unknown-exposure suppression and explicit retry; actual-provider gate remains open.
+
 - [V2 execution runtime](references/r03-runtime-execution-admission.md) — pre-execution durable binding and admitted child lifetime; integrated after Linux and retained Darwin owner checks.
 - [V8 history contract](references/r03-v8-history.md) — explicit admitted-lifetime persistence, legacy compatibility and native decoder/presentation evidence.
 

@@ -406,3 +406,70 @@ fn read_only_socket_can_list_but_cannot_obtain_consumer_capabilities_or_mutate()
     }
     assert!(!root.0.join("terminal-input-counter").exists());
 }
+
+#[test]
+fn explicit_cli_retry_preserves_unknown_message_identity_without_terminal_input() {
+    use desktop_runtime::agent_messages::{MessageAction, ProviderExposure};
+    let root = Directory::new();
+    let app = App::open(&root.0);
+    let snapshot = desktop_snapshot::read(&app.desktop);
+    let surface = snapshot
+        .model
+        .object_uuid(
+            TargetKind::Surface,
+            snapshot.model.workspaces[0].root.panes()[0].surfaces[0]
+                .id
+                .0,
+        )
+        .to_string();
+    let sent = app.call(&["agent", "message", &surface, "retry me once"]);
+    let (_, registered) = agent_operation(
+        &app,
+        MessageAction::Register {
+            surface: surface.clone(),
+            provider: "synthetic-provider".into(),
+            interactive: true,
+        },
+    );
+    let make_claim = || MessageAction::Claim {
+        surface: surface.clone(),
+        consumer: registered["consumer"].as_str().unwrap().parse().unwrap(),
+        token: registered["token"].as_str().unwrap().into(),
+        max_messages: Some(1),
+        exposure: Some(ProviderExposure {
+            provider: "claude".into(),
+            provider_version: "2.1.301".into(),
+            runtime_id: uuid::Uuid::new_v4(),
+            adapter_generation: uuid::Uuid::new_v4(),
+            session_id: "synthetic-root".into(),
+            prompt_id: uuid::Uuid::new_v4().to_string(),
+        }),
+    };
+    let (_, exposed) = agent_operation(&app, make_claim());
+    let message_id = sent["message"]["id"].as_str().unwrap();
+    assert_eq!(exposed["messages"][0]["id"], message_id);
+    let denied = app.output(&["agent", "retry", "--surface", &surface, message_id]);
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("--accept-duplicate"));
+    let result = app.call(&[
+        "agent",
+        "retry",
+        "--surface",
+        &surface,
+        "--accept-duplicate",
+        message_id,
+    ]);
+    assert_eq!(result["possible_duplicate"], true);
+    let (_, retried) = agent_operation(&app, make_claim());
+    assert_eq!(retried["messages"][0]["id"], message_id);
+    assert_eq!(
+        retried["messages"][0]["delivery_attempts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let inbox = app.call(&["agent", "inbox", "--surface", &surface]);
+    assert_eq!(inbox["messages"][0]["state"], "queued");
+    assert!(!root.0.join("terminal-input-counter").exists());
+}

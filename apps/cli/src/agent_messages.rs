@@ -182,6 +182,42 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 cursor,
             }
         }
+        "retry" => {
+            let mut surface = None;
+            let mut ids = Vec::new();
+            let mut accept_duplicate = false;
+            let mut index = 1;
+            while index < args.len() {
+                match args[index].as_str() {
+                    "--surface" => {
+                        let v = value(&args, &mut index)?;
+                        once(&mut surface, v, "--surface")?;
+                    }
+                    "--accept-duplicate" if !accept_duplicate => accept_duplicate = true,
+                    "--request-id" => {
+                        let v = uuid(&value(&args, &mut index)?)?;
+                        once(&mut request_id, v, "--request-id")?;
+                    }
+                    "--json" => (),
+                    v if !v.starts_with('-') => ids.push(uuid(v)?),
+                    _ => {
+                        return Err(CliError(
+                            "retry accepts --surface UUID --accept-duplicate and exact message IDs"
+                                .into(),
+                        ));
+                    }
+                }
+                index += 1;
+            }
+            if !accept_duplicate || ids.is_empty() || ids.len() > 8 {
+                return Err(CliError("retry requires 1–8 IDs and --accept-duplicate: an earlier unconfirmed submission may already have arrived".into()));
+            }
+            MessageAction::Retry {
+                surface: surface.ok_or_else(|| CliError("retry requires --surface".into()))?,
+                ids,
+                accept_duplicate,
+            }
+        }
         "messages" => {
             let mut index = 1;
             let enabled = match args.get(index).map(String::as_str) {
@@ -243,7 +279,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     }))
 }
 
-fn completed(
+pub(super) fn completed(
     options: &ClientOptions,
     deadline: Instant,
     message: MessageRequest,
