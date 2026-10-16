@@ -182,6 +182,12 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
     @objc private func refreshClicked(_ sender: Any?) { refresh() }
     @objc private func firstClicked(_ sender: Any?) { page = nil; refresh() }
     @objc private func nextClicked(_ sender: Any?) { guard let cursor else { return }; page = cursor; refresh() }
+    // Pending mutations own their status and recovery UUID. Background list
+    // reads and editor validation may report feedback only while idle.
+    private func idleFeedback(_ message: String) {
+        guard pending == nil else { return }
+        feedback.stringValue = message
+    }
     private func refresh() {
         guard activeOrigin, !refreshing else { return }
         refreshing = true; controls()
@@ -197,7 +203,7 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
                 if !messages.contains(where: { $0.id == self.selected }) { self.selected = messages.first?.id }
                 self.renderRows(); self.renderSelection()
                 if self.pending == nil, self.lastSettingRefresh.map({ ContinuousClock.now - $0 >= .seconds(1) }) ?? true { self.refreshSettings() }
-            } catch { if !Task.isCancelled { self.feedback.stringValue = "Refresh failed: " + error.localizedDescription } }
+            } catch { if !Task.isCancelled { self.idleFeedback("Refresh failed: " + error.localizedDescription) } }
         }
     }
     private func renderRows() {
@@ -257,7 +263,7 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         guard textView === reply, let replacementString else { return true }
         let proposed = (textView.string as NSString).replacingCharacters(in: affectedCharRange, with: replacementString)
-        guard proposed.utf8.count <= 4096 else { feedback.stringValue = "Replies are limited to 4096 UTF-8 bytes."; return false }
+        guard proposed.utf8.count <= 4096 else { idleFeedback("Replies are limited to 4096 UTF-8 bytes."); return false }
         return true
     }
     @objc private func sendReply(_ sender: Any?) {
@@ -365,18 +371,18 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
             guard result.durability == "saved", let saved = result.message, saved.requestId == operation.request.requestId,
                   saved.replyTo == parent.id, saved.threadId == parent.threadId, saved.recipient.surfaceId == parent.sender.surfaceId,
                   saved.body.utf8.elementsEqual(draft.body.utf8) else {
-                uncertain = true; feedback.stringValue = "The saved reply could not be verified. Check Status."; controls(); return
+                uncertain = true; feedback.stringValue = "The saved reply could not be verified. Check Status: " + operation.request.requestId.uuidString.lowercased(); controls(); return
             }
             drafts.clear(key, ifRevision: draft.revision)
             if draftKey == key, drafts.value(key).body.isEmpty, reply.string.utf8.elementsEqual(draft.body.utf8) { reply.string = "" }
             feedback.stringValue = "Saved · \(saved.status)"
         case .read:
-            guard result.messages != nil else { uncertain = true; feedback.stringValue = "Read result unconfirmed. Check Status."; return }
+            guard result.messages != nil else { uncertain = true; feedback.stringValue = "Read result unconfirmed. Check Status: " + operation.request.requestId.uuidString.lowercased(); return }
             feedback.stringValue = "Saved exact message read state."
         case .settings(let context):
             guard result.scope == context.scope, result.owner == context.target.flatMap({ UUID(uuidString: $0) }),
                   result.enabled != nil, result.effectiveEnabled != nil else {
-                uncertain = true; feedback.stringValue = "Receiving settings unconfirmed. Check Status."; return
+                uncertain = true; feedback.stringValue = "Receiving settings unconfirmed. Check Status: " + operation.request.requestId.uuidString.lowercased(); return
             }
             if context.scope == settingScope && context.target == settingTarget && context.generation == settingGeneration {
                 showSetting(result)
