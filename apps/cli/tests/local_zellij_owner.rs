@@ -22,6 +22,8 @@ use zmux_session_runtime::child::{ExitObservation, observe_child, process_identi
 mod native;
 #[path = "local_zellij_owner/observer.rs"]
 mod observer;
+#[path = "local_zellij_owner/prebound.rs"]
+mod prebound;
 
 // Compare fresh tcgetattr snapshots. Darwin keeps PENDIN as kernel input state
 // after noncanonical -> canonical TCSANOW, even when the saved flags omit it.
