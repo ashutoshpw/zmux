@@ -110,6 +110,13 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private var pdfPageCount = 0
 
     private let editor = FileEditorTextView(frame: .zero)
+    /// This file's own undo history. Without it every editor shares the window's manager, so Cmd-Z in
+    /// one tab could undo a hidden tab's unsaved text and any load would erase every tab's history.
+    private let undoHistory: UndoManager = {
+        let manager = UndoManager()
+        manager.levelsOfUndo = 200
+        return manager
+    }()
     private let editorScroll = NSScrollView()
     private let markdownView = NSTextView(frame: .zero)
     private let markdownScroll = NSScrollView()
@@ -197,6 +204,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         editor.isRichText = false
         editor.importsGraphics = false
         editor.allowsUndo = true
+        editor.delegate = self
         editor.usesFontPanel = false
         // Typing must never alter bytes: no smart quotes, dashes, replacements or link detection.
         editor.isAutomaticQuoteSubstitutionEnabled = false
@@ -603,7 +611,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         let selection = editor.selectedRange()
         editor.string = text
         editor.setSelectedRange(NSRange(location: min(selection.location, text.utf16.count), length: 0))
-        editor.undoManager?.removeAllActions()
+        undoHistory.removeAllActions()
         suppressEdits = false
         dirtyChanged(model.adopt(text: text))
         isLoaded = true
@@ -1110,6 +1118,11 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             if let failure = rendered.failure { self.setBanner(.message(failure)) }
             self.refreshHeader()
         }
+    }
+
+    /// Only the editor has an undoable buffer; it answers with this panel's own history.
+    func undoManager(for view: NSTextView) -> UndoManager? {
+        view === editor ? undoHistory : nil
     }
 
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {

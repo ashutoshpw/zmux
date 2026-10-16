@@ -5,6 +5,9 @@ import Foundation
 /// service caps; Rust remains the authority and rejects anything larger.
 enum FileHostLimits {
     static let maxHeader = 16_384
+    /// A reply header is bounded only by the whole reply buffer (`MAX_RESPONSE_BYTES` of the native
+    /// bridge), not by the request cap: an open reply echoes every path and a surface receipt per item.
+    static let maxReplyHeader = 8_388_608
     static let maxFrame = 16_384
     static let maxSaveBody = 2_097_152
     static let maxSaveFrame = 16_384 + 2_097_152
@@ -164,7 +167,7 @@ struct FileHostReply: Sendable {
             throw FileHostFailure(code: "invalid_reply", message: "The file channel reply was truncated", outcomeUnknown: true)
         }
         let headerLength = (Int(bytes[0]) << 24) | (Int(bytes[1]) << 16) | (Int(bytes[2]) << 8) | Int(bytes[3])
-        guard headerLength <= FileHostLimits.maxHeader, 4 + headerLength <= bytes.count else {
+        guard headerLength <= FileHostLimits.maxReplyHeader, 4 + headerLength <= bytes.count else {
             throw FileHostFailure(code: "invalid_reply", message: "The file channel reply header is malformed", outcomeUnknown: true)
         }
         let decoder = JSONDecoder()

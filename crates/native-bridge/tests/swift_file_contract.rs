@@ -400,6 +400,132 @@ fn swift_frame_limits_and_operations_match_the_rust_channel() {
     );
 }
 
+/// The raw reply frame of one file-channel call: `(header_len, header, body)`.
+fn raw_call(desktop: u64, header: &Value) -> (usize, Value) {
+    let header = serde_json::to_vec(header).unwrap();
+    let mut frame = (header.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(&header);
+    // SAFETY: the request storage is live for the whole call.
+    let result = unsafe { zmux_desktop_file(desktop, frame.as_ptr(), frame.len()) };
+    assert_eq!(result.status, 0);
+    let reply = bytes_of(result.value);
+    let length = u32::from_be_bytes(reply[..4].try_into().unwrap()) as usize;
+    (
+        length,
+        serde_json::from_slice(&reply[4..4 + length]).unwrap(),
+    )
+}
+
+// A legal request (header within the 16 KiB request cap) can produce a reply header larger than
+// that cap, because each open item echoes its path plus a surface receipt. Swift must accept every
+// reply Rust can legally send, so its reply limit must exceed what the real export produces.
+#[test]
+fn swift_accepts_the_largest_legal_open_reply_header_the_real_rust_export_sends() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = TempDir::new();
+    let mut deep = dir.0.clone();
+    for _ in 0..3 {
+        deep.push("d".repeat(200));
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    let desktop = zmux_desktop_create();
+    assert_eq!(desktop.status, 0);
+    let desktop = desktop.value;
+    snapshot(desktop, |v| {
+        !v["model"]["workspaces"].as_array().unwrap().is_empty()
+    });
+    // Sixteen existing files at long paths; the request header stays within the request cap.
+    let mut items = Vec::new();
+    for i in 0..16 {
+        let path = deep.join(format!("open-{i:02}-{}.txt", "x".repeat(40)));
+        std::fs::write(&path, format!("file {i}\n")).unwrap();
+        items.push(json!({"kind":"path","value":path}));
+    }
+    let request = json!({"op":"open","items":items,"focus":true});
+    assert!(
+        serde_json::to_vec(&request).unwrap().len() <= file_channel::MAX_FILE_HEADER_BYTES,
+        "the probe request must itself be legal"
+    );
+    let (length, reply) = raw_call(desktop, &request);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["result"]["items"].as_array().unwrap().len(), 16);
+    assert!(
+        length > file_channel::MAX_FILE_HEADER_BYTES,
+        "the probe must produce a reply header past the request cap (got {length}); lengthen the paths"
+    );
+    let client = swift("FileHostClient.swift");
+    let limit = client
+        .lines()
+        .find(|l| l.contains("static let maxReplyHeader ="))
+        .expect("FileHostLimits.maxReplyHeader is missing")
+        .split('=')
+        .nth(1)
+        .unwrap()
+        .trim()
+        .replace('_', "")
+        .parse::<usize>()
+        .unwrap();
+    assert!(
+        length <= limit,
+        "Swift would reject a legal {length}-byte open reply header (limit {limit})"
+    );
+    let lib =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+    assert!(
+        lib.contains(&format!(
+            "const MAX_RESPONSE_BYTES: usize = {};",
+            "8_388_608"
+        )) && limit == 8_388_608,
+        "the reply header limit must equal the native bridge's whole-reply cap"
+    );
+    // The decode guard uses the reply limit, never the request limit.
+    let decode = between(
+        &client,
+        "static func decode(",
+        "let decoder = JSONDecoder()",
+    );
+    assert!(
+        decode.contains("headerLength <= FileHostLimits.maxReplyHeader")
+            && !decode.contains("FileHostLimits.maxHeader"),
+        "FileHostReply.decode must bound the reply header by maxReplyHeader: {decode}"
+    );
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
+}
+
+// Each file tab has its own undo history. AppKit gives every text view without a delegate answer
+// the window's single manager, which lets undo reach a hidden tab and lets any load erase every
+// tab's history. This pin cannot run AppKit; it keeps the per-panel manager wired.
+#[test]
+fn pin_every_file_editor_has_its_own_undo_history() {
+    let panel = swift("FilePanelView.swift");
+    for needed in [
+        "private let undoHistory: UndoManager",
+        "editor.delegate = self",
+        "func undoManager(for view: NSTextView) -> UndoManager?",
+        "view === editor ? undoHistory : nil",
+        "undoHistory.removeAllActions()",
+    ] {
+        assert!(panel.contains(needed), "missing `{needed}`");
+    }
+    assert!(
+        !panel.contains("editor.undoManager"),
+        "reading editor.undoManager would clear or use the window's shared manager if the delegate is lost"
+    );
+    let apply = between(&panel, "private func applyText(", "isLoaded = true");
+    assert!(
+        apply.contains("undoHistory.removeAllActions()"),
+        "a load clears this panel's history only: {apply}"
+    );
+    // Nothing else in the app may clear a shared manager from the file panel.
+    assert_eq!(
+        panel.matches("removeAllActions").count(),
+        1,
+        "only applyText clears an undo history, and only this panel's own"
+    );
+}
+
 #[test]
 fn every_browser_kind_test_in_the_swift_sources_is_audited() {
     // Each entry is a place that tests `kind == "browser"` / `!= "browser"`, with how it treats
