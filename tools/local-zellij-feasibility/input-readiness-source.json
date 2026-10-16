@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "source_commit": "23bb542548d517f7f20a7fdd14a943f1a610df37",
+  "source_archive_sha256": "d8738326a7b3f7b9eec6b9ae94c01acfb1b87f54598e1ef88adee9e94811d4f8",
+  "license": "MIT; original optional Zmux integration, upstream Zellij notices retained",
+  "capability_argument": "--zmux-input-readiness-protocol",
+  "inputs_sha256": {
+    "input-readiness-protocol.json": "6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4",
+    "input-readiness-reporter.rs": "eb8511de6efd085d87ecdbf092fb2c336b3fe6723ab0575ca8d56f6c567708f8",
+    "patches/0002-optional-input-readiness.patch": "5de516602dea459870746b3c945ff814e09d9b4e6c62938bfa2f767f07898946",
+    "produce-patched.py": "cce014d75f4ec4fa190db067ea230a36196822f82b5b712273db310f8f3d4ccc",
+    "input-readiness-owner.py": "0157be6228352e137223601c5f43eeec1b386696a05e7689be023bddae34375f",
+    "run.py": "7ff02fccfa2fa6db01157eb0f6ff7bf7275cca1c0235ccb7c132ad89df8f7f46",
+    "public_identity.c": "81bbf6615dabfafeca27a1047c0405920805d26cd74c3119b936c47f43bd3c73",
+    "pty_exec.c": "1e5e35935698b9b114a22ee01d2c90055fb470bbb2dd475b7081d8b62b37cb5c"
+  },
+  "upstream_files_sha256": {
+    "src/main.rs": "02d5530be391aee6a9493ae68ef047c133a0bade025527b38a39f9d59712292d",
+    "src/commands.rs": "a8488c90e0154917270ef15f933bb4f1048ff34b313b8ad517eaae1930045478",
+    "zellij-client/src/lib.rs": "02019b7371415cf05918fee5d56855c25f85cdc0c746b573226b92ee83882235",
+    "zellij-client/src/input_readiness.rs": "eb8511de6efd085d87ecdbf092fb2c336b3fe6723ab0575ca8d56f6c567708f8"
+  },
+  "dependency_changes": false,
+  "default_enabled": false,
+  "scope": "source producer/reporter/actual frontend controls only; no package, core/runtime, or native activation"
+}
