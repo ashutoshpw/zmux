@@ -3044,16 +3044,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
                 if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
-                        try await controller.sidebarGroupingSmoke(report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
-                        try await coordinator.shutdown(); exit(0)
+                        try self.writeSidebarLifecycle(report: report, complete: false)
+                        try await controller.sidebarGroupingSmoke(report: report)
+                        try await coordinator.shutdown()
+                        try self.writeSidebarLifecycle(report: report, complete: true)
+                        exit(0)
                     } catch {
                         FileHandle.standardError.write(Data("Native sidebar smoke failed: \(error)\n".utf8))
                         do {
                             let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                             try controller.captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-failure.png"))
                         } catch { FileHandle.standardError.write(Data("Sidebar failure image unavailable: \(error)\n".utf8)) }
-                        do { try await coordinator.shutdown() } catch { FileHandle.standardError.write(Data("Sidebar cleanup failed: \(error)\n".utf8)) }
+                        do {
+                            try await coordinator.shutdown()
+                            try self.writeSidebarLifecycle(report: report, complete: true)
+                        } catch { FileHandle.standardError.write(Data("Sidebar cleanup failed: \(error)\n".utf8)) }
                         exit(1)
                     }
                 }
@@ -3162,6 +3169,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 coordinator.requestApplicationTermination()
             }
         }
+    }
+
+    private func writeSidebarLifecycle(report: URL, complete: Bool) throws {
+        guard let nonce = ProcessInfo.processInfo.environment["ZMUX_SIDEBAR_NONCE"], UUID(uuidString: nonce) != nil,
+              let source = Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String, source.count == 40 else {
+            throw BridgeFailure(message: "Sidebar fixture is missing its launch identity")
+        }
+        let evidence: [String: Any] = ["app_pid": ProcessInfo.processInfo.processIdentifier, "nonce": nonce,
+            "source_sha": source, "physical_cleanup_complete": complete]
+        try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
+            .write(to: report.deletingLastPathComponent().appendingPathComponent("native-sidebar-lifecycle.json"), options: .atomic)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) { coordinator?.appActive(true) }
