@@ -5,6 +5,31 @@
 
 ## Active implementation
 
+- Combined mainf231186 checks pass395 tests/73groups/1existing ignored plus
+  strict Clippy, notices and both native ABI checks. Log:
+  /tmp/zmux-main-hooks-pointer-check-20261016.log. This validates integrated
+  adapter+pointer owner source; native/provider/full-product gates remain open.
+
+- A02 opt-in Claude adapter integrated locally as036e478 from reviewed718c896.
+  Exact ten source hashes verified. Isolated checks394/72groups/1existing ignored
+  plus Clippy/notices/both ABI pass. Real Desktop/PTY synthetic-provider tests
+  exercise holds, no idle claims, no PTY body input, uninstall and same-request
+  bounded retirement recovery. Actual-Claude acceptance remains unverified.
+- T01 semantic pointer worker integrated locally asb03f371/f231186 from
+  c53e150/1b6c0cd. Real raw-child unknown-command red and six mode scenarios green;
+  worker-authoritative encoding shares wheel reports. Isolated checks388/72groups/
+  1existing ignored pass; independent protocol/lifecycle review found no blocker.
+  Native event wiring and packaged pointer regression remain active separately.
+- Full main46422ef workflow38854903325 passes universal compile, then fails Save
+  dialog preflight because accessibility_trusted=false/post_event_access=false.
+  All physical owners joined. Raw log /tmp/zmux-main-46422ef-native-failure.log.
+  This repeats the known runner permission gate; no unchanged rerun requested.
+- Readiness producer38855036920 at45f4d9 passes fresh dependency/silent owner,
+  public consumer, package and archive controls. Exact retained bytes are under
+  review before admission or native startup activation. Native configuration
+  preparation70f5aa has52 source hashes independently verified, but no AppKit
+  or final-bundle acceptance yet. Cloud health3530 remains HTTP200/statusok.
+
 - Exact-main46422ef terminal-selection run38854903069 passes32 native clipboard
   cases, decoder and shared shutdown. Independently verified266 source hashes,
   archive/source plist/linked bridge and actual app/child identity. Foundation
