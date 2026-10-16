@@ -115,6 +115,36 @@ independently before a failed focus guard; clicks and Copy still require actual
 focus. No forced activation, fake focus, changed production view or relaxed oracle
 is part of this fixture repair.
 
+## Prepared production owner (not yet natively accepted)
+
+One `TerminalSelection` instance per TerminalView owns character/word/physical-row
+anchors, forward/reverse drag expansion, highlight bounds and extracted text.
+Copy and menu Select All use that same owner. Word lookup lazily creates a private
+NSTextView only when needed; idle views and typing do not allocate that helper.
+ASCII drawing runs expand into original grid cells; isolated Unicode runs retain
+their authoritative terminal spans, so combining/wide cells are never split.
+No Unicode width is guessed in Swift and no Rust/ABI/model/engine pin changes.
+
+Explicitly selected whitespace, including a partial same-row selection ending
+at the right grid edge, is preserved. Whole-row selection and physical row
+breaks omit right-edge grid padding; joining remains physical-row based because no
+soft-wrap continuation metadata exists. Existing geometry/history invalidation
+remains. Keyboard/history paths clear the same selection and request redraw.
+
+Prepared native green cases retain the original alpha regression, then add row
+selection/drag, forward/reverse character and word drags, styled-run word copying,
+wide/combining/emoji cell spans, interior/right-edge spaces and real menu Select
+All. Actual public AppKit observations from1f3d492 supply independent literal dot,
+repeated-space, underscore and slash word cases. The expanded fixture waits for
+actual requested grid size to match the PTY viewport and records bounds/grid
+dimensions. After the unchanged alpha regression event, exact cell centers come
+from the existing public NSTextInputClient cursor rectangle and actual viewport
+cursor indices, not copied font metrics or a test-only geometry seam. Expected
+text comes from fixed child literals; UTF8 comparison rejects canonical Unicode
+normalization changes. This source is unpublished until an
+intended focused native baseline red is retained; source review and actual green
+compilation/execution are still required. No Linux port of this AppKit algorithm
+or fake native metric test substitutes for those gates.
 
 ## LaunchServices admission reassessment
 
@@ -144,3 +174,21 @@ AppKit/Rust/Desktop/storage startup; CLI help is offline. Thus an unexpected
 instance cannot run the selection fixture, write its report or open a persistent
 Desktop. Its returned PID fails admission and is never adopted or signalled.
 Native activation remains a hosted gate until the exact frozen source executes.
+
+Independent review accepted the exact LaunchServices fixture v2 freeze without
+findings, receipt SHA256
+`aefe07fe119ba8181d4d238fcab9596dfc8caf421713e1ab45519000f5fd240f`.
+Diagnostic commit6b52949 preserves baseline TerminalView. Manual isolated
+selection run38833749334 obtained the intended baseline red: actual exact-self
+activationPID14137 equals appPID14137; active/visible/key/responder are alltrue.
+The original alpha event and actual Command-C menu Copy leave the clipboard
+sentinel, expectedalpha. Buildexit0/nativeexit1, no timeout. All224 retained
+source copies match Git6b52949; archive SHA/source plist and actual child14192
+PPID/nonce match. Artifact12018706906 ZIP SHA256
+`4948e99d6c9d3c93c9bdace437ac77077cd791b54ce98442393b9a79edc00343`.
+Independent native red review SHA256
+`cf6e9ac4fce17087be4125e9ea30579ce7dce10bb64c9cda3f132124e074626c`.
+`scripts/check` passed on the frozen fixture-only diagnostic worktree; the actual
+compiled CLI offline help also returned0 with an intentionally nonexistent
+socket. The production owner and expanded matrix still require actual native
+compilation, same-case green and successful shared shutdown before acceptance.
