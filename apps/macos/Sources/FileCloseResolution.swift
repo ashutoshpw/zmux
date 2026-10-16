@@ -107,6 +107,11 @@ final class FileCloseSettlement {
     /// Panels whose Don't Save is waiting for the core.
     var pendingDiscardCount: Int { isResolved ? 0 : discards.count }
 
+    /// Whether `panel`'s Don't Save answer is still waiting in this settlement.
+    func isDiscarding(_ panel: AnyObject) -> Bool {
+        !isResolved && discards.contains { $0 === panel }
+    }
+
     func finish(closeSucceeded: Bool) {
         guard !isResolved else { return }
         isResolved = true

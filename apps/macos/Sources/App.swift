@@ -3371,17 +3371,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if terminating { return .terminateLater }
         if coordinator.hasUnsavedFiles {
             // Unsaved file text is the one thing quitting cannot recover: ask before any shutdown
-            // work starts, and quit again only once every file was saved or knowingly discarded.
+            // work starts, and shut down only once every file was saved or knowingly discarded.
             guard !resolvingUnsavedFiles else { return .terminateCancel }
             resolvingUnsavedFiles = true
             Task {
-                let proceed = await coordinator.resolveFilesBeforeQuit()
+                let settlement = await coordinator.resolveFilesBeforeQuit()
                 self.resolvingUnsavedFiles = false
-                sender.reply(toApplicationShouldTerminate: false)
-                if proceed { coordinator.requestApplicationTermination() }
+                guard let settlement else {
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                // Don't Save is applied here, in the same synchronous step that starts the
+                // shutdown, and only if no panel took text after it was answered. Quitting
+                // through a deferred `terminate:` would leave a window in which the quit can be
+                // superseded while the panels already read as clean.
+                guard coordinator.commitQuit(settlement) else {
+                    sender.reply(toApplicationShouldTerminate: false)
+                    coordinator.requestApplicationTermination()
+                    return
+                }
+                self.beginTermination(sender, coordinator: coordinator)
             }
             return .terminateLater
         }
+        beginTermination(sender, coordinator: coordinator)
+        return .terminateLater
+    }
+
+    /// Starts the shared shutdown and replies to AppKit once it is done. Past this point the
+    /// application terminates whether or not the shutdown reports a clean result.
+    private func beginTermination(_ sender: NSApplication, coordinator: ApplicationCoordinator) {
         terminating = true
         WindowLifecycleSmoke.trace("application termination requested; before shared shutdown")
         Task {
@@ -3399,7 +3418,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             sender.reply(toApplicationShouldTerminate: true)
         }
-        return .terminateLater
     }
 }
 

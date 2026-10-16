@@ -166,7 +166,9 @@ actor NativeBridge {
     func workspaceGroup(_ command: WorkspaceGroupCommand) async throws {
         try await send(["command": "action", "action": ["action": "workspace_group", "command": command.payload]])
     }
-    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil, window: UInt64? = nil) async throws {
+    /// `acknowledged` waits for the executor's own result instead of queue acceptance, so a
+    /// refused command throws. Closes that discard unsaved text use it.
+    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil, window: UInt64? = nil, acknowledged: Bool = false) async throws {
         var action: [String: Any] = ["action": name]
         if let window { action["window_id"] = window }
         if let pane { action["pane_id"] = pane }
@@ -178,7 +180,7 @@ actor NativeBridge {
         if let closed { action["closed_id"] = closed }
         if let direction { action["direction"] = direction }
         if let focus { action["focus"] = focus }
-        try await send(["command": "action", "action": action])
+        try await send(["command": "action", "action": action], acknowledged: acknowledged)
     }
     func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?, profile: UUID? = nil) async throws {
         var action: [String: Any] = ["action": name, "url": url]
@@ -266,12 +268,12 @@ actor NativeBridge {
     func cancelBrowserDownload(_ record: BrowserDownloadRecord) async throws {
         try await send(["command": "downloads", "request": ["scope": ["surface": record.origin.surfaceUuid.uuidString.lowercased()], "action": ["operation": "cancel", "download_id": record.downloadId.uuidString.lowercased()]]])
     }
-    func window(_ operation: String, window: UInt64? = nil, focus: Bool? = nil) async throws {
+    func window(_ operation: String, window: UInt64? = nil, focus: Bool? = nil, acknowledged: Bool = false) async throws {
         var scope: [String: Any] = [:]
         if let window { scope["window"] = "window:" + String(window) }
         var action: [String: Any] = ["operation": operation]
         if let focus { action["focus"] = focus }
-        try await send(["command": "windows", "request": ["scope": scope, "action": action]])
+        try await send(["command": "windows", "request": ["scope": scope, "action": action]], acknowledged: acknowledged)
     }
     func windowEvent(_ event: NativeWindowEvent) async throws {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
@@ -571,24 +573,46 @@ actor NativeBridge {
         }
         handle = 0
     }
-    private func send(_ payload: [String: Any]) async throws {
+    private func send(_ payload: [String: Any], acknowledged: Bool = false) async throws {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
         requestId += 1
         let data = try JSONSerialization.data(withJSONObject: ["version": 1, "request_id": requestId, "payload": payload])
         for attempt in 0..<100 {
-            let result = data.withUnsafeBytes { bytes in
-                zmux_desktop_dispatch(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            let desktop = handle
+            let status: Int32
+            let body: Data
+            if acknowledged {
+                // Blocks for up to two seconds until the executor has run the command, so it runs
+                // on a detached worker: never on the main actor or this actor's executor.
+                (status, body) = try await Task.detached(priority: .userInitiated) {
+                    let result = data.withUnsafeBytes { bytes in
+                        zmux_desktop_dispatch_acknowledged(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                    }
+                    guard result.status == 0 else { return (result.status, Data()) }
+                    return (result.status, try Self.consume(result.value))
+                }.value
+            } else {
+                let result = data.withUnsafeBytes { bytes in
+                    zmux_desktop_dispatch(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                }
+                status = result.status
+                body = result.status == 0 ? try Self.consume(result.value) : Data()
             }
-            if result.status == -4 {
+            if status == -4 {
+                // Nothing ran: the queue was full. Safe to try again for both entry points.
                 if attempt == 99 { throw BridgeFailure(message: "Terminal is busy; input was not accepted") }
                 try await Task.sleep(for: .milliseconds(10))
                 continue
             }
-            guard result.status == 0 else { throw Self.failure(result.status, operation: "send \(payload["command"] as? String ?? "unknown") request=\(requestId)") }
-            let response = try JSONSerialization.jsonObject(with: Self.consume(result.value)) as? [String: Any]
+            guard status == 0 else { throw Self.failure(status, operation: "send \(payload["command"] as? String ?? "unknown") request=\(requestId)") }
+            let response = try JSONSerialization.jsonObject(with: body) as? [String: Any]
             guard response?["ok"] as? Bool == true else {
                 let error = response?["error"] as? [String: Any]
-                throw BridgeFailure(message: error?["message"] as? String ?? "Command rejected")
+                var message = error?["message"] as? String ?? "Command rejected"
+                if acknowledged, response?["outcome_unknown"] as? Bool == true {
+                    message += " (the outcome is unknown and the command was not replayed)"
+                }
+                throw BridgeFailure(message: message)
             }
             return
         }

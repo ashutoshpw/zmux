@@ -524,6 +524,62 @@ pub unsafe extern "C" fn zmux_desktop_dispatch(
     })
 }
 
+/// Execute one workspace action or window command and return the executor's own result for it.
+/// Unlike `zmux_desktop_dispatch`, whose `ok:true` means only that the command was queued, this
+/// replies `ok:true` once the executor ran the command and `ok:false` with its error when it
+/// refused it.
+///
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call. This call may
+/// block for up to two seconds and must run off the native UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_dispatch_acknowledged(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_REQUEST_BYTES || (request.is_null() && length != 0) {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = desktop(id)?;
+        // Reserve the response before enqueueing: CAPACITY means nothing ran.
+        let reservation = Reservation::new()?;
+        // SAFETY: same checked pointer/length and caller ownership contract as desktop dispatch.
+        let bytes = if length == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(request, length) }
+        };
+        let reply = match serde_json::from_slice::<DesktopRequest>(bytes) {
+            Err(error) => transfer_error_reply(error.to_string(), false),
+            Ok(request) if request.version != ABI_VERSION => {
+                transfer_error_reply("expected protocol version 1".into(), false)
+            }
+            Ok(request) => match desktop.execute_acknowledged(request) {
+                Ok(execution) => match execution.result {
+                    Ok(()) => json!({
+                        "version": ABI_VERSION,
+                        "ok": true,
+                        "revision": execution.revision,
+                    }),
+                    Err(error) => transfer_error_reply(error.to_string(), false),
+                },
+                // The queue was full, so nothing ran and the caller may retry.
+                Err(zmux_desktop_runtime::CommandExecutionError {
+                    error: DesktopError::QueueFull,
+                    ..
+                }) => return Err(BUSY),
+                Err(error) => transfer_error_reply(error.error.to_string(), error.outcome_unknown),
+            },
+        };
+        let response = serde_json::to_vec(&reply).unwrap_or_else(|_| {
+            br#"{"ok":false,"error":{"message":"response serialization failed"},"outcome_unknown":true}"#.to_vec()
+        });
+        reservation.publish(response)
+    })
+}
+
 /// Execute one session-bound native file transfer and return its worker acknowledgement.
 ///
 /// # Safety

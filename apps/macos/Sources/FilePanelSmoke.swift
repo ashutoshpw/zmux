@@ -291,6 +291,15 @@ enum FilePanelSmoke {
         try await wait("both panels guarded in the model after a refused close") {
             modelDirty(coordinator, markdownID) == true && modelDirty(coordinator, reopenedID) == true
         }
+        // A real refusal by the core, not a simulated one: the model guards the file again, so the
+        // core's own dirty guard refuses a close, and the tracked close must say so even though
+        // the command was queued and acknowledged.
+        let realRefusal = coordinator.enqueueTracked(.surface("close_surface", markdownID, nil, nil, nil))
+        let closedByCore = await realRefusal.wait()
+        guard !closedByCore, let afterRefusal = coordinator.snapshot, fileSurface(afterRefusal, markdownID) != nil,
+              markdownPanel.isDirty, markdownPanel.hasUnsavedChanges else {
+            throw failure("a close the core refused read as accepted, or the refused tab lost its text")
+        }
         // The same answers, now with the core closing the tab: only then are the edits dropped.
         let repeated = CloseScript([.discard, .discard])
         coordinator.fileCloseChoiceOverride = { _ in repeated.next() }
