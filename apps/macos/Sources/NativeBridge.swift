@@ -200,6 +200,24 @@ actor NativeBridge {
     func renameBrowserProfile(id: UUID, name: String) async throws -> BrowserProfileReceipt {
         try await mutateBrowserProfile(["operation": "rename", "profile": id.uuidString.lowercased(), "name": name])
     }
+    func reconcileBrowserProfileData(profile: UUID, intent: UUID) async throws {
+        let controller = profileLeaseEpoch
+        var receipt = try await BrowserProfileNativeClient.call(.init(operation: "request_reconcile", controller: controller, intent: intent, profile: profile), as: BrowserProfileNativeClient.Reconciliation.self)
+        let id = receipt.id
+        let deadline = ContinuousClock.now + .seconds(20)
+        while receipt.state == "pending", ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+            receipt = try await BrowserProfileNativeClient.call(.init(operation: "reconcile_status", controller: controller, id: id), as: BrowserProfileNativeClient.Reconciliation.self)
+            guard receipt.id == id, receipt.profile == profile, receipt.intent == intent else { throw BridgeFailure(message: "Original profile reconciliation receipt mismatch.") }
+        }
+        if receipt.state == "failed", receipt.originalPhase == "failed_partial" {
+            throw BrowserProfileNativeFailure(message: "Website data cleared; profile removal failed.", outcomeUnknown: false)
+        }
+        if receipt.state == "failed", receipt.originalPhase == "failed_before_clear" {
+            throw BrowserProfileNativeFailure(message: "Operation failed before website data was cleared.", outcomeUnknown: false)
+        }
+        guard receipt.state == "completed" else { throw BrowserProfileNativeFailure(message: receipt.error ?? "Original profile reconciliation \(id) remains pending; no WebKit effect was replayed.", outcomeUnknown: true) }
+    }
     func changeBrowserProfileData(id: UUID, delete: Bool) async throws -> BrowserProfileReceipt {
         try await mutateBrowserProfile(["operation": delete ? "delete" : "clear", "profile": id.uuidString.lowercased()])
     }

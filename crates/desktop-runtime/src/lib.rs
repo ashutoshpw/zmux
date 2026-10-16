@@ -643,6 +643,29 @@ impl Desktop {
             .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
     }
 
+    pub fn profile_reconcile(
+        &self,
+        profile: uuid::Uuid,
+        intent: uuid::Uuid,
+    ) -> Result<profile_native::ReconcileReceipt, DesktopError> {
+        self.shared
+            .profile_native
+            .as_ref()
+            .ok_or(profiles::ProfileError::NativeUnavailable)?
+            .request_reconcile(profile, intent)
+            .map_err(|e| DesktopError::Failure(e.to_string()))
+    }
+    pub fn profile_reconcile_status(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<profile_native::ReconcileReceipt, DesktopError> {
+        self.shared
+            .profile_native
+            .as_ref()
+            .ok_or(profiles::ProfileError::NativeUnavailable)?
+            .reconciliation_status(id)
+            .map_err(|e| DesktopError::Failure(e.to_string()))
+    }
     /// Read-only original intent lookup on the control worker, never core/UI.
     pub fn profile_intent_status(
         &self,

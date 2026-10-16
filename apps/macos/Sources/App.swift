@@ -925,6 +925,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 try await bridge.createBrowserProfile(name: name)
             }, rename: { id, name in
                 try await bridge.renameBrowserProfile(id: id, name: name)
+            }, reconcile: { profile, intent in
+                try await bridge.reconcileBrowserProfileData(profile: profile, intent: intent)
             }, changeData: { id, delete in
                 try await bridge.changeBrowserProfileData(id: id, delete: delete)
             }, open: { [weak self] profile in
