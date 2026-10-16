@@ -70,11 +70,12 @@ def verify_report(result, owned, source, nonce, root, native, executable):
         raise RuntimeError('Native inbox did not observe distinct real window/message/PTY owners')
     for row in children:
         observed = native.document(root / ('child-' + str(row['pid']) + '.json'), maximum=2048)
-        if (any(observed[key] != value for key, value in row.items() if key != 'sequence')
+        if (any(observed[key] != value for key, value in row.items() if key not in ('sequence', 'workspace', 'surface'))
+                or any(uuid.UUID(observed[key]) != uuid.UUID(row[key]) for key in ('workspace', 'surface'))
                 or observed['sequence'] < row['sequence'] or row['parentPID'] != owned['pid']
                 or row['nonce'] != nonce or row['inputBytes'] != 0):
             raise RuntimeError('Independent native inbox PTY input/identity differs')
-    if result['checks'][:3] != PREREQUISITES:
+    if result.get('activationPID') != owned['pid'] or result['checks'][:3] != PREREQUISITES:
         raise RuntimeError('Native inbox behavioral prerequisites did not pass')
 
 
