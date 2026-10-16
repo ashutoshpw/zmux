@@ -821,3 +821,37 @@ The first public core regression compiled and failed for the intended missing
 log `/tmp/zmux-t03-groups-domain-red.log`. The test checks existing-object
 preservation, contiguous canonical order, idempotent allocation, atomic refusal
 of a split group, anchor promotion and non-destructive ungrouping.
+
+### Group domain/persistence cohort verified
+
+The core owner now has bounded nonempty group records and shared lifecycle/order
+mutations. All normal actions reconcile closed/moved members before commit;
+ordinary single/bulk order planning also refuses a split group or changed live
+anchor during preview. A focused provisional-reopen case exposed the separate
+failed-launch rollback path, which now shares the same membership reconciliation.
+Its intended red and final green are retained at
+`/tmp/zmux-t03-groups-restore-rollback-red.log` and
+`/tmp/zmux-t03-groups-domain-green.log`. An initial fixture used the intentionally
+nil standalone-core namespace while asserting session export; it was corrected
+to inject the same nonzero namespace required by the production persistence owner.
+
+Session version 9 requires explicit group rows (including an empty array). The
+version 1–8 readers require this new field to be absent and migrate to no groups.
+Validation rejects empty, noncontiguous, duplicated, cross-window, colliding-ID
+and duplicate external-identity group data. Existing legacy test constructors now
+omit the future field when deriving older-version fixtures, keeping their actual
+older wire contracts rather than weakening validation. New native rendering has
+not been added; the existing model version 6 receives additive group metadata.
+
+The real filesystem/PTY test groups and collapses existing workspaces, proves
+all four Session IDs/PIDs and focus remain unchanged, saves exact group bytes,
+shuts down and reopens the actual persistent Desktop. Logical group/window/UUID
+namespace identity survives; runtime Session IDs are fresh. Focused evidence:
+`/tmp/zmux-t03-groups-persistence-green.log`.
+
+Full `scripts/check` passed 400 tests in 74 groups, one existing ignored subprocess
+entrypoint, strict Clippy, notices and both C ABI gates. Final log:
+`/tmp/zmux-t03-groups-domain-check-final.log`. The prior full run found a legacy
+fixture still carrying the new field, then the next run passed tests but requested
+an equivalent collapsed conditional in Clippy; both were repaired. Public CLI,
+shared group selector/request delivery and native presentation remain pending.
