@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Reassessment after native run `38907593402` at `f712e5e`: minimized restoration
+  passes, but the new close-all scenario incorrectly assumes menu-bar-only mode.
+  The existing shared contract intentionally saves/quits on final close. Keep its
+  tests/policy and verify actual app hide/Show with unchanged status/child identity
+  instead. Show now explicitly unhides. Receipt `hidden_window_recovery` replaces
+  the incorrect claim; background recovery after final close remains unfinished.
+  N03 records source evidence and why this is a fixture-contract correction.
+  Full local `scripts/check` passes (`/tmp/zmux-status-menu-hidden-window-check.log`).
+
 - Run `38906067122` at `84c13ad` passes the earlier preview point and reaches the
   minimized-window check. Show chose the sibling that became key after minimizing
   the target. Native minimization history now restores the most recently minimized

@@ -410,6 +410,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             return
         }
         host.installMenus()
+        NSApp.unhide(nil)
         if host.window.isMiniaturized { host.window.deminiaturize(nil) }
         host.window.makeKeyAndOrderFront(nil)
         NSApp.activate()

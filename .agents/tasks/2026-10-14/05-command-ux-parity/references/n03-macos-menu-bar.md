@@ -95,8 +95,8 @@ full cmux parity or authorizes describing a new artifact that way.
 by `ApplicationCoordinator` after startup and removed before shared shutdown.
 Its menu exposes recent previews, Show zmux, Show Notifications, Jump to Latest
 Unread, Mark All Read, Clear All, Cloud Account, desktop-notification permission,
-Keep Mac Awake and normal application Quit. Show zmux restores minimized windows
-and requests a new window through the existing owner when all windows are closed.
+Keep Mac Awake and normal application Quit. Show zmux restores minimized/hidden
+live windows through the existing owner without starting a second Desktop.
 Keep-awake uses an owned IOKit assertion and releases it on toggle/shutdown.
 
 The menu reads the complete application snapshot across windows. Rendering updates
@@ -140,3 +140,25 @@ minimization history and restores the most recently minimized live host first.
 AppKit delegate callbacks reconcile this presentation state; close/restore/shutdown
 remove stale identities. The same minimized-window and last-window assertions
 remain required. Failed-run physical app/socket cleanup and PID absence pass.
+
+## Lifecycle reassessment after the third native run
+
+Run `38907593402` at `f712e5e` passes the minimized-window point and reaches the
+new close-all scenario. Its final close is a `terminate` request, so normal shared
+shutdown removes the control socket while the CLI is still observing its receipt.
+This is the retained regular-mode contract, not evidence that a background app
+should have zero windows: `workspace-core/src/windows.rs` rejects deleting the final
+window, `desktop-runtime/tests/windows.rs` requires preservation of the pre-close
+layout/process until termination, and T03 explicitly requires save/quit on final
+close. The frozen reference has a separate explicit menu-bar-only preference;
+that preference remains unfinished here.
+
+The new fixture incorrectly assumed menu-bar-only semantics. Reassessed after
+three native failures, it now exercises actual `NSApp.hide`/Show recovery, requiring
+the same status item and original child identities. Show explicitly unhides the
+application. The receipt is named `hidden_window_recovery`; it does not claim
+last-window background recovery. Existing last-close/save/quit tests remain
+unchanged, and final status-item/IOKit cleanup remains required. No regular-mode
+window policy is changed, no failing product regression is disabled, and no
+menu-bar-only implementation is claimed. Physical cleanup/PID absence passed
+on the failed run; the corrected native journey still needs hosted acceptance.
