@@ -72,6 +72,13 @@ pub enum ControlCommand {
     BrowserProfiles {
         action: crate::profiles::ProfileCommand,
     },
+    BrowserProfileReconcile {
+        profile: uuid::Uuid,
+        intent: uuid::Uuid,
+    },
+    BrowserProfileReconcileStatus {
+        id: uuid::Uuid,
+    },
     BrowserProfileIntentStatus {
         profile: uuid::Uuid,
         intent: uuid::Uuid,
@@ -692,6 +699,17 @@ fn dispatch(
             request.request_id,
             Command::Profiles { action },
         ),
+        ControlCommand::BrowserProfileReconcile { profile, intent } => {
+            let _guard = admission.check().map_err(|e| (e.code(), e.to_string()))?;
+            desktop
+                .profile_reconcile(profile, intent)
+                .map(|v| json!(v))
+                .map_err(desktop_error)
+        }
+        ControlCommand::BrowserProfileReconcileStatus { id } => desktop
+            .profile_reconcile_status(id)
+            .map(|v| json!(v))
+            .map_err(desktop_error),
         ControlCommand::BrowserProfileIntentStatus { profile, intent } => desktop
             .profile_intent_status(profile, intent)
             .map(|v| json!(v))

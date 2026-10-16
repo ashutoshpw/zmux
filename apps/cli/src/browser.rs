@@ -34,6 +34,10 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             ["profiles", action @ ("clear" | "delete"), profile] => Ok(Parsed::BrowserProfile(ControlCommand::BrowserProfiles {
                 action: if *action == "clear" { zmux_desktop_runtime::profiles::ProfileCommand::Clear { profile: (*profile).into() } } else { zmux_desktop_runtime::profiles::ProfileCommand::Delete { profile: (*profile).into() } },
             })),
+            ["profiles", "reconcile", profile, intent] => Ok(Parsed::BrowserProfile(ControlCommand::BrowserProfileReconcile {
+                profile: profile.parse().map_err(|_| CliError("profile reconciliation requires original profile UUID".into()))?,
+                intent: intent.parse().map_err(|_| CliError("profile reconciliation requires original intent UUID".into()))?,
+            })),
             ["profiles", "status", profile, intent] => Ok(Parsed::App(ControlCommand::BrowserProfileIntentStatus {
                 profile: profile.parse().map_err(|_| CliError("profile status requires the original profile UUID".into()))?,
                 intent: intent.parse().map_err(|_| CliError("profile status requires the original intent UUID".into()))?,
@@ -781,6 +785,9 @@ pub(super) fn run_profile(
     options: &ClientOptions,
     command: ControlCommand,
 ) -> Result<serde_json::Value, CliError> {
+    if matches!(&command, ControlCommand::BrowserProfileReconcile { .. }) {
+        return run_reconcile(options, command);
+    }
     let deadline = Instant::now() + options.timeout;
     let mut receipt = response_result(request(&remaining(options, deadline, None)?, command)?)?;
     let id = receipt["operation_id"]
@@ -842,6 +849,49 @@ pub(super) fn run_profile(
                 operation_id: Some(id),
                 epoch: Some(owner),
             },
+        )?)?;
+    }
+}
+
+fn run_reconcile(
+    options: &ClientOptions,
+    command: ControlCommand,
+) -> Result<serde_json::Value, CliError> {
+    let deadline = Instant::now() + options.timeout;
+    let mut receipt = response_result(request(options, command)?)?;
+    let id: uuid::Uuid = receipt["id"]
+        .as_str()
+        .ok_or_else(|| CliError("profile reconciliation receipt missing ID".into()))?
+        .parse()
+        .map_err(|_| CliError("invalid profile reconciliation ID".into()))?;
+    loop {
+        if receipt["id"].as_str() != Some(id.to_string().as_str()) {
+            return Err(CliError(
+                "mismatched original profile reconciliation receipt".into(),
+            ));
+        }
+        match receipt["state"].as_str() {
+            Some("completed") => return Ok(receipt),
+            Some("failed") => {
+                return Err(CliError(
+                    receipt["error"]
+                        .as_str()
+                        .unwrap_or("original profile reconciliation failed; quarantine remains")
+                        .into(),
+                ));
+            }
+            Some("pending") => (),
+            _ => {
+                return Err(CliError(
+                    "invalid profile reconciliation receipt state".into(),
+                ));
+            }
+        }
+        let budget = remaining(options, deadline, None).map_err(|e| CliError(format!("{e}; original metadata-only reconciliation {id} remains queryable; no WebKit effect was replayed")))?;
+        thread::sleep(Duration::from_millis(20).min(budget.timeout));
+        receipt = response_result(request(
+            &remaining(options, deadline, None)?,
+            ControlCommand::BrowserProfileReconcileStatus { id },
         )?)?;
     }
 }

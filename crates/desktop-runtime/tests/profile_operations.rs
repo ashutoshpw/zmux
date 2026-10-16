@@ -14,6 +14,7 @@ use zmux_desktop_runtime::profile_leases::{
 };
 #[test]
 fn shared_runtime_receipt_fences_new_opens_and_waits_for_native_physical_catalog_chain() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     use std::sync::Arc;
     use zmux_desktop_runtime::{
         Desktop, DesktopOptions, Shell, profile_native::NativeProfileOperations,
@@ -115,6 +116,28 @@ fn shared_runtime_receipt_fences_new_opens_and_waits_for_native_physical_catalog
         serde_json::json!({"method":"browser_profile_native", "operation":"finish", "intent":intent}),
     );
     assert_eq!(forged["error"]["code"], "invalid_request");
+    server
+        .set_policy(
+            zmux_desktop_runtime::control_policy::ControlPolicy::same_user(
+                zmux_desktop_runtime::control_policy::ControlAccess::ReadOnly,
+            ),
+        )
+        .unwrap();
+    let denied = wire(
+        serde_json::json!({"method":"browser_profile_reconcile", "profile":fixture.profiles[0], "intent":intent}),
+    );
+    assert_eq!(denied["error"]["code"], "policy_denied");
+    assert!(native.drain_reconciliations().unwrap().is_empty());
+    server
+        .set_policy(zmux_desktop_runtime::control_policy::ControlPolicy::default())
+        .unwrap();
+    let recovery = wire(
+        serde_json::json!({"method":"browser_profile_reconcile", "profile":fixture.profiles[0], "intent":intent}),
+    );
+    let recovery_id: Uuid = recovery["result"]["id"].as_str().unwrap().parse().unwrap();
+    let recovery_status =
+        wire(serde_json::json!({"method":"browser_profile_reconcile_status", "id":recovery_id}));
+    assert_eq!(recovery_status["result"]["state"], "pending");
     drop(server);
     let requests = native.drain().unwrap();
     assert_eq!(requests.len(), 1);
@@ -139,6 +162,16 @@ fn shared_runtime_receipt_fences_new_opens_and_waits_for_native_physical_catalog
             .complete(intent, Err("generic timeout after native dispatch".into()))
             .is_err()
     );
+    assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
+    let recovery = native.drain_reconciliations().unwrap();
+    assert_eq!(recovery.len(), 1);
+    assert_eq!(recovery[0].id, recovery_id);
+    native
+        .finish_reconciliation(
+            recovery_id,
+            Some("original callback remains unknown; no native work replayed".into()),
+        )
+        .unwrap();
     assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
     let report = desktop
         .begin_shutdown(Duration::from_secs(5), false)
@@ -174,4 +207,129 @@ fn shared_runtime_receipt_fences_new_opens_and_waits_for_native_physical_catalog
     .unwrap();
     assert!(!catalog.profiles.iter().any(|v| v.id == fixture.profiles[0]));
     assert!(catalog.profiles.iter().any(|v| v.id == fixture.profiles[1]));
+}
+
+#[test]
+fn terminal_sentinel_status_is_truthful_and_cleanup_needs_exact_original_intent() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
+    use std::io::Write;
+    let fixture = Fixture::new();
+    let service = LeaseService::start(fixture.lease_root()).unwrap();
+    let token = service
+        .mutation_start(MutationRequest {
+            catalog: fixture.state(),
+            controller: Uuid::new_v4(),
+            intent: Uuid::new_v4(),
+            profile: fixture.profiles[0],
+            kind: MutationKind::Clear,
+            local_stores: vec![],
+        })
+        .unwrap();
+    for phase in [
+        MutationPhase::ClearDispatched,
+        MutationPhase::ClearCompleted,
+        MutationPhase::RemoveDispatched,
+        MutationPhase::RemoveCompleted,
+    ] {
+        service.mutation_advance(token, phase).unwrap();
+    }
+    service
+        .mutation_finish(token, NativeMutationOutcome::Completed)
+        .unwrap();
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.path())
+        .unwrap();
+    file.write_all(QUARANTINE_SENTINEL).unwrap();
+    file.sync_all().unwrap();
+    let status = service.intent_status(token.profile, token.intent).unwrap();
+    assert_eq!(status.record.phase, MutationPhase::Completed);
+    assert!(status.physical_cleanup_pending && !status.outcome_unknown);
+    assert!(
+        service
+            .recover_terminal(token.profile, Uuid::new_v4())
+            .is_err()
+    );
+    assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
+    let status = service
+        .recover_terminal(token.profile, token.intent)
+        .unwrap();
+    assert!(!status.physical_cleanup_pending);
+    assert!(fs::read(fixture.path()).unwrap().is_empty());
+}
+
+#[test]
+fn known_native_failure_reconciliation_never_reports_destructive_success() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
+    use std::sync::Arc;
+    use zmux_desktop_runtime::profile_native::NativeProfileOperations;
+    for partial in [false, true] {
+        let fixture = Fixture::new();
+        let service = Arc::new(LeaseService::start(fixture.lease_root()).unwrap());
+        let controller = Uuid::new_v4();
+        let native =
+            NativeProfileOperations::new(controller, fixture.state(), service.clone()).unwrap();
+        let token = service
+            .mutation_start(MutationRequest {
+                catalog: fixture.state(),
+                controller,
+                intent: Uuid::new_v4(),
+                profile: fixture.profiles[0],
+                kind: MutationKind::Delete,
+                local_stores: vec![],
+            })
+            .unwrap();
+        let outcome = if partial {
+            for phase in [
+                MutationPhase::ClearDispatched,
+                MutationPhase::ClearCompleted,
+                MutationPhase::RemoveDispatched,
+            ] {
+                service.mutation_advance(token, phase).unwrap();
+            }
+            NativeMutationOutcome::RemovalFailed {
+                message: "original public removal callback failed".into(),
+            }
+        } else {
+            NativeMutationOutcome::AbortedBeforeClear {
+                message: "known pre-dispatch refusal".into(),
+            }
+        };
+        service.mutation_finish(token, outcome).unwrap();
+        // Optional diagnostic text must not turn a known failure phase into success.
+        let path = fixture
+            .lease_root()
+            .join(format!("browser-profile-{}.intent.json", token.profile));
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["error"] = serde_json::Value::Null;
+        fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let receipt = native
+            .request_reconcile(token.profile, token.intent)
+            .unwrap();
+        let drained = native.drain_reconciliations().unwrap();
+        assert_eq!(drained.len(), 1);
+        native.finish_reconciliation(receipt.id, None).unwrap();
+        let result = native.reconciliation_status(receipt.id).unwrap();
+        assert_eq!(result.state, "failed");
+        assert_eq!(
+            result.original_phase,
+            Some(if partial {
+                MutationPhase::FailedPartial
+            } else {
+                MutationPhase::FailedBeforeClear
+            })
+        );
+        assert!(result.error.unwrap().contains("original operation failed_"));
+        let successor = native
+            .request_reconcile(token.profile, token.intent)
+            .unwrap();
+        assert_ne!(successor.id, receipt.id);
+        assert!(native.finish_reconciliation(receipt.id, None).is_err());
+        assert_eq!(
+            native.reconciliation_status(successor.id).unwrap().state,
+            "pending"
+        );
+        assert!(fs::read(fixture.path()).unwrap().is_empty());
+    }
 }

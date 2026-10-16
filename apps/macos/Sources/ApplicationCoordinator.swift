@@ -187,7 +187,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             while !Task.isCancelled {
                 guard let self, self.shutdownTask == nil else { break }
                 do {
-                    if self.snapshot?.browserProfiles.enabled == true {
+                    if (self.snapshot?.browserProfiles.nativePendingRequests ?? 0) > 0 || (self.snapshot?.browserProfiles.reconciliationPendingRequests ?? 0) > 0 {
                         try await self.browserProfileStores.poll(downloadsBusy: { self.browserDownloads.isProfileBusy($0) }, modelBusy: { profile in
                             self.snapshot?.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.contains { $0.browserProfileId == profile } ?? true
                         }, reportError: { [weak self] in self?.reportError($0) })
@@ -281,6 +281,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         await imagePastes.desktopClosed()
                         shutdownImagesReleased = true
                     }
+                }
+                if snapshot?.browserProfiles.enabled == true {
+                    try await browserProfileStores.pollReconciliations(reportError: { [weak self] in self?.reportError($0) })
                 }
                 browserProfileStores.cancelUnused(activeOwners: [], reportError: { [weak self] in self?.reportError($0) })
                 if downloadsComplete, browserProfileStores.cleanupComplete, shutdownImagesReleased, !nativeAcknowledged {

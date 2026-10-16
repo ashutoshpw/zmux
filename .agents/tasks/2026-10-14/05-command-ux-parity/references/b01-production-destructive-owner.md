@@ -325,3 +325,63 @@ Freeze and review the fixture/runner before the hosted execution. Retain bounded
 source/build identities, original UUID/intent receipts, callback phases, actual weak-view
 release checks and owned process cleanup. No broad B01/V01 parity or all-data-type seeding
 claim follows from this limited cookie/localStorage fixture.
+
+## Explicit reconciliation source
+
+The production gap found in review is now connected, rather than relying on the lease
+unit test's catalog retry. The CLI exposes `browser profiles reconcile PROFILE_UUID
+INTENT_UUID`; the manager exposes “Finish Interrupted Operation” with exact original UUID/
+operation details. Both use the shared controller's separately bounded8-receipt queue.
+A pending explicit re-request re-delivers only the original metadata reconciliation;
+MainActor coalesces its running receipt. Receipt UUIDs fence late completions from a
+successor. Read-only sockets can query reconciliation but cannot request it.
+
+Swift retains its original job/token, clear callback and removal result. Its reconciliation
+function never constructs a store/view, calls all-data clear or calls UUID removal.
+It only re-acknowledges that captured removal callback, commits the original catalog change,
+or recovers a known terminal physical cleanup. It retires the job only after matching
+durable terminal state and physical-cleanup proof. Lost finish acknowledgment after the
+runtime queue entry retired uses durable service status; it does not require `request()`.
+RemoveDispatched re-acknowledgment still requires that original queue entry, which cannot
+retire before terminal physical proof. A broken invariant fails closed without native replay.
+Unknown clear/removal callbacks or restarted unresolved operations remain unsupported and
+quarantined. Shutdown continues draining metadata-only reconciliation independently.
+
+Known FailedPartial/FailedBeforeClear phases remain failures even when optional diagnostic
+text is absent; they never produce a completed destructive receipt or success copy. The
+manager distinguishes known partial/before-clear failure from inability to confirm an
+outcome. Terminal-sentinel status now reads and validates the stable inode and reports
+pending physical cleanup honestly. Filesystem-only recovery requires the exact original
+known terminal record, gate/lock identity and no active successor. Ordinary effect polling
+is driven by pending snapshot counts; it adds no idle native IPC loop.
+
+Review of caller lifetimes also extracted returning job reservation, clear and caller-store
+retirement helpers. The outer effect path retains only the mutable job, so cache-entry or
+store locals cannot accidentally span UUID removal, matching the accepted physical probe's
+helper lifetime discipline.
+
+The additional real-CLI boundary regression was committed first as `24aa46a`. Against a
+trusted exported `5109f75` tree plus that test it compiled and failed the intended missing
+`reconcile` grammar assertion; log `/tmp/zmux-b01-reconcile-ingress-red-20261016.log`.
+The same focused command passes current implementation; log
+`/tmp/zmux-b01-reconcile-ingress-green-20261016.log`. An initial missing test import was a
+compile failure, repaired before the actual compiling red; it is not regression evidence.
+The real foreign C ABI harness now exercises catalog failure followed by catalog-only
+reconciliation, plus lost finish acknowledgment after original Desktop/operation retirement.
+
+The process-global fork fixture isolation was tightened after further transient inherited
+catalog-lock contention: test cases using subprocess/PTY fixtures serialize host setup,
+while preserving their explicit independent-process lifetime/admission concurrency checks.
+No production lock retry or weakened assertion was introduced. Three focused runtime/
+recovery tests pass, including original failures without optional text, stale reconciliation
+receipt rejection and exact terminal-sentinel cleanup. The owning boundaries remain distinct:
+public CLI admission, physical worker/process exclusion, shared socket/shutdown and foreign
+C ABI transport. There are no test-only production flags/exports or fabricated WebKit proof.
+Native Swift compilation and the focused physical happy-path fixture are still pending.
+
+Final recovery portable verification passed on frozen Rust/C source:
+`CARGO_TARGET_DIR=target/agent-validation/profile-destructive-owner/cargo scripts/check`,
+log `/tmp/zmux-b01-reconciliation-frozen-source-check-20261016.log`, including all3 runtime/
+recovery cases,6 lease cases, actual compiling public ingress regression, all workspace
+checks and the foreign C reconciliation harness. Swift helper/UI source remains a separate
+uncompiled macOS gate; these portable results do not establish physical native acceptance.

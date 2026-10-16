@@ -232,10 +232,42 @@ int main(int count, char **arguments) {
         snprintf(request, sizeof request, "{\"operation\":\"advance\",\"token\":%s,\"phase\":\"%s\"}", writer, phases[phase]);
         native_ok(request);
     }
+    char original_catalog[8192];
+    snprintf(original_catalog, sizeof original_catalog, "%s/original-catalog", root);
+    assert(rename(catalog, original_catalog) == 0 && mkdir(catalog, 0700) == 0);
     snprintf(request, sizeof request, "{\"operation\":\"finish\",\"token\":%s,\"result\":{\"outcome\":\"completed\"}}", writer);
+    refused = native(request);
+    assert(strstr(refused, "\"ok\":false"));
+    free(refused);
+    assert(stat(lock_path, &after) == 0 && after.st_size > 0);
+    assert(rmdir(catalog) == 0 && rename(original_catalog, catalog) == 0);
+    /* Production native reconciliation resumes only the correlated catalog
+       commit. There is no phase dispatch or WebKit call in this operation. */
+    snprintf(request, sizeof request, "{\"operation\":\"reconcile\",\"token\":%s,\"result\":{\"outcome\":\"completed\"}}", writer);
     native_ok(request);
     assert(stat(lock_path, &after) == 0 && after.st_ino == before.st_ino && after.st_size == 0);
     assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
+    /* The original runtime operation queue entry has retired. A lost finish ACK
+       is still reconciled through exact durable service status. */
+    snprintf(request, sizeof request, "{\"operation\":\"request_reconcile\",\"controller\":\"%s\",\"profile\":\"%s\",\"intent\":\"%s\"}", controller, profile, intent);
+    char *recovery_receipt = native(request);
+    char recovery_id[37] = {0};
+    const char *recovery_start = strstr(recovery_receipt, "\"id\":\"");
+    assert(recovery_start != NULL);
+    memcpy(recovery_id, recovery_start + strlen("\"id\":\""), 36);
+    free(recovery_receipt);
+    snprintf(request, sizeof request, "{\"operation\":\"drain_reconciliations\",\"controller\":\"%s\"}", controller);
+    recovery_receipt = native(request);
+    assert(strstr(recovery_receipt, recovery_id));
+    free(recovery_receipt);
+    snprintf(request, sizeof request, "{\"operation\":\"reconcile\",\"token\":%s,\"result\":{\"outcome\":\"completed\"}}", writer);
+    native_ok(request);
+    snprintf(request, sizeof request, "{\"operation\":\"reconciled\",\"controller\":\"%s\",\"id\":\"%s\"}", controller, recovery_id);
+    native_ok(request);
+    snprintf(request, sizeof request, "{\"operation\":\"reconcile_status\",\"controller\":\"%s\",\"id\":\"%s\"}", controller, recovery_id);
+    recovery_receipt = native(request);
+    assert(strstr(recovery_receipt, "\"state\":\"completed\""));
+    free(recovery_receipt);
     snprintf(request, sizeof request, "{\"operation\":\"status\",\"controller\":\"%s\",\"profile\":\"%s\",\"intent\":\"%s\"}", controller, profile, intent);
     status = native(request);
     assert(strstr(status, "\"phase\":\"completed\"") && strstr(status, "\"physical_cleanup_pending\":false"));

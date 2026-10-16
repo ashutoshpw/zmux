@@ -91,6 +91,11 @@ pub enum LeaseError {
 
 type Reply<T = Option<LeaseToken>> = SyncSender<Result<T, LeaseError>>;
 enum Request {
+    RecoverTerminal {
+        profile: Uuid,
+        intent: Uuid,
+        reply: Reply<journal::IntentStatus>,
+    },
     ConstructionStatus {
         construction: Uuid,
         reply: Reply<Option<ConstructionPermit>>,
@@ -175,6 +180,14 @@ impl LeaseService {
                 };
                 while let Ok(request) = receiver.recv() {
                     match request {
+                        Request::RecoverTerminal {
+                            profile,
+                            intent,
+                            reply,
+                        } => {
+                            let result = registry.recover_intent_terminal(profile, intent);
+                            let _ = reply.try_send(result);
+                        }
                         Request::ConstructionStatus {
                             construction,
                             reply,
@@ -343,6 +356,17 @@ impl LeaseService {
         self.call(|reply| Request::MutationFinish {
             token,
             outcome,
+            reply,
+        })
+    }
+    pub fn recover_terminal(
+        &self,
+        profile: Uuid,
+        intent: Uuid,
+    ) -> Result<journal::IntentStatus, LeaseError> {
+        self.call(|reply| Request::RecoverTerminal {
+            profile,
+            intent,
             reply,
         })
     }

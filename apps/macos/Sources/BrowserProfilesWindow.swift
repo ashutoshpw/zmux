@@ -6,6 +6,9 @@ import AppKit
 final class BrowserProfilesWindowController: NSWindowController {
     private let createProfile: @MainActor (String) async throws -> BrowserProfileReceipt
     private let renameProfile: @MainActor (UUID, String) async throws -> BrowserProfileReceipt
+    private let reconcileData: @MainActor (UUID, UUID) async throws -> Void
+    private var lastOperation: (profile: UUID, intent: UUID)?
+    private let reconcileButton = NSButton(title: "Finish Interrupted Operation", target: nil, action: nil)
     private let changeData: @MainActor (UUID, Bool) async throws -> BrowserProfileReceipt
     private let openProfile: @MainActor (UUID) throws -> Void
     private let profiles = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -27,13 +30,15 @@ final class BrowserProfilesWindowController: NSWindowController {
 
     init(create: @escaping @MainActor (String) async throws -> BrowserProfileReceipt,
          rename: @escaping @MainActor (UUID, String) async throws -> BrowserProfileReceipt,
+         reconcile: @escaping @MainActor (UUID, UUID) async throws -> Void,
          changeData: @escaping @MainActor (UUID, Bool) async throws -> BrowserProfileReceipt,
          open: @escaping @MainActor (UUID) throws -> Void) {
+        reconcileData = reconcile
         self.changeData = changeData
         createProfile = create
         openProfile = open
         renameProfile = rename
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 580),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 620),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Browser Profiles"
         window.isReleasedWhenClosed = false
@@ -89,6 +94,8 @@ final class BrowserProfilesWindowController: NSWindowController {
         deleteButton.target = self; deleteButton.action = #selector(deleteSelected(_:)); deleteButton.bezelStyle = .rounded
         stack.addArrangedSubview(clearButton)
         stack.addArrangedSubview(deleteButton)
+        reconcileButton.target = self; reconcileButton.action = #selector(reconcileOriginal(_:)); reconcileButton.bezelStyle = .rounded
+        stack.addArrangedSubview(reconcileButton)
         let separator = NSBox()
         separator.boxType = .separator
         stack.addArrangedSubview(separator)
@@ -110,6 +117,9 @@ final class BrowserProfilesWindowController: NSWindowController {
     }
 
     private func render() {
+        if lastOperation == nil, let operation = state?.operations.reversed().first(where: { $0.intent != nil && $0.profile != nil }), let intent = operation.intent, let profile = operation.profile?.id { lastOperation = (profile, intent) }
+        reconcileButton.isEnabled = !creating && lastOperation != nil
+        reconcileButton.toolTip = lastOperation.map { "Profile UUID \($0.profile), original operation \($0.intent)." }
         // Preserve immutable selection across refreshes; a missing ID must never
         // silently select a different profile at the same list position.
         let catalog = available ? state?.profiles ?? [] : []
@@ -172,6 +182,24 @@ final class BrowserProfilesWindowController: NSWindowController {
               state?.profiles.contains(where: { $0.id == selectedID }) == true else { return }
         mutate(name: renameName.stringValue, renaming: selectedID)
     }
+    @objc private func reconcileOriginal(_ sender: NSButton) {
+        guard !creating, let original = lastOperation else { return }
+        creating = true
+        feedback = nil
+        message.stringValue = "Finishing original operation…"
+        render()
+        operation = Task { [weak self] in
+            guard let self else { return }
+            defer { self.creating = false; self.operation = nil; self.render() }
+            do {
+                try await self.reconcileData(original.profile, original.intent)
+                self.feedback = "Original operation completed."
+            } catch {
+                if let failure = error as? BrowserProfileNativeFailure, !failure.outcomeUnknown { self.feedback = failure.message }
+                else { self.feedback = "Unable to confirm completion; profile remains unavailable." }
+            }
+        }
+    }
     @objc private func clearSelected(_ sender: NSButton) { confirmDataChange(delete: false) }
     @objc private func deleteSelected(_ sender: NSButton) { confirmDataChange(delete: true) }
     private func confirmDataChange(delete: Bool) {
@@ -182,7 +210,11 @@ final class BrowserProfilesWindowController: NSWindowController {
         alert.alertStyle = .warning
         alert.addButton(withTitle: delete ? "Delete Profile" : "Clear Website Data")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn { mutate(name: "", renaming: profile.id, destructive: delete) }
+        guard let window else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task { @MainActor [weak self] in self?.mutate(name: "", renaming: profile.id, destructive: delete) }
+        }
     }
     private func mutate(name submittedName: String, renaming profileID: UUID?, destructive: Bool? = nil) {
         // Rust owns validation, including UTF-8 bounds and duplicate names.
@@ -199,6 +231,7 @@ final class BrowserProfilesWindowController: NSWindowController {
                 if let destructive, let profileID { admission = try await self.changeData(profileID, destructive) }
                 else if let profileID { admission = try await self.renameProfile(profileID, submittedName) }
                 else { admission = try await self.createProfile(submittedName) }
+                if let intent = admission.intent, let profile = admission.profile?.id { self.lastOperation = (profile, intent) }
                 while ContinuousClock.now < deadline {
                     try Task.checkCancellation()
                     guard self.state?.epoch == admission.epoch else {
