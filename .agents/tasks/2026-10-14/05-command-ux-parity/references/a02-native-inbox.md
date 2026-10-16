@@ -546,3 +546,25 @@ Capture-only repair uses CoreGraphics' supported 32-bit RGBx CGContext
 (`noneSkipLast`), draws the same actual background/native pixels, and exports
 the resulting opaque CGImage through NSBitmapImageRep. No production change or
 acceptance weakening: opaque PNG, shared shutdown and final native green remain.
+
+## Background read must not erase a completed mutation receipt
+
+Run [38868618382](https://github.com/ashutoshpw/zmux/actions/runs/38868618382), exact
+`148d70fa9883926fd7b4419b1627191084629181`, passes Swift 6 slices (132.193 s)
+and package (385.734 s), but exposes an earlier related feedback bug before capture.
+The native reply has already been found in the durable CLI inbox with exact
+body/parent/thread/sender/recipient and one reply; the newer 66-byte draft remains.
+Mounted Send is enabled and Check Status disabled, but a background read replaces
+Saved with `Refresh failed: Message acknowledgement failed (-4).` App PID 10676
+exits 1 without timeout (17.199 s) awaiting saved receipt presentation. All 273
+retained hashes match source; archive SHA256:
+`4c70d8dfd534bab458b588354880501fb496702c6d46782935a88047d5187673`.
+
+The preceding idleFeedback guard protected pending UUIDs but not completed Saved
+or authoritative refusal messages. List reads now own an accessible refresh-status
+label in the existing toolbar, with full error tooltip and truncation; successful
+refresh clears only that label. Mutation feedback remains owned by mutations and
+explicit idle editor validation. Settings already use their separate label. This
+repairs shared feedback ownership across both pending and completed states without
+retries/timing changes. Native saved reply ID/body proof is retained before waiting
+for its UI status, improving failure diagnostics without weakening the assertion.

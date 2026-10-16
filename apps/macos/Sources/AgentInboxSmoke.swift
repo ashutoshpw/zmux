@@ -268,11 +268,11 @@ enum AgentInboxSmoke {
                   saved.sender.surface_id == sourceChild.surface, saved.recipient.surface_id == otherChild.surface,
                   saved.thread_id == primary.thread_id, saved.state == "queued", saved.body.utf8.elementsEqual(submittedDraft.utf8),
                   replies.messages.filter({ $0.reply_to == primary.id }).count == 1 else { throw failure("Reply lost original parent/thread/sender/recipient or duplicated") }
+            evidence.unicodeBytes.append(UTF8Evidence(name: "saved_precomposed", expected: Array(submittedDraft.utf8), observed: Array(saved.body.utf8)))
+            evidence.savedReplies.append(saved.id)
             try await wait(coordinator, "saved receipt preserves newer draft revision") { _ in
                 !status.isEnabled && submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8) && operationStatus(content).hasPrefix("Saved")
             }
-            evidence.unicodeBytes.append(UTF8Evidence(name: "saved_precomposed", expected: Array(submittedDraft.utf8), observed: Array(saved.body.utf8)))
-            evidence.savedReplies.append(saved.id)
             evidence.checks.append("button_and_submit_key_save_one_exact_reply_and_keep_later_edit")
             let beforeRead = try JSONDecoder().decode(Inbox.self, from: await cli(source, ["agent", "inbox"]))
             guard beforeRead.messages.first(where: { $0.id == primary.id })?.state == "queued",

@@ -21,6 +21,7 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
     private let attribution = NSTextField(wrappingLabelWithString: "Select a message to reply.")
     private let feedback = NSTextField(wrappingLabelWithString: "")
     private let settingDetail = NSTextField(wrappingLabelWithString: "")
+    private let refreshDetail = NSTextField(labelWithString: "")
     private let refreshButton = IconButton(symbol: "arrow.clockwise", label: "Refresh", target: nil, action: nil)
     private let firstButton = IconButton(symbol: "backward.end", label: "First Page", target: nil, action: nil)
     private let nextButton = IconButton(symbol: "chevron.right", label: "Next Page", target: nil, action: nil)
@@ -108,8 +109,14 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
         let explanation = NSTextField(wrappingLabelWithString: "Messages across this installation. Replies are saved to the inbox and do not type into terminals.")
         explanation.textColor = .secondaryLabelColor
         stack.addArrangedSubview(explanation)
-        let toolbar = NSStackView(views: [refreshButton, firstButton, nextButton, readButton]); toolbar.spacing = 8
+        refreshDetail.font = .systemFont(ofSize: 12); refreshDetail.textColor = .secondaryLabelColor
+        refreshDetail.lineBreakMode = .byTruncatingTail
+        refreshDetail.setAccessibilityLabel("Message list refresh status")
+        refreshDetail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        refreshDetail.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let toolbar = NSStackView(views: [refreshButton, firstButton, nextButton, readButton, refreshDetail]); toolbar.spacing = 8
         stack.addArrangedSubview(toolbar)
+        toolbar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 4
         rows.translatesAutoresizingMaskIntoConstraints = false
         let list = NSScrollView(); list.hasVerticalScroller = true; list.documentView = rows
@@ -182,8 +189,9 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
     @objc private func refreshClicked(_ sender: Any?) { refresh() }
     @objc private func firstClicked(_ sender: Any?) { page = nil; refresh() }
     @objc private func nextClicked(_ sender: Any?) { guard let cursor else { return }; page = cursor; refresh() }
-    // Pending mutations own their status and recovery UUID. Background list
-    // reads and editor validation may report feedback only while idle.
+    // Pending mutations own their status and recovery UUID. Explicit editor
+    // validation may replace completed feedback only while idle; list/settings
+    // reads have separate status channels and never write mutation feedback.
     private func idleFeedback(_ message: String) {
         guard pending == nil else { return }
         feedback.stringValue = message
@@ -199,11 +207,17 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
                 let receipt = try await self.read(query)
                 guard self.activeOrigin, !Task.isCancelled, let result = receipt.result, let messages = result.messages,
                       messages.count <= 32, messages.allSatisfy({ $0.namespace == self.origin.namespace && $0.body.utf8.count <= 4096 }) else { return }
+                self.refreshDetail.stringValue = ""; self.refreshDetail.toolTip = nil
                 self.messages = messages; self.cursor = result.nextCursor
                 if !messages.contains(where: { $0.id == self.selected }) { self.selected = messages.first?.id }
                 self.renderRows(); self.renderSelection()
                 if self.pending == nil, self.lastSettingRefresh.map({ ContinuousClock.now - $0 >= .seconds(1) }) ?? true { self.refreshSettings() }
-            } catch { if !Task.isCancelled { self.idleFeedback("Refresh failed: " + error.localizedDescription) } }
+            } catch {
+                if !Task.isCancelled {
+                    self.refreshDetail.stringValue = "Refresh failed: " + error.localizedDescription
+                    self.refreshDetail.toolTip = self.refreshDetail.stringValue
+                }
+            }
         }
     }
     private func renderRows() {
