@@ -326,3 +326,84 @@ fn workspace_last_tab_and_pane_recovery_attach_exact_owner_and_failed_retry_neve
         );
     }
 }
+
+// Independent wire fixture: binding digest precomputed from the versioned field
+// order, not produced by the receipt validator under test. This is history data,
+// not a live supervisor authentication fixture.
+fn completed_document() -> Value {
+    let mut value = document();
+    value["version"] = json!(7);
+    let receipt: Value = serde_json::from_str(r#"{"version":1,"domain":"zmux.local-zellij.terminal.v1","binding":{"version":1,"owner_uuid":"00000000-0000-0000-0000-000000000014","owner_generation":"00000000-0000-0000-0000-000000000015","namespace":{"root":[1,11],"socket":[1,12]},"completion_socket":[1,13],"server":{"pid":101,"uid":1000,"parent_pid":1,"start":[20,0],"boot":"11111111-1111-4111-8111-111111111111","executable":"/opt/zellij"},"supervisor":{"pid":102,"uid":1000,"parent_pid":101,"start":[30,0],"boot":"11111111-1111-4111-8111-111111111111","executable":"/opt/zmux"},"workload":{"pid":103,"uid":1000,"parent_pid":102,"start":[40,0],"boot":"11111111-1111-4111-8111-111111111111","executable":"/bin/sh"}},"binding_digest":"ada9261a1a1bd868e4b920118c71247a61ba3bdc5cabbea46737aad6ce06050e","terminal_sequence":1,"workload_exit":{"kind":"exited","value":7},"child_reaped":true}"#).unwrap();
+    value["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"] = json!({
+        "kind":"completed_local_zellij_terminal",
+        "profile_id":uuid::Uuid::from_u128(10), "owner_uuid":uuid::Uuid::from_u128(20),
+        "history":{"receipt":receipt,"viewport":{"contents":"workload exited 7","truncated":false}}
+    });
+    value
+}
+#[test]
+fn v7_completed_history_restores_without_allocating_a_pty_or_replaying_attach() {
+    let wire = completed_document();
+    let validated = validate(wire.clone()).expect("v7 completed owner history must validate");
+    assert_eq!(
+        validated.terminal_count(),
+        0,
+        "completed history cannot consume launch IDs or physical PTY capacity"
+    );
+    let mut prepared = WorkspaceStore::prepare_session_restore(validated, &[], None).unwrap();
+    assert!(
+        prepared.effects.is_empty(),
+        "completed history must not launch Attach or ordinary shell"
+    );
+    let snapshot = serde_json::to_value(prepared.store.snapshot()).unwrap();
+    let surface = &snapshot["workspaces"][0]["root"]["pane"]["surfaces"][0];
+    assert!(surface["session_id"].is_null());
+    let saved = serde_json::to_value(prepared.store.session_document().unwrap()).unwrap();
+    assert_eq!(saved["version"], 7);
+    assert_eq!(
+        saved["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"],
+        wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]
+    );
+    let surface_id = prepared.store.snapshot().workspaces[0].root.panes()[0].surfaces[0].id;
+    prepared
+        .store
+        .apply(Action::CloseSurface { surface_id })
+        .unwrap();
+    let closed_id = prepared.store.snapshot().closed_items[0].id;
+    let reopened = prepared
+        .store
+        .apply(Action::ReopenClosed {
+            closed_id: Some(closed_id),
+        })
+        .unwrap();
+    assert!(
+        reopened.effects.is_empty(),
+        "undo of completed history must remain completed"
+    );
+}
+#[test]
+fn v7_completed_history_rejects_corrupt_receipts_owner_mismatch_and_unbounded_viewport() {
+    fn content(value: &mut Value) -> &mut Value {
+        &mut value["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]
+    }
+    for corruption in ["version", "owner", "digest", "reaped", "exit", "viewport"] {
+        let mut value = completed_document();
+        match corruption {
+            "version" => value["version"] = json!(6),
+            "owner" => content(&mut value)["owner_uuid"] = json!(uuid::Uuid::from_u128(25)),
+            "digest" => {
+                content(&mut value)["history"]["receipt"]["binding_digest"] = json!("0".repeat(64))
+            }
+            "reaped" => content(&mut value)["history"]["receipt"]["child_reaped"] = json!(false),
+            "exit" => {
+                content(&mut value)["history"]["receipt"]["workload_exit"]["value"] = json!(256)
+            }
+            "viewport" => {
+                content(&mut value)["history"]["viewport"]["contents"] =
+                    json!("x".repeat(16 * 1024 + 1))
+            }
+            _ => unreachable!(),
+        }
+        assert!(validate(value).is_err(), "{corruption}");
+    }
+}
