@@ -33,7 +33,7 @@ with (root/'child.json').open('x') as out:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce},out)
 rows=['alpha beta','alpha.beta  value_name /tmp/file','A界 e\\u0301🙂 Z','ab\\x1b[31mcd\\x1b[0mef','NATIVE_SELECTION_READY_'+nonce]
 os.write(1,('\\x1b[2J\\x1b[H'+'\\r\\n'.join(rows)+'\\r\\n').encode())
-for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_'),('c','WORD_UNICODE_READY_'),('t','POINTER_READY_')]:
+for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_'),('c','WORD_UNICODE_READY_'),('t','POINTER_READY_'),('y','HOVER_READY_')]:
  ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
  if not ready:break
  assert os.read(0,1)==key.encode()
@@ -49,11 +49,11 @@ for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_')
  if key=='m':payload='X'*(columns-1)+'界Z'
  if key=='u':payload='X'*(columns-1)+'e\\u0301🙂Z'
  if key=='h':payload='HARD_A\\r\\n\\r\\nHARD_B'
- if key=='t':payload='pointer line\\r\\nsecond pointer line'
+ if key in ('t','y'):payload='pointer line\\r\\nsecond pointer line'
  if key=='p':payload+='\\r\\n'+'\\r\\n'.join('FILLER_'+str(n) for n in range(rows_count+4))
- mode='\\x1b[?1002h\\x1b[?1006h' if key=='t' else ''
+ mode=('\\x1b[?1002h' if key=='t' else '\\x1b[?1003h')+'\\x1b[?1006h' if key in ('t','y') else ''
  os.write(1,(mode+'\\x1b[2J\\x1b[H'+payload+'\\r\\n'+marker+nonce+'\\r\\n').encode())
- if key=='t':
+ if key in ('t','y'):
   captured=bytearray()
   while time.monotonic()<deadline and b'\\x18' not in captured:
    ready,_,_=select.select([0],[],[],min(10,max(0,deadline-time.monotonic())))
@@ -64,10 +64,10 @@ for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_')
    assert len(captured)<=4096
   body,found,trailing=bytes(captured).partition(b'\\x18')
   assert found==b'\\x18'
-  with (root/'pointer-child.json').open('x') as out:
-   json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce,'rows':rows_count,'columns':columns,'phase':'t',
+  with (root/('pointer-child.json' if key=='t' else 'pointer-hover-child.json')).open('x') as out:
+   json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce,'rows':rows_count,'columns':columns,'phase':key,
               'captured_hex':body.hex(),'sentinel_hex':found.hex(),'trailing_hex':trailing.hex()},out)
-  os.write(1,('\\x1b[?1002l\\x1b[?1006l\\r\\nPOINTER_CAPTURED_'+nonce+'\\r\\n').encode())
+  os.write(1,('\\x1b[?1002l\\x1b[?1003l\\x1b[?1006l\\r\\nPOINTER_CAPTURED_'+nonce+'\\r\\n').encode())
 time.sleep(max(0,deadline-time.monotonic()))
 '''
 
@@ -171,13 +171,15 @@ def main():
                 or registration != {'pid': result['childPID'], 'parent_pid': result['appPID'], 'nonce': nonce}
                 or not result['cases'] or any(case['expected'] != case['observed'] for case in result['cases'])):
             raise RuntimeError('Selection native source, real child, cases or shared shutdown differs')
-        pointer = native.document(root / 'pointer-child.json')
-        if (pointer.get('pid') != result['childPID'] or pointer.get('parent_pid') != result['appPID']
-                or pointer.get('nonce') != nonce or pointer.get('phase') != 't'
+        for filename, phase, field in [('pointer-child.json', 't', 'pointerCapture'),
+                                       ('pointer-hover-child.json', 'y', 'hoverPointerCapture')]:
+            pointer = native.document(root / filename)
+            if (pointer.get('pid') != result['childPID'] or pointer.get('parent_pid') != result['appPID']
+                or pointer.get('nonce') != nonce or pointer.get('phase') != phase
                 or pointer.get('sentinel_hex') != '18' or pointer.get('trailing_hex') != ''
-                or result.get('pointerCapture') != pointer):
-            raise RuntimeError('Independent pointer child capture or exact native identity differs')
-        receipt['pointer_capture'] = pointer
+                or result.get(field) != pointer):
+                raise RuntimeError('Independent pointer child capture or exact native identity differs')
+            receipt[field] = pointer
         receipt['native_report'] = result
         receipt['registration'] = registration
         if sources() != frozen:

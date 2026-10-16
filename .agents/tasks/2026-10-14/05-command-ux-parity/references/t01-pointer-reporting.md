@@ -79,3 +79,40 @@ bytes; Shift-down followed by unshifted drag/up must copy `pointer` without addi
 application bytes. Exact child PID/parent/nonce/size and raw capture are retained
 separately. No tracking metadata or native pointer repair is included in this red
 fixture cohort; the expected red is an empty capture from missing native routing.
+
+## Native intended red and repair cohort
+
+Fixture-only `fdc8d03` ran in macOS Actions run38857212985. Packaged app,
+strict Swift6 metadata compilation and33 existing copy/Shift cases passed;
+`application_pointer_capture` expected SGR reports and observed an empty capture.
+Independent child16521/parent16517, nonce1f42f54c-abe8-4df6-9266-099cc556dfd8,
+31x100 grid, Ctrl-X sentinel18 and empty trailing bytes match the native report.
+All268 retained source hashes, packaged plist SHA, archive digest and archived
+linked bridge/probe digest were verified. Local evidence:
+`/tmp/zmux-pointer-native-red-verification-20261016.json` and
+`/tmp/zmux-pointer-native-red-38857212985/`.
+
+The native repair publishes optional typed pointer_tracking routing hints from
+vt100, with nil for the unsupported optional engine. AppKit submits semantic
+button/action/cell/modifier values through the shared bounded queue; only the
+worker encodes bytes against its authoritative current mode. Each button keeps
+its press-time selection/application/refused route. Shift selection stays local
+through release; application gestures retain button identity across modifiers
+and leaving/reentering the view. Duplicate motion compares cell and modifiers.
+Responder/window/app focus loss attempts semantic releases through the same queue.
+
+The synchronous callback reports UI queue admission only, never PTY delivery.
+A refused press remains refused through release; failed motion does not advance
+its suppression sample. Queue saturation/refused release uses the existing
+visible command error, with no byte fallback, unbounded tasks, automatic replay
+or delivery claim. Sustained native queue-saturation and physical-device
+acceptance remain separate gates. AnyMotion requests native move delivery only
+while a visible terminal needs it; a per-window owner set restores the previous
+setting when the last terminal releases it.
+
+The repair fixture preserves Shift copy and the real child's Ctrl-X delimiter,
+and adds simultaneous right/middle identities, same-cell modifier changes,
+outside/reentry clamping, actual responder cancellation and1003 hover. Portable scripts/check passes388 tests/72 groups,1 ignored, strict Clippy,
+notices and both C ABI checks (`/tmp/zmux-pointer-native-repair-check-final.log`).
+Native repair compilation/execution is still pending; portable checks are not
+AppKit or physical-mouse evidence.

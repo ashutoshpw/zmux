@@ -86,6 +86,7 @@ private struct SelectionNativeReport: Codable, Sendable {
     var parkedOffset: Int?
     var copyRows: [SelectionCopyRows]
     var pointerCapture: SelectionPointerCapture?
+    var hoverPointerCapture: SelectionPointerCapture?
     var state: String
     var publicWordReferences: [SelectionWordReference]
     var cases: [SelectionNativeCase]
@@ -160,7 +161,7 @@ enum TerminalSelectionSmoke {
             keyWindow: window.isKeyWindow && NSApp.keyWindow === window,
             terminalFirstResponder: window.firstResponder === view,
             activationRequestProcessID: activationRequestProcessID, activationFailure: activationFailure,
-            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], parkedOffset: nil, copyRows: [], pointerCapture: nil, state: "running", publicWordReferences: [], cases: [])
+            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], parkedOffset: nil, copyRows: [], pointerCapture: nil, hoverPointerCapture: nil, state: "running", publicWordReferences: [], cases: [])
         // Public system behavior is recorded separately from the independently
         // specified regression literal below. Punctuation is not guessed.
         let reference = NSTextView(frame: .zero)
@@ -344,10 +345,30 @@ enum TerminalSelectionSmoke {
             (NSEvent.EventType.leftMouseDown, (0, 2), NSEvent.ModifierFlags()),
             (.leftMouseDragged, (0, 2), []),
             (.leftMouseDragged, (1, 4), []),
-            (.leftMouseUp, (1, 4), [])
+            (.leftMouseDragged, (1, 4), [.option]),
+            (.leftMouseDragged, (1, 4), [.option]),
+            (.leftMouseDragged, (1, 4), [.shift]),
+            (.leftMouseUp, (1, 4), [.shift]),
+            (.rightMouseDown, (2, 1), []),
+            (.otherMouseDown, (2, 3), []),
+            (.rightMouseDragged, (2, 2), [.option]),
+            (.otherMouseDragged, (2, 4), [.control]),
+            (.rightMouseUp, (2, 2), []),
+            (.otherMouseUp, (2, 4), []),
+            (.leftMouseDown, (3, 1), []),
+            (.leftMouseDragged, (-3, -3), []),
+            (.leftMouseDragged, (3, 2), []),
+            (.leftMouseUp, (3, 2), []),
+            (.mouseMoved, (0, 1), [])
         ] {
-            try pointerEvent(type, cell: cell, modifiers: modifiers, view: view, window: window, viewport: pointer)
+            try pointerEvent(type, cell: cell, modifiers: modifiers, view: view, window: window, viewport: pointer,
+                             allowOutside: type == .leftMouseDragged)
         }
+        // A real responder change must end application ownership without a stuck
+        // button. A later mouse-up cannot create a second release.
+        try pointerEvent(.leftMouseDown, cell: (3, 4), modifiers: [], view: view, window: window, viewport: pointer)
+        guard window.makeFirstResponder(nil), window.makeFirstResponder(view) else { throw failure("Actual pointer cancellation responder change was refused") }
+        try pointerEvent(.leftMouseUp, cell: (3, 4), modifiers: [], view: view, window: window, viewport: pointer)
         try await check("pointer_shift_selection", expected: "pointer", window: window, result: &result, report: report) {
             for (type, cell, modifiers) in [
                 (NSEvent.EventType.leftMouseDown, (0, 0), NSEvent.ModifierFlags.shift),
@@ -357,9 +378,36 @@ enum TerminalSelectionSmoke {
                 try pointerEvent(type, cell: cell, modifiers: modifiers, view: view, window: window, viewport: pointer)
             }
         }
+        let expectedPointer = "\u{1b}[<0;3;1M\u{1b}[<32;5;2M\u{1b}[<40;5;2M\u{1b}[<36;5;2M\u{1b}[<4;5;2m"
+            + "\u{1b}[<2;2;3M\u{1b}[<1;4;3M\u{1b}[<42;3;3M\u{1b}[<49;5;3M\u{1b}[<2;3;3m\u{1b}[<1;5;3m"
+            + "\u{1b}[<0;2;4M\u{1b}[<32;1;1M\u{1b}[<32;3;4M\u{1b}[<0;3;4m\u{1b}[<0;5;4M\u{1b}[<0;5;4m"
+        let pointerCapture = try await capturePointer(phase: "t", filename: "pointer-child.json", expected: expectedPointer,
+            name: "application_pointer_capture", viewport: pointer, coordinator: coordinator, window: window, result: &result, report: report)
+        result.pointerCapture = pointerCapture
+        let hover = try await beginCopyPhase(key: "y", code: 16, marker: "HOVER_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        guard hover.pointerTracking == .some(.anyMotion), window.acceptsMouseMovedEvents else { throw failure("Actual AnyMotion mode did not request native motion delivery") }
+        for (cell, modifiers) in [((0, 1), NSEvent.ModifierFlags()), ((0, 1), []),
+                                  ((0, 1), [.option]), ((1, 2), []), ((1, 2), [.shift])] {
+            try pointerEvent(.mouseMoved, cell: cell, modifiers: modifiers, view: view, window: window, viewport: hover)
+        }
+        let hoverCapture = try await capturePointer(phase: "y", filename: "pointer-hover-child.json",
+            expected: "\u{1b}[<35;2;1M\u{1b}[<43;2;1M\u{1b}[<35;3;2M", name: "application_hover_capture", viewport: hover,
+            coordinator: coordinator, window: window, result: &result, report: report)
+        result.hoverPointerCapture = hoverCapture
+        result.state = "completed_cases"
+        try await save(result, to: report)
+        try await coordinator.shutdown()
+        result.state = "complete"
+        try await save(result, to: report)
+    }
+
+    private static func capturePointer(phase: String, filename: String, expected: String, name: String, viewport: Viewport,
+                                       coordinator: ApplicationCoordinator, window: NSWindow,
+                                       result: inout SelectionNativeReport, report: URL) async throws -> SelectionPointerCapture {
         try sendKey("x", code: 7, modifiers: [.control], window: window)
         guard let root = ProcessInfo.processInfo.environment["ZMUX_SELECTION_ROOT"] else { throw failure("Pointer capture root unavailable") }
-        let captureURL = URL(fileURLWithPath: root).appendingPathComponent("pointer-child.json")
+        let captureURL = URL(fileURLWithPath: root).appendingPathComponent(filename)
         let pointerDeadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < pointerDeadline {
             if coordinator.snapshot?.frames.first(where: { $0.sessionId == result.sessionID })?.snapshot?.viewport.contents.contains("POINTER_CAPTURED_" + result.nonce) == true { break }
@@ -370,22 +418,17 @@ enum TerminalSelectionSmoke {
             guard data.count <= 8192 else { throw BridgeFailure(message: "Pointer capture exceeds byte bound") }
             return try JSONDecoder().decode(SelectionPointerCapture.self, from: data)
         }.value
-        result.pointerCapture = capture
         guard UInt32(exactly: capture.pid) == result.childPID, capture.parentPID == getpid(), capture.nonce == result.nonce,
-              capture.rows == pointer.size.rows, capture.columns == pointer.size.cols, capture.phase == "t",
+              capture.rows == viewport.size.rows, capture.columns == viewport.size.cols, capture.phase == phase,
               capture.sentinelHex == "18", capture.trailingHex.isEmpty else { throw failure("Pointer capture child identity, grid or native key sentinel differs") }
-        let expectedPointer = "\u{1b}[<0;3;1M\u{1b}[<32;5;2M\u{1b}[<0;5;2m".utf8.map { String(format: "%02x", $0) }.joined()
-        result.cases.append(SelectionNativeCase(name: "application_pointer_capture", expected: expectedPointer, observed: capture.capturedHex))
+        let expectedPointer = expected.utf8.map { String(format: "%02x", $0) }.joined()
+        result.cases.append(SelectionNativeCase(name: name, expected: expectedPointer, observed: capture.capturedHex))
         if capture.capturedHex != expectedPointer {
             result.state = "failed"
             try await save(result, to: report)
             throw failure("Actual PTY did not receive the exact native pointer reports; observed \(capture.capturedHex)")
         }
-        result.state = "completed_cases"
-        try await save(result, to: report)
-        try await coordinator.shutdown()
-        result.state = "complete"
-        try await save(result, to: report)
+        return capture
     }
 
     private static func beginCopyPhase(key: String, code: UInt16, marker: String,
@@ -524,11 +567,20 @@ enum TerminalSelectionSmoke {
     }
 
     private static func pointerEvent(_ type: NSEvent.EventType, cell: (Int, Int), modifiers: NSEvent.ModifierFlags,
-                                     view: TerminalView, window: NSWindow, viewport: Viewport) throws {
-        guard let event = NSEvent.mouseEvent(with: type, location: try point(view, row: cell.0, col: cell.1, viewport: viewport),
+                                     view: TerminalView, window: NSWindow, viewport: Viewport, allowOutside: Bool = false) throws {
+        let grid = try gridGeometry(view, viewport: viewport)
+        let location: NSPoint
+        if allowOutside {
+            location = view.convert(NSPoint(x: grid.minX + (CGFloat(cell.1) + 0.5) * grid.width,
+                y: grid.minY + (CGFloat(cell.0) + 0.5) * grid.height), to: nil)
+        } else { location = try point(view, row: cell.0, col: cell.1, viewport: viewport) }
+        guard let event = NSEvent.mouseEvent(with: type, location: location,
             modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1) else {
             throw failure("Cannot construct actual native pointer event")
+        }
+        if [.otherMouseDown, .otherMouseDragged, .otherMouseUp].contains(type), event.buttonNumber != 2 {
+            throw failure("Public native fixture did not construct middle-button identity")
         }
         window.sendEvent(event)
     }
