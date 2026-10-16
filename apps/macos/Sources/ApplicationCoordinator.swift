@@ -60,6 +60,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private(set) var statusMenu: StatusMenuController?
     private var pendingStatusNotifications: Bool?
     private var minimizedWindowHistory: [MainWindowIdentity] = []
+    private let applicationActivation = NativeApplicationActivation()
+    private var activationTask: Task<Void, Never>?
+    private var pendingActivationWindow: WindowHostToken?
     private func makeNotificationDelivery() -> NotificationDelivery {
         NotificationDelivery(
             sendEvent: { [weak self] event in
@@ -75,8 +78,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                       let target = receipt.navigation?.target,
                       target.identityNamespace == snapshot.model.identityNamespace,
                       let host = self.mainWindowHosts[MainWindowIdentity(namespace: target.identityNamespace, windowId: id)] else { return }
-                host.installMenus(); host.window.makeKeyAndOrderFront(nil)
-                NSApp.activate()
+                self.revealNativeWindow(host)
             },
             reportError: { [weak self] message in self?.reportError(message) }
         )
@@ -250,6 +252,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         statusMenu = nil
         pendingStatusNotifications = nil
         minimizedWindowHistory.removeAll()
+        activationTask?.cancel(); activationTask = nil
+        pendingActivationWindow = nil
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
@@ -409,12 +413,39 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             } else if notifications { pendingStatusNotifications = true }
             return
         }
+        revealNativeWindow(host)
+        if notifications { host.showNotifications() }
+    }
+
+    private func revealNativeWindow(_ host: MainWindowHost) {
+        guard shutdownTask == nil, let token = host.nativeToken else { return }
+        pendingActivationWindow = token
         host.installMenus()
         NSApp.unhide(nil)
         if host.window.isMiniaturized { host.window.deminiaturize(nil) }
         host.window.makeKeyAndOrderFront(nil)
         NSApp.activate()
-        if notifications { host.showNotifications() }
+        guard !NSApp.isActive, activationTask == nil else { return }
+        activationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.activationTask = nil; self.pendingActivationWindow = nil }
+            do {
+                try await self.applicationActivation.activateCurrent()
+                guard !Task.isCancelled, self.shutdownTask == nil,
+                      let desired = self.pendingActivationWindow,
+                      desired.epoch == self.snapshot?.windowEpoch,
+                      desired.identityNamespace == self.snapshot?.model.identityNamespace,
+                      let current = self.mainWindowHosts[MainWindowIdentity(namespace: desired.identityNamespace, windowId: desired.windowId)],
+                      current.nativeReady, current.nativeToken?.hostId == desired.hostId else { return }
+                current.installMenus()
+                NSApp.unhide(nil)
+                if current.window.isMiniaturized { current.window.deminiaturize(nil) }
+                current.window.makeKeyAndOrderFront(nil)
+            } catch {
+                guard !Task.isCancelled, self.shutdownTask == nil else { return }
+                self.reportError(error.localizedDescription)
+            }
+        }
     }
 
     func windowMiniaturizationChanged(_ host: MainWindowHost, minimized: Bool) {
