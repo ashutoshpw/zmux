@@ -54,6 +54,10 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [CPU and Claude completion repair](../../2026-10-16/01-terminal-cpu-audit/plan.md) —
+  reproduced active-screen data amplification, missing plain-Claude completion
+  ingress and phased repair/native profiling plan; implementation unstarted.
+
 - [N02 workspace context menu](references/n02-workspace-context-menu.md) — screenshot/source comparison, missing versus conditional actions, delivery failure and behavioral closure gates.
 - [N03 macOS menu bar](references/n03-macos-menu-bar.md) — absent status-item owner, full menu behavior, application lifecycle and native OS-menu gates.
 
