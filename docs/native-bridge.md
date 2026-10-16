@@ -95,6 +95,15 @@ Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup of
 There are at most four desktop contexts and eight terminals per desktop, including pending or
 retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
 
+`zmux_desktop_dispatch_acknowledged` executes one `action` or `windows` command and replies with
+the executor's own result: `{ok:true,revision}` once the command ran, `{ok:false,error,
+outcome_unknown}` when the executor refused it (for example closing a file tab whose model is
+dirty). Plain dispatch acknowledges only queue acceptance, so a caller that must not act before
+the command really happened (the native file panel dropping unsaved text on Don't Save) uses
+this export. Any other command kind is refused before it is queued, `ZMUX_BUSY` means the queue
+was full and nothing ran (retry), and `outcome_unknown: true` (two second timeout or a closing
+desktop) must not be replayed. It blocks, so call it off the UI thread.
+
 ## Trusted native file channel
 
 `zmux_desktop_file` is the one export that carries file text and previews. It is trusted
@@ -121,7 +130,12 @@ The body is raw: no JSON escaping and no base64.
 A malformed, truncated, unknown-op, unknown-field, non-`save` body or oversized frame is
 `ZMUX_INVALID_ARGUMENT` before any work. Every other failure is a reply with status 0 whose header
 is `{"ok":false,"op_id":N|null,"outcome_unknown":bool,"error":{"code","message"}}`, plus
-`"conflict":{"kind":"modified"|"deleted","disk_sha256","disk_size"}` for a save conflict.
+`"conflict":{"kind":"modified"|"deleted","disk_sha256","disk_size"}` for a save conflict, and
+`"generation":N` for a save that failed with `sync_failed` after the rename landed (the written
+text is on disk and is now the view's baseline at that generation; a repeat save of the same
+bytes on it is the recovery, offered by the caller and never automatic). The bridge statuses
+`ZMUX_BUSY` and `ZMUX_CAPACITY` mean the request did not run and may be retried with back-off;
+the reply header may be as large as the 8 MiB reply cap, which a client must accept.
 
 Ops (request headers; `owner` is `{epoch, identity_namespace, surface_id, host_id}` as returned
 by attach and fenced on every call):
@@ -181,7 +195,8 @@ Each pane owns ordered `surfaces` and `selected_surface`; a terminal surface own
 navigation generation. File surfaces (version 7) have `kind: file`, no session or URL, and a
 `file` object `{path, mode, dirty}`: an absolute canonical path, a presentation mode (`text`,
 `markdown`, `image`, `pdf`) and a dirty mirror that only the native document owner may set. File
-content never travels in the snapshot. Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
+content never travels in the snapshot. Persisted sessions carrying a file surface are session
+format version 10; older readers refuse it and older documents restore unchanged. Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
 Native UI and Rust are packaged together; older hosts must reject an unfamiliar model version.
 Legacy socket pane inspection still projects the selected session for existing CLI callers.
 
