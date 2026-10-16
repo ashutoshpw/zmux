@@ -7,6 +7,8 @@ import PDFKit
 protocol FilePanelOwner: AnyObject {
     /// Runs one trusted file-channel request off the main actor and returns its validated reply.
     func fileCall(_ request: FileHostRequest, body: Data) async throws -> FileHostReply
+    /// Admission control for the requests that load a whole file (attach, reload).
+    var fileLoadGate: FileLoadGate { get }
     func filePanelFocused(_ surface: UInt64)
     /// Dirty state, banner or title changed; window chrome (tab marker, header) should refresh.
     func filePanelStateChanged(_ surface: UInt64)
@@ -73,6 +75,8 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private var writable = false
     private var busy = false
     private var closed = false
+    /// Where the current attach or reload stands while it queues or backs off; nil otherwise.
+    private var loadProgress: FileLoadProgress?
     private var staleOwner = false
     private(set) var isLoaded = false
     private(set) var failureCode: String?
@@ -526,6 +530,30 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         catch { return .failure(FileHostFailure(code: "internal", message: error.localizedDescription, outcomeUnknown: true)) }
     }
 
+    /// Sends a request that loads the whole file (attach, reload) through the application's load
+    /// gate: it waits its turn behind at most `FileLoadPolicy.maxInFlight` other loads, shows that
+    /// it is waiting or retrying, and is tried again with a back-off while the file service
+    /// reports it busy. Every other failure is returned at once.
+    private func sendLoad(_ request: FileHostRequest) async -> Result<FileHostReply, FileHostFailure> {
+        guard let owner else { return .failure(FileHostFailure(code: "closed", message: "The application is shutting down")) }
+        let result = await owner.fileLoadGate.run(
+            isCancelled: { self.closed },
+            progress: { self.loadProgressChanged($0) },
+            operation: { await self.send(request) })
+        loadProgress = nil
+        guard let result else {
+            return .failure(FileHostFailure(code: "closed", message: "The tab closed before its request was sent"))
+        }
+        return result
+    }
+
+    private func loadProgressChanged(_ progress: FileLoadProgress) {
+        guard !closed else { return }
+        loadProgress = progress
+        if !isLoaded { showLoading(progress.loadingTitle(for: title)) }
+        refreshHeader()
+    }
+
     /// Marks the panel busy and builds the attach request, or returns nil when an attach cannot
     /// start (another operation is running, the tab is closing, or no snapshot has arrived yet).
     private func prepareAttach() -> FileHostRequest? {
@@ -538,7 +566,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     }
 
     private func finishAttach(_ request: FileHostRequest) async {
-        let result = await send(request)
+        let result = await sendLoad(request)
         busy = false
         resumeEditing()
         if closed {
@@ -748,7 +776,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         busy = true
         suspendEditing()
         refreshHeader()
-        let result = await send(.reload(token, discard: discard))
+        let result = await sendLoad(.reload(token, discard: discard))
         busy = false
         resumeEditing()
         guard !closed else { return }
@@ -1169,7 +1197,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         nameLabel.toolTip = path
         var parts: [String] = []
         if !isLoaded {
-            parts.append(failureCode == nil ? "Opening…" : "Unavailable")
+            parts.append(failureCode == nil ? (loadProgress?.statusNote ?? "Opening…") : "Unavailable")
         } else {
             switch mode {
             case .text?: parts.append(editor.string.isEmpty ? "Empty file" : "Text")
@@ -1180,6 +1208,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             }
             if (mode?.isEditableText ?? false) && !writable { parts.append("Read-only") }
         }
+        if isLoaded, let note = loadProgress?.statusNote { parts.append(note) }
         if busy { parts.append("Working…") }
         if let stalled = workerStalledMs { parts.append("File service busy for \(stalled / 1000)s") }
         setText(statusLabel, parts.joined(separator: " · "))

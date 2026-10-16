@@ -56,6 +56,9 @@ struct FileHostFailure: Error, LocalizedError, Sendable {
     var isOwnerLoss: Bool { ["stale_owner", "unknown_surface", "host_conflict", "closed"].contains(code) }
 }
 
+/// Lets `FileLoadGate` (Foundation only) retry the failures the file service reports as transient.
+extension FileHostFailure: FileLoadFailure {}
+
 enum FileHostRequest: Sendable {
     case attach(epoch: UUID, surface: UInt64, host: UUID)
     case reload(FileOwnerToken, discard: Bool)

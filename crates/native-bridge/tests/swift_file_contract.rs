@@ -12,8 +12,8 @@
 //! - tests named `pin_*` read Swift source and assert that exact statements exist and in what
 //!   order. They are structure pins: they catch a reverted fix or a moved statement, not wrong
 //!   behaviour, and they never run the Swift. Behaviour is checked only by the macOS fixtures
-//!   (`scripts/check-file-close-resolution`, `scripts/check-file-editor-model`) and the in-app
-//!   smoke, none of which can run on this machine.
+//!   (`scripts/check-file-close-resolution`, `scripts/check-file-editor-model`,
+//!   `scripts/check-file-load-gate`) and the in-app smoke, none of which can run on this machine.
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -136,6 +136,22 @@ fn call(desktop: u64, header: &Value, body: &[u8]) -> (Value, Vec<u8>) {
         serde_json::from_slice(&reply[4..4 + length]).unwrap(),
         reply[4 + length..].to_vec(),
     )
+}
+/// Like `call`, but returns the bridge status instead of asserting it is zero: the statuses
+/// `ZMUX_BUSY` (-4) and `ZMUX_CAPACITY` (-5) are the ones Swift must treat as "nothing ran".
+fn call_status(desktop: u64, header: &Value, body: &[u8]) -> (i32, Value) {
+    let header = serde_json::to_vec(header).unwrap();
+    let mut frame = (header.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(&header);
+    frame.extend_from_slice(body);
+    // SAFETY: the request storage is live for the whole call.
+    let result = unsafe { zmux_desktop_file(desktop, frame.as_ptr(), frame.len()) };
+    if result.status != 0 {
+        return (result.status, Value::Null);
+    }
+    let reply = bytes_of(result.value);
+    let length = u32::from_be_bytes(reply[..4].try_into().unwrap()) as usize;
+    (0, serde_json::from_slice(&reply[4..4 + length]).unwrap())
 }
 fn find_file_surface(value: &Value) -> Option<&Value> {
     match value {
@@ -1518,8 +1534,8 @@ fn pin_the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it() {
         .find("suspendEditing()")
         .expect("a reload suspends editing");
     let sent = perform
-        .find("await send(.reload")
-        .expect("a reload sends the request");
+        .find("await sendLoad(.reload")
+        .expect("a reload sends the request through the load gate");
     let resumed = perform
         .find("resumeEditing()")
         .expect("a reload resumes editing");
@@ -1671,4 +1687,500 @@ fn pin_the_file_editor_model_is_appkit_free_and_the_panel_asks_it() {
         panel.contains("typealias Banner = FileBanner"),
         "the smoke and the coordinator still name FilePanelView.Banner"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The load gate. Every file tab attaches when its snapshot arrives, so sixteen tabs opened or
+// restored together used to start sixteen bridge requests at once. Rust queues 8 jobs and runs 1
+// and answers `busy` at once when full, so the overload came from Swift and the tabs past the limit
+// ended in the error state. `FileLoadGate` keeps the number in flight below what Rust admits and
+// retries the failures that mean "busy". The Swift cannot run here; these tests execute the real
+// Rust worker with the numbers read from the Swift source.
+// ---------------------------------------------------------------------------------------------
+
+/// The text after `=` on the line of `static let <name>` in `FileLoadGate.swift`.
+fn load_gate_value(source: &str, name: &str) -> String {
+    let marker = format!("static let {name}");
+    let line = source
+        .lines()
+        .find(|l| l.contains(&marker))
+        .unwrap_or_else(|| panic!("FileLoadPolicy.{name} is missing"));
+    line.split_once('=')
+        .unwrap_or_else(|| panic!("FileLoadPolicy.{name} has no value: {line}"))
+        .1
+        .trim()
+        .to_owned()
+}
+fn load_gate_numbers(value: &str) -> Vec<usize> {
+    value
+        .trim_matches(['[', ']'])
+        .split(',')
+        .map(|n| n.trim().replace('_', "").parse().expect("a number"))
+        .collect()
+}
+fn load_gate_codes(value: &str) -> BTreeSet<String> {
+    value
+        .trim_matches(['[', ']'])
+        .split(',')
+        .map(|c| c.trim().trim_matches('"').to_owned())
+        .collect()
+}
+
+#[test]
+fn the_swift_load_gate_keeps_sixteen_tabs_inside_what_the_rust_worker_admits() {
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let gate = swift("FileLoadGate.swift");
+    let max_in_flight = load_gate_numbers(&load_gate_value(&gate, "defaultMaxInFlight"))[0];
+    let max_attempts = load_gate_numbers(&load_gate_value(&gate, "defaultMaxAttempts"))[0];
+    let backoff = load_gate_numbers(&load_gate_value(&gate, "defaultBackoffMilliseconds"));
+    let transient = load_gate_codes(&load_gate_value(&gate, "defaultTransientCodes"));
+
+    // The arithmetic: loads share the worker queue with saves, reloads of other tabs and `open`
+    // probes, so they may use at most half of it, and the worker admits a job without `busy`
+    // only while fewer than QUEUE_BOUND are queued.
+    let queue = zmux_desktop_runtime::files::QUEUE_BOUND;
+    assert!(
+        (1..=queue / 2).contains(&max_in_flight),
+        "FileLoadPolicy.defaultMaxInFlight ({max_in_flight}) must be at least 1 and at most half the worker queue ({queue})"
+    );
+    assert_eq!(
+        backoff.len() + 1,
+        max_attempts,
+        "one back-off before each retry"
+    );
+    assert!(
+        max_attempts >= 2 && backoff.windows(2).all(|w| w[0] <= w[1]),
+        "retry at least once, with a back-off that does not shrink: {backoff:?}"
+    );
+    assert!(
+        backoff.iter().sum::<usize>() <= 5_000,
+        "the whole back-off must stay short enough to be a visible wait, not a hang"
+    );
+    // The most file surfaces one command may open (16) are attached through the gate's callers and
+    // none of them may be refused.
+    let operands = zmux_desktop_runtime::files::MAX_OPEN_ITEMS;
+    assert_eq!(
+        operands, 16,
+        "the scenario below is the design's largest open"
+    );
+
+    let dir = TempDir::new();
+    let desktop = zmux_desktop_create();
+    assert_eq!(desktop.status, 0);
+    let desktop = desktop.value;
+    snapshot(desktop, |v| {
+        !v["model"]["workspaces"].as_array().unwrap().is_empty()
+    });
+    let mut items = Vec::new();
+    for i in 0..operands {
+        let path = dir.0.join(format!("tab-{i:02}.txt"));
+        // Large enough that each load occupies the worker for a while.
+        std::fs::write(&path, format!("tab {i}\n").repeat(40_000)).unwrap();
+        items.push(json!({"kind":"path","value":path}));
+    }
+    let (opened, _) = call(
+        desktop,
+        &json!({"op":"open","items":items,"focus":true}),
+        &[],
+    );
+    assert_eq!(opened["ok"], true, "{opened}");
+    let surfaces: Vec<u64> = opened["result"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["surface"]["surface_id"].as_u64().expect("a surface"))
+        .collect();
+    assert_eq!(surfaces.len(), operands);
+    let state = snapshot(desktop, |v| {
+        v["files"]["entries"]
+            .as_array()
+            .is_some_and(|e| e.len() == 16)
+    });
+    let epoch = state["files"]["epoch"].clone();
+
+    // The gate: `max_in_flight` callers pull tabs in order, so no more than that many requests are
+    // ever outstanding. Both the attach of every tab and a reload of every tab must succeed.
+    let hosts: Vec<Uuid> = surfaces.iter().map(|_| Uuid::new_v4()).collect();
+    let owners = Mutex::new(vec![Value::Null; operands]);
+    let run_gated = |phase: &str, request: &(dyn Fn(usize) -> Value + Sync)| {
+        let next = AtomicUsize::new(0);
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let start = Barrier::new(max_in_flight);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let failures = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..max_in_flight {
+                scope.spawn(|| {
+                    start.wait();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::SeqCst);
+                        if index >= operands {
+                            break;
+                        }
+                        let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        // Statuses -4 and -5 are refused before the request runs (the registry was
+                        // contended, or no reply buffer was free); Swift reports them as the
+                        // transient `busy` and sends the request again. Any other nonzero status
+                        // is a failure here.
+                        let reply = loop {
+                            let (status, reply) = call_status(desktop, &request(index), &[]);
+                            match status {
+                                0 => break reply,
+                                -4 | -5 => {
+                                    assert!(
+                                        Instant::now() < deadline,
+                                        "{phase}: still refused after a minute"
+                                    );
+                                    std::thread::yield_now();
+                                }
+                                other => panic!("{phase}: unexpected bridge status {other}"),
+                            }
+                        };
+                        in_flight.fetch_sub(1, Ordering::SeqCst);
+                        if reply["ok"] != true {
+                            failures.lock().unwrap().push((index, reply));
+                        } else if let Some(owner) = reply.get("owner") {
+                            owners.lock().unwrap()[index] = owner.clone();
+                        }
+                    }
+                });
+            }
+        });
+        let failures = failures.into_inner().unwrap();
+        assert!(
+            failures.is_empty(),
+            "{phase}: the file worker refused loads that stayed within the gate's limit of {max_in_flight}: {failures:?}"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) <= max_in_flight,
+            "{phase}: the harness exceeded the limit it models"
+        );
+    };
+    run_gated(
+        "attach",
+        &|i| json!({"op":"attach","epoch":epoch,"surface_id":surfaces[i],"host_id":hosts[i]}),
+    );
+    let tokens = owners.lock().unwrap().clone();
+    assert!(
+        tokens.iter().all(Value::is_object),
+        "every tab attached and got an owner"
+    );
+    run_gated(
+        "reload",
+        &|i| json!({"op":"reload","owner":tokens[i],"discard":true}),
+    );
+
+    // Failures the person must see at once are not in the transient set; the ones that mean
+    // "busy" are. Real Rust supplies the non-transient codes.
+    std::fs::remove_file(dir.0.join("tab-00.txt")).unwrap();
+    let (missing, _) = call(
+        desktop,
+        &json!({"op":"reload","owner":tokens[0],"discard":true}),
+        &[],
+    );
+    let stale_owner = {
+        let mut wrong = tokens[1].clone();
+        wrong["host_id"] = json!(Uuid::new_v4());
+        call(
+            desktop,
+            &json!({"op":"reload","owner":wrong,"discard":true}),
+            &[],
+        )
+        .0
+    };
+    for (what, reply) in [
+        ("a vanished file", &missing),
+        ("a foreign owner", &stale_owner),
+    ] {
+        let code = reply["error"]["code"].as_str().unwrap_or_default();
+        assert!(
+            !code.is_empty() && !transient.contains(code),
+            "{what} fails with `{code}`, which the gate must not retry: {reply}"
+        );
+    }
+    // Every transient code is one the worker really emits for overload.
+    let files = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../desktop-runtime/src/files.rs"),
+    )
+    .unwrap();
+    for code in &transient {
+        assert!(
+            files.contains(&format!("\"{code}\"")),
+            "transient code `{code}` is never emitted by the Rust file worker"
+        );
+    }
+    for code in ["busy", "file_worker_unavailable", "timeout"] {
+        assert!(
+            transient.contains(code),
+            "the worker's overload code `{code}` must be retried"
+        );
+    }
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
+}
+
+#[test]
+fn the_file_load_gate_fixture_is_wired_into_macos_ci() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |path: &str| {
+        std::fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let script = read("scripts/check-file-load-gate");
+    assert!(
+        script.contains("apps/macos/Sources/FileLoadGate.swift")
+            && script.contains("tools/native-fixtures/file-load-gate.swift")
+            && script.contains("-warnings-as-errors")
+            && script.contains("-swift-version 6")
+            && !script.contains("FilePanelView.swift"),
+        "the script must compile the production gate alone with the fixture, strictly"
+    );
+    assert!(
+        read(".github/workflows/macos-development.yml").contains("scripts/check-file-load-gate"),
+        "macOS CI must run the fixture; it cannot run on this machine"
+    );
+    let gate = read("apps/macos/Sources/FileLoadGate.swift");
+    let imports: Vec<&str> = gate
+        .lines()
+        .filter(|l| l.trim_start().starts_with("import "))
+        .collect();
+    assert_eq!(
+        imports,
+        ["import Foundation"],
+        "the gate must be AppKit free"
+    );
+    let fixture = read("tools/native-fixtures/file-load-gate.swift");
+    for scenario in [
+        "sixteen requests: three running and thirteen waiting",
+        "only three requests reached the file service",
+        "all sixteen loads succeed with their own reply",
+        "busy triggers a retry each time",
+        "exactly four tries",
+        "is not transient and must not be retried",
+        "is tried once",
+        "a request that is backing off holds no slot",
+        "a cancelled request never reaches the file service",
+        "a queued tab says it is waiting and where",
+    ] {
+        assert!(
+            fixture.contains(scenario),
+            "fixture scenario `{scenario}` is missing"
+        );
+    }
+}
+
+#[test]
+fn pin_every_whole_file_load_goes_through_the_gate_and_the_panel_shows_waiting_and_retry() {
+    let panel = swift("FilePanelView.swift");
+    let coordinator = swift("ApplicationCoordinator.swift");
+    // One gate, owned by the coordinator, shared by every panel.
+    assert_eq!(
+        coordinator
+            .matches("let fileLoadGate = FileLoadGate()")
+            .count(),
+        1,
+        "the coordinator owns exactly one load gate"
+    );
+    assert!(
+        panel.contains("var fileLoadGate: FileLoadGate { get }"),
+        "panels reach the gate through their owner"
+    );
+    // Attach and reload (the requests that read a whole file) never bypass it.
+    let send_load = between(
+        &panel,
+        "private func sendLoad(",
+        "private func loadProgressChanged(",
+    );
+    for needed in [
+        "owner.fileLoadGate.run(",
+        "isCancelled: { self.closed }",
+        "progress: { self.loadProgressChanged($0) }",
+        "operation: { await self.send(request) }",
+        "loadProgress = nil",
+    ] {
+        assert!(
+            send_load.contains(needed),
+            "sendLoad lost `{needed}`: {send_load}"
+        );
+    }
+    let uses = |needle: &str| panel.matches(needle).count();
+    assert_eq!(
+        uses("await sendLoad(request)") + uses("await sendLoad(.reload("),
+        2,
+        "the attach and the reload are the only callers of sendLoad"
+    );
+    assert_eq!(
+        uses("await send(.save(") + uses("await send(.observe("),
+        3,
+        "the save and the two observation sites are sent directly, not queued behind loads"
+    );
+    assert!(
+        !panel.contains("await send(.reload(") && !panel.contains("await send(request)"),
+        "a whole-file load must not bypass the gate"
+    );
+    // A waiting tab says so and a retrying tab says why; both leave the state when the load ends.
+    let progress = between(
+        &panel,
+        "private func loadProgressChanged(",
+        "/// Marks the panel busy",
+    );
+    assert!(
+        progress.contains("showLoading(progress.loadingTitle(for: title))"),
+        "an unloaded tab shows the waiting or retrying state: {progress}"
+    );
+    assert!(
+        panel.contains("loadProgress?.statusNote"),
+        "the header carries the waiting or retrying note"
+    );
+    // The in-app smoke opens sixteen tabs in one command and checks the gate's peak.
+    let smoke = swift("FilePanelSmoke.swift");
+    assert!(
+        smoke.contains("writeManyFiles(count: 16")
+            && smoke.contains("gate.peakInFlightCount <= FileLoadPolicy.defaultMaxInFlight")
+            && smoke.contains("ended in an error state instead of loading"),
+        "the smoke must open sixteen file tabs at once and check none failed and the limit held"
+    );
+}
+
+// `ZMUX_BUSY` (the bridge registry was contended) and `ZMUX_CAPACITY` (all sixteen reply buffers
+// are reserved) are answered before a file request reaches the worker. Swift used to report every
+// status but -2 as a `transport` failure with an unknown outcome, which is never retried, so a
+// momentary collision between two bridge calls turned into an error tab. The Swift mapping
+// (`FileBridgeRefusal`) must name the statuses Rust really uses, and -5 must really mean that
+// nothing ran.
+#[test]
+fn swift_treats_the_bridge_statuses_that_ran_nothing_as_busy_and_rust_agrees_nothing_ran() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lib =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs")).unwrap();
+    let rust_status = |name: &str| -> i32 {
+        lib.lines()
+            .find_map(|l| l.strip_prefix(&format!("const {name}: i32 = ")))
+            .unwrap_or_else(|| panic!("const {name} is missing from lib.rs"))
+            .trim_end_matches(';')
+            .parse()
+            .unwrap()
+    };
+    let gate = swift("FileLoadGate.swift");
+    let swift_status = |name: &str| -> i32 {
+        gate.lines()
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix(&format!("static let {name}: Int32 = "))
+            })
+            .unwrap_or_else(|| panic!("FileBridgeRefusal.{name} is missing"))
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    assert_eq!(swift_status("busyStatus"), rust_status("BUSY"));
+    assert_eq!(swift_status("capacityStatus"), rust_status("CAPACITY"));
+    assert_eq!(
+        swift_status("invalidArgumentStatus"),
+        rust_status("INVALID_ARGUMENT")
+    );
+    let header =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("include/zmux.h"))
+            .unwrap();
+    assert!(
+        header.contains("ZMUX_BUSY = -4") && header.contains("ZMUX_CAPACITY = -5"),
+        "the header and the Swift mapping must agree on the refusal statuses"
+    );
+    let bridge = swift("NativeBridge.swift");
+    assert!(
+        between(
+            &bridge,
+            "func file(_ request: FileHostRequest",
+            "func pastePreparedImage"
+        )
+        .contains("FileBridgeRefusal(status: result.status)"),
+        "NativeBridge.file must classify a nonzero status with FileBridgeRefusal"
+    );
+    let refusal = between(&gate, "struct FileBridgeRefusal", "/// What the gate needs");
+    assert!(
+        refusal.contains("case Self.busyStatus:")
+            && refusal.contains("case Self.capacityStatus:")
+            && refusal.matches("code: \"busy\"").count() == 2
+            && refusal.matches("outcomeUnknown: false").count() == 3
+            && refusal.matches("outcomeUnknown: true").count() == 1,
+        "-4 and -5 are busy and ran nothing; -2 ran nothing; every other status is unknown: {refusal}"
+    );
+
+    // -5 really means nothing ran: reserve every reply buffer, send a request that changes the
+    // model, observe the refusal, release, and see that the model is unchanged.
+    let dir = TempDir::new();
+    let path = dir.0.join("capacity.txt");
+    std::fs::write(&path, "x\n").unwrap();
+    let desktop = zmux_desktop_create();
+    assert_eq!(desktop.status, 0);
+    let desktop = desktop.value;
+    snapshot(desktop, |v| {
+        !v["model"]["workspaces"].as_array().unwrap().is_empty()
+    });
+    let (opened, _) = call(
+        desktop,
+        &json!({"op":"open","items":[{"kind":"path","value":path}],"focus":true}),
+        &[],
+    );
+    assert_eq!(opened["ok"], true, "{opened}");
+    let state = snapshot(desktop, |v| {
+        v["files"]["entries"]
+            .as_array()
+            .is_some_and(|e| !e.is_empty())
+    });
+    let (attached, _) = call(
+        desktop,
+        &json!({"op":"attach","epoch":state["files"]["epoch"],
+                "surface_id":opened["result"]["items"][0]["surface"]["surface_id"],
+                "host_id":Uuid::new_v4()}),
+        &[],
+    );
+    assert_eq!(attached["ok"], true, "{attached}");
+    let dirty = |model: &Value| find_file_surface(model).map(|s| s["file"]["dirty"].clone());
+    assert_eq!(
+        dirty(&snapshot(desktop, |_| true)["model"]),
+        Some(json!(false))
+    );
+
+    let mut held = Vec::new();
+    let refused = loop {
+        let taken = zmux_desktop_snapshot(desktop, 0);
+        if taken.status != 0 {
+            assert_eq!(taken.status, rust_status("CAPACITY"));
+            break taken.status;
+        }
+        held.push(taken.value);
+        assert!(held.len() <= 16, "the reply buffer pool is larger than 16");
+    };
+    assert_eq!(refused, rust_status("CAPACITY"));
+    let observe = json!({"op":"observe","owner":attached["owner"],"dirty":true});
+    let (status, _) = call_status(desktop, &observe, &[]);
+    assert_eq!(
+        status,
+        rust_status("CAPACITY"),
+        "a file request with no free reply buffer is refused with ZMUX_CAPACITY"
+    );
+    for id in held {
+        assert_eq!(zmux_buffer_release(id), 0);
+    }
+    // The refused observation changed nothing; sending it again (what Swift does) works.
+    assert_eq!(
+        dirty(&snapshot(desktop, |_| true)["model"]),
+        Some(json!(false)),
+        "a request refused with ZMUX_CAPACITY must not have run"
+    );
+    let (status, reply) = call_status(desktop, &observe, &[]);
+    assert_eq!((status, &reply["ok"]), (0, &json!(true)), "{reply}");
+    snapshot(desktop, |v| {
+        find_file_surface(&v["model"]).is_some_and(|s| s["file"]["dirty"] == true)
+    });
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
 }

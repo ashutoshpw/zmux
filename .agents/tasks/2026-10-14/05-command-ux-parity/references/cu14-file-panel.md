@@ -1024,6 +1024,7 @@ around `beginSheetModal` in `presentSheet`.
   socket `close-surface` through; the orphan sheet then offers Copy Text. Not testable here.
 - If the file service is stalled, Save, Reload and `observe` surface `file_worker_unavailable`
   or `busy`; `observe` retries at a bounded rate, the others show a banner and wait for the person.
+  (Fix round 8: attach and reload now also retry automatically, four tries, then show the error.)
 - The Swift cannot prove first-responder retention, sheet flows or decode; CI is the verifier.
 - No test, native or Linux, drives the Swift reaction to a `files.epoch` rotation (session restore)
   end to end; see "Fix round 2" for what is pinned structurally and why the smoke omits it.
@@ -1032,7 +1033,8 @@ around `beginSheetModal` in `presentSheet`.
 
 - `scripts/check` (fmt, `cargo test --workspace --locked`, clippy `-D warnings`,
   `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 549 tests
-  passed, 0 failed, 2 ignored, 79 test binaries (546 before the slice plus the 3 new tests). The
+  passed, 0 failed, 2 ignored, 79 test binaries (546 before the slice plus the 3 new tests; this is
+  the count at the slice commit, each fix round below records its own, 573 after round 8). The
   license inventory and `THIRD_PARTY_NOTICES.md` are unchanged (no dependency was added).
 - `cargo test -p zmux-native-bridge --test swift_file_contract`: 3 passed; mutation and
   determinism evidence above.
@@ -1261,7 +1263,7 @@ Deviations and limits specific to this round:
 
 Every Swift/macOS gate is UNAVAILABLE locally: `scripts/check-macos-sources` (Swift 6 strict
 concurrency, warnings-as-errors type check of all sources including `FileCloseResolution.swift`),
-`scripts/check-file-close-resolution`, `scripts/check-browser-download-files`, `scripts/build-macos-dev`,
+`scripts/check-file-close-resolution`, `scripts/check-file-load-gate` (fix round 8), `scripts/check-browser-download-files`, `scripts/build-macos-dev`,
 `scripts/check-macos-app`, the `file_panel` smoke stage and every hosted macOS workflow. None is
 recorded as passed; CI is the verifier and none of the Swift in this slice has ever been compiled.
 
@@ -1279,11 +1281,16 @@ recorded as passed; CI is the verifier and none of the Swift in this slice has e
   dark-appearance banner contrast.
 - Between the first keystroke and the acknowledged `observe(true)` (D7a), a socket `close-surface` can
   still get through; the orphan sheet then offers Copy Text.
-- A stalled file service surfaces `file_worker_unavailable`/`busy` on Save, Reload and observe; observe
-  retries at a bounded rate, the others show a banner and wait.
+- A stalled or overloaded file service: observe retries at a bounded rate. Attach and reload are
+  queued behind at most three in flight and retried up to four tries with 250/500/1000 ms back-off
+  when the service answers `busy`, `file_worker_unavailable` or `timeout` (or the bridge refuses the
+  call with status -4/-5), then show the error with Retry (fix round 8). Save is not queued and not
+  retried: it shows the failure and waits for the person.
 - Session quit/restore (`files.epoch` rotation) and the quit-with-dirty prompt are not exercised by the
   smoke; the epoch reaction is pinned structurally only.
-- Typing is blocked, not buffered, while a reload or attach is in flight; keystrokes then are lost.
+- Typing is blocked, not buffered, while a reload or attach is in flight, which now includes the
+  time it waits in the load gate's queue or backs off between tries (up to roughly the queue
+  position times the 2 s call timeout, plus 1.75 s of back-off); keystrokes then are lost.
 - Text typed into a panel between its Don't Save answer and the end of the same close is also discarded.
 - Repeats of the same close gesture while it is pending are folded into the pending request.
 - Rendered Markdown: tables degrade to tab-separated text; thematic breaks, images and raw HTML are not
@@ -1469,3 +1476,111 @@ Still UNAVAILABLE (unchanged; no Swift toolchain): `scripts/check-macos-sources`
 initialiser and `maxReplyHeader`), `scripts/check-file-editor-model`, `scripts/check-file-close-resolution`,
 `scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke and every hosted macOS
 workflow. Not run anywhere: the undo-isolation behaviour in a real window.
+
+### Fix round 8 (S4 review finding, one blocking, valid and fixed at the root)
+
+Base of the round: `cdacaa6`. Swift still cannot be compiled or run here (no Swift toolchain, Linux).
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | Every file panel attaches the moment its snapshot arrives, with no concurrency limit and no automatic retry. Rust queues 8 jobs and runs 1 and answers `busy` at once when full, so 10 to 16 file tabs opened or restored together leave some in the "File service is busy" state until the person clicks Retry tab by tab. | Yes, twice over. (a) By reading: `reconcileFilePanels` updates every file surface, `FilePanelView.update` calls `beginAttach` for each, `NativeBridge.file` runs each on its own detached task, and `loadFailed` turns `busy` into the error state that `update` ignores. (b) By execution on Linux with the real `zmux_desktop_file` export (a scratch copy of the new test, deleted, not committed): 16 file surfaces of 240 to 280 KB each attached by 16 threads released together: 7 of 16 worker `busy` replies (the finding's figure) plus 31 bridge-level refusals; the same 16 attached by 3 callers: 0 worker refusals. | `FileLoadGate` (new Foundation-only `apps/macos/Sources/FileLoadGate.swift`, owned by `ApplicationCoordinator` as `fileLoadGate`, reached by every panel through `FilePanelOwner`). Attach and reload go through `FilePanelView.sendLoad`: at most `FileLoadPolicy.defaultMaxInFlight` = 3 in flight (the pure `FileLoadScheduler` FIFO; 3 is at most half the worker's 8-slot queue, which saves, observations and `open` probes also use); the rest wait in order and the panel shows "Waiting to open X… (n in line)" (loading screen) or a header note; a failure whose code is `busy`, `file_worker_unavailable` or `timeout` and whose outcome is known is retried after 250, 500, 1000 ms (four tries in all, the pure `FileLoadPolicy.decision`), the panel says "The file service is busy. Opening X again… (try n of 4)", and a request that is backing off holds no slot; after the last try the existing error state with Retry appears. Every other code, and any `outcomeUnknown`, fails at once. A panel that closed while queued or backing off never sends its request. Save and observe are not queued. |
+| 1b | (found while verifying) The same overload exists one layer below the worker. `zmux_desktop_file` answers `ZMUX_BUSY` (-4: bridge registry `try_lock` contended) and `ZMUX_CAPACITY` (-5: all 16 reply buffers reserved) before the request runs, and Swift reported every status except -2 as `transport` with `outcomeUnknown`, which is never retried. With the gate at 3 callers the real export still refused 3 to 4 calls per run with -4, so a gate alone would still have produced error tabs (and, for a save, a misleading "outcome unknown" banner). | Yes, by execution: the new contract test counted the refusals; by reading: every -4/-5 site in `zmux_desktop_file` (`desktop`, `Reservation::new`) precedes `file_channel::execute`, and the only status after execution is -6. -5 is proven deterministically (below). -4 cannot be provoked on demand; its "nothing ran" property rests on that reading. | New pure `FileBridgeRefusal(status:)` in `FileLoadGate.swift`, used by `NativeBridge.file`: -4 and -5 become the transient `busy` with `outcomeUnknown: false` (so they are retried by the gate, by `observe`, and shown as a plain "could not save" rather than an unknown outcome for a save); -2 stays a transport failure that ran nothing; every other status stays a transport failure with unknown outcome. |
+
+Tests added or changed:
+
+- `tools/native-fixtures/file-load-gate.swift` + `scripts/check-file-load-gate` (new, wired into
+  `.github/workflows/macos-development.yml` after the editor-model step): compiles the production
+  `FileLoadGate.swift` alone (Foundation only) with Swift 6 strict concurrency and warnings as errors
+  and runs it with no threads, timers or sleeps (requests wait on explicit latches, the back-off
+  `pause` is scripted, settling is a bounded `Task.yield()` loop). Scenarios: the pure FIFO (16
+  tickets, 3 start, 13 wait at positions 1...13, the freed slot goes to the oldest, an abandoned
+  waiter leaves, draining in any order never exceeds the limit); the retry table (`busy`,
+  `file_worker_unavailable`, `timeout` retry with 250/500/1000 then give up; 18 other codes and every
+  transient code with an unknown outcome do not retry); the bridge statuses (-4 and -5 retry, -2 and
+  the unknown statuses do not); sixteen simultaneous requests through the real gate (3 reach the
+  service, 13 wait, nothing above 3 in flight at any time, all 16 succeed with their own reply and
+  start in the order they asked); busy twice then success (three tries, pauses 250 and 500, panel
+  progress events); busy forever (exactly four tries, three pauses, the busy failure returned);
+  non-transient and unknown-outcome failures (one try, no pause); a backing-off request holds no slot
+  (a second request runs during its pause, the retry queues behind); a request cancelled while
+  waiting or backing off never reaches the service and passes its slot on; the waiting and retrying
+  texts. UNAVAILABLE here (needs `xcrun swiftc`): never compiled or run, so even its syntax is
+  unproven; expected values were traced by hand.
+- `crates/native-bridge/tests/swift_file_contract.rs`, now 26 tests (22 before, 4 added), all of which
+  run on Linux:
+  - `the_swift_load_gate_keeps_sixteen_tabs_inside_what_the_rust_worker_admits` (contract; executes
+    real Rust). It reads `defaultMaxInFlight`, `defaultMaxAttempts`, `defaultBackoffMilliseconds` and
+    `defaultTransientCodes` from the Swift, checks the arithmetic against the worker's real
+    `QUEUE_BOUND` (limit at most half of it; one back-off per retry; total back-off at most 5 s),
+    opens 16 real files of 240 to 280 KB through the real `zmux_desktop_file` export, and attaches then
+    reloads all 16 through exactly that many concurrent callers pulling tabs in order: no worker
+    refusal may occur. It then provokes real non-transient failures (`not_found`, `stale_owner`) and
+    asserts they are outside the Swift transient set, and that every transient code is emitted by
+    `files.rs`. It fails if the Swift constants are raised past what Rust admits (verified by
+    mutation below). It does not assert that 16 ungated callers fail: that depends on timing and the
+    determinism rule forbids it; the 7-of-16 figure above is measurement, not an assertion.
+  - `swift_treats_the_bridge_statuses_that_ran_nothing_as_busy_and_rust_agrees_nothing_ran`
+    (contract). Swift's `busyStatus`, `capacityStatus`, `invalidArgumentStatus` equal `BUSY`,
+    `CAPACITY`, `INVALID_ARGUMENT` read from `lib.rs`, and `zmux.h`; `NativeBridge.file` classifies
+    with `FileBridgeRefusal`. Then real Rust: all 16 reply buffers are reserved, an `observe(dirty:
+    true)` is refused with -5, and after releasing them the model still reads clean (it did not run);
+    sending it again succeeds and the model becomes dirty. Deterministic: the pool bound is a
+    constant and nothing else runs under the test serial lock.
+  - `the_file_load_gate_fixture_is_wired_into_macos_ci` (script compiles the gate alone, strictly;
+    workflow runs it; the gate imports Foundation only; ten named fixture scenarios exist).
+  - `pin_every_whole_file_load_goes_through_the_gate_and_the_panel_shows_waiting_and_retry` (structure
+    pin, never runs the Swift): one gate owned by the coordinator, reached through the owner; attach
+    and reload are the only `sendLoad` callers and are not sent directly; save and the two observe
+    sites are sent directly; the loading screen and header show the progress; the smoke opens 16 tabs.
+  - `pin_the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it` now looks for
+    `await sendLoad(.reload` (the same ordering assertions otherwise).
+- `FilePanelSmoke` step 13 (UNAVAILABLE here, not run): writes 16 files, opens them with one `zmux
+  open`, waits until all 16 panels are loaded, requires none to show an error state and the gate's
+  `peakInFlightCount` to be between 1 and 3 with nothing left queued.
+
+Mutation checks on Linux (applied, run, restored): `defaultMaxInFlight = 3` raised to `5` fails the
+arithmetic assertion; `defaultTransientCodes` with `"busy"` removed fails the overload-code
+assertion; reverting `NativeBridge.file` to the unclassified `transport` failure fails the status
+contract; calling `send(.reload` instead of `sendLoad(.reload` fails the reload pin and the gate
+pin, and `send(request)` instead of `sendLoad(request)` in `finishAttach` fails the gate pin. No mutation of the Swift behaviour (the scheduler, the retry rule, the gate) is caught on
+Linux, by design: only `scripts/check-file-load-gate` on macOS can fail those.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test result
+lines, 573 passed, 0 failed, 2 ignored, the previous 569 plus 4; clippy `-D warnings`; license
+inventory; `scripts/check-native-bridge`). Determinism of the changed binary (`swift_file_contract`,
+26 tests, three real Desktop tests among the new and changed ones, each with its own temp directory):
+20 serial runs, 0 failures; then 5 rounds of 8 copies started together and waited for individually,
+beside 24 busy-loop CPU hogs, 40 runs, 0 failures; 60 of 60 logs carry `26 passed; 0 failed`.
+
+Still UNAVAILABLE (unchanged; no Swift toolchain, Linux): `scripts/check-file-load-gate` (new),
+`scripts/check-file-editor-model`, `scripts/check-file-close-resolution`, `scripts/check-macos-sources`
+(type-checks `FileLoadGate.swift`, the edited `FilePanelView.swift`, `NativeBridge.swift`,
+`FileHostClient.swift`, `ApplicationCoordinator.swift` and `FilePanelSmoke.swift`),
+`scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke and every hosted macOS
+workflow. CI is the verifier and none of this round's Swift has been compiled. New unconfirmed Swift
+points for CI: the generic `FileLoadGate.run<Value, Fault: FileLoadFailure>` taking `@MainActor`
+closures and inferring `Value`/`Fault` from `await self.send(request)`; `extension FileHostFailure:
+FileLoadFailure {}` satisfying `outcomeUnknown` with a stored `var`; `withCheckedContinuation`
+storing its continuation in a `@MainActor` dictionary; a `static let` shared by `FileLoadPolicy.standard`
+and the Rust parser; `FileBridgeRefusal`'s delegating `init(status:)` with `case Self.busyStatus:`;
+the fixture's `Task { @MainActor in ... }` returning `Result<String, ScriptedFault>?`, its
+`if case .success? = ...` payload-less patterns, and `String(format:)` in the smoke.
+
+Limits and deviations:
+
+- The gate is per application, not per window, and bounds attach and reload only. A save, an
+  `observe`, a `detach` and `File > Open` still reach the worker directly; three loads leave five
+  queue slots for them, which is headroom, not a guarantee. Rust still answers `busy` when the queue
+  is full for other reasons; the gate's retry then absorbs it for loads only.
+- A retried request is re-sent with the epoch and owner it was built with. If the epoch rotates (session
+  restore) while it waits, the retry fails with `stale_owner`, which is not retried and shows Retry.
+- A load that times out (`timeout`, 2 s) is retried although the first attempt's job may still be
+  running in the worker; the retry then meets `busy` ("another operation is still running for this
+  tab") and backs off again. Attach and reload are idempotent, so no data is at risk.
+- The total wait before an explicit error is at most 1.75 s of back-off plus up to four 2 s call timeouts
+  and the queue wait; there is no cap on the queue wait itself beyond the 16 operand limit of one open.
+- Typing is blocked while a panel queues or backs off (see the limitations list above).
+- The gate default pause uses `Task.sleep`; a cancelled sleep returns early and the next try comes
+  sooner, bounded by the four tries.
+- The retry count and delays are constants, not user settings.
+
