@@ -323,3 +323,37 @@ unchanged. Instrumentation itself changes elapsed time, so a different cookie re
 alone will not establish cause. Actual lineage/group evidence must precede any
 cleanup-policy change. Portable real-child observation/exit/reap checks pass; actual
 Darwin relationships remain a hosted diagnostic gate.
+
+
+## Single creation-path discriminator (source prepared, native pending)
+
+The next diagnostic preserves V8b's no-removal baseline, normal AppKit termination,
+fixed 45-second native phase limits, original JavaScript `probe=A/B` and localStorage
+assertions, and unchanged owned-group cleanup and process observations. It adds
+exactly one separately named `native_created=A/B` persistent cookie to each exact
+identifier store through public `httpCookieStore.setCookie`, awaiting each callback
+once. The new name cannot accidentally satisfy the existing `probe=A/B` substring
+checks. No cookie backup, replay, added delay or production change is involved.
+
+Creation first reads each original JavaScript cookie and requires the expected
+loopback domain, root path, future expiry and non-session/non-secure/non-HttpOnly
+attributes. The new cookie uses those same observed domain/path/expiry values.
+Both JavaScript and public store observations are retained and checked before
+termination and before any existing fresh-reader cleanup. The independent runner
+requires both exact names, values, comparable persistence attributes, two acknowledged
+preparer-only sets, no reader sets, and unchanged expiry across the process boundary.
+An unknown native-set callback has its own receipt field, separate from an unknown
+removal callback. All original callback/retirement semantics remain unchanged.
+
+The public `WKHTTPCookieStore.h` says `setCookie` completion fires once the cookie
+has been stored. The examined identifier-store and `isPersistent` documentation
+and WebKit profile article describe persistent profile restoration, but do not
+promise an fsync barrier for that callback. This experiment compares acknowledged
+creation paths; it does not claim a flush mechanism. Both cookie paths surviving
+would establish only this changed fixture result, not prove the cause of prior
+loss. Native-only survival leaves the original JavaScript durability gate failing;
+both paths disappearing points to a shared persistence issue. No outcome alone
+accepts profile deletion or unlocks production lifetime ownership.
+
+Portable Python syntax, validator positive and mutation controls, and diff whitespace
+checks pass. Swift compilation and actual macOS/WebKit execution remain pending.

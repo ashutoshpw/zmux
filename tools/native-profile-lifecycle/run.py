@@ -27,6 +27,27 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def validate_creation_path(report, profile_a, profile_b, prepared=None):
+    assert report['aNativeCookieRetained'] and report['bNativeCookieRetained']
+    expected_sets = ([{'profile': profile_a.upper(), 'value': 'A', 'callbackReceived': True},
+                      {'profile': profile_b.upper(), 'value': 'B', 'callbackReceived': True}]
+                     if prepared is None else [])
+    assert report['nativeCookieSets'] == expected_sets
+    for key, value in (('aCookieStoreObservation', 'A'), ('bCookieStoreObservation', 'B')):
+        cookies = report[key]
+        assert len(cookies) == 2 and {row['name'] for row in cookies} == {'probe', 'native_created'}
+        by_name = {row['name']: row for row in cookies}
+        for row in cookies:
+            assert row['value'] == value and row['domain'] == '127.0.0.1' and row['path'] == '/'
+            assert not row['sessionOnly'] and not row['secure'] and not row['httpOnly']
+            assert isinstance(row['expiresAt'], (int, float)) and row['expiresAt'] > time.time()
+        assert abs(by_name['probe']['expiresAt'] - by_name['native_created']['expiresAt']) < 1
+        if prepared is not None:
+            previous = {row['name']: row for row in prepared[key]}
+            for row in cookies:
+                assert abs(row['expiresAt'] - previous[row['name']]['expiresAt']) < 1
+
+
 def main():
     if sys.platform != "darwin":
         raise SystemExit("Public WebKit lifecycle feasibility requires macOS")
@@ -44,6 +65,8 @@ def main():
     receipt = {"schema_version": 1, "state": "starting", "source_sha": source,
                "scenario": SCENARIO,
                "termination": "nsapplication_terminate",
+               "cookie_creation_discriminator": "js_probe_and_acknowledged_native_created",
+               "set_cookie_callback_is_flush_receipt": False,
                "source_sha256": frozen, "nonce": nonce, "bundle_id": bundle_id,
                "profile_a": profile_a, "profile_b": profile_b,
                "platform": platform.platform(), "architecture": platform.machine(), "phases": [],
@@ -231,6 +254,7 @@ def main():
         if SCENARIO == "baseline":
             assert prepared["removals"] == [] and not prepared.get("aDataRemoval")
             assert prepared["aCookieStoreObservation"] and prepared["bCookieStoreObservation"]
+            validate_creation_path(prepared, profile_a, profile_b)
         else:
             assert prepared["reopenedAEmpty"]
             assert prepared["aDataRemoval"]["scope"] == "profile_a_all_website_data"
@@ -259,6 +283,7 @@ def main():
         assert report["separateBRetained"] and report["aViewReleased"]
         if SCENARIO == "baseline":
             assert report["heldDataRetained"]
+            validate_creation_path(report, profile_a, profile_b, prepared)
         else:
             assert report["reopenedAEmpty"]
         assert [item["phase"] for item in report["removals"]] == ["cleanup_a", "cleanup_b"]
@@ -273,12 +298,16 @@ def main():
     except Exception as error:
         receipt.update(state="failed", error=f"{type(error).__name__}: {error}")
         receipt["removal_outcome_unknown"] = False
+        receipt["cookie_set_outcome_unknown"] = False
         for name, key in (("native-profile-prepare.json", "partial_native_preparation"),
                           ("native-profile-lifecycle.json", "partial_native_report")):
             report_path = root / name
             if report_path.exists():
                 receipt[key] = json.loads(report_path.read_text())
-                receipt["removal_outcome_unknown"] |= receipt[key]["stage"].endswith("_callback_pending")
+                stage = receipt[key]["stage"]
+                receipt["cookie_set_outcome_unknown"] |= stage.startswith("native_cookie_") and stage.endswith("_set_callback_pending")
+                receipt["removal_outcome_unknown"] |= (stage.endswith("_callback_pending")
+                    and not stage.startswith("native_cookie_"))
     finally:
         server.shutdown()
         server.server_close()
