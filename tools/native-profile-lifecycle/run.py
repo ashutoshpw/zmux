@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 INPUTS = ("tools/native-profile-lifecycle/Probe.swift", "tools/native-profile-lifecycle/run.py",
           ".github/workflows/profile-lifecycle-probe.yml", "tools/terminal-feasibility/run.py",
           "scripts/process_group.py", "LICENSE")
+SCENARIO = "baseline"
 
 
 def digest(path):
@@ -39,6 +40,7 @@ def main():
     profile_a, profile_b = str(uuid.uuid4()), str(uuid.uuid4())
     bundle_id = "app.w3dev.zmux.profile-lifecycle-probe." + uuid.uuid4().hex
     receipt = {"schema_version": 1, "state": "starting", "source_sha": source,
+               "scenario": SCENARIO,
                "source_sha256": frozen, "nonce": nonce, "bundle_id": bundle_id,
                "profile_a": profile_a, "profile_b": profile_b,
                "platform": platform.platform(), "architecture": platform.machine(), "phases": [],
@@ -111,7 +113,7 @@ def main():
         fixture = f"http://127.0.0.1:{server.server_port}/fixture/{nonce}"
         preparation_path = root / "native-profile-prepare.json"
         runner.run([str(executable), str(preparation_path), fixture,
-                    nonce, profile_a, profile_b, "prepare", str(preparation_path)], "native-profile-prepare", root,
+                    nonce, profile_a, profile_b, "prepare", str(preparation_path), SCENARIO], "native-profile-prepare", root,
                    receipt["phases"], timeout=45, cwd=REPO)
         prepared = json.loads(preparation_path.read_text())
 
@@ -119,15 +121,21 @@ def main():
             assert report["appPID"] == pid
             assert report["sourceSHA"] == source and report["bundleID"] == bundle_id and report["nonce"] == nonce
             assert report["profileA"].lower() == profile_a and report["profileB"].lower() == profile_b
+            assert report["scenario"] == SCENARIO
 
         validate_identity(prepared, owned_groups[-1]["pid"])
         assert prepared["phase"] == "prepare" and prepared["state"] == "prepared" and prepared["stage"] == "prepared_for_fresh_process"
-        assert all(prepared[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "reopenedAEmpty", "separateBRetained"))
-        assert prepared["aDataRemoval"]["scope"] == "profile_a_all_website_data"
-        assert prepared["aDataRemoval"]["callbackReceived"] and prepared["aDataRemoval"]["dataTypes"]
-        assert [item["phase"] for item in prepared["removals"]] == ["mounted_a_remove", "released_a_remove"]
-        assert all(item["callbackReceived"] for item in prepared["removals"])
-        assert prepared["removals"][0].get("errorDomain") and not prepared["removals"][1].get("errorDomain")
+        assert all(prepared[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "separateBRetained"))
+        if SCENARIO == "baseline":
+            assert prepared["removals"] == [] and not prepared.get("aDataRemoval")
+            assert prepared["aCookieStoreObservation"] and prepared["bCookieStoreObservation"]
+        else:
+            assert prepared["reopenedAEmpty"]
+            assert prepared["aDataRemoval"]["scope"] == "profile_a_all_website_data"
+            assert prepared["aDataRemoval"]["callbackReceived"] and prepared["aDataRemoval"]["dataTypes"]
+            assert [item["phase"] for item in prepared["removals"]] == ["mounted_a_remove", "released_a_remove"]
+            assert all(item["callbackReceived"] for item in prepared["removals"])
+            assert prepared["removals"][0].get("errorDomain") and not prepared["removals"][1].get("errorDomain")
         # The unchanged owned runner closes/reaps each phase before returning.
         # Inspect the retained child handle, never infer exit from a reused PID.
         assert owned_processes[-1].returncode == 0 and owned_processes[-1].poll() == 0
@@ -139,13 +147,17 @@ def main():
         assert digest(executable) == receipt["executable_sha256"]
         assert digest(archive) == receipt["archive"]["sha256"]
         runner.run([str(executable), str(root / "native-profile-lifecycle.json"), fixture,
-                    nonce, profile_a, profile_b, "reopen", str(preparation_path)], "native-profile-reopen", root,
+                    nonce, profile_a, profile_b, "reopen", str(preparation_path), SCENARIO], "native-profile-reopen", root,
                    receipt["phases"], timeout=45, cwd=REPO)
         report = json.loads((root / "native-profile-lifecycle.json").read_text())
         validate_identity(report, owned_groups[-1]["pid"])
         assert report["appPID"] != prepared["appPID"] and report["preparerPID"] == prepared["appPID"]
         assert report["phase"] == "reopen" and report["state"] == "complete" and report["stage"] == "public_cleanup_complete"
-        assert report["reopenedAEmpty"] and report["separateBRetained"] and report["aViewReleased"]
+        assert report["separateBRetained"] and report["aViewReleased"]
+        if SCENARIO == "baseline":
+            assert report["heldDataRetained"]
+        else:
+            assert report["reopenedAEmpty"]
         assert [item["phase"] for item in report["removals"]] == ["cleanup_a", "cleanup_b"]
         assert all(item["callbackReceived"] and not item.get("errorDomain") for item in report["removals"])
         assert owned_processes[-1].returncode == 0 and owned_processes[-1].poll() == 0

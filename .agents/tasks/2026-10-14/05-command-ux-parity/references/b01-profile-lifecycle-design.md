@@ -1,8 +1,8 @@
 # B01 clear/delete lifecycle design (read-only investigation)
 
 No destructive command or release of constructed-store ownership is implemented.
-The acquisition slice still requires actual macOS validation. This design removes
-the restart-only limitation for a sole local owner without treating wrapper
+The acquisition slice still requires actual macOS validation. This design proposes
+a replacement for restart-only ownership for a sole local owner without treating wrapper
 closure/deinit as physical WebKit retirement evidence.
 
 ## Public evidence and its limit
@@ -21,8 +21,10 @@ Read-only upstream reference, not imported implementation: WebKit commit
 30281d59519dd0df7cf7b0326d31b726ddb04289 returns busy for active pages or a retained
 network process, otherwise removes the identifier's network session and disk data
 before completing. This is not installed-OS proof; busy/success native fixtures
-must establish supported behavior. The public removal callback is the sole data
-removal receipt. Weak object disappearance, stopLoading, canceled navigation,
+must establish supported behavior. The identifier callback is the namespace-removal
+receipt; V3's retained cookie shows that it alone does not establish empty website
+data. Store-specific clearing has a separate completion, and native data observations
+remain required. Weak object disappearance, stopLoading, canceled navigation,
 empty host dictionaries, cache eviction and UUID listing cannot replace it.
 https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/UIProcess/WebsiteData/Cocoa/WebsiteDataStoreCocoa.mm#L326
 
@@ -63,31 +65,46 @@ sequence, including native callback and catalog commit.
    insufficient: actual WKWebViews and physical download/conversion jobs count.
 3. Acquire admission exclusive. Contention returns busy without dropping lifetime
    ownership. Revalidate current-catalog identity and native busy state under it.
-4. Evict only the idle local store cache, release application-owned native refs,
+4. Evict only the idle local store cache, release application-owned WKWebViews,
    and observe actual WKWebView weak registrations plus existing physical job
-   receipts. Keep the shared lifetime lease while this prerequisite is pending.
+   receipts. Retain the exact inactive store for store-specific data clearing.
+   Keep the shared lifetime lease while this prerequisite is pending.
 5. Under retained admission exclusive, transition this process's exact known
    lifetime owners to one lifetime-exclusive reservation. Existing foreign shared
    owners cause busy. Restore all required local shared ownership before releasing
    admission; never expose an unlocked gap. Other processes' cached stores remain
    valid busy owners; do not steal their tokens or infer retirement from age.
-6. With writer authority retained, call public identifier removal once, after the
-   documented WKWebView release prerequisite. Residual framework/network ownership
-   may still return busy. No background retry loop or synthetic completion.
+6. With writer authority retained and WKWebViews released, invoke the exact inactive
+   store's all-data clear once and retain its distinct completion receipt. Release
+   store refs, then call public identifier removal once and retain its distinct
+   namespace-removal receipt. Residual framework/network ownership may still return
+   busy. No background retry loop or synthetic completion.
 7. On known busy/error, restore local lifetime shared authority while admission is
    still exclusive, then unlock admission and report the exact failure. If shared
    restoration fails, retain writer authority and capacity; reopening stays denied.
+   A namespace-removal error after data-clear completion is a partial mutation,
+   never unchanged/busy rollback. Retain and report both phase outcomes.
 8. Timeout/cancel after admission or callback dispatch is unknown, never success.
    Retain writer, lifetime-exclusive authority and physical callback capacity until
    that original callback/status resolves. No replay and no same-UUID reopen.
-9. Public success permits the correlated durable metadata sequence below. Only its
+9. Known data-clear completion plus namespace-removal success permit the correlated
+   durable metadata sequence below. Only its
    exact known completion releases writer authority. Late callbacks cannot affect a
    successor; no successor is admitted while the original outcome remains unknown.
 
-Clear can use the identifier-removal owner while retaining the immutable catalog
+Clear can use this data-clear/identifier-removal owner while retaining the immutable catalog
 UUID, so the next permitted open creates empty storage. Delete removes catalog
 membership only after public removal succeeds. Never substitute private/default
 storage, delete unrelated history or silently rewrite old session/closed bindings.
+
+Retain distinct correlated durable phases for data-clear dispatch/completion,
+namespace-removal dispatch/completion/error and selected-catalog commit. Completion
+of an earlier phase does not imply later phases ran. Unknown callbacks retain
+authority and callback capacity; restart reconciliation and receipt retention must
+be chosen before production admission. A known partial failure must disclose the
+already-cleared data and must never replay clearing while retrying catalog work.
+Generated cleanup UUID callbacks in the diagnostic prove only their reported
+namespace outcomes; they do not independently prove cookie clearing, as V3 showed.
 
 ## Delete scope and stale copies
 
@@ -237,3 +254,24 @@ The runner retains `same_process_acceptance` and `fresh_process_acceptance`
 separately. Pending markers cover all-data completion and UUID callbacks. Unknown
 outcomes never cause a retry, overlapping app or filesystem cleanup. Production
 writer/lease coordination and destructive command exposure remain unavailable.
+
+Run [38839907151](https://github.com/ashutoshpw/zmux/actions/runs/38839907151)
+at `6e71df371c7fa9d4bcb911a67b2e44ca09353b6b` passed preparation and the
+owned exit barrier (PID 8020, exit 0), then failed in reader PID 8045 without a
+timeout. A was empty in the fresh process. B retained localStorage B but its
+`probe=B` cookie check was false. The reader performed no removal/cleanup before
+failing; no callback was pending. Exact retained sources/archive/plist/executable,
+both identities, preparation hash and phase linkage were independently verified.
+This blocks fresh-process isolation acceptance; it does not yet distinguish
+cross-profile clearing from cookie persistence under the fixture's `exit(0)`.
+
+The next fresh-ID control is explicitly `scenario=baseline`. Its preparer seeds
+A/B, records actual JavaScript cookie/localStorage strings plus public per-store
+`getAllCookies` results (bounded name/value/domain/path/session/expiry fields), then
+uses the same view release and owned `exit(0)`/reopen sequence. It performs no
+data clearing or UUID removal before the reader. The reader never seeds and must
+preserve both A and B cookies/localStorage; cleanup only follows passing those
+assertions. The clear scenario retains its original strict empty-A/intact-B
+assertions. No delay, replay or per-cookie deletion is added. If the baseline also
+loses cookies, normal documented app termination is a separate comparison to
+investigate before attributing loss to A clearing or claiming durability.
