@@ -236,6 +236,11 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         guard let view = aView else { throw ProbeFailure(description: "A reopen is absent") }
         try await load(view)
     }
+    private func loadFreshB() async throws {
+        (bStore, bView) = makeView(profile: report.profileB, x: 640)
+        guard let view = bView else { throw ProbeFailure(description: "Fresh B is absent") }
+        try await load(view)
+    }
     private func reopenA() async throws {
         try await loadA()
         let observation = try await evaluate(aView, "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:!document.cookie.includes('probe=')})")
@@ -363,9 +368,7 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         report.stage = "fresh_process_loading"
         try await save()
         // Never seed on reopen. Observe the exact namespace from the exited app.
-        (bStore, bView) = makeView(profile: report.profileB, x: 640)
-        guard let view = bView else { throw ProbeFailure(description: "Fresh B is absent") }
-        try await load(view)
+        try await loadFreshB()
         if report.scenario == "baseline" {
             try await loadA()
             try await observeRetainedAData()

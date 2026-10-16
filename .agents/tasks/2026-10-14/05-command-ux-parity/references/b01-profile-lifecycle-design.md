@@ -480,3 +480,74 @@ lease checks. Log: `/tmp/zmux-b01-caller-retention-repository-check-20261016.log
 No Swift compiler is available on this host; these checks do not compile or execute
 the WebKit diagnostic. The previously dirty V9 outcome/scope notes are preserved
 alongside this appendix. No push or diagnostic/native rerun has occurred.
+
+### V10 actual retained-caller outcome: cookies survive, B cleanup blocked
+
+Authorized single run
+[38848628624](https://github.com/ashutoshpw/zmux/actions/runs/38848628624) at
+`421b797f811adfb7f0ff56c9995caceefb405817` compiled with Swift 6 strict
+concurrency/warnings-as-errors in 18.987 seconds. Preparer PID5284 recorded both
+views released and both exact caller stores retained, including the synchronous
+`applicationWillTerminate` event. It exited/reaped0 before reader PID5308.
+
+The fresh reader observed all four original JS/native-created cookies: A/B public
+stores each contained `probe` and `native_created`, with unchanged attributes and
+expiry1792127084. Both exact localStorage values survived. Reader
+`nativeCookieSets` was empty; no replay or reseeding occurred. These strict data
+checks passed before cleanup. This contrasts with V9's loss and supports caller
+lifetime affecting this fixture. It does not prove a particular internal
+NetworkProcess session/save path or establish general durable-cookie acceptance.
+
+The overall run failed after successful `cleanup_a` public callback, at the
+unchanged B view-release guard: `Released B WKWebView still exists; cleanup
+prerequisite is unproven`. B's five-second release deadline elapsed with
+`bViewReleased=false`; no `cleanup_b` call followed. Reader returned1, without
+normal AppKit termination. The original owned process-group cleanup/reap behavior
+was preserved. No callback was unknown, native phase timed out or log truncated.
+The retained process observations do not establish unowned WebKit helper state,
+and B's public UUID-store cleanup remains incomplete.
+
+Source inspection identifies a preexisting strong local in `runFreshProcess`:
+`guard let view = bView` followed by `await load(view)`. That local can survive in
+the async frame through later `dropB`. The observed live B view is actual evidence;
+this exact retaining edge remains a source-backed explanation requiring a separate
+reviewed repair. Earlier cookie failures never reached this cleanup guard. No
+cleanup weakening or automatic rerun is authorized by this result.
+
+Artifact12024347372 ZIP SHA256:
+`46dd7fc8c04655ba42e56caebf4100db316e0385e5e6c11f5760c934fbdd595c`.
+Five retained source files match exact Git and the reviewed freeze byte-for-byte;
+all six claimed input hashes match. The unchanged workflow's hidden-source-copy
+omission remains disclosed. Archived app/plist/executable identities and both
+phases' namespace/origin linkage were verified. Independent interpretation receipt:
+`/tmp/zmux-b01-caller-retention-result-review-20261016.json`, SHA256
+`a6f28d3d4404bf5e0765a0de2dfd851f7eb26ec1f982c91929d9d2ccc18553e1`.
+No production integration or further diagnostic run follows automatically.
+
+### Fresh-reader B load scope repair
+
+Parent reviewed the exact helper proposal SHA256
+`635e539e30e3fa8ee43130e2811389a910cdd6d08d9d63355933d64c4b05c4e4`.
+Fresh B creation/guard/load now lives in a returning `loadFreshB()` helper, matching
+the existing A load pattern. The outer `runFreshProcess` activation no longer binds
+a strong B view local across the later cleanup awaits. This changes only caller
+reference scope; the strict five-second weak-view release guard remains unchanged.
+Cookie creation/assertions, no-reseed reader, preparer store retention, public
+cleanup order and owned process cleanup are unchanged.
+
+The retained V10 run is the actual native red for this cleanup path. Portable
+Python syntax and original validators accept V10's observed cookie/retention data
+at its historical observation time and reject missing-retention/original-cookie-loss
+controls. This does not accept V10's failed cleanup or replace a new native result.
+Source diagnosis receipt:
+`/tmp/zmux-b01-fresh-b-lifetime-diagnosis-20261016.json`, SHA256
+`5afb3951e87bb4316f0efdc2b7cacad85e21d80e8b67cad5a5a918d201239503`.
+Parent explicitly authorized this exact repair, portable/repository validation,
+commit/push and one subsequent diagnostic. No production merge is authorized.
+
+The repaired `CARGO_TARGET_DIR=target/agent-validation/profile-caller-retention/cargo
+scripts/check` passed exit0: workspace tests, formatting, strict all-target Clippy,
+notice inventory, foreign C ABI and profile lease checks. Log:
+`/tmp/zmux-b01-fresh-b-lifetime-repository-check-20261016.log`. Portable validation:
+`/tmp/zmux-b01-fresh-b-lifetime-portable-validation-20261016.json`. Swift/native
+compilation and lifecycle outcome remain pending the one authorized diagnostic.
