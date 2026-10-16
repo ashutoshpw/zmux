@@ -5,6 +5,11 @@
 
 ## Active implementation
 
+- Foundation run `38850609492` at `b5557cb` exposed a Darwin-only test socket
+  mode error before all five execution-admission handshakes. Accepted fixture
+  sockets now explicitly use bounded blocking reads, matching production owners.
+  Full local `scripts/check` passes; new hosted Darwin verification remains pending.
+
 - V2 runtime/history cohort integrated locally through `58fbd92`, preserving the
   two regression commits. All 42 touched files exactly match reviewed `b15fb47`.
   Darwin package run `38849188824` passes 51 executed owner tests with 293 source

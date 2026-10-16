@@ -88,3 +88,19 @@ frame, lifetime-drift, and prewrite-bound contracts unreachable through a correc
 helper. No production-only seam was added solely for tests. No tests were removed
 or weakened to obtain green results. The earlier native observer3 red was fixed
 at negotiated completion-ACK version validation, retaining observer2/rawV1 proof.
+
+
+## Darwin admission fixture socket mode
+
+Main Foundation run `38850609492` at `b5557cb` exposed five immediate failures
+at the first supervisor-frame read in `apps/cli/tests/execution_admission.rs`.
+Darwin inherited the nonblocking listener flag on the accepted connection, so
+its read returned `WouldBlock` before the configured timeout could apply.
+The fixture now explicitly selects blocking mode before its existing three-second
+read/write deadlines. Production supervisor and completion-control owners already
+select this mode. Admission ordering, exact binding, actual child results, and
+all five behavioral assertions remain unchanged; no new production seam is added.
+Raw hosted failure is retained at `/tmp/zmux-main-foundation-38850609492.log`.
+Local full verification is recorded at
+`/tmp/zmux-admission-accepted-socket-check.log`; Darwin acceptance requires the
+subsequent Foundation run and is not inferred from Linux.
