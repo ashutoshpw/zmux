@@ -2,6 +2,14 @@ name: Opt-in retained Zellij native package
 
 on:
   workflow_dispatch:
+    inputs:
+      variant:
+        description: Exact retained dependency variant (readiness is diagnostic only)
+        type: choice
+        options:
+          - legacy
+          - input-readiness-v1
+        default: legacy
 
 permissions:
   contents: read
@@ -19,8 +27,16 @@ jobs:
       RUSTUP_TOOLCHAIN: 1.95.0
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       MACOSX_DEPLOYMENT_TARGET: '14.0'
+      ZMUX_PACKAGE_VARIANT: ${{ inputs.variant || 'legacy' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Check out exact previously passing legacy native consumer
+        if: ${{ inputs.variant == 'legacy' || inputs.variant == '' }}
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: b15fb4737fe0572d64aad573f53831931589afb0
+          path: .diagnostic-legacy-owner
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -30,21 +46,28 @@ jobs:
         run: |
           python3 -B tools/local-zellij-feasibility/test_capture_stdout.py
           python3 -B tools/local-zellij-feasibility/test_package_admission.py
-          python3 -B tools/local-zellij-feasibility/native-package.py --check-inputs
-      - name: Build host-only app and exercise unchanged bundled dependency through actual CLI owner
+          python3 -B tools/local-zellij-feasibility/native-package.py --check-inputs --variant "$ZMUX_PACKAGE_VARIANT"
+      - name: Build selected host-only bundle and execute its matching actual owner
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -B tools/local-zellij-feasibility/native-package.py --output "$RUNNER_TEMP/native-zellij-package"
+        run: python3 -B tools/local-zellij-feasibility/native-package.py --variant "$ZMUX_PACKAGE_VARIANT" --output "$RUNNER_TEMP/native-zellij-package"
       - name: Retain bounded native dependency execution evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: opt-in-native-zellij-package-${{ github.sha }}
+          name: ${{ inputs.variant == 'input-readiness-v1' && 'diagnostic-' || '' }}opt-in-native-zellij-package-${{ github.sha }}
           path: |
             ${{ runner.temp }}/native-zellij-package/receipt.json
             ${{ runner.temp }}/native-zellij-package/*.log
+            ${{ runner.temp }}/native-zellij-package/legacy-owner-source/**
+            ${{ runner.temp }}/native-zellij-package/source/**
+            ${{ runner.temp }}/native-zellij-package/appkit/*.json
+            ${{ runner.temp }}/native-zellij-package/appkit/*.py
+            ${{ runner.temp }}/native-zellij-package/appkit/*-count
+            ${{ runner.temp }}/native-zellij-package/appkit/silent-lines
             ${{ runner.temp }}/native-zellij-package/retained-package.zip
             ${{ runner.temp }}/native-zellij-package/zmux-dev-arm64-*.zip
             dist/build-info.json
           if-no-files-found: error
           retention-days: 7
+          include-hidden-files: true

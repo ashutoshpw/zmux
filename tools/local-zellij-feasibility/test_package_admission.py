@@ -96,7 +96,8 @@ class PackageAdmission(unittest.TestCase):
             sentinel = bundle / "retained-user-build"
             sentinel.write_bytes(b"previous development bundle")
             before = sentinel.stat()
-            cases = [(["--with-zellij"], "must be supplied together"),
+            cases = [(["--zellij-variant", "input-readiness-v1"], "requires --with-zellij"),
+                     (["--with-zellij"], "must be supplied together"),
                      (["--with-zellij", "--zellij-package-root", "/missing"], "Intel/universal are unverified")]
             if sys.platform == "linux":
                 cases.append((["--architecture", "host", "--with-zellij", "--zellij-package-root", "/missing"], "Intel/universal are unverified"))
@@ -108,6 +109,16 @@ class PackageAdmission(unittest.TestCase):
                 self.assertEqual(sentinel.read_bytes(), b"previous development bundle")
                 self.assertEqual(sentinel.stat().st_mtime_ns, before.st_mtime_ns)
                 self.assertEqual(list(bundle.iterdir()), [sentinel])
+
+    def test_explicit_readiness_variant_and_legacy_default_have_distinct_reviewed_archives(self):
+        legacy = admission.pin()
+        self.assertEqual(legacy, admission.pin("legacy"))
+        readiness = admission.pin("input-readiness-v1")
+        self.assertEqual(readiness["variant"], "input-readiness-v1")
+        self.assertTrue(readiness["diagnostic_only"])
+        self.assertNotEqual(legacy["archive_sha256"], readiness["archive_sha256"])
+        with self.assertRaisesRegex(admission.Rejected, "unknown retained package variant"):
+            admission.pin("latest")
 
     def test_changed_or_expired_download_identity_has_no_fallback(self):
         accepted = admission.pin()

@@ -1,0 +1,81 @@
+{
+  "status": "passed",
+  "native_execution": false,
+  "legacy_tuple_unchanged": true,
+  "review_sha256": "93b90dbceba09f5cf5c8f12a8b6fb661d1821376a7206b94532ebc9a99051291",
+  "positive": {
+    "legacy-default": {
+      "case": "legacy-default",
+      "exit_code": 0,
+      "stdout": "{\"target\": \"aarch64-apple-darwin\", \"source_sha\": \"986600f2a258a20f896083a4407f08b3778afa2c\", \"run_id\": 38823056442, \"archive_sha256\": \"29d931115b1b013310c28df096bd05594cca848aba22209cc1f39cfaabc15a45\", \"manifest_sha256\": \"a46b08268a4cb1ef38d7e69537a87816221149a96a84406c7e5dc55b81e02f5e\", \"binary_sha256\": \"f3168d37e1ecd278e66b28edb0b5755202b6c16ff67ea0cd3d38ebd10d82b98d\"}",
+      "stderr": ""
+    },
+    "explicit-readiness": {
+      "case": "explicit-readiness",
+      "exit_code": 0,
+      "stdout": "{\"target\": \"aarch64-apple-darwin\", \"source_sha\": \"45f4d9ab1032276720c21521f69237909e41f232\", \"run_id\": 38855036920, \"archive_sha256\": \"d9af85d6e299a7f6738af49c558884bede96ca574d59ffca3fb5df39ded9b11c\", \"manifest_sha256\": \"e09d6c92cd97d87ca9c27613542fa91ad869c1fdaa1704d2f6fded3cfb87c842\", \"binary_sha256\": \"8c4f10864b52f7be16ae8126d50be0742a2e9680e0804625c7755b3593b91bfc\", \"variant\": \"input-readiness-v1\", \"inventory_sha256\": \"c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8\", \"protocol_sha256\": \"6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4\", \"diagnostic_only\": true}",
+      "stderr": ""
+    },
+    "payload-reverification": {
+      "case": "payload-reverification",
+      "exit_code": 0,
+      "stdout": "{\"target\": \"aarch64-apple-darwin\", \"source_sha\": \"45f4d9ab1032276720c21521f69237909e41f232\", \"run_id\": 38855036920, \"archive_sha256\": \"d9af85d6e299a7f6738af49c558884bede96ca574d59ffca3fb5df39ded9b11c\", \"manifest_sha256\": \"e09d6c92cd97d87ca9c27613542fa91ad869c1fdaa1704d2f6fded3cfb87c842\", \"binary_sha256\": \"8c4f10864b52f7be16ae8126d50be0742a2e9680e0804625c7755b3593b91bfc\", \"variant\": \"input-readiness-v1\", \"inventory_sha256\": \"c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8\", \"protocol_sha256\": \"6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4\", \"diagnostic_only\": true}",
+      "stderr": ""
+    },
+    "after-controls-unchanged": {
+      "case": "after-controls-unchanged",
+      "exit_code": 0,
+      "stdout": "{\"target\": \"aarch64-apple-darwin\", \"source_sha\": \"45f4d9ab1032276720c21521f69237909e41f232\", \"run_id\": 38855036920, \"archive_sha256\": \"d9af85d6e299a7f6738af49c558884bede96ca574d59ffca3fb5df39ded9b11c\", \"manifest_sha256\": \"e09d6c92cd97d87ca9c27613542fa91ad869c1fdaa1704d2f6fded3cfb87c842\", \"binary_sha256\": \"8c4f10864b52f7be16ae8126d50be0742a2e9680e0804625c7755b3593b91bfc\", \"variant\": \"input-readiness-v1\", \"inventory_sha256\": \"c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8\", \"protocol_sha256\": \"6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4\", \"diagnostic_only\": true}",
+      "stderr": ""
+    }
+  },
+  "refusals": [
+    {
+      "case": "no-implicit-readiness",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "optional Zellij package rejected: [Errno 2] No such file or directory: '/tmp/zmux-readiness-admission-local-review-20261016/readiness-download/zellij-0.43.0-zmux-aarch64-apple-darwin-1dba7394d653.tar.gz'"
+    },
+    {
+      "case": "unknown-variant",
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: accept-package.py [-h] [--variant {legacy,input-readiness-v1}]\n                         --root ROOT --target TARGET [--output OUTPUT]\n                         [--verify-payload]\naccept-package.py: error: argument --variant: invalid choice: 'latest' (choose from 'legacy', 'input-readiness-v1')"
+    },
+    {
+      "case": "wrong-target",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "optional Zellij package rejected: no retained package accepted for requested target"
+    },
+    {
+      "case": "changed-schema",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "optional Zellij package rejected: package manifest differs from retained review"
+    },
+    {
+      "case": "changed-variant",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "optional Zellij package rejected: package manifest differs from retained review"
+    },
+    {
+      "case": "changed-corresponding-source",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "optional Zellij package rejected: package file inventory differs"
+    },
+    {
+      "case": "changed-binary",
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "optional Zellij package rejected: package member digest/size differs: bin/zellij"
+    },
+    {
+      "case": "expired-download",
+      "reason": "retained artifact identity changed or expired; no fallback"
+    }
+  ],
+  "artifact_bytes_unchanged": true
+}

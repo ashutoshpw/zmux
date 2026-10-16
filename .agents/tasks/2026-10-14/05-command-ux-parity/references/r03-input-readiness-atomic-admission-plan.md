@@ -128,9 +128,9 @@ a user-facing artifact remains gated on the complete parity acceptance.
 - [x] Dispatch one authorized prepare-only Darwin run at `9a42f851`.
 - [x] Review [run38852664400 source/evidence](r03-input-readiness-package-darwin.md); actual consumer passed, wrapper selection failed, package not run.
 - [x] Implement isolated [promotion/finite-retention source](r03-input-readiness-promotion.md).
-- [ ] Freeze promotion source and current prepare-only evidence for review.
-- [ ] Produce and independently review exact promoted readiness package.
-- [ ] Implement one atomic opt-in admission/consumer/native integration branch.
+- [x] Freeze repaired promotion source45f4d9 and failed prepare-only evidence for review.
+- [x] Produce run38855036920 and independently review exact diagnostic readiness archive; review93b90db accepted.
+- [ ] Implement one atomic opt-in admission/consumer/native integration branch; source prepared in ci/input-readiness-admission, native proof still pending.
 - [ ] Prove final relocated bundle and actual AppKit behaviors before landing.
 
 The prepare-only run failed only at strict owner enumeration of an ignored
@@ -138,3 +138,12 @@ reexec fixture; all actual consumer tests passed. The parent approved a narrow
 shared selection repair and one fresh combined chain after exact source review.
 No later producer dispatch, retained executable, tuple replacement or native
 activation has occurred.
+
+## Accepted diagnostic and admission continuation
+
+Run38855036920 at45f4d9 passed the repaired producer/package chain. The exact
+archive and its independent review are now separately pinned; see
+[r03-input-readiness-admission-native.md](r03-input-readiness-admission-native.md).
+The earlier prepare-only failure remains preserved. The no-retained-package
+statements above describe the earlier run, not the accepted finite diagnostic.
+No readiness/native runtime has been activated on main.

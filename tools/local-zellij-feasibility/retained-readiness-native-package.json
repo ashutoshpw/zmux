@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "repository": "ashutoshpw/zmux",
+  "run_id": 38855036920,
+  "source_sha": "45f4d9ab1032276720c21521f69237909e41f232",
+  "notice_policy_sha256": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79",
+  "variant": "input-readiness-v1",
+  "inventory_sha256": "c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8",
+  "protocol_sha256": "6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4",
+  "diagnostic_only": true,
+  "target": "aarch64-apple-darwin",
+  "archive_name": "DIAGNOSTIC-zellij-0.43.0-zmux-aarch64-apple-darwin-input-readiness-v1-c5b795096378-1dba7394d653.tar.gz",
+  "archive_bytes": 62788152,
+  "archive_sha256": "d9af85d6e299a7f6738af49c558884bede96ca574d59ffca3fb5df39ded9b11c",
+  "manifest_sha256": "e09d6c92cd97d87ca9c27613542fa91ad869c1fdaa1704d2f6fded3cfb87c842",
+  "binary_sha256": "8c4f10864b52f7be16ae8126d50be0742a2e9680e0804625c7755b3593b91bfc",
+  "payload_bytes": 96842169,
+  "files": 1255,
+  "corresponding_source": {
+    "SOURCES/input-readiness-v1/reporter.rs": "eb8511de6efd085d87ecdbf092fb2c336b3fe6723ab0575ca8d56f6c567708f8",
+    "SOURCES/input-readiness-v1/input-readiness.patch": "5de516602dea459870746b3c945ff814e09d9b4e6c62938bfa2f767f07898946",
+    "SOURCES/input-readiness-v1/protocol.json": "6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4",
+    "SOURCES/input-readiness-v1/source-inventory.json": "c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8"
+  },
+  "readiness_owner_receipt_sha256": "812c1096cd0693283fd3ac54a201d50b4fc282d44657d9d2b78abb8ea3fdec1e",
+  "independent_review": {
+    "path": "evidence/retained-readiness-package-independent-review.json",
+    "sha256": "93b90dbceba09f5cf5c8f12a8b6fb661d1821376a7206b94532ebc9a99051291"
+  },
+  "download": {
+    "artifact_id": 12026404425,
+    "name": "diagnostic-zellij-readiness-package-Darwin-ARM64-45f4d9ab1032276720c21521f69237909e41f232",
+    "zip_bytes": 62749970,
+    "zip_sha256": "a4d93dd90c1a26aeddcaa203ac140e1a424c69aa68dd0980c7016a2512b61b0a",
+    "expires_at": "2026-10-23T05:37:24Z"
+  },
+  "scope": "explicit host-only finite diagnostic readiness input; no implicit download/rebuild/latest fallback, default activation, public artifact handoff, Intel/universal or minimum-OS acceptance"
+}
