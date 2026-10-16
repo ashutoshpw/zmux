@@ -5,6 +5,39 @@
 
 ## Active implementation
 
+- Published cohort `3fc2364` passes foundation38832687268 and native universal
+  compilation, then native38832687280 stops in WindowLifecycleSmoke's metadata
+  predicate. Earlier move coverage retains status `move`; later preparation adds
+  `temporary` but incorrectly expects one status. Fixture now checks both exact
+  key/value entries and emits bounded predicate diagnostics on timeout. Native
+  validation remains pending: local Swift check requires unavailable xcrun. Broad
+  browser keyboard/profile tests and fresh-process reopen were
+  not reached; no native acceptance is inferred from compilation or saved todos.
+- Native Zellij observer38833738922 at `4b96b48` passes 35 actual owner tests.
+  Independent source/package/phase verification is complete; the acknowledgment
+  revision remains synthetic, so native S01 durability and AppKit Start/Attach
+  remain open. Correction committed on main `c1b4d38`; consumer implementation now
+  coordinates actual Session ownership with exact durable checkpoint completion.
+- Named buffers committed `ca2d815`: exact private UTF-8 persistence, concurrent
+  writers and shared raw/bracketed paste. Isolated314-test baseline plus focused
+  final parser checks, strict Clippy, notices and C ABI pass. Historical output,
+  grapheme counts, capacity compatibility and native execution remain open.
+- Browser lifetime-lease primitive committed `21741d3` after source review and
+  isolated314-test/full checks. No native store acquisition or clear/delete is
+  exposed. Integration must use the common WebKit namespace, independent of
+  configurable catalog paths, and retain physical leases across logical shutdown.
+- Selection baseline38833749334 at `6b52949` reproduces the actual Command-C
+  failure after verified native focus. Owner repair38834961185 at `3b686c1` passes
+  all18 native cases; independent review verifies225 source copies, focus/PTY
+  identity, exact UTF-8 clipboard results and shared cleanup. Main integration is
+  pending the final frozen patch; no full-parity acceptance follows from this slice.
+- Attach-only v6 recovery identity core committed `7b1943b`. Combined323 tests in
+  67 groups, formatting, strict Clippy, notices and C ABI pass on the isolated
+  reviewed source. S01 durable checkpoint coordination and actual observer Session
+  consumption remain in progress; no UI Start/Attach is exposed yet.
+- Local readiness still returns200 at3530 (identity/devices/organizations ready).
+  Public zmux.w3dev.app DNS remains unresolved here; VM/relay/email unavailable.
+  Full V01 and the user-facing artifact handoff remain open.
 - Reviewed browser literal-key repair committed as `08eaee8`: implicit Shift now
   remains consistent through paired key events, held keys and alias releases.
   Four frozen source hashes and parent review verified; native green pending.
