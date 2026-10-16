@@ -431,6 +431,10 @@ impl Worker {
                     );
                     match prepared {
                         Ok(mut prepared) => {
+                            if let Err(error) = self.validate_launch_effects(&prepared.effects) {
+                                self.load_failed(op, error.to_string());
+                                continue;
+                            }
                             if let Err(error) =
                                 self.profiles.validate_model(&prepared.store.snapshot())
                             {

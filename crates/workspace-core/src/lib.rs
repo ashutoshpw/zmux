@@ -2,7 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+mod local_zellij;
 mod navigation;
+pub use local_zellij::{
+    LocalZellijIdentity, LocalZellijReservation, MAX_LOCAL_ZELLIJ_RESERVATIONS,
+    PreparedLocalZellijSurface,
+};
 mod restore;
 pub mod surface_order;
 mod surfaces;
@@ -357,6 +362,11 @@ pub enum Action {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "effect", rename_all = "snake_case")]
 pub enum Effect {
+    AttachLocalZellijSession {
+        pane_id: PaneId,
+        session_id: SessionId,
+        identity: LocalZellijIdentity,
+    },
     StartSession {
         pane_id: PaneId,
         session_id: SessionId,
@@ -401,6 +411,8 @@ pub struct WorkspaceStore {
     state: Snapshot,
     next_id: u64,
     pending_restores: Vec<PendingRestore>,
+    local_zellij_reservations:
+        std::collections::HashMap<SurfaceId, (WorkspaceId, PaneId, SessionId)>,
     focus_history: std::collections::HashMap<WindowId, navigation::FocusHistory>,
     restore_placements: std::collections::HashMap<u64, Vec<surfaces::SplitAnchor>>,
     restored_panes: std::collections::HashMap<PaneId, PaneId>,
@@ -413,6 +425,7 @@ impl Default for WorkspaceStore {
             state: Snapshot::default(),
             next_id: 1,
             pending_restores: Vec::new(),
+            local_zellij_reservations: Default::default(),
             focus_history: Default::default(),
             restore_placements: Default::default(),
             restored_panes: Default::default(),
@@ -457,6 +470,7 @@ impl WorkspaceStore {
         candidate.check_window_layout()?;
         candidate.trim_todo_history()?;
         candidate.validate_todos()?;
+        candidate.validate_terminal_descriptors()?;
         candidate.record_focus(prior, prior_window, is_history_navigation, record_current);
         *self = candidate;
         Ok(result)

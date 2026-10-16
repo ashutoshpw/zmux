@@ -1959,6 +1959,15 @@ impl Worker {
         }
         candidate
     }
+    pub(crate) fn validate_launch_effects(&self, effects: &[Effect]) -> Result<(), DesktopError> {
+        if effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::AttachLocalZellijSession { .. }))
+        {
+            return Err(DesktopError::Failure("local Zellij attach client is unavailable; native checkpoint/consumer is not enabled".into()));
+        }
+        Ok(())
+    }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
         let move_context = if let Action::MoveWorkspaceToWindow {
             workspace_id,
@@ -2009,6 +2018,7 @@ impl Worker {
         let transition = candidate
             .apply(action)
             .map_err(|e| DesktopError::Failure(e.to_string()))?;
+        self.validate_launch_effects(&transition.effects)?;
         let starts = transition
             .effects
             .iter()
@@ -2083,6 +2093,16 @@ impl Worker {
     fn effects(&mut self, effects: Vec<Effect>) {
         for effect in effects {
             match effect {
+                Effect::AttachLocalZellijSession { session_id, .. } => {
+                    // Admission rejects this effect until the authenticated consumer exists.
+                    let error =
+                        SessionError::Failure("local Zellij attach client is unavailable".into());
+                    if !self.complete_session_restore(session_id, &Err(error)) {
+                        let cleanup = self.model.finish_restore(session_id, false);
+                        self.effects(cleanup);
+                    }
+                    self.last_error = Some("local Zellij attach client is unavailable".into());
+                }
                 Effect::StopSession { session_id } => {
                     if let Some(mut slot) = self.slots.remove(&session_id)
                         && let Some(session) = slot.session.take()
