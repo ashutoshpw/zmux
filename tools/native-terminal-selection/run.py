@@ -3,6 +3,7 @@
 import argparse
 import ast
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,10 +12,17 @@ import shutil
 import subprocess
 import sys
 import uuid
+import zipfile
 
 REPO = Path(__file__).resolve().parents[2]
 OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos-development.yml',
               'tools/native-terminal-selection/CopyMetadataContract.swift')
+# Compile the complete real model dependency closure, including the bridge owner
+# used by NotificationDelivery; never substitute test definitions for app types.
+METADATA_INPUTS = tuple('apps/macos/Sources/' + name + '.swift' for name in (
+    'Models', 'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
+    'NotificationDelivery', 'NativeBridge', 'NativeStoragePath', 'TerminalKeyEncoder')) + (
+    'crates/native-bridge/include/zmux.h', 'tools/native-terminal-selection/CopyMetadataContract.swift')
 CHILD = '''#!/usr/bin/env python3
 import fcntl,json,os,pathlib,select,struct,termios,time,tty
 root=pathlib.Path(os.environ['ZMUX_SELECTION_ROOT'])
@@ -72,6 +80,8 @@ def main():
 
     frozen = sources()
     ast.parse(CHILD)
+    if any(name not in frozen for name in METADATA_INPUTS):
+        raise RuntimeError('Selection decoder dependency is absent from retained sources')
     if args.check_inputs:
         print(json.dumps({'sources': len(frozen), 'actual_native_execution': False,
                           'app_seconds': 45, 'independent_child_seconds': 120}))
@@ -110,9 +120,22 @@ def main():
         shutil.copy2(archive, root / archive.name)
         receipt.update(build_info=info, archive={'name': archive.name, 'sha256': native.digest(archive)})
         decoder_probe = root / 'copy-metadata-contract'
+        frameworks = REPO / 'dist/zmux.app/Contents/Frameworks'
+        receipt['metadata_probe_inputs'] = {name: frozen[name] for name in METADATA_INPUTS}
+        receipt['metadata_bridge_sha256'] = native.digest(frameworks / 'libzmux_native_bridge.dylib')
+        with zipfile.ZipFile(archive) as packaged:
+            bridge_entry = packaged.getinfo('zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib')
+            if bridge_entry.file_size > 64 * 1024 * 1024:
+                raise RuntimeError('Selection archived decoder bridge exceeds its byte bound')
+            if hashlib.sha256(packaged.read(bridge_entry)).hexdigest() != receipt['metadata_bridge_sha256']:
+                raise RuntimeError('Selection decoder bridge differs from the archived app build')
         runner.run(['/usr/bin/xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6', '-warnings-as-errors',
-                    '-target', 'arm64-apple-macos14.0', str(REPO / 'apps/macos/Sources/Models.swift'),
-                    str(REPO / 'tools/native-terminal-selection/CopyMetadataContract.swift'), '-o', str(decoder_probe)],
+                    '-strict-concurrency=complete', '-target', 'arm64-apple-macos14.0',
+                    '-import-objc-header', str(REPO / 'crates/native-bridge/include/zmux.h'),
+                    *[str(REPO / name) for name in METADATA_INPUTS if name.endswith('.swift')],
+                    '-L', str(frameworks), '-lzmux_native_bridge',
+                    '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'UserNotifications',
+                    '-Xlinker', '-rpath', '-Xlinker', str(frameworks), '-o', str(decoder_probe)],
                    'metadata-compile', root, receipt['phases'], timeout=60, cwd=REPO, env=environment)
         runner.run([str(decoder_probe)], 'metadata-contract', root, receipt['phases'],
                    timeout=5, cwd=REPO, env=environment)
