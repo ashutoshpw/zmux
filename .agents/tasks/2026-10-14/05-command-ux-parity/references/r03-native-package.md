@@ -154,3 +154,88 @@ unchanged Rust validation is retained from V2 rather than repeated. The final
 freeze, explicit before/after hashes and combined validation receipt are in
 `target/agent-validation/r03-native-package-check-v3-20261015/`. Independent source
 review and the actual final Darwin bundle/dependency execution remain required.
+
+## Darwin PENDIN investigation and test-only repair
+
+Native run [38827122318](https://github.com/ashutoshpw/zmux/actions/runs/38827122318)
+at `7b6540e8668b9a4d43feff6024be8fa0531b6289` built and signed the host-only app,
+preserved the complete admitted payload, verified the final dependency signature
+and version, and passed owner-0/owner-1. Owner-2 failed after the actual CLI stopped:
+the restored terminal differed only by local flag `0x20000000`, Darwin `PENDIN`.
+No final actual-owner receipt or accepted app ZIP followed that failed gate.
+
+Published Apple source explains this state without establishing the failed
+runner's exact kernel revision:
+
+- [XNU tty.c at 43a90889846e00bfb5cf1d255cdc0a701a1e05a4](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/kern/tty.c), tag `xnu-11417.140.69`: lines 1253–1258 copy termios for TIOCGETA; 1358–1379 set PENDIN when enabling ICANON without flushing; 1391 retains kernel PENDIN despite supplied saved flags; 2073–2088 clear it while reprocessing pending raw input. Input/read/readiness paths can consume that state.
+- [XNU termios.h at the same commit](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/sys/termios.h), line 259, identifies PENDIN as retype-pending-input state.
+- [Libc termios.c at d53736942feb8997a67d27003deb42e6883ccaf3](https://github.com/apple-oss-distributions/Libc/blob/d53736942feb8997a67d27003deb42e6883ccaf3/gen/FreeBSD/termios.c), tag `Libc-1698.140.3`, lines 55–77: tcgetattr uses TIOCGETA and TCSANOW uses TIOCSETA; TCSAFLUSH selects a different ioctl and can discard queued input.
+
+Research copies and hashes are retained under
+`target/agent-validation/r03-termios-pendin-20261016/`. The production foreground
+owner remains unchanged and still restores with TCSANOW before stop and exit.
+Only fresh test snapshots are normalized on Darwin, masking PENDIN in the local
+raw libc value and rebuilding the nix wrapper before equality. This handles the
+wrapper's private raw snapshot without overlooking any other raw flag, control
+character or speed; Linux comparison remains exact.
+
+The same actual-owner test file adds a bounded private-PTY platform probe. It
+saves canonical configuration, selects raw mode, queues a known incomplete line,
+restores with TCSANOW, and captures termios before any read/readiness query. Darwin
+must exhibit exactly the investigated PENDIN delta. The probe then supplies the
+newline, reads exactly the original line once, rejects further readable input,
+and checks that PENDIN has cleared with every configurable setting preserved.
+Its receipt records uname, the actual kernel version, pre/post termios and input
+bytes. No user terminal or adopted workload participates. The existing production
+CLI input, resize, stop/resume, detach/reattach and startup-once checks remain.
+
+Test-authoring gate: this probe protects queued-input preservation across the
+specific platform transition that caused the false terminal-equality failure.
+A flushing restore, wrong canonical mode, lost/duplicated bytes or any additional
+setting change fails it. The existing workload journey proves resumed forwarding,
+but did not isolate input already queued when restoring the outer terminal. No
+production seam or new dependency is needed. The hosted owner assertion already
+provides the pre-repair red result; Darwin green and exact kernel behavior remain
+pending the coordinated native rerun. Linux focused probe and scoped linting are
+mechanics/configuration evidence only, not Darwin acceptance. No unrelated broad
+Rust suite is repeated for this test-only repair.
+
+## Passed native diagnostic and independent artifact verification
+
+Run [38828839028](https://github.com/ashutoshpw/zmux/actions/runs/38828839028)
+passed at diagnostic source `9ec70f7f187394c4ab8f4ef3cc0e7b4fa3513d4a` on
+ARM64 macOS 15.7.9. Its private-PTY probe records Darwin 24.6.0,
+`xnu-11417.140.69.711.44~1/RELEASE_ARM64_VMAPPLE`: TCSANOW changed local flags
+from 1483 to 536872395, exactly PENDIN, and all other raw fields matched. The
+queued 22-byte line arrived once, no additional input was readable for 200ms,
+and flags returned to 1483 with the original control characters and speeds.
+This is actual hosted-kernel evidence; the earlier published source is explanatory.
+
+All 30 owner tests passed (suite counts 2/15/3/4/3/3), including the existing real
+input, resize, stop/resume, detach/reattach, startup-once and identity-preservation
+journey against the final app-bundled dependency. The dependency signature and
+version checks passed. Independent inspection verified all 258 source-input
+hashes, phase logs, package identity/legal/source manifests and all 1,237 final
+dependency files byte for byte against the retained reviewed package. No downloaded
+executable was executed during independent verification.
+
+The accepted app ZIP is 71,975,210 bytes, SHA256
+`c7f362738e50cae34a7fdd2aae5ad189b2b7fccdea7435574065f371f7633bde`.
+Dependency source remains `986600f2a258a20f896083a4407f08b3778afa2c`; its unchanged
+binary SHA256 is `f3168d37e1ecd278e66b28edb0b5755202b6c16ff67ea0cd3d38ebd10d82b98d`.
+Outer artifact `12016870967` is 133,342,791 bytes with verified ZIP SHA256
+`acdf7213b40320f1637204679e8b340a807afb208ef0167744ecb9f973a8d511`,
+expiring `2026-10-23T00:26:52Z`. Extracted artifact members also match that ZIP.
+Independent receipts are under
+`target/agent-validation/r03-native-package-hosted-38828839028/`:
+`verified-receipt.json` (SHA256 `2e6a3675a1af76f1a425a9b2a4450078bc35d38957c8577a0da3de3ad5ad2bb8`)
+and `artifact-identity-receipt.json`.
+
+This accepts the opt-in packaged dependency through the Cargo-built production
+CLI owner on the executed host. It does not establish AppKit Start/Attach,
+Intel/universal support, older-macOS runtime behavior, durable/default distribution
+or notarized release acceptance. Production TCSANOW and default acquisition remain
+unchanged. The two-file correction retains the prior unchanged-base full
+`scripts/check` result plus focused probe/rustfmt/Clippy/whitespace checks; its
+separate validation/policy receipts are in
+`target/agent-validation/r03-termios-pendin-20261016/repair-v1/`.
