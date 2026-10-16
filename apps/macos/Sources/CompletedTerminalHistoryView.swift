@@ -12,7 +12,7 @@ final class CompletedTerminalHistoryView: BackgroundView {
     init(history: CompletedLocalZellijHistory, onFocus: @escaping () -> Void) {
         completionDigest = history.receipt.bindingDigest
         super.init(color: ZmuxPalette.terminal)
-        let status = NSTextField(labelWithString: history.receipt.workloadExit.label)
+        let status = NSTextField(labelWithString: history.receipt.statusLabel)
         status.font = .systemFont(ofSize: 12, weight: .medium)
         status.textColor = .secondaryLabelColor
         let detail = NSTextField(labelWithString: history.viewport == nil
@@ -20,7 +20,15 @@ final class CompletedTerminalHistoryView: BackgroundView {
             : (history.viewport?.truncated == true ? "Saved output · truncated" : "Saved output"))
         detail.font = .systemFont(ofSize: 11)
         detail.textColor = .secondaryLabelColor
-        let heading = NSStackView(views: [status, detail])
+        var labels = [status]
+        if let explanation = history.receipt.executionDetail {
+            let execution = NSTextField(labelWithString: explanation)
+            execution.font = .systemFont(ofSize: 11)
+            execution.textColor = .secondaryLabelColor
+            labels.append(execution)
+        }
+        labels.append(detail)
+        let heading = NSStackView(views: labels)
         heading.orientation = .vertical
         heading.alignment = .leading
         heading.spacing = 4

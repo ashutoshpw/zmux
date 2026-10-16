@@ -88,8 +88,98 @@ struct CompletedLocalZellijHistory: Decodable, Sendable {
                 }
             }
         }
+        enum ExecutionObservation: Decodable, Sendable {
+            case notObserved
+            case shellObserved
+            case execFailed(errno: Int)
+            private enum CodingKeys: String, CodingKey { case kind, stage, errno }
+            init(from decoder: any Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                let kind = try c.decode(String.self, forKey: .kind)
+                switch kind {
+                case "not_observed", "shell_observed":
+                    guard !c.contains(.stage), !c.contains(.errno) else {
+                        throw DecodingError.dataCorruptedError(forKey: .kind, in: c,
+                            debugDescription: "Observed execution variant has unexpected failure fields")
+                    }
+                    self = kind == "not_observed" ? .notObserved : .shellObserved
+                case "exec_failed":
+                    let number = try c.decode(Int.self, forKey: .errno)
+                    guard try c.decode(String.self, forKey: .stage) == "configured_shell_exec",
+                          number > 0, number <= Int(Int32.max) else {
+                        throw DecodingError.dataCorruptedError(forKey: .stage, in: c,
+                            debugDescription: "Invalid configured shell launch failure")
+                    }
+                    self = .execFailed(errno: number)
+                default:
+                    throw DecodingError.dataCorruptedError(forKey: .kind, in: c,
+                        debugDescription: "Unknown execution observation")
+                }
+            }
+        }
+        private struct Body: Decodable {
+            let version: Int
+            let domain: String
+            let bindingDigest: String
+            let workloadExit: Exit
+            let executionObservation: ExecutionObservation?
+        }
+        private enum CodingKeys: String, CodingKey {
+            case executionContract, receipt, version, domain, bindingDigest, workloadExit, executionObservation
+        }
         let bindingDigest: String
         let workloadExit: Exit
+        let executionObservation: ExecutionObservation?
+        let contractVersion: Int
+
+        // This is a presentation projection. Rust owns receipt authentication and
+        // persistence validation; decoding a saved value does not authenticate it.
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let body: Body
+            if c.contains(.executionContract) {
+                guard try c.decode(String.self, forKey: .executionContract) == "admitted_lifetime_v2",
+                      Set(c.allKeys) == Set([.executionContract, .receipt]) else {
+                    throw DecodingError.dataCorruptedError(forKey: .executionContract, in: c,
+                        debugDescription: "Unknown or ambiguous execution contract")
+                }
+                body = try c.decode(Body.self, forKey: .receipt)
+                guard body.version == 2, body.domain == "zmux.local-zellij.terminal.v2",
+                      body.executionObservation != nil else {
+                    throw DecodingError.dataCorruptedError(forKey: .receipt, in: c,
+                        debugDescription: "V2 execution receipt requires its version, domain and observation")
+                }
+                contractVersion = 2
+            } else {
+                body = try Body(from: decoder)
+                guard !c.contains(.receipt), body.version == 1, body.domain == "zmux.local-zellij.terminal.v1",
+                      body.executionObservation == nil else {
+                    throw DecodingError.dataCorruptedError(forKey: .version, in: c,
+                        debugDescription: "Legacy history requires a raw V1 receipt")
+                }
+                contractVersion = 1
+            }
+            let bound = body.workloadExit.kind == .exited ? 0...255 : 1...127
+            guard bound.contains(body.workloadExit.value), body.bindingDigest.utf8.count == 64,
+                  body.bindingDigest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                    debugDescription: "Invalid saved history exit or binding digest"))
+            }
+            bindingDigest = body.bindingDigest
+            workloadExit = body.workloadExit
+            executionObservation = body.executionObservation
+        }
+        var statusLabel: String {
+            if case .execFailed(let number)? = executionObservation { return "Shell launch failed (error \(number))" }
+            return workloadExit.label
+        }
+        var executionDetail: String? {
+            switch executionObservation {
+            case .notObserved?: return "Shell startup was not observed."
+            case .execFailed?: return workloadExit.label
+            case .shellObserved?, nil: return nil
+            }
+        }
     }
     struct CapturedViewport: Decodable, Sendable {
         let contents: String

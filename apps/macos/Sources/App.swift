@@ -664,7 +664,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         } else if let pane = focusedPane, pane.selected.kind == "browser" {
             detail = pane.selected.url == "about:blank" ? "Private browser" : (pane.selected.url ?? "Private browser")
         } else if let completion = focusedPane?.selected.localZellijCompletion {
-            detail = completion.receipt.workloadExit.label
+            detail = completion.receipt.statusLabel
         } else if let workingDirectory = focusedViewport(in: snapshot)?.workingDirectory, !workingDirectory.isEmpty {
             detail = (workingDirectory as NSString).abbreviatingWithTildeInPath
         } else if let endpoint = focusedPane?.selected.remote {
