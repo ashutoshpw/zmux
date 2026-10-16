@@ -384,7 +384,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         sidebarLayout.resize(to: 224, availableWidth: 900)
         applySidebarLayout()
         window.makeKeyAndOrderFront(nil); NSApp.activate()
-        try await waitUntil { $0.workspace != nil && $0.frames.first?.snapshot?.state == "running" && self.nativeReady }
+        try await waitUntil { $0.workspace != nil && $0.frames.first?.snapshot?.state == "running" && self.nativeReady && self.window.isKeyWindow && NSApp.isActive }
         guard let content = window.contentView else { throw BridgeFailure(message: "Sidebar fixture has no content view") }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
         func click(_ view: NSView) throws {
@@ -427,6 +427,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 throw BridgeFailure(message: "Group name sheet has no editable field and submit button")
             }
             field.stringValue = name; submit.performClick(nil)
+            // The sheet ends asynchronously. Activate the target before the next
+            // gesture; AppKit otherwise consumes its first click for activation.
+            try await waitUntil { _ in self.window.attachedSheet == nil }
+            window.makeKeyAndOrderFront(nil); NSApp.activate()
+            try await waitUntil { _ in self.window.isKeyWindow && NSApp.isActive }
         }
         func geometry() throws {
             content.layoutSubtreeIfNeeded()
@@ -462,7 +467,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let members = Array(initial.model.workspaces.prefix(2).map(\.id))
         let pids = Dictionary(uniqueKeysWithValues: initial.frames.map { ($0.sessionId, $0.processId ?? 0) })
         func unchanged() throws {
-            guard snapshot?.model.focusedWorkspace == selected, window.firstResponder === responder,
+            guard snapshot?.model.focusedWorkspace == selected, window.firstResponder === responder, window.isKeyWindow, NSApp.keyWindow === window,
                   snapshot.map({ Dictionary(uniqueKeysWithValues: $0.frames.map { ($0.sessionId, $0.processId ?? 0) }) }) == pids else {
                 throw BridgeFailure(message: "Grouping changed terminal selection, responder or child identity")
             }
