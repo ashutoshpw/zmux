@@ -5,6 +5,50 @@
 
 ## Active implementation
 
+- Finite completion integrated locally as `1a81f2d`, deterministic exec regression
+  `f80a432`, and repair `f2fd5b6`. Exact frozen cohort passes 22 desktop tests,
+  16 actual Zellij/auth tests and strict relevant Clippy; unchanged broad
+  `scripts/check` evidence is 340 passed/one ignored plus ABI/license checks.
+- Native saved-history run `38845311766` at `af80731` passes actual ARM64 build,
+  exact Unicode clipboard, read-only typing/Paste, scroll/selection retention
+  across cross-window move and source closure, and awaited shared shutdown.
+  All 253 retained source hashes match. Independent review/integration underway;
+  these generated historical receipts do not establish live authentication.
+- Wrapped-copy repair `3203dca` has 24 exact native clipboard cases and decoder
+  coverage. Browser asynchronous mounted-store repair `ce5e057` passes its native
+  mount and lease checks. Both are included in the pending main publication cohort.
+- Browser diagnostic `9518593` / run `38844359603` reaches seven native smoke stages
+  then fails the still-required Save-dialog Accessibility preflight. Metadata
+  identifies 17 removed-target detach errors; two late failure receipts still need
+  exact rejection attribution. No suppression or ownership relaxation applied.
+- V2 execution admission and V8 persistence are being implemented in isolated
+  `ci/execution-admission`. Core/desktop 42 focused tests and strict Clippy pass;
+  actual helper Run/no-Run and finite-exit evidence, native decoding and integration
+  remain required. Frontend semantic input-readiness design is recorded separately.
+- Cookie persistence diagnostic `137255d` / run `38843434898` loses both native-created
+  and JavaScript cookies across a fresh process even without deletion; localStorage
+  persists. Profile clear/delete remain unavailable; root cause is unresolved.
+- Local Docker readiness remains at `127.0.0.1:3530`; identity/devices/organizations
+  are ready, VM/relay/email unavailable. Public tunnel acceptance remains open.
+- Full 26-package/172-family parity is incomplete. No subset artifact handoff.
+
+- `ac41162` passes foundation38839050321 on macOS and Linux. Native38839050463
+  passes Swift typecheck, early native fixtures and Rust/C ABI; universal build
+  remains running. Earlier native38838984041 was cancelled by workflow concurrency.
+- Wrapped-copy diagnostic5a71574/run38839319267 built the actual app, then failed
+  compiling the standalone decoder probe because actual production dependencies
+  were omitted. No native clipboard cases executed. Reviewed harness correction
+  links the real model dependencies and exact archived bridge; rerun pending.
+- Browser public all-data-clear + UUID-removal diagnosticade61da/run38839388593
+  passed same-process empty-A/intact-B checks with exact source and owned-process
+  receipts. Fresh-process6e71df3/run38839907151 kept A empty and B localStorage,
+  but lost B cookie; no deletion-isolation acceptance follows. A no-clear baseline
+  with raw cookie/store observations is being prepared to distinguish fixture
+  persistence from cross-profile mutation.
+- Real finite completion regression committed locally `a170f29`; completed-history
+  no-launch restore regression committed `2a16e93`. Both intended red receipts are
+  retained; publication waits for the corresponding reviewed green implementation.
+
 - R03 runtime/checkpoint prerequisite committed `dc43608` after all 21 staged
   source hashes matched the independently reviewed freeze. Isolated `scripts/check`
   passed 331 tests (one intentional ignored); actual Zellij conformance passed 12.

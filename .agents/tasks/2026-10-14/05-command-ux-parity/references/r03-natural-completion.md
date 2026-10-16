@@ -15,14 +15,14 @@ supervisor identity captured at bootstrap. The native worker independently does
 the same before accepting a Completed outcome. A private file on its own is never
 authentication after the publisher has died.
 
-Today `supervisor.rs::run_supervisor` observes and waits for its directly retained
-Child, then immediately returns its mapped status. `create` authenticates the
-supervisor and server, records the selected shell's full image/start identity,
-persists the bound record and sends only a string `committed`. Bootstrap files and
-socket are then deleted. `broker.rs::attach` and the native monitor can currently
-prove only live preservation, so expected workload exit invalidates that proof.
-The new protocol replaces that missing fact with a separately typed Completed
-branch; it does not weaken `Record::verify_live`.
+Before this completion slice, `supervisor.rs::run_supervisor` observed and
+waited for its directly retained Child, then immediately returned its mapped
+status. `create` authenticated the supervisor and server, recorded the selected
+shell's full image/start identity, persisted the bound record and sent only a
+string `committed`. Bootstrap files and socket were then deleted.
+`broker.rs::attach` and the native monitor could prove only live preservation,
+so expected workload exit invalidated that proof. The implemented protocol adds
+a separately typed Completed branch without weakening `Record::verify_live`.
 
 ## Persistent identity and small schema
 
@@ -50,12 +50,16 @@ workload environment or command text.
 The immutable `TerminalReceiptV1` contains only:
 
 ```
-version, domain = "zmux.local-zellij.terminal.v1"
-owner_uuid, owner_generation, binding_digest
-committed_binding
+version = 1
+domain = "zmux.local-zellij.terminal.v1"
+binding = CommittedBinding {
+  version = 1, owner_uuid, owner_generation, namespace,
+  completion_socket, server, supervisor, workload
+}
+binding_digest
 terminal_sequence = 1
-workload_exit = { kind: "exited", code: 0..255 }
-             | { kind: "signaled", signal: positive platform signal }
+workload_exit = { kind: "exited", value: 0..255 }
+             | { kind: "signaled", value: positive signal bounded to 1..127 }
 child_reaped = true
 ```
 

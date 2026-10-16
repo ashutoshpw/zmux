@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Type-check native app slices and the external Save panel driver before Rust builds."""
+"""Check native app and fixture sources before Rust builds."""
 from pathlib import Path
 import platform
 import subprocess
@@ -20,6 +20,11 @@ if platform.machine() == "x86_64":
     architectures.reverse()
 for architecture in architectures:
     subprocess.run([
+        "xcrun", "clang", "-fsyntax-only", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-target", f"{architecture}-apple-macosx14.0", "-isysroot", sdk,
+        str(root / "tools/native-fixtures/profile-lease-probe.c"),
+    ], check=True)
+    subprocess.run([
         "xcrun", "swiftc", "-typecheck", "-swift-version", "6",
         "-strict-concurrency=complete", "-warnings-as-errors",
         "-target", f"{architecture}-apple-macosx14.0", "-sdk", sdk,
@@ -33,4 +38,4 @@ for architecture in architectures:
         str(root / "tools/native-fixtures/save-panel-driver.swift"),
         "-framework", "AppKit", "-framework", "ApplicationServices",
     ], check=True)
-print("Both native Swift slices and the Save panel driver type-check; linking and runtime checks remain required.")
+print("Both native slices, Save panel driver and lease probe pass source checks; linking and runtime checks remain required.")

@@ -91,6 +91,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private var browserEventTask: Task<Void, Never>?
     private var browserEpoch: UUID?
     private(set) var terminals: [UInt64: TerminalView] = [:]
+    private(set) var completedHistories: [UInt64: CompletedTerminalHistoryView] = [:]
+    private var completedHistoryNamespace: UUID?
     private(set) var browsers: [UInt64: BrowserView] = [:]
     private lazy var browserProfileStores = BrowserProfileStores(bridge: bridge)
 
@@ -372,6 +374,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         self.snapshot = snapshot
         try splitLayouts.reconcile(snapshot)
+        let retainedHistories = Set(snapshot.model.workspaces.flatMap { $0.root.panes }
+            .flatMap { $0.surfaces }.filter { $0.sessionId == nil && $0.localZellijCompletion != nil }.map(\.id))
+        retainCompletedHistories(retainedHistories, namespace: snapshot.model.identityNamespace)
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
         let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
@@ -550,6 +555,25 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         terminal.pane = pane
         terminals[session] = terminal
         return terminal
+    }
+
+    private func retainCompletedHistories(_ surfaces: Set<UInt64>, namespace: UUID) {
+        if completedHistoryNamespace != namespace {
+            completedHistories.removeAll()
+            completedHistoryNamespace = namespace
+        }
+        completedHistories = completedHistories.filter { surfaces.contains($0.key) }
+    }
+
+    func completedHistory(surface: UInt64, history: CompletedLocalZellijHistory,
+                          onFocus: @escaping () -> Void) -> CompletedTerminalHistoryView {
+        if let retained = completedHistories[surface], retained.completionDigest == history.receipt.bindingDigest {
+            retained.updateFocus(onFocus)
+            return retained
+        }
+        let view = CompletedTerminalHistoryView(history: history, onFocus: onFocus)
+        completedHistories[surface] = view
+        return view
     }
 
     func downloadWindow(for origin: BrowserOwner) -> NSWindow? {
