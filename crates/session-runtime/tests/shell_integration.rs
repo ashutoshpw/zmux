@@ -123,11 +123,14 @@ printf 'PROVIDER_ARGUMENTS_PRESERVED\n'
 }
 
 #[test]
-fn posix_owner_hangup_cleans_hooks_without_waiting_for_the_interactive_child() {
+fn posix_group_hangup_cleans_hooks_before_the_foreground_shell_exits() {
     let directory = Directory::new();
     let report = directory.0.join("lease-root");
+    // Optional local portability reproduction with an independently installed
+    // older Bash. CI uses the platform's actual /bin/bash without an override.
+    let bash = std::env::var("ZMUX_TEST_BASH").unwrap_or_else(|_| "/bin/bash".into());
     let (mut launch, lease) = shell_integration::prepare(Launch {
-        program: "/bin/bash".into(),
+        program: bash.clone(),
         args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
         cwd: Some(directory.0.clone()),
         size: Size {
@@ -138,7 +141,7 @@ fn posix_owner_hangup_cleans_hooks_without_waiting_for_the_interactive_child() {
     .unwrap();
     // Exercise Darwin's Bash POSIX-shell wait semantics on Linux too. Keep the
     // Rust cleanup lease outside the worker so it cannot mask shell cleanup.
-    launch.program = "/bin/bash".into();
+    launch.program = bash;
     launch.args.insert(0, "--posix".into());
     let mut session = Session::spawn_with_environment(
         launch,
@@ -148,7 +151,7 @@ fn posix_owner_hangup_cleans_hooks_without_waiting_for_the_interactive_child() {
         )],
     )
     .unwrap();
-    let wait = |predicate: fn(&str) -> bool| {
+    let wait = |label: &str, predicate: fn(&str) -> bool| {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if session
@@ -157,27 +160,35 @@ fn posix_owner_hangup_cleans_hooks_without_waiting_for_the_interactive_child() {
             {
                 break;
             }
-            assert!(
-                Instant::now() < deadline,
-                "PTY lifecycle fixture did not execute"
-            );
+            if Instant::now() >= deadline {
+                let observed = session.snapshot().map(|s| {
+                    (
+                        s.state,
+                        s.failure.clone(),
+                        s.viewport.contents.chars().take(1800).collect::<String>(),
+                    )
+                });
+                panic!("PTY lifecycle fixture did not execute {label}: {observed:?}");
+            }
             thread::sleep(Duration::from_millis(5));
         }
     };
     session.send_input(b"stty -echo; printf '%s' \"$ZMUX_SHELL_INTEGRATION_DIRECTORY\" > \"$ZMUX_FIXTURE_LEASE_REPORT\"; printf '\\033[2J\\033[HHANGUP_READY'\n").unwrap();
     // Cleared screen prefix excludes echoed command text and proves the preceding
     // lease-path write completed before the controlled HUP.
-    wait(|text| text.starts_with("HANGUP_READY"));
+    wait("ready", |text| text.starts_with("HANGUP_READY"));
     let root = PathBuf::from(fs::read_to_string(report).unwrap());
     assert!(root.join("plugin/hooks/hooks.json").is_file());
-    // Background ownership must preserve ordinary Ctrl-C handling and PTY input.
+    // The notification relay must preserve ordinary Ctrl-C handling and PTY input.
     session.send_input(b"sleep 30\n").unwrap();
     thread::sleep(Duration::from_millis(100));
     session
         .send_input(b"\x03printf '\\nINTERRUPT_RECOVERED\\n'\n")
         .unwrap();
-    wait(|text| text.contains("INTERRUPT_RECOVERED"));
-    nix::sys::signal::kill(
+    wait("Ctrl-C recovery", |text| {
+        text.contains("INTERRUPT_RECOVERED")
+    });
+    nix::sys::signal::killpg(
         nix::unistd::Pid::from_raw(session.process_id() as i32),
         nix::sys::signal::Signal::SIGHUP,
     )
@@ -191,6 +202,6 @@ fn posix_owner_hangup_cleans_hooks_without_waiting_for_the_interactive_child() {
     assert!(lease.is_some());
     assert!(
         cleaned,
-        "POSIX owner deferred hook cleanup while its interactive child was alive"
+        "PTY group hangup deferred hook cleanup while its foreground shell was alive"
     );
 }
