@@ -16,6 +16,14 @@ private struct DataRemoval: Codable, Sendable {
     let dataTypes: [String]
     var callbackReceived = false
 }
+private struct CookieObservation: Codable, Sendable {
+    let name: String
+    let value: String
+    let domain: String
+    let path: String
+    let sessionOnly: Bool
+    let expiresAt: Double?
+}
 private struct Report: Codable, Sendable {
     let sourceSHA: String
     let appPID: Int32
@@ -24,6 +32,7 @@ private struct Report: Codable, Sendable {
     let profileA: UUID
     let profileB: UUID
     let phase: String
+    let scenario: String
     var preparerPID: Int32?
     var state = "starting"
     var stage = "startup"
@@ -37,6 +46,9 @@ private struct Report: Codable, Sendable {
     var reopenedAStorageObservation: String?
     var separateBRetained = false
     var separateBObservation: String?
+    var separateBStorageObservation: String?
+    var aCookieStoreObservation: [CookieObservation]?
+    var bCookieStoreObservation: [CookieObservation]?
     var aDataRemoval: DataRemoval?
     var removals: [Removal] = []
     var failure: String?
@@ -60,12 +72,12 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
     private weak var retiredBView: WKWebView?
     private var navigation: [ObjectIdentifier: CheckedContinuation<Void, any Error>] = [:]
 
-    init(output: URL, fixture: URL, nonce: String, a: UUID, b: UUID, phase: String, preparation: URL) {
+    init(output: URL, fixture: URL, nonce: String, a: UUID, b: UUID, phase: String, preparation: URL, scenario: String) {
         self.output = output
         self.fixture = fixture
         self.preparation = preparation
         report = Report(sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ProbeSourceSHA") as? String ?? "",
-            appPID: getpid(), bundleID: Bundle.main.bundleIdentifier ?? "", nonce: nonce, profileA: a, profileB: b, phase: phase)
+            appPID: getpid(), bundleID: Bundle.main.bundleIdentifier ?? "", nonce: nonce, profileA: a, profileB: b, phase: phase, scenario: scenario)
         super.init()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -190,10 +202,13 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         report.stage = "inactive_a_data_remove_callback_received"
         try await save()
     }
-    private func reopenA() async throws {
+    private func loadA() async throws {
         (aStore, aView) = makeView(profile: report.profileA, x: 0)
         guard let view = aView else { throw ProbeFailure(description: "A reopen is absent") }
         try await load(view)
+    }
+    private func reopenA() async throws {
+        try await loadA()
         let observation = try await evaluate(aView, "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:!document.cookie.includes('probe=')})")
         report.reopenedAObservation = String(observation.prefix(4096))
         report.reopenedAEmpty = observation == "{\"empty\":true,\"cookie\":true}"
@@ -204,6 +219,37 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         let observation = try await evaluate(bView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=B')})")
         report.separateBObservation = String(observation.prefix(4096))
         report.separateBRetained = observation == "{\"local\":\"B\",\"cookie\":true}"
+        report.separateBStorageObservation = String(try await evaluate(bView,
+            "JSON.stringify({localValue:localStorage.getItem('probe'),cookieValue:document.cookie})").prefix(4096))
+    }
+    private func observeRetainedAData() async throws {
+        let observation = try await evaluate(aView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=A')})")
+        report.heldAObservation = String(observation.prefix(4096))
+        report.heldDataRetained = observation == "{\"local\":\"A\",\"cookie\":true}"
+        report.reopenedAStorageObservation = String(try await evaluate(aView,
+            "JSON.stringify({localValue:localStorage.getItem('probe'),cookieValue:document.cookie})").prefix(4096))
+    }
+    private func readCookies(_ store: WKWebsiteDataStore?) async throws -> [CookieObservation] {
+        guard let store else { throw ProbeFailure(description: "Exact cookie store is absent") }
+        let cookies: [CookieObservation] = await withCheckedContinuation { continuation in
+            store.httpCookieStore.getAllCookies { cookies in
+                continuation.resume(returning: cookies.prefix(129).map {
+                    CookieObservation(name: String($0.name.prefix(256)), value: String($0.value.prefix(256)),
+                        domain: String($0.domain.prefix(256)), path: String($0.path.prefix(256)),
+                        sessionOnly: $0.isSessionOnly, expiresAt: $0.expiresDate?.timeIntervalSince1970)
+                })
+            }
+        }
+        guard cookies.count <= 128 else { throw ProbeFailure(description: "Cookie observation exceeds bound") }
+        return cookies
+    }
+    private func observeCookieStores() async throws {
+        report.stage = "cookie_store_observation_pending"
+        try await save()
+        report.aCookieStoreObservation = try await readCookies(aStore)
+        report.bCookieStoreObservation = try await readCookies(bStore)
+        report.stage = "cookie_store_observation_received"
+        try await save()
     }
     private func dropB() async throws {
         retiredBView = bView
@@ -226,9 +272,12 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             return try JSONDecoder().decode(Report.self, from: data)
         }.value
         guard prepared.phase == "prepare", prepared.state == "prepared", prepared.stage == "prepared_for_fresh_process",
+              prepared.scenario == report.scenario,
               prepared.sourceSHA == report.sourceSHA, prepared.bundleID == report.bundleID, prepared.nonce == report.nonce,
               prepared.profileA == report.profileA, prepared.profileB == report.profileB, prepared.appPID != getpid(),
-              prepared.reopenedAEmpty, prepared.separateBRetained, prepared.aDataRemoval?.callbackReceived == true else {
+              prepared.separateBRetained,
+              (report.scenario == "baseline" ? prepared.heldDataRetained && prepared.removals.isEmpty && prepared.aDataRemoval == nil
+                : prepared.reopenedAEmpty && prepared.aDataRemoval?.callbackReceived == true) else {
             throw ProbeFailure(description: "Fresh process does not match the completed exact preparation")
         }
         report.preparerPID = prepared.appPID
@@ -238,10 +287,17 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         (bStore, bView) = makeView(profile: report.profileB, x: 640)
         guard let view = bView else { throw ProbeFailure(description: "Fresh B is absent") }
         try await load(view)
-        try await reopenA()
+        if report.scenario == "baseline" {
+            try await loadA()
+            try await observeRetainedAData()
+        } else { try await reopenA() }
         try await observeBData()
-        guard report.reopenedAEmpty, report.separateBRetained else {
-            throw ProbeFailure(description: "Fresh process did not observe empty A and unchanged B")
+        try await observeCookieStores()
+        let aMatches = report.scenario == "baseline" ? report.heldDataRetained : report.reopenedAEmpty
+        guard aMatches, report.separateBRetained else {
+            throw ProbeFailure(description: report.scenario == "baseline"
+                ? "Fresh-process no-removal baseline did not preserve A and B data"
+                : "Fresh process did not observe empty A and unchanged B")
         }
         report.stage = "fresh_process_data_verified"
         try await save()
@@ -276,6 +332,21 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             try await seedB()
             report.mountedA = aView?.window === window && aStore?.identifier == report.profileA
             guard report.mountedA else { throw ProbeFailure(description: "A is not the actual mounted UUID store") }
+            if report.scenario == "baseline" {
+                try await observeRetainedAData()
+                try await observeBData()
+                try await observeCookieStores()
+                guard report.heldDataRetained, report.separateBRetained else {
+                    throw ProbeFailure(description: "No-removal baseline did not seed separate A/B data")
+                }
+                dropA()
+                try await observeARelease()
+                try await dropB()
+                report.state = "prepared"
+                report.stage = "prepared_for_fresh_process"
+                try await save()
+                exit(0)
+            }
             let held = try await remove(report.profileA, phase: "mounted_a_remove")
             guard held.errorDomain != nil else { throw ProbeFailure(description: "Public removal unexpectedly succeeded with mounted A") }
             let heldObservation = try await evaluate(aView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=A')})")
@@ -318,14 +389,14 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
 private enum Main {
     static func main() {
         let arguments = CommandLine.arguments
-        guard arguments.count == 8, let fixture = URL(string: arguments[2]),
+        guard arguments.count == 9, let fixture = URL(string: arguments[2]),
               fixture.scheme == "http", fixture.host == "127.0.0.1",
               let a = UUID(uuidString: arguments[4]), let b = UUID(uuidString: arguments[5]),
-              ["prepare", "reopen"].contains(arguments[6]) else { exit(2) }
+              ["prepare", "reopen"].contains(arguments[6]), ["baseline", "clear"].contains(arguments[8]) else { exit(2) }
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
         let delegate = Probe(output: URL(fileURLWithPath: arguments[1]), fixture: fixture,
-            nonce: arguments[3], a: a, b: b, phase: arguments[6], preparation: URL(fileURLWithPath: arguments[7]))
+            nonce: arguments[3], a: a, b: b, phase: arguments[6], preparation: URL(fileURLWithPath: arguments[7]), scenario: arguments[8])
         app.delegate = delegate
         withExtendedLifetime(delegate) { app.run() }
     }
