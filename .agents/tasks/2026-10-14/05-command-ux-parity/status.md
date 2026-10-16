@@ -5,6 +5,12 @@
 
 ## Active implementation
 
+- Cohort published `38698c3`; foundation38835680975 and macOS38835681008 are
+  executing on that exact SHA. Native typecheck and early fixtures pass; packaged
+  lifecycle/browser acceptance is still pending. Selection integration and the
+  updated deferred-cloud plan are held locally to avoid cancelling useful native
+  execution. Cloud `/ready` rechecked successfully at port3530.
+
 - Published cohort `3fc2364` passes foundation38832687268 and native universal
   compilation, then native38832687280 stops in WindowLifecycleSmoke's metadata
   predicate. Earlier move coverage retains status `move`; later preparation adds
@@ -29,8 +35,10 @@
 - Selection baseline38833749334 at `6b52949` reproduces the actual Command-C
   failure after verified native focus. Owner repair38834961185 at `3b686c1` passes
   all18 native cases; independent review verifies225 source copies, focus/PTY
-  identity, exact UTF-8 clipboard results and shared cleanup. Main integration is
-  pending the final frozen patch; no full-parity acceptance follows from this slice.
+  identity, exact UTF-8 clipboard results and shared cleanup. Frozen integration
+  committed `b659b73`; seven full-file hashes match and only selection startup hunks
+  were staged from shared App.swift. Current-main native acceptance remains open;
+  no full-parity acceptance follows from this slice.
 - Attach-only v6 recovery identity core committed `7b1943b`. Combined323 tests in
   67 groups, formatting, strict Clippy, notices and C ABI pass on the isolated
   reviewed source. S01 durable checkpoint coordination and actual observer Session
