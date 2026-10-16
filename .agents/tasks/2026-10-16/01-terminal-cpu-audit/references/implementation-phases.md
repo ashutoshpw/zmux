@@ -201,3 +201,11 @@ claimed. A configured OpenSSH RemoteCommand bypasses bootstrap. An existing boun
 process runner is shared for ssh -G configuration resolution on the launch worker
 (5s, 64KiB per stream, private group cleanup), without blocking terminal_spec/UI.
 Config probe failure retains ordinary SSH behavior and reports integration disabled.
+
+Darwin POSIX Bash requires an interruptible shell `wait` builtin for prompt HUP
+cleanup: a synchronous external-shell invocation defers its trap until that child
+exits. The original stdin is explicitly supplied to the async child, relay FDs
+are closed there, and INT/QUIT defaults restored before exec. A real-PTY regression
+selects Bash POSIX owner semantics on Linux/macOS and retains the Rust lease outside
+the worker, so only actual shell cleanup can pass. It also exercises ordinary Ctrl-C
+and input. macOS packaged cleanup remains gated by the same10s assertion.

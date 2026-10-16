@@ -4,6 +4,24 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Actions38935487196 at8167545 passes current native repaint, sidebar, grouping,
+  status-menu and hidden-app recovery assertions with correlated physical cleanup.
+  Packaged plain SSH delivers the expected exact-surface notification, but remote
+  hook cleanup fails the existing10s deadline on macOS. Nested SSH/tmux is pending
+  there because plain cleanup fails first. No repair artifact has been published.
+- Confirmed cleanup owner: Bash POSIX mode defers a HUP trap while synchronously
+  waiting for the interactive external shell. Direct real-PTY regression fails
+  pre-fix (`/tmp/zmux-posix-hangup-red.log`). The bootstrap now runs its child with
+  explicit original stdin/default signal handling and an interruptible wait
+  builtin; hook cleanup no longer waits for the foreground child. Green test also
+  proves Ctrl-C/input; Rust lease is deliberately retained outside the worker so
+  it cannot mask shell cleanup (`/tmp/zmux-posix-hangup-green.log`).
+- Full portable check passes after this repair, including strict Clippy, notices,
+  real SSH transfer/reopen, public C ABI and native lease ABI
+  (`/tmp/zmux-posix-owner-full-check.log`). Release plain/nested SSH both pass
+  exact-surface delivery and prompt cleanup after the owner fix:
+  `/tmp/zmux-posix-owner-ssh-green.log`, `/tmp/zmux-posix-owner-tmux-green.log`.
+  macOS native shell lifecycle and packaged SSH/tmux reruns remain required.
 - Actions38933217178 at df1f4a8 validates the intended old-renderer metadata-only
   failure, physical cleanup, both-target Swift compilation and local completion.
   Current renderer passes the new damage assertions and proceeds through grouping,

@@ -51,26 +51,36 @@ exec 7>/dev/tty || exit 70
     done <"$zmux_private_root/attention"
 ) &
 exec 8>"$zmux_private_root/attention"
+# Waiting for a foreground external command defers traps on Darwin's POSIX Bash.
+# The shell wait builtin is interruptible, so HUP cleans the private lease even
+# when the interactive child or its foreground provider has not exited yet.
+# Preserve real stdin and default interactive signal handling in the child.
+exec 9<&0
+(
+trap - 0 HUP TERM INT QUIT
 case "${zmux_shell##*/}" in
     bash)
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@" 7>&- 8>&-
+        exec "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@"
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}
         ZMUX_USER_ZDOTDIR_SET=${ZDOTDIR+x}
         export ZMUX_USER_ZDOTDIR ZMUX_USER_ZDOTDIR_SET
-        ZDOTDIR=$zmux_private_root "$zmux_shell" "$@" 7>&- 8>&-
+        ZDOTDIR=$zmux_private_root exec "$zmux_shell" "$@"
         ;;
     fish)
-        "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@" 7>&- 8>&-
+        exec "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@"
         ;;
     sh|dash)
         ZMUX_USER_ENV=${ENV-}
         export ZMUX_USER_ENV
-        ENV=$zmux_private_root/env "$zmux_shell" "$@" 7>&- 8>&-
+        ENV=$zmux_private_root/env exec "$zmux_shell" "$@"
         ;;
 esac
+) <&9 7>&- 8>&- 9>&- &
+zmux_shell_child=$!
+wait "$zmux_shell_child"
 exit $?

@@ -10,6 +10,20 @@ use zmux_session_runtime::{Launch, Session, State, shell_integration};
 use zmux_terminal_adapter::Size;
 
 struct Directory(PathBuf);
+impl Directory {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "zmux-shell-contract-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
 impl Drop for Directory {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).unwrap();
@@ -18,16 +32,7 @@ impl Drop for Directory {
 
 #[test]
 fn interactive_startup_keeps_user_configuration_and_notification_opt_out() {
-    let path = std::env::temp_dir().join(format!(
-        "zmux-shell-contract-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir(&path).unwrap();
-    let directory = Directory(path);
+    let directory = Directory::new();
     let provider = directory.0.join("claude");
     fs::write(
         &provider,
@@ -115,4 +120,77 @@ printf 'PROVIDER_ARGUMENTS_PRESERVED\n'
         wait("VERSION_PASSTHROUGH");
         session.shutdown(Duration::from_secs(3)).unwrap();
     }
+}
+
+#[test]
+fn posix_owner_hangup_cleans_hooks_without_waiting_for_the_interactive_child() {
+    let directory = Directory::new();
+    let report = directory.0.join("lease-root");
+    let (mut launch, lease) = shell_integration::prepare(Launch {
+        program: "/bin/bash".into(),
+        args: vec!["--noprofile".into(), "--norc".into(), "-i".into()],
+        cwd: Some(directory.0.clone()),
+        size: Size {
+            rows: 12,
+            cols: 100,
+        },
+    })
+    .unwrap();
+    // Exercise Darwin's Bash POSIX-shell wait semantics on Linux too. Keep the
+    // Rust cleanup lease outside the worker so it cannot mask shell cleanup.
+    launch.program = "/bin/bash".into();
+    launch.args.insert(0, "--posix".into());
+    let mut session = Session::spawn_with_environment(
+        launch,
+        &[(
+            "ZMUX_FIXTURE_LEASE_REPORT".into(),
+            report.to_str().unwrap().into(),
+        )],
+    )
+    .unwrap();
+    let wait = |predicate: fn(&str) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if session
+                .snapshot()
+                .is_ok_and(|s| predicate(&s.viewport.contents))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "PTY lifecycle fixture did not execute"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    session.send_input(b"stty -echo; printf '%s' \"$ZMUX_SHELL_INTEGRATION_DIRECTORY\" > \"$ZMUX_FIXTURE_LEASE_REPORT\"; printf '\\033[2J\\033[HHANGUP_READY'\n").unwrap();
+    // Cleared screen prefix excludes echoed command text and proves the preceding
+    // lease-path write completed before the controlled HUP.
+    wait(|text| text.starts_with("HANGUP_READY"));
+    let root = PathBuf::from(fs::read_to_string(report).unwrap());
+    assert!(root.join("plugin/hooks/hooks.json").is_file());
+    // Background ownership must preserve ordinary Ctrl-C handling and PTY input.
+    session.send_input(b"sleep 30\n").unwrap();
+    thread::sleep(Duration::from_millis(100));
+    session
+        .send_input(b"\x03printf '\\nINTERRUPT_RECOVERED\\n'\n")
+        .unwrap();
+    wait(|text| text.contains("INTERRUPT_RECOVERED"));
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(session.process_id() as i32),
+        nix::sys::signal::Signal::SIGHUP,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while root.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    let cleaned = !root.exists();
+    session.shutdown(Duration::from_secs(3)).unwrap();
+    assert!(lease.is_some());
+    assert!(
+        cleaned,
+        "POSIX owner deferred hook cleanup while its interactive child was alive"
+    );
 }
