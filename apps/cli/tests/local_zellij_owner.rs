@@ -151,6 +151,52 @@ struct Client {
     before: nix::sys::termios::Termios,
     reaped: bool,
 }
+fn reap_fixture_child(
+    child: &mut dyn portable_pty::Child,
+    deadline: Instant,
+) -> std::io::Result<portable_pty::ExitStatus> {
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "actual fixture CLI reap exceeded its fixed cleanup budget",
+            ));
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+fn cancel_fixture_child(
+    child: &mut dyn portable_pty::Child,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    if child.try_wait()?.is_some() {
+        return Ok(());
+    }
+    // This PID is the still-unreaped physical Child, never a discovered owner.
+    // Give this exact CLI a bounded chance to clean up its owned frontend.
+    // Never enter portable-pty's SIGHUP path or an unbounded final wait.
+    let pid = child
+        .process_id()
+        .ok_or_else(|| std::io::Error::other("fixture Child has no PID"))?;
+    match kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => (),
+        Err(error) => return Err(error.into()),
+    }
+    let grace_deadline = deadline.min(Instant::now() + Duration::from_secs(1));
+    match reap_fixture_child(child, grace_deadline) {
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => (),
+        Err(error) => return Err(error),
+    }
+    match kill(Pid::from_raw(pid as i32), Signal::SIGKILL) {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => (),
+        Err(error) => return Err(error.into()),
+    }
+    reap_fixture_child(child, deadline).map(|_| ())
+}
 impl Client {
     fn new(fixture: &Fixture, args: &[&str]) -> Self {
         Self::with_environment(fixture, args, &[])
@@ -331,7 +377,7 @@ impl Client {
             terminal_configuration(self.before.clone()),
             "foreground CLI did not restore actual terminal settings"
         );
-        self.child.wait().unwrap();
+        reap_fixture_child(&mut *self.child, Instant::now() + Duration::from_secs(3)).unwrap();
         self.reaped = true;
         match outcome {
             ExitObservation::Exited(code) => code,
@@ -344,9 +390,13 @@ impl Client {
 }
 impl Drop for Client {
     fn drop(&mut self) {
-        if !self.reaped {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        if !self.reaped
+            && let Err(error) =
+                cancel_fixture_child(&mut *self.child, Instant::now() + Duration::from_secs(3))
+        {
+            eprintln!(
+                "owned fixture CLI cleanup unconfirmed: {error}; no original owner was signalled"
+            );
         }
     }
 }
@@ -826,4 +876,54 @@ fn two_actual_frontends_consume_one_retained_completion_and_cleanup_only_its_gen
         "R03 actual multi-client completion: {}",
         serde_json::json!({"owner_uuid":owner,"owner_generation":generation,"workload_exit":7,"startup_count":1,"concurrent_frontends":2,"duplicate_consumption":true,"live_original_publisher_retained_until_explicit_cleanup":true,"registry_reclaimed":true})
     );
+}
+
+#[test]
+fn owned_fixture_cli_cleanup_reaps_a_hup_and_term_ignoring_child_within_its_fixed_budget() {
+    // A real private PTY process verifies failure-path cleanup independently of
+    // Zellij/owner authority. No adopted process or process group is signalled.
+    let pair = portable_pty::native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args([
+        "-c",
+        "trap '' HUP TERM; printf 'FIXTURE_CLEANUP_HELD\\n'; while IFS= read -r line; do :; done",
+    ]);
+    struct HeldChild(Box<dyn portable_pty::Child + Send + Sync>);
+    impl Drop for HeldChild {
+        fn drop(&mut self) {
+            if let Err(error) =
+                cancel_fixture_child(&mut *self.0, Instant::now() + Duration::from_secs(3))
+            {
+                eprintln!("private cleanup control child unconfirmed: {error}");
+            }
+        }
+    }
+    let mut child = HeldChild(pair.slave.spawn_command(command).unwrap());
+    let mut io = FileDescriptor::dup(&MasterFd(&*pair.master)).unwrap();
+    io.set_non_blocking(true).unwrap();
+    let ready_deadline = Instant::now() + Duration::from_secs(3);
+    let mut output = Vec::new();
+    while !String::from_utf8_lossy(&output).contains("FIXTURE_CLEANUP_HELD") {
+        let mut bytes = [0; 1024];
+        match io.read(&mut bytes) {
+            Ok(n) => output.extend_from_slice(&bytes[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => (),
+            Err(error) => panic!("private cleanup fixture: {error}"),
+        };
+        if Instant::now() >= ready_deadline {
+            panic!("owned cleanup fixture did not initialize");
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+    cancel_fixture_child(&mut *child.0, cleanup_deadline).unwrap();
+    assert!(child.0.try_wait().unwrap().is_some());
+    assert!(Instant::now() < cleanup_deadline);
 }
