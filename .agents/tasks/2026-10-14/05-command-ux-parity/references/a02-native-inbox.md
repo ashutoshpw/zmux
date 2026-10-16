@@ -218,3 +218,22 @@ Provider-owner coordination confirms future optional `delivery_attempts` and
 `retry_authorized` metadata. Preserve four states and show a latest
 `delivery_unknown` attempt as queued / Submission unconfirmed. Do not implement a
 provider wake or automatic retry in this slice.
+
+## First Darwin setup result and narrow repair
+
+Run [38854068017](https://github.com/ashutoshpw/zmux/actions/runs/38854068017), exact
+`54f6bf67a607cfe30ef9fa346dce515a9159329e`, did **not** establish behavioral red.
+Both Swift 6 slices passed (93.598 s); the actual arm64 package built (226.101 s).
+The owned app exited 1 without timeout after two-window/PTY, exact CLI messages,
+closed-recipient history and independent zero-input prerequisites passed. It then
+timed out making the sibling window really key, before the entrypoint assertion.
+The runner also incorrectly compared uppercase Swift UUID text with lowercase child
+UUID text. Raw child identities agree semantically and all three input counts are 0.
+
+All 267 retained source hashes match the local freeze and retained source bytes.
+Retained archive SHA256: `26a8b97c34ee08234d3c61bb016b473286fe4b41ac03f477431939650c7d3798`.
+Local artifacts: `/tmp/zmux-agent-inbox-red-38854068017/`.
+Parent approved only two setup repairs before another baseline run: exact-owned
+LaunchServices activation (existing native fixture pattern, PID checked, substitution
+forbidden) and semantic UUID comparison. Keep the actual key/responder checks and
+all original prerequisites. No production inbox code has been added.

@@ -22,6 +22,7 @@ enum AgentInboxSmoke {
         var stage = "prerequisites"
         var sourceWindow: UInt64?
         var otherWindow: UInt64?
+        var activationPID: Int32?
         var messageIDs: [UUID] = []
         var checks: [String] = []
         var children: [Child] = []
@@ -124,8 +125,13 @@ enum AgentInboxSmoke {
             // Invoking a retained NSMenu action must retain its explicit source target.
             source.installMenus()
             let sourceMenu = NSApp.mainMenu
+            evidence.activationPID = try await activateOwnedApplication()
+            guard evidence.activationPID == evidence.appPID else { throw failure("Activation substituted another process") }
             other.installMenus(); other.window.makeKeyAndOrderFront(nil); NSApp.activate()
-            try await wait(coordinator, "other window really key") { _ in NSApp.keyWindow === other.window && other.window.isKeyWindow }
+            try await wait(coordinator, "other window really key") { state in
+                NSApp.keyWindow === other.window && other.window.isKeyWindow &&
+                state.observedKeyWindow == otherID && state.model.focusedWindow == otherID
+            }
             evidence.checks.append("other_window_key_before_explicit_source_menu")
             evidence.stage = "entrypoint"
             try await save(evidence, to: report)
@@ -262,6 +268,25 @@ enum AgentInboxSmoke {
             try await Task.sleep(for: .milliseconds(32))
         }
         throw failure("Timed out awaiting " + description)
+    }
+    private static func activateOwnedApplication() async throws -> Int32 {
+        let current = NSRunningApplication.current
+        let bundle = Bundle.main.bundleURL.standardizedFileURL
+        guard current.bundleURL?.standardizedFileURL == bundle, let identifier = current.bundleIdentifier,
+              NSWorkspace.shared.runningApplications.filter({ $0.bundleIdentifier == identifier }).map(\.processIdentifier) == [current.processIdentifier] else {
+            throw failure("LaunchServices did not identify the exact unique fixture app")
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true; configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        configuration.arguments = ["--cli", "--help"]
+        return try await withCheckedThrowingContinuation { continuation in
+            NSWorkspace.shared.openApplication(at: bundle, configuration: configuration) { @Sendable application, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let application { continuation.resume(returning: application.processIdentifier) }
+                else { continuation.resume(throwing: failure("Owned activation returned no process")) }
+            }
+        }
     }
     private static func save(_ evidence: Evidence, to report: URL) async throws {
         try await Task.detached {
