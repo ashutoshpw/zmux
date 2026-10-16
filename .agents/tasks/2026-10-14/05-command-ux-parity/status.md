@@ -5,6 +5,19 @@
 
 ## Active implementation
 
+- Native pointer changes integrated asb04b6c6/affad11/98acf98/e0fd3a8 after
+  independent verification of all268 retained Git source hashes, archive integrity,
+  embedded source SHA and35 native cases from38858961638 at52b5ef0.
+  Shared shutdown and actual PTY1002/1003 captures pass; physical mouse,
+  optional engine and sustained saturation remain unverified. Combined-main
+  scripts/check passes395 tests/73groups/1existing ignored plus Clippy/notices
+  and both ABI checks (/tmp/zmux-main-native-pointer-check-20261016.log).
+  Hosted native validation on the integrated source remains pending.
+- Mainc162b37 Foundation38858457903 passes on Linux and macOS, confirming the
+  hook socket-path repair. Universal native38858458015 builds and reaches the
+  known Save-panel Accessibility/post-event permission gate, then joins all
+  physical owners. No TCC changes or user artifact delivery occurred.
+
 - Hook runtime long-TMPDIR regression56a2125 reproduces the Darwin startup
   failure at the actual Desktop/PTY boundary. Bounded canonical socket selection
   and pre-bind owned cleanup pass the same five scenarios and full Linux

@@ -130,7 +130,7 @@
       "implemented_slices": [
         "T01a function/navigation-key encoding with real native PTY byte acceptance at5f5005e",
         "Displayed word/row/cell selection and authoritative soft-wrap copying; double-click and word drag span wrapped visible words",
-        "Semantic pointer reports use bounded desktop/session queue and authoritative vt100 worker modes; native event wiring remains pending"
+        "Semantic pointer reports use bounded desktop/session queue and authoritative vt100 worker modes; native routing integrated after35 packaged AppKit cases in38858961638; main native validation, physical mouse, optional engine and sustained saturation remain open"
       ],
       "verification_receipts": [
         "t01-terminal-input.md",
