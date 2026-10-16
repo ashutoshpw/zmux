@@ -919,6 +919,8 @@ final class WorkspaceGroupRowView: NSControl {
     }
     required init?(coder: NSCoder) { nil }
     override var acceptsFirstResponder: Bool { false }
+    // Labels are presentation only. The whole header is one disclosure control.
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
     override func mouseDown(with event: NSEvent) { _ = sendAction(action, to: target) }
     override func accessibilityPerformPress() -> Bool { sendAction(action, to: target) }
     func updateAttention(unread: Int) {
