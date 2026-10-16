@@ -1,0 +1,41 @@
+name: Native control action probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  control-action:
+    runs-on: macos-15
+    timeout-minutes: 5
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Type-check and compile standalone AppKit probe
+        run: |
+          mkdir -p dist
+          xcrun swiftc -typecheck -swift-version 6 -strict-concurrency=complete -warnings-as-errors tools/native-control-probe/main.swift
+          xcrun swiftc -swift-version 6 -strict-concurrency=complete -warnings-as-errors -framework AppKit tools/native-control-probe/main.swift -o dist/control-action-probe
+      - name: Run actual AppKit actions with finite deadline
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          with Path('dist/control-action.stdout.log').open('wb') as output, Path('dist/control-action.stderr.log').open('wb') as errors:
+              subprocess.run(['dist/control-action-probe', 'dist/control-action.json'], stdout=output, stderr=errors, check=True, timeout=60)
+          print(Path('dist/control-action.json').read_text())
+          PY
+      - name: Retain exact probe and actual framework evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-control-action-${{ github.sha }}
+          path: |
+            tools/native-control-probe/main.swift
+            dist/control-action*.json
+            dist/control-action*.log
+          if-no-files-found: warn
+          retention-days: 7
