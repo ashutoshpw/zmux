@@ -1127,6 +1127,22 @@ impl Worker {
     fn poll_retired_sessions(&mut self) -> bool {
         let mut dirty = false;
         for mut retired in std::mem::take(&mut self.retired) {
+            // A terminal-before-readiness handoff waits for Saved/ACK to let
+            // its CLI exit naturally. Session keeps an exited viewport alive
+            // until close is requested, so release it after that actual exit.
+            if !retired.is_finished()
+                && retired.snapshot().is_ok_and(|snapshot| {
+                    matches!(
+                        snapshot.state,
+                        zmux_session_runtime::State::Exited
+                            | zmux_session_runtime::State::Failed
+                            | zmux_session_runtime::State::Closed
+                    )
+                })
+                && let Err(error) = retired.request_close()
+            {
+                self.cleanup_error = Some(error.to_string());
+            }
             if retired.is_finished() {
                 let result = retired.shutdown(Duration::ZERO);
                 let exit_code = retired
@@ -2389,6 +2405,35 @@ impl Worker {
             .remove(&(completion.id, completion.launch_id));
         self.pending_launches -= 1;
         self.complete_local_tmux(&completion);
+        if completion.zellij.as_ref().is_some_and(|metadata| {
+            matches!(
+                metadata.admission,
+                Some(local_zellij::ClientAdmission::TerminalObserved { .. })
+            )
+        }) {
+            match completion.result {
+                Ok(session) => {
+                    let metadata = completion
+                        .zellij
+                        .as_ref()
+                        .expect("terminal handoff metadata");
+                    if let Some(slot) = self.slots.get_mut(&completion.id)
+                        && slot.launch_id == completion.launch_id
+                    {
+                        slot.starting = false;
+                    }
+                    // Saved/ACK drives normal frontend exit. This Session has
+                    // no interactive admission and remains an actual cleanup owner.
+                    self.retired.push(RetiredSession {
+                        session,
+                        zellij: Some(metadata.tag.clone()),
+                    });
+                    return;
+                }
+                Err(error) => completion.result = Err(error),
+            }
+        }
+
         if self
             .slots
             .get(&completion.id)

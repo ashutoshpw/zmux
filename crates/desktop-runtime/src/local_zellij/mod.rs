@@ -89,7 +89,23 @@ pub(crate) struct LaunchRequest {
     pub engine: Option<EngineOptions>,
     pub environment: Vec<(String, String)>,
 }
+#[derive(Clone, Debug)]
+pub(crate) enum ClientAdmission {
+    InputReady {
+        attachment_id: Uuid,
+    },
+    TerminalObserved {
+        receipt: Box<TerminalReceipt>,
+        deadline: Instant,
+    },
+}
 pub(crate) enum LaunchEvent {
+    TransportConnected {
+        correlation: Correlation,
+        frontend: ProcessIdentity,
+        attachment_id: Uuid,
+        execution_contract_version: u8,
+    },
     WorkloadFinished {
         correlation: Correlation,
         receipt: Box<TerminalReceipt>,
@@ -141,6 +157,7 @@ impl ObserverHandle {
     }
 }
 pub(crate) struct ClientReady {
+    pub admission: ClientAdmission,
     pub session: Session,
     pub observer: ObserverHandle,
     pub record: Record,

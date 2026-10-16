@@ -44,8 +44,28 @@ impl Context {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReadinessRequest {
+    pub capability: String,
+    pub version: u8,
+    pub deadline_monotonic_ms: u64,
+}
+impl ReadinessRequest {
+    pub fn validate(&self) -> io::Result<()> {
+        if self.capability != super::input_readiness::CAPABILITY || self.version != 1 {
+            return Err(super::fail(
+                "unsupported required frontend input readiness capability",
+            ));
+        }
+        super::input_readiness::local_deadline(self.deadline_monotonic_ms)?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Descriptor {
     pub version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_readiness: Option<ReadinessRequest>,
     pub socket: PathBuf,
     pub launcher: ProcessIdentity,
     pub context: Context,
@@ -107,6 +127,14 @@ pub enum Event {
     TransportConnected {
         owner_uuid: Uuid,
         frontend: ProcessIdentity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment_id: Option<Uuid>,
+    },
+    InputReady {
+        owner_uuid: Uuid,
+        owner_generation: Uuid,
+        attachment_id: Uuid,
+        frontend: ProcessIdentity,
     },
     FrontendFinished {
         owner_uuid: Uuid,
@@ -139,7 +167,18 @@ impl Frame {
             Some("workload_finished") => &["owner_uuid", "receipt"],
             Some("owner_reserved") => &["owner_uuid"],
             Some("owner_bound") => &["record"],
+            Some("transport_connected")
+                if object.get("version").and_then(|v| v.as_u64()) == Some(4) =>
+            {
+                &["owner_uuid", "frontend", "attachment_id"]
+            }
             Some("transport_connected") => &["owner_uuid", "frontend"],
+            Some("input_ready") if object.get("version").and_then(|v| v.as_u64()) == Some(4) => &[
+                "owner_uuid",
+                "owner_generation",
+                "attachment_id",
+                "frontend",
+            ],
             Some("frontend_finished") => &[
                 "owner_uuid",
                 "owned_client_exit",

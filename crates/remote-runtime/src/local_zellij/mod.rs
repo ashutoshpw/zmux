@@ -4,6 +4,7 @@ pub mod admission;
 mod admission_gate;
 mod broker;
 pub mod completion;
+pub mod input_readiness;
 pub use admission_gate::run_workload;
 mod completion_cleanup;
 mod completion_control;

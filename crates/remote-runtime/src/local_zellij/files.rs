@@ -192,11 +192,19 @@ pub struct LocalZellij {
     pub(super) root: PathBuf,
     pub(super) binary: PathBuf,
     pub(super) program: PathBuf,
+    startup_deadline: Option<Instant>,
 }
 impl LocalZellij {
     pub fn from_environment(
         mut terminal: Option<&mut process::ForegroundTerminal>,
     ) -> io::Result<Self> {
+        let requested = if terminal.is_some() {
+            Some(super::observer::requested_deadline(
+                Instant::now() + START_TIMEOUT,
+            )?)
+        } else {
+            None
+        };
         let root = if let Some(root) = std::env::var_os("ZMUX_LOCAL_ZELLIJ_ROOT") {
             PathBuf::from(root)
         } else {
@@ -229,7 +237,10 @@ impl LocalZellij {
         version.env_remove(super::observer::ENV);
         if process::capture(
             version.arg("--version"),
-            Instant::now() + Duration::from_secs(5),
+            requested.map_or_else(
+                || Instant::now() + Duration::from_secs(5),
+                |(deadline, _)| deadline.min(Instant::now() + Duration::from_secs(5)),
+            ),
             || {
                 if let Some(terminal) = terminal.as_mut() {
                     terminal.startup_events()
@@ -243,7 +254,24 @@ impl LocalZellij {
         {
             return Err(fail("only zellij0.43.0 is supported"));
         }
+        if requested.is_some_and(|(_, required)| required) {
+            let mut probe = std::process::Command::new(&binary);
+            super::super::local_multiplexer::clear_context(&mut probe);
+            let output = process::capture(
+                probe.arg("--zmux-input-readiness-protocol"),
+                requested.expect("requested capability").0,
+                || {
+                    terminal
+                        .as_mut()
+                        .map_or(Ok(()), |terminal| terminal.startup_events())
+                },
+            )?;
+            super::input_readiness::verify_capability(&output)?;
+        }
         Ok(Self {
+            startup_deadline: requested
+                .filter(|(_, required)| *required)
+                .map(|(deadline, _)| deadline),
             root,
             binary,
             program: executable(&std::env::current_exe()?)?,
@@ -346,7 +374,9 @@ impl LocalZellij {
         {
             return Err(fail("invalid bounded zellij name/cwd/start command"));
         }
-        let deadline = Instant::now() + super::START_TIMEOUT;
+        let deadline = self
+            .startup_deadline
+            .unwrap_or_else(|| Instant::now() + super::START_TIMEOUT);
         let mut observer =
             super::observer::Observer::configured(deadline, || terminal.startup_events())?;
         let lock = if observer.is_some() {
@@ -418,7 +448,9 @@ impl LocalZellij {
         self.attach_record(record, terminal, observer, deadline)
     }
     pub fn attach(&self, id: Uuid, terminal: &mut process::ForegroundTerminal) -> io::Result<i32> {
-        let deadline = Instant::now() + super::START_TIMEOUT;
+        let deadline = self
+            .startup_deadline
+            .unwrap_or_else(|| Instant::now() + super::START_TIMEOUT);
         let observer =
             super::observer::Observer::configured(deadline, || terminal.startup_events())?;
         let record = {
@@ -550,8 +582,15 @@ pub(super) fn socket_path(path: &Path) -> io::Result<()> {
 
 fn files_runtime(record: &Record) -> io::Result<()> {
     let root = record.runtime()?;
+    validate_directory(&root, true)?;
+    let namespace = record
+        .namespace
+        .as_ref()
+        .ok_or_else(|| fail("missing immutable namespace binding"))?;
+    if inode(&root)? != namespace.root {
+        return Err(fail("reserved namespace/socket was replaced"));
+    }
     for path in [
-        &root,
         &root.join("s"),
         &root.join("s/0.43.0"),
         &root.join("cache"),
@@ -559,11 +598,7 @@ fn files_runtime(record: &Record) -> io::Result<()> {
     ] {
         validate_directory(path, true)?;
     }
-    let namespace = record
-        .namespace
-        .as_ref()
-        .ok_or_else(|| fail("missing immutable namespace binding"))?;
-    if inode(&root)? != namespace.root || inode(&record.backend()?)? != namespace.socket {
+    if inode(&record.backend()?)? != namespace.socket {
         return Err(fail("reserved namespace/socket was replaced"));
     }
     let backend = record.backend()?.symlink_metadata()?;

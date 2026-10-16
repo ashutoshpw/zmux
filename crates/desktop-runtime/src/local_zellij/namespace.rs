@@ -7,6 +7,7 @@ use std::{
         net::UnixListener,
     },
     path::{Path, PathBuf},
+    time::Instant,
 };
 use uuid::Uuid;
 use zmux_remote_runtime::local_zellij::observer_protocol::{Descriptor, FRAME_LIMIT, runtime_base};
@@ -66,6 +67,7 @@ impl Namespace {
     pub fn create(
         context: Correlation,
         launcher: ProcessIdentity,
+        deadline: Instant,
     ) -> io::Result<(Self, UnixListener)> {
         let root = runtime_base()?.join(format!("zo{}", Uuid::new_v4().simple()));
         fs::DirBuilder::new().mode(0o700).create(&root)?;
@@ -82,7 +84,18 @@ impl Namespace {
             listener.set_nonblocking(true)?;
             let nonce = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
             let bytes = serde_json::to_vec(&Descriptor {
-                version: 3,
+                version: 4,
+                input_readiness: Some(
+                    zmux_remote_runtime::local_zellij::observer_protocol::ReadinessRequest {
+                        capability: zmux_remote_runtime::local_zellij::input_readiness::CAPABILITY
+                            .into(),
+                        version: 1,
+                        deadline_monotonic_ms:
+                            zmux_remote_runtime::local_zellij::input_readiness::monotonic_deadline(
+                                deadline,
+                            )?,
+                    },
+                ),
                 socket: socket.clone(),
                 launcher,
                 context,

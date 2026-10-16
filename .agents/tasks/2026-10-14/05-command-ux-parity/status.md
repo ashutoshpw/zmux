@@ -5,6 +5,19 @@
 
 ## Active implementation
 
+- Observer4 consumer is implemented in isolated `ci/input-readiness-integration`.
+  Actual Linux public22 tests pass with silent first-line delivery on two distinct
+  attachments, startup1, actual7 Saved/physical joins, and terminal0/7 before
+  readiness without interactive admission. Completion-before-connect and namespace
+  fixture races retain exact red/green evidence. Queued historical transport
+  retains only an independently authenticated, identical correlated terminal fact;
+  changed live frontend identities still fail and cannot seed readiness. Strict feature Clippy passes;
+  final repository check passes362 tests plus three owned subprocess fixtures,
+  strict workspace Clippy, license inventory and C ABI. Parent source review is
+  complete; isolated diagnostic delivery is authorized. Main activation, Swift
+  presentation and consumer Darwin acceptance remain gated by the matching package. See
+  [consumer evidence](references/r03-input-readiness-consumer.md).
+
 - R03 runtime/checkpoint prerequisite committed `dc43608` after all 21 staged
   source hashes matched the independently reviewed freeze. Isolated `scripts/check`
   passed 331 tests (one intentional ignored); actual Zellij conformance passed 12.

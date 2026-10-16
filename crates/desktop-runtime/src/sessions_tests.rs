@@ -225,6 +225,8 @@ fn pending_start(
         },
     );
     worker.local_zellij.receipts.push(Receipt {
+        input_ready: false,
+        attachment_id: None,
         epoch: worker.local_zellij.epoch,
         operation_id: 1,
         state: "starting".into(),
@@ -568,6 +570,8 @@ fn attach_and_start_setup_refusal_publish_no_surface_and_burn_without_leaking_ti
     let pane_id = worker.model.snapshot().workspaces[0].focused_pane;
     for operation_id in 1..=32 {
         worker.local_zellij.receipts.push(Receipt {
+            input_ready: false,
+            attachment_id: None,
             epoch: worker.local_zellij.epoch,
             operation_id,
             state: "starting".into(),
@@ -1183,5 +1187,80 @@ fn completed_fact_blocks_all_new_input_before_saved_while_the_real_pty_is_live()
         .unwrap()
         .shutdown(Duration::from_secs(5))
         .unwrap();
+    close_writer(&mut worker);
+}
+
+#[test]
+fn completed_before_input_ready_holds_the_actual_session_only_for_saved_and_cleanup() {
+    // Synthetic terminal fact at the coordinator owner; actual S01 writer and
+    // actual retained PTY verify handoff ownership, not live Zellij authority.
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let (pending, authorization) = active_completion(&mut worker);
+    let job = worker.local_zellij.active.remove(&1).unwrap();
+    let id = job.session;
+    let launch_id = job.launch_id;
+    worker.local_zellij.jobs.insert(1, job);
+    worker.pending_launches += 1;
+    let session = Session::spawn(zmux_session_runtime::Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "IFS= read -r line; exit 0".into()],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    let pid = session.process_id();
+    worker.complete(Completion {
+        launch_id,
+        id,
+        result: Ok(session),
+        connection: None,
+        cleanup: None,
+        zellij: Some(zellij_coordinator::ZellijCompletion {
+            admission: Some(local_zellij::ClientAdmission::TerminalObserved {
+                receipt: Box::new(pending.receipt.clone()),
+                deadline: pending.deadline,
+            }),
+            tag: zellij_coordinator::ZellijTag {
+                correlation: pending.correlation.clone(),
+                session: id,
+                launch_id,
+            },
+            observer: None,
+            owner_uuid: Some(pending.receipt.owner_uuid()),
+            frontend_pid: Some(pid),
+            execution_contract_version: Some(pending.receipt.contract_version()),
+        }),
+    });
+    assert_eq!(worker.pending_launches, 0);
+    assert!(worker.slots[&id].session.is_none());
+    assert!(worker.writable_session(id).is_err());
+    assert!(!worker.local_zellij.receipts[0].input_ready);
+    assert_eq!(worker.local_zellij.receipts[0].frontend_pid, Some(pid));
+    assert_eq!(worker.retired.len(), 1);
+    assert_eq!(worker.retired[0].process_id(), pid);
+    assert_eq!(
+        worker.retired[0].snapshot().unwrap().state,
+        zmux_session_runtime::State::Running,
+        "completion handoff must not cancel actual frontend before Saved/ACK"
+    );
+    assert!(authorization.try_recv().is_err());
+    let pending = worker.local_zellij.pending_completions.remove(&1).unwrap();
+    worker.zellij_workload_finished(pending).unwrap();
+    saved(&mut worker);
+    assert!(matches!(
+        authorization.try_recv().unwrap(),
+        local_zellij::Authorization::Completion(_)
+    ));
+    worker.retired[0].send_input(b"finish-fixture\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !worker.retired.is_empty() {
+        worker.poll_retired_sessions();
+        assert!(
+            Instant::now() < deadline,
+            "terminal handoff actual exited Session must release its resource and join"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
     close_writer(&mut worker);
 }
