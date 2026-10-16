@@ -8,9 +8,11 @@ import json
 import os
 import platform
 import plistlib
+import selectors
 import subprocess
 import sys
 import threading
+import time
 import uuid
 import zipfile
 
@@ -52,11 +54,101 @@ def main():
     owned_groups = []
     owned_processes = []
     group_factory = runner.ProcessGroup
+    receipt["process_observations"] = []
+
+    def observe_processes(stage, app_pid=None, leader_exited=None):
+        observation = {"stage": stage, "app_pid": app_pid, "leader_exited": leader_exited,
+                       "scope": "read_only_relationships_not_signal_authority"}
+        probe = None
+        selector = selectors.DefaultSelector()
+        try:
+            if len(receipt["process_observations"]) >= 12:
+                raise RuntimeError("Process observation count exceeds bound")
+            probe = subprocess.Popen(["/bin/ps", "-A", "-o", "pid=,ppid=,pgid=,stat=,comm="],
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            selector.register(probe.stdout, selectors.EVENT_READ)
+            data = bytearray()
+            deadline = time.monotonic() + 2
+            while selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Read-only process observation timed out")
+                for key, _ in selector.select(0.03):
+                    chunk = os.read(key.fileobj.fileno(), 16384)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                    if len(data) + len(chunk) > 262144:
+                        raise RuntimeError("Read-only process observation exceeds byte bound")
+                    data.extend(chunk)
+            if probe.wait(timeout=max(0.01, deadline - time.monotonic())) != 0:
+                raise RuntimeError("Read-only process observation failed")
+            rows = []
+            for line in data.decode("utf-8", errors="strict").splitlines():
+                fields = line.split(maxsplit=4)
+                if len(fields) != 5 or len(rows) >= 4096:
+                    raise RuntimeError("Read-only process observation row/type bound failed")
+                pid, parent, group = map(int, fields[:3])
+                rows.append({"pid": pid, "ppid": parent, "pgid": group, "state": fields[3], "comm": fields[4][:1024]})
+            descendants = {app_pid} if app_pid is not None else set()
+            for _ in range(len(rows)):
+                found = {row["pid"] for row in rows if row["ppid"] in descendants}
+                if found <= descendants:
+                    break
+                descendants |= found
+            retained = []
+            for row in rows:
+                relationships = []
+                if app_pid is not None and row["pgid"] == app_pid:
+                    relationships.append("observed_owned_group")
+                if row["pid"] in descendants:
+                    relationships.append("observed_app_or_descendant")
+                if "webkit" in row["comm"].lower():
+                    relationships.append("observed_webkit_candidate_relationship_unproven")
+                if relationships:
+                    retained.append(dict(row, relationships=relationships))
+            observation["processes"] = retained
+        except Exception as error:
+            observation["error"] = f"{type(error).__name__}: {error}"[:2048]
+        finally:
+            selector.close()
+            if probe is not None:
+                try:
+                    if probe.stdout is not None:
+                        probe.stdout.close()
+                    if probe.returncode is None:
+                        # Only this unreaped direct ps child is stopped, never an observed PID.
+                        probe.kill()
+                    probe.wait(timeout=2)
+                except Exception as error:
+                    observation["cleanup_error"] = f"{type(error).__name__}: {error}"[:2048]
+            receipt["process_observations"].append(observation)
 
     def record_group(command, **options):
+        native = Path(str(command[0])).name == "profile-lifecycle-probe"
+        if native:
+            observe_processes("before_native_spawn")
         owner = group_factory(command, **options)
         owned_groups.append({"pid": owner.process.pid, "command": [str(item) for item in command]})
         owned_processes.append(owner.process)
+        if native:
+            original_stop, original_close = owner.stop, owner.close
+
+            def observed_stop():
+                try:
+                    observe_processes("before_owned_cleanup_signal", owner.process.pid, owner.exited())
+                except Exception as error:
+                    receipt["process_observations"].append({"stage": "before_owned_cleanup_signal",
+                        "app_pid": owner.process.pid, "scope": "read_only_relationships_not_signal_authority",
+                        "error": f"{type(error).__name__}: {error}"[:2048]})
+                return original_stop()
+
+            def observed_close(**options):
+                try:
+                    return original_close(**options)
+                finally:
+                    observe_processes("after_owned_cleanup", owner.process.pid)
+
+            owner.stop = observed_stop
+            owner.close = observed_close
         return owner
 
     # Delegate the unchanged lifecycle owner; retain its actual spawned identity.
@@ -195,6 +287,8 @@ def main():
             receipt.update(state="failed", error="Owned fixture server did not join")
         if any(phase["log_bytes_seen"] != phase["log_bytes_retained"] for phase in receipt["phases"]):
             receipt.update(state="failed", error="Probe log exceeded retained bound")
+        if any(item.get("error") or item.get("cleanup_error") for item in receipt["process_observations"]):
+            receipt.update(state="failed", process_observation_incomplete=True)
         (root / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps({"state": receipt["state"], "receipt": str(root / "receipt.json")}))
     return 0 if receipt["state"] == "complete" else 1
