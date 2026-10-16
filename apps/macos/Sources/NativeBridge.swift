@@ -223,8 +223,10 @@ actor NativeBridge {
     }
     private func mutateBrowserProfile(_ command: [String: String]) async throws -> BrowserProfileReceipt {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
-        guard let name = command["name"], !name.isEmpty, name.utf8.count <= 128 else {
-            throw BridgeFailure(message: "Profile names must contain 1 to 128 UTF-8 bytes.")
+        if command["operation"] == "add" || command["operation"] == "rename" {
+            guard let name = command["name"], !name.isEmpty, name.utf8.count <= 128 else {
+                throw BridgeFailure(message: "Profile names must contain 1 to 128 UTF-8 bytes.")
+            }
         }
         let desktop = handle
         let data = try JSONSerialization.data(withJSONObject: command)

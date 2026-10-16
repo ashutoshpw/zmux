@@ -430,3 +430,17 @@ Missing callbacks, interrupted nonterminal native recovery and deterministic con
 racing restore remain separate unexercised gates. Ordinary terminal reconciliation is
 exercised, not a lost-callback claim. Native compilation/execution is still pending at
 this source-freeze stage.
+
+Parent fixture review accepted the scope and requested one launch-isolation repair:
+the runner drops every inherited `ZMUX_`/`DYLD_` value (and Rust compiler flags),
+then supplies only its exact private `ZMUX_SOCKET` and `ZMUX_SOCKET_PATH` to the
+owned helper/app processes. Inherited engine, socket or credential overrides cannot
+redirect this generated fixture to another service. The repaired freeze is authorized
+for branch push and the isolated `profile-operations` dispatch, with compilation first.
+
+The final pre-dispatch owner audit found that Swift's shared profile mutation helper
+required a name even for UUID-only clear/delete commands. The real manager fixture was
+already committed in5ff0028 before this repair, but could not execute its native red on
+Linux. Name validation is now scoped to add/rename; clear/delete reach the same Rust
+admission used by the manager. No native effect/ABI changed. The hosted fixture must still
+establish actual compilation and manager behavior; source reasoning is not native red proof.
