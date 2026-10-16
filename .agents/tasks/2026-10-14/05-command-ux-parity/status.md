@@ -5,14 +5,14 @@
 
 ## Active implementation
 
-- Screenshot-driven compact sidebar/group UI in progress. Shared group domain,
-  persistence and CLI integrated (0e77cac/b4aab55/e178d25/ffc635e); full scripts/check
-  passes, including strict Clippy/notices/both ABI and four group core tests.
-  Native UI now uses one32pt titlebar strip, visible expanded/collapsed toggles,
-  bell/workspace toggle, named collapsible headers and membership/context menus.
-  Dedicated manual sidebar native suite and universal artifact runner e7c4750.
-  Native compile, actual mouse/menu/sheet journey and screenshots pending on Actions;
-  no native acceptance or full-parity claim yet. See N01 compact groups reference.
+- Compact sidebar/group UI accepted on macOS: source cdbb392, run38890159245
+  passes all9 interaction flags, real second-window scoping and nonce-bound app
+  physical cleanup/PID absence. Parent inspected both toggle-state screenshots,
+  ZIP integrity/source/app name and equality with the tested executable. Apple
+  Silicon artifact12042350763; SHA256 a507e380...166895. Both Swift slices pass;
+  shared core/CLI/persistence checks pass. See N01 compact groups reference.
+  This closes the requested compact chrome, visible sidebar toggle and native
+  group controls slice; full product parity remains in progress.
 
 - Hosted Linux Foundation112e55a exposed an execution-admission fixture race:
   shell redirection creates the file before writing. Regression75ddce1 reproduces
