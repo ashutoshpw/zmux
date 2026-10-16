@@ -2,7 +2,8 @@
 //!
 //! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
 //! descriptors; V4 adds canonical window membership; V5 adds workspace todos;
-//! V6 adds attach-only local Zellij identity; V7 adds bounded completed history.
+//! V6 adds attach-only local Zellij identity; V7 adds bounded completed history;
+//! V8 adds explicit admitted-lifetime execution history while retaining V7 reads.
 //! Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
@@ -11,7 +12,7 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 7;
+pub const SESSION_DOCUMENT_VERSION: u32 = 8;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -321,6 +322,20 @@ impl Validation {
                                 return Err(invalid(
                                     "completed local Zellij history requires session version 7",
                                 ));
+                            }
+                            match history.receipt.contract_version() {
+                                1 => (),
+                                2 if self.version >= 8 => (),
+                                2 => {
+                                    return Err(invalid(
+                                        "admitted local Zellij history requires session version 8",
+                                    ));
+                                }
+                                _ => {
+                                    return Err(invalid(
+                                        "unsupported local Zellij execution contract",
+                                    ));
+                                }
                             }
                             history
                                 .validate(&LocalZellijIdentity {

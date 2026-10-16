@@ -82,7 +82,7 @@ impl Namespace {
             listener.set_nonblocking(true)?;
             let nonce = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
             let bytes = serde_json::to_vec(&Descriptor {
-                version: 2,
+                version: 3,
                 socket: socket.clone(),
                 launcher,
                 context,

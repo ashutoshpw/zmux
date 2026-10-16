@@ -14,7 +14,7 @@ use std::{
 };
 use uuid::Uuid;
 use zmux_remote_runtime::local_zellij::{
-    Record, completion::TerminalReceiptV1, observer_protocol::FrontendReceipt,
+    Record, completion::TerminalReceipt, observer_protocol::FrontendReceipt,
 };
 use zmux_session_runtime::{EngineOptions, Session, SessionError, child::ProcessIdentity};
 use zmux_workspace_core::LocalZellijIdentity;
@@ -92,7 +92,7 @@ pub(crate) struct LaunchRequest {
 pub(crate) enum LaunchEvent {
     WorkloadFinished {
         correlation: Correlation,
-        receipt: Box<TerminalReceiptV1>,
+        receipt: Box<TerminalReceipt>,
         deadline: Instant,
     },
     OwnerReserved {
@@ -145,6 +145,7 @@ pub(crate) struct ClientReady {
     pub observer: ObserverHandle,
     pub record: Record,
     pub frontend: Option<ProcessIdentity>,
+    pub execution_contract_version: u8,
 }
 pub(crate) struct ClientLaunchFailure {
     pub error: SessionError,

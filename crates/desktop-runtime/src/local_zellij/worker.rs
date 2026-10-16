@@ -238,6 +238,7 @@ mod tests;
 struct Ready {
     record: Record,
     frontend: Option<ProcessIdentity>,
+    execution_contract_version: u8,
 }
 
 pub(crate) fn launch_client(
@@ -416,6 +417,7 @@ pub(crate) fn launch_client(
             observer,
             record: ready.record,
             frontend: ready.frontend,
+            execution_contract_version: ready.execution_contract_version,
         }),
         Err(error) => {
             if let Err(e) = session.request_close() {
@@ -577,7 +579,7 @@ impl Monitor {
         let mut completed = None;
         loop {
             let frame = receive(&mut stream, &request, stopped, !connected)?;
-            if frame.version != 2
+            if frame.version != 3
                 || frame.context != request.correlation
                 || frame.nonce != nonce
                 || frame.sequence != sequence + 1
@@ -630,7 +632,7 @@ impl Monitor {
                     send_ack(
                         &mut stream,
                         Acknowledgment {
-                            version: 2,
+                            version: 3,
                             context: request.correlation.clone(),
                             nonce: nonce.clone(),
                             sequence: 2,
@@ -692,6 +694,11 @@ impl Monitor {
                         .try_send(Ok(Ready {
                             record: record.as_ref().expect("checked record").clone(),
                             frontend: Some(frontend),
+                            execution_contract_version: record
+                                .as_ref()
+                                .expect("checked record")
+                                .execution_binding()?
+                                .contract_version(),
                         }))
                         .map_err(|_| {
                             fail("native retained-Session readiness receiver unavailable")
@@ -718,6 +725,9 @@ impl Monitor {
                             .try_send(Ok(Ready {
                                 record: bound.clone(),
                                 frontend: None,
+                                execution_contract_version: bound
+                                    .execution_binding()?
+                                    .contract_version(),
                             }))
                             .map_err(|_| {
                                 fail("completed retained Session readiness unavailable")
@@ -754,7 +764,7 @@ impl Monitor {
                         }
                     };
                     if saved.correlation != request.correlation
-                        || saved.owner_generation != receipt.binding.owner_generation
+                        || saved.owner_generation != receipt.owner_generation()
                         || saved.receipt_digest != receipt.digest()?
                         || saved.document_revision == 0
                         || saved.io_id == 0
@@ -765,7 +775,7 @@ impl Monitor {
                     }
                     view.validate()?;
                     let ack = Acknowledgment {
-                        version: 2,
+                        version: 3,
                         context: request.correlation.clone(),
                         nonce: nonce.clone(),
                         sequence: sequence + 1,

@@ -77,7 +77,7 @@ pub struct Acknowledgment {
 )]
 pub enum OwnerOutcome {
     LivePreserved,
-    WorkloadCompleted(Box<super::completion::TerminalReceiptV1>),
+    WorkloadCompleted(Box<super::completion::TerminalReceipt>),
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,7 +96,7 @@ pub struct FrontendReceipt {
 pub enum Event {
     WorkloadFinished {
         owner_uuid: Uuid,
-        receipt: super::completion::TerminalReceiptV1,
+        receipt: super::completion::TerminalReceipt,
     },
     OwnerReserved {
         owner_uuid: Uuid,

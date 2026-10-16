@@ -499,7 +499,7 @@ pub(super) fn connect_while(
 fn acknowledge_completion(
     owner: &LocalZellij,
     record: &Record,
-    receipt: &super::completion::TerminalReceiptV1,
+    receipt: &super::completion::TerminalReceipt,
     terminal: &mut ForegroundTerminal,
     observer: &mut Option<super::observer::Observer>,
     client: &mut super::completion_control::Client,
@@ -528,10 +528,29 @@ pub(super) fn attach(
     terminal.startup_events()?;
     let mut completion = if record.completion.is_some() {
         let mut client = super::completion_control::Client::connect(&record, startup_deadline)?;
-        let already = client.subscribe(
+        let mut already = client.subscribe(
             observer.as_ref().map(|o| o.context()),
             observer.as_ref().map(|o| o.launcher()),
         )?;
+        if already.is_none()
+            && let Err(live_error) = record.verify_live()
+        {
+            // A finite Child may end between Subscribe and live validation.
+            // Only the original authenticated publisher can resolve that race;
+            // absence of a process never manufactures a terminal outcome.
+            let deadline = startup_deadline.min(Instant::now() + Duration::from_secs(2));
+            loop {
+                terminal.startup_events()?;
+                already = client.query()?;
+                if already.is_some() {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err(live_error);
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
         if let Some(receipt) = already {
             acknowledge_completion(
                 owner,
@@ -561,13 +580,15 @@ pub(super) fn attach(
                 )?;
             }
             client.release()?;
-            return receipt.workload_exit.mapped();
+            return receipt.command_result();
         }
         Some(client)
     } else {
         None
     };
-    record.verify_live()?;
+    if completion.is_none() {
+        record.verify_live()?;
+    }
     let mut attachment = Attachment {
         broker: Broker::start(&record)?,
         child: None,
@@ -689,7 +710,7 @@ pub(super) fn attach(
     };
     if observer
         .as_ref()
-        .is_none_or(|observer| observer.version() != 2)
+        .is_none_or(|observer| observer.version() < 2)
     {
         eprintln!(
             "zmux local-zellij attachment receipt: {}",
@@ -726,7 +747,7 @@ pub(super) fn attach(
         client.release()?;
     }
     if let Some(receipt) = completed {
-        return receipt.workload_exit.mapped();
+        return receipt.command_result();
     }
     match outcome {
         ExitObservation::Exited(code) => Ok(code),

@@ -1,6 +1,6 @@
 //! Explicit completed-owner retirement. Every process exits through its own
 //! supervisor; deletion is descriptor-relative and never grants PID signal rights.
-use super::{LocalZellij, Record, completion::TerminalReceiptV1, completion_control, fail, files};
+use super::{LocalZellij, Record, completion::TerminalReceipt, completion_control, fail, files};
 use serde::Serialize;
 use std::{
     fs::File,
@@ -15,7 +15,7 @@ use zmux_session_runtime::child::{ProcessIdentity, process_identity};
 pub struct CompletionStatus {
     #[serde(flatten)]
     pub record: Record,
-    pub terminal_receipt: Option<TerminalReceiptV1>,
+    pub terminal_receipt: Option<TerminalReceipt>,
     pub completion_authenticated: bool,
     pub consumption_confirmed: bool,
     pub completion_error: Option<String>,
@@ -92,8 +92,8 @@ impl LocalZellij {
                 .find(|r| r.id == id)
                 .ok_or_else(|| fail("completed owner not found"))?
         };
-        let binding = record.committed_binding()?;
-        if binding.owner_generation != generation {
+        let binding = record.execution_binding()?;
+        if binding.owner_generation() != generation {
             return Err(fail("completed cleanup owner generation differs"));
         }
         let mut client =
@@ -104,7 +104,7 @@ impl LocalZellij {
         self.consume_terminal(&record, &terminal)?;
         client.retire(&terminal)?;
         let deadline = Instant::now() + Duration::from_secs(3);
-        while !departed(&binding.supervisor)? || !departed(&binding.server)? {
+        while !departed(binding.supervisor())? || !departed(binding.server())? {
             if Instant::now() >= deadline {
                 return Err(fail(
                     "completed cleanup awaits original supervisor/backend departure; no signals sent",
@@ -125,7 +125,7 @@ impl LocalZellij {
             .file_name()
             .ok_or_else(|| fail("missing completed runtime name"))?;
         let mut budget = 4096;
-        remove_directory(&base, name, binding.namespace.root, 0, &mut budget)?;
+        remove_directory(&base, name, binding.namespace().root, 0, &mut budget)?;
         base.sync_all()?;
         let _lock = self.lock()?;
         let mut records = self.records()?;
@@ -133,7 +133,7 @@ impl LocalZellij {
             .iter()
             .find(|r| r.id == id)
             .ok_or_else(|| fail("completed cleanup registry changed"))?;
-        if current.committed_binding()? != binding {
+        if current.execution_binding()? != binding {
             return Err(fail(
                 "completed cleanup binding changed before registry reclaim",
             ));
