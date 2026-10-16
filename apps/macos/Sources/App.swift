@@ -839,6 +839,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let bridge = self.bridge
             browserProfilesWindow = BrowserProfilesWindowController(create: { name in
                 try await bridge.createBrowserProfile(name: name)
+            }, rename: { id, name in
+                try await bridge.renameBrowserProfile(id: id, name: name)
             }, open: { [weak self] profile in
                 guard let self, let pane = self.focusedPane,
                       let state = self.snapshot?.browserProfiles, state.enabled,
@@ -2020,6 +2022,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let name = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "New profile name" }),
               let status = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Profile status" }),
               let create = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Create Profile" }),
+              let rename = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Rename Profile" }),
+              let renameName = controls.compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Selected profile new name" }),
               let open = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Open Profile" }),
               let profiles = controls.compactMap({ $0 as? NSPopUpButton }).first else {
             throw BridgeFailure(message: "Profile manager controls are unavailable")
@@ -2062,10 +2066,44 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard try await browserCLIValue(["browser", "eval", "localStorage.getItem('zmuxManager') === null && !document.cookie.includes('zmuxManager=created')", "--surface", String(privateSurface)]) as? Bool == true else {
             throw BridgeFailure(message: "Managed profile data leaked into the private browser")
         }
+        // Real manager and CLI rename the same live UUID without replacing its host
+        // or losing existing website data, then survive close/reopen through the manager.
+        guard let retainedHost = browsers[surface] else { throw BridgeFailure(message: "Managed profile host disappeared") }
+        let renamedName = "Renamed " + UUID().uuidString
+        renameName.stringValue = renamedName
+        rename.performClick(nil)
+        guard !rename.isEnabled, !create.isEnabled, !open.isEnabled else { throw BridgeFailure(message: "Profile rename allowed overlapping manager work") }
+        try await waitUntil { $0.browserProfiles.profiles.contains { $0.id == profile.id && $0.name == renamedName } && rename.isEnabled }
+        guard browsers[surface] === retainedHost,
+              (profiles.selectedItem?.representedObject as? String) == profile.id.uuidString,
+              profiles.selectedItem?.title == renamedName else { throw BridgeFailure(message: "Profile rename replaced the host or selected another UUID") }
+        _ = try await nativeCLI(["browser", "profiles", "rename", renamedName, submittedName])
+        try await waitUntil { $0.browserProfiles.profiles.contains { $0.id == profile.id && $0.name == submittedName } }
+        guard browsers[surface] === retainedHost,
+              try await browserCLIValue(["browser", "eval", "localStorage.getItem('zmuxManager') === 'created' && document.cookie.includes('zmuxManager=created')", "--surface", String(surface)]) as? Bool == true else {
+            throw BridgeFailure(message: "Profile rename lost its live website data")
+        }
         _ = try await nativeCLI(["close-surface", "--surface", String(surface)])
+        let beforeReopen = Set(browsers.keys)
+        open.performClick(nil)
+        try await waitUntil { value in
+            guard let selected = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
+            return !beforeReopen.contains(selected.id) && selected.browserProfileId == profile.id
+        }
+        guard let reopened = focusedPane?.selectedSurface,
+              browsers[reopened]?.webView.configuration.websiteDataStore.identifier == profile.id else {
+            throw BridgeFailure(message: "Renamed profile reopened a different datastore")
+        }
+        _ = try await nativeCLI(["browser", "goto", "--surface", String(reopened), origin + "/first"])
+        try await waitUntil { [weak self] _ in self?.browsers[reopened]?.webView.title == "First fixture" && self?.browsers[reopened]?.webView.isLoading == false }
+        guard try await browserCLIValue(["browser", "eval", "localStorage.getItem('zmuxManager') === 'created' && document.cookie.includes('zmuxManager=created')", "--surface", String(reopened)]) as? Bool == true else {
+            throw BridgeFailure(message: "Renamed profile lost data after manager reopen")
+        }
+        _ = try await nativeCLI(["close-surface", "--surface", String(reopened)])
         browserProfilesWindow?.close()
         selectTab(privateSurface)
         try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == pane })?.selectedSurface == privateSurface }
+        FileHandle.standardError.write(Data("Native browser profiles: real manager/CLI rename, immutable UUID/live host, cookie/localStorage retention and manager reopen passed\n".utf8))
     }
     /// Public bundled-CLI assertions on a never-selected WebKit document. Fixture
     /// DOM writes are explicit eval; no synthetic input is presented as pointer parity.

@@ -607,13 +607,16 @@ impl Desktop {
         &self,
         name: String,
     ) -> Result<profiles::ProfileReceipt, ProfileAdmissionError> {
+        self.native_profile_command(profiles::ProfileCommand::Add { name })
+    }
+
+    /// Admit one catalog mutation with the same exact bounded acknowledgement owner.
+    pub fn native_profile_command(
+        &self,
+        action: profiles::ProfileCommand,
+    ) -> Result<profiles::ProfileReceipt, ProfileAdmissionError> {
         let execution = self
-            .execute_native(
-                Command::Profiles {
-                    action: profiles::ProfileCommand::Add { name },
-                },
-                NATIVE_COMMAND_TIMEOUT,
-            )
+            .execute_native(Command::Profiles { action }, NATIVE_COMMAND_TIMEOUT)
             .map_err(|error| ProfileAdmissionError {
                 outcome_unknown: matches!(error, DesktopError::Timeout | DesktopError::Closed),
                 error,

@@ -172,18 +172,24 @@ actor NativeBridge {
     /// Submit once and return attributable admission, before the disk worker completes.
     /// A lost acknowledgement is never replayed as another profile creation.
     func createBrowserProfile(name: String) async throws -> BrowserProfileReceipt {
+        try await mutateBrowserProfile(["operation": "add", "name": name])
+    }
+    func renameBrowserProfile(id: UUID, name: String) async throws -> BrowserProfileReceipt {
+        try await mutateBrowserProfile(["operation": "rename", "profile": id.uuidString.lowercased(), "name": name])
+    }
+    private func mutateBrowserProfile(_ command: [String: String]) async throws -> BrowserProfileReceipt {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
-        guard !name.isEmpty, name.utf8.count <= 128 else {
+        guard let name = command["name"], !name.isEmpty, name.utf8.count <= 128 else {
             throw BridgeFailure(message: "Profile names must contain 1 to 128 UTF-8 bytes.")
         }
         let desktop = handle
-        let data = Data(name.utf8)
+        let data = try JSONSerialization.data(withJSONObject: command)
         let admission = Task<BrowserProfileReceipt, Error>.detached(priority: .userInitiated) {
             let result = data.withUnsafeBytes { bytes in
-                zmux_desktop_profile_add(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                zmux_desktop_profile_command(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
             }
             guard result.status == 0 else {
-                throw BridgeFailure(message: "Profile creation could not be acknowledged (\(result.status)). Check the profile list before trying again.")
+                throw BridgeFailure(message: "Profile change could not be acknowledged (\(result.status)). Check the profile list before trying again.")
             }
             struct Response: Decodable {
                 struct Failure: Decodable { let message: String }

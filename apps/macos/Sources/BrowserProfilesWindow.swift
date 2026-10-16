@@ -5,11 +5,14 @@ import AppKit
 @MainActor
 final class BrowserProfilesWindowController: NSWindowController {
     private let createProfile: @MainActor (String) async throws -> BrowserProfileReceipt
+    private let renameProfile: @MainActor (UUID, String) async throws -> BrowserProfileReceipt
     private let openProfile: @MainActor (UUID) throws -> Void
     private let profiles = NSPopUpButton(frame: .zero, pullsDown: false)
     private let name = NSTextField(string: "")
+    private let renameName = NSTextField(string: "")
     private let message = NSTextField(wrappingLabelWithString: "")
     private let createButton = NSButton(title: "Create Profile", target: nil, action: nil)
+    private let renameButton = NSButton(title: "Rename Profile", target: nil, action: nil)
     private let openButton = NSButton(title: "Open Profile", target: nil, action: nil)
     private var state: BrowserProfileState?
     private var selectedID: UUID?
@@ -20,10 +23,12 @@ final class BrowserProfilesWindowController: NSWindowController {
     private var operation: Task<Void, Never>?
 
     init(create: @escaping @MainActor (String) async throws -> BrowserProfileReceipt,
+         rename: @escaping @MainActor (UUID, String) async throws -> BrowserProfileReceipt,
          open: @escaping @MainActor (UUID) throws -> Void) {
         createProfile = create
         openProfile = open
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 400),
+        renameProfile = rename
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Browser Profiles"
         window.isReleasedWhenClosed = false
@@ -68,6 +73,13 @@ final class BrowserProfilesWindowController: NSWindowController {
         openButton.action = #selector(openSelected(_:))
         openButton.bezelStyle = .rounded
         stack.addArrangedSubview(openButton)
+        renameName.placeholderString = "New name for selected profile"
+        renameName.setAccessibilityLabel("Selected profile new name")
+        stack.addArrangedSubview(renameName)
+        renameButton.target = self
+        renameButton.action = #selector(renameSelected(_:))
+        renameButton.bezelStyle = .rounded
+        stack.addArrangedSubview(renameButton)
         let separator = NSBox()
         separator.boxType = .separator
         stack.addArrangedSubview(separator)
@@ -82,7 +94,7 @@ final class BrowserProfilesWindowController: NSWindowController {
         message.textColor = .secondaryLabelColor
         message.font = .systemFont(ofSize: 12)
         stack.addArrangedSubview(message)
-        let fullWidth: [NSView] = [detail, profiles, separator, name, message]
+        let fullWidth: [NSView] = [detail, profiles, renameName, separator, name, message]
         for view in fullWidth {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -113,6 +125,8 @@ final class BrowserProfilesWindowController: NSWindowController {
         }
         profiles.isEnabled = available && !creating
         openButton.isEnabled = available && selectedID != nil && !creating
+        renameName.isEnabled = available && selectedID != nil && !creating
+        renameButton.isEnabled = renameName.isEnabled
         name.isEnabled = available && !creating && (state?.profiles.count ?? 32) < 32
         createButton.isEnabled = name.isEnabled
         if creating { return }
@@ -140,18 +154,27 @@ final class BrowserProfilesWindowController: NSWindowController {
     }
     @objc private func create(_ sender: NSButton) {
         guard available, !creating else { return }
-        let submittedName = name.stringValue
+        mutate(name: name.stringValue, renaming: nil)
+    }
+    @objc private func renameSelected(_ sender: NSButton) {
+        guard available, !creating, let selectedID,
+              state?.profiles.contains(where: { $0.id == selectedID }) == true else { return }
+        mutate(name: renameName.stringValue, renaming: selectedID)
+    }
+    private func mutate(name submittedName: String, renaming profileID: UUID?) {
         // Rust owns validation, including UTF-8 bounds and duplicate names.
         creating = true
         feedback = nil
-        message.stringValue = "Creating profile…"
+        message.stringValue = profileID == nil ? "Creating profile…" : "Renaming profile…"
         render()
         let deadline = ContinuousClock.now + .seconds(20)
         operation = Task { [weak self] in
             guard let self else { return }
             defer { self.creating = false; self.operation = nil; self.render() }
             do {
-                let admission = try await self.createProfile(submittedName)
+                let admission: BrowserProfileReceipt
+                if let profileID { admission = try await self.renameProfile(profileID, submittedName) }
+                else { admission = try await self.createProfile(submittedName) }
                 while ContinuousClock.now < deadline {
                     try Task.checkCancellation()
                     guard self.state?.epoch == admission.epoch else {
@@ -163,15 +186,16 @@ final class BrowserProfilesWindowController: NSWindowController {
                         switch receipt.state {
                         case "completed":
                             guard let profile = receipt.profile,
-                                  self.state?.profiles.contains(where: { $0.id == profile.id && $0.name == profile.name }) == true else {
+                                  self.state?.profiles.contains(where: { $0.id == profile.id }) == true else {
                                 throw BridgeFailure(message: "The completed profile is unavailable. Check the profile list before trying again.")
                             }
                             self.selectedID = profile.id
-                            self.name.stringValue = ""
-                            self.feedback = "Profile created."
+                            if profileID == nil { self.name.stringValue = "" }
+                            else { self.renameName.stringValue = "" }
+                            self.feedback = profileID == nil ? "Profile created." : "Profile renamed."
                             return
                         case "failed":
-                            throw BridgeFailure(message: receipt.error ?? "Profile creation failed.")
+                            throw BridgeFailure(message: receipt.error ?? "Profile change failed.")
                         case "pending": break
                         default:
                             throw BridgeFailure(message: "The profile receipt could not be read. Check the profile list before trying again.")
@@ -179,7 +203,7 @@ final class BrowserProfilesWindowController: NSWindowController {
                     }
                     try await Task.sleep(for: .milliseconds(50))
                 }
-                throw BridgeFailure(message: "Profile creation timed out. Check the profile list before trying again; creation was not replayed.")
+                throw BridgeFailure(message: "Profile change timed out. Check the profile list before trying again; the operation was not replayed.")
             } catch {
                 self.feedback = error.localizedDescription
             }

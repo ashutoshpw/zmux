@@ -164,3 +164,55 @@ Menu and manager fixtures now use that documented grammar; their datastore/ident
 assertions remain unchanged. A secondary direct-launch diagnostic failed sidebar
 dragging with a non-key window; it is not the original Launch Services failure.
 Packaged profile acceptance remains open until the corrected journey executes.
+
+
+## Rename slice and destructive ownership prerequisite
+
+Rename now shares the bounded Rust catalog worker with Add. The CLI accepts
+`browser profiles rename NAME_OR_UUID NEW_NAME`; the manager binds its Rename
+control to the immutable selected UUID. The worker holds the existing advisory
+catalog lock, reloads current disk state, validates the name and duplicates, and
+atomically saves before its exact epoch/operation receipt completes. Renaming
+retains UUID, live hosts, website data, closed descriptors and saved bindings.
+It works at the 32-profile capacity; duplicate, invalid, unknown or lock-contention
+failures preserve the prior catalog. Names are resolved again under the catalog
+lock, rather than renaming against a stale worker snapshot. Runtime lists refresh
+on startup and successful local mutations; continuous cross-process synchronization
+is not claimed.
+
+The native window uses the same admission owner through a strict bounded JSON C
+adapter. One pending manager mutation disables Create/Rename/Open and selection.
+A lost acknowledgment, timeout or runtime replacement remains unknown and is never
+replayed. Receipt identity is the UUID, so another valid rename cannot retarget the
+selected profile or falsely invalidate an earlier successful creation.
+
+The real CLI lifecycle case first failed on unsupported rename and now covers name
+and UUID selectors, duplicate/invalid/unknown failure atomicity, read-only denial,
+retained live/restored UUIDs and restart persistence. The filesystem owner additionally
+checks rename contention, preserving other writers and rename at full capacity.
+The foreign C caller checks malformed/oversized requests, capacity before mutation
+and the exact UUID-addressed completion. The authored native manager journey renames
+through its real control and bundled CLI, retains the same live host and cookie/
+localStorage data, then reopens the same UUID through the manager. Swift compilation
+and this actual WebKit journey remain hosted gates; portable checks cannot close them.
+
+Clear/delete remain unavailable. The catalog metadata lock does not establish that
+another process has no live website store. Before exposing either operation, add
+UUID-derived private lock files with OS shared/exclusive advisory leases: every
+native cached store, live/retiring host and download/conversion owner retains its
+shared lease for its entire physical lifetime. Store acquisition revalidates current
+catalog identity under that lease. A destructive reservation blocks new create,
+reopen and restore for that UUID, drops only an idle local store, then requires a
+nonblocking exclusive lease. Contention reports busy before WebKit mutation. Hold
+the exclusive lease and physical callback capacity through public WebKit completion
+and catalog commit; logical timeout cannot release them or replay work. Epoch/
+operation fences reject late completion of a successor; crashes release OS leases,
+with no age-based stealing or lock-file unlinking.
+
+Clear retains the catalog UUID. Delete releases actual local store references,
+uses public WebKit identifier removal, then removes catalog metadata after native
+success. If metadata commit fails after data removal, report that partial outcome.
+Old closed/session descriptors retain the deleted UUID and fail explicitly as
+unavailable, without private fallback, silent store recreation or deleting unrelated
+history. Actual two-process lease contention and real WebKit clear/delete/download
+ownership are required before claiming full profile lifecycle parity.

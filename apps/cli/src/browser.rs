@@ -31,8 +31,17 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                     },
                 }))
             }
+            ["profiles", "rename", profile, name] => {
+                zmux_desktop_runtime::profiles::validate_name(name).map_err(CliError)?;
+                Ok(Parsed::BrowserProfile(ControlCommand::BrowserProfiles {
+                    action: zmux_desktop_runtime::profiles::ProfileCommand::Rename {
+                        profile: (*profile).into(),
+                        name: (*name).into(),
+                    },
+                }))
+            }
             _ => Err(CliError(
-                "browser profiles requires list or add NAME".into(),
+                "browser profiles requires list, add NAME, or rename NAME_OR_UUID NEW_NAME".into(),
             )),
         };
     }

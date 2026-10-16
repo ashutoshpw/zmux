@@ -1286,6 +1286,56 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
             id
         );
     }
+    // Renaming the live profile preserves UUID bindings, undo descriptors and durable
+    // data-store selection. Both name and UUID selectors reach the catalog owner.
+    let renamed = value(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "rename", "Work", "Office"],
+    );
+    assert_eq!(renamed["id"], id);
+    assert_eq!(renamed["name"], "Office");
+    let rename_back = value(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "rename", id, "Work"],
+    );
+    assert_eq!(rename_back, profile);
+    let duplicate = value(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "add", "Personal"],
+    );
+    let catalog_before =
+        value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"].clone();
+    for (selector, name, expected) in [
+        (id, "Personal", "already exists"),
+        ("Missing", "Unused", "unknown browser profile"),
+        (id, " bad ", "trimmed"),
+    ] {
+        let rejected = invoke(
+            &socket,
+            &fixture.0,
+            &["browser", "profiles", "rename", selector, name],
+        );
+        assert!(!rejected.status.success());
+        assert!(
+            String::from_utf8_lossy(&rejected.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&rejected.stderr)
+        );
+        assert_eq!(
+            value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"],
+            catalog_before
+        );
+    }
+    assert_ne!(duplicate["id"], id);
+    let durable_renamed = value(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "rename", id, "Office"],
+    );
+    assert_eq!(durable_renamed["id"], id);
     server
         .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
         .unwrap();
@@ -1305,12 +1355,23 @@ fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_cata
         )
         .contains("read-only")
     );
+    assert!(
+        String::from_utf8_lossy(
+            &invoke(
+                &socket,
+                &fixture.0,
+                &["browser", "profiles", "rename", id, "Blocked"]
+            )
+            .stderr
+        )
+        .contains("read-only")
+    );
     drop(running);
     let running = start();
     let desktop = &running.desktop;
     assert_eq!(
         value(&socket, &fixture.0, &["browser", "profiles", "list"])["profiles"][0],
-        profile
+        durable_renamed
     );
     let restored = profile_snapshot(desktop, Instant::now() + Duration::from_secs(5));
     let browsers: Vec<_> = restored

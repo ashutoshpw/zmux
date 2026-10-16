@@ -57,6 +57,9 @@ ZmuxResult zmux_desktop_transfer_files(uint64_t desktop, const uint8_t *request,
    thread, and returns an exact epoch/operation receipt. Receipt completion is in
    snapshots. Never replay automatically after any failure or uncertain outcome. */
 ZmuxResult zmux_desktop_profile_add(uint64_t desktop, const uint8_t *name, size_t length);
+/* Strict profile command JSON <=2048 bytes: add{name}, rename{profile,name}.
+   Same bounded receipt, off-main admission and never-replay contract as profile_add. */
+ZmuxResult zmux_desktop_profile_command(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted native download lifecycle JSON, <=16384 bytes. Waits at most two seconds
    off the UI thread. Missing acknowledgement must not replay admission/publication.
    Caller-generated fenced tokens correlate uncertain outcomes with later snapshots. */
