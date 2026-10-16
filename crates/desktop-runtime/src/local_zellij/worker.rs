@@ -186,22 +186,49 @@ fn configured_cli_identity(
     identity: ProcessIdentity,
     launcher: &ProcessIdentity,
     configured: &Path,
-    _deadline: Instant,
-    _cancellation: &AtomicBool,
+    deadline: Instant,
+    cancellation: &AtomicBool,
 ) -> io::Result<ProcessIdentity> {
-    if identity.parent_pid != launcher.pid
-        || identity.uid != launcher.uid
-        || identity.boot != launcher.boot
-        || identity.executable != configured
-    {
-        return Err(fail(format!(
-            "CLI is not the exact directly retained configured child: observed={identity:?}; expected_parent={}; expected_uid={}; expected_executable={}",
-            launcher.pid,
-            launcher.uid,
-            configured.display()
-        )));
+    let anchor = identity.clone();
+    let mut current = identity;
+    loop {
+        if cancellation.load(Ordering::Acquire) || Instant::now() >= deadline {
+            return Err(fail(format!(
+                "retained CLI exec admission cancelled or deadline; do not replay: observed={current:?}; expected_executable={}",
+                configured.display()
+            )));
+        }
+        if current.pid != anchor.pid
+            || current.uid != anchor.uid
+            || current.parent_pid != anchor.parent_pid
+            || current.start != anchor.start
+            || current.boot != anchor.boot
+            || current.parent_pid != launcher.pid
+            || current.uid != launcher.uid
+            || current.boot != launcher.boot
+        {
+            return Err(fail(format!(
+                "retained CLI physical child identity changed or is not the direct launcher child: observed={current:?}; anchor={anchor:?}"
+            )));
+        }
+        if current.executable == configured {
+            return Ok(current);
+        }
+        // Only the exact native launcher's inherited image can precede exec.
+        // Any unrelated image is rejected, even with unchanged PID/start fields.
+        if current.executable != launcher.executable {
+            return Err(fail(format!(
+                "retained CLI entered an unconfigured executable: observed={current:?}; expected_executable={}",
+                configured.display()
+            )));
+        }
+        thread::sleep(POLL);
+        current = process_identity(anchor.pid).map_err(|error| {
+            fail(format!(
+                "inspect retained CLI exec transition: {error}; retained_child={anchor:?}"
+            ))
+        })?;
     }
-    Ok(identity)
 }
 
 #[cfg(test)]
