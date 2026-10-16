@@ -1227,3 +1227,169 @@ fn surface_reorder_invalid_placements_fail_before_connecting() {
         );
     }
 }
+
+#[test]
+fn workspace_group_cli_uses_real_owner_scope_idempotency_and_read_policy_without_replacing_children()
+ {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
+    let fixture = Fixture::new();
+    fixture.value(&["new-workspace", "B"]);
+    fixture.value(&["new-workspace", "C"]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let before = loop {
+        let s = desktop_snapshot::read_until(&fixture.desktop, deadline);
+        if s.control_frames.len() == 3 && s.control_frames.iter().all(|f| f.process_id.is_some()) {
+            break s;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(5));
+    };
+    let ids = before.model.windows[0].workspace_ids.clone();
+    let members = format!("workspace:{},workspace:{}", ids[0].0, ids[2].0);
+    let created = fixture.value(&[
+        "workspace",
+        "group",
+        "create",
+        "--name",
+        "Project",
+        "--from",
+        &members,
+        "--idempotency-key",
+        "controller-project",
+    ]);
+    assert_eq!(created["created"], true);
+    let identity = created["group"]["group_uuid"].as_str().unwrap().to_owned();
+    let grouped = desktop_snapshot::read(&fixture.desktop);
+    assert_eq!(
+        grouped.model.focused_workspace,
+        before.model.focused_workspace
+    );
+    assert_eq!(grouped.model.workspaces, before.model.workspaces);
+    let children = |s: &desktop_runtime::Snapshot| {
+        let mut rows: Vec<_> = s
+            .control_frames
+            .iter()
+            .map(|f| (f.session_id.0, f.process_id))
+            .collect();
+        rows.sort();
+        rows
+    };
+    assert_eq!(children(&grouped), children(&before));
+    let retried = fixture.value(&[
+        "workspace-group",
+        "create",
+        "--name",
+        "Repeated",
+        "--from",
+        "workspace:999999",
+        "--external-id",
+        "controller-project",
+    ]);
+    assert_eq!(retried["created"], false);
+    assert_eq!(retried["group"]["group_uuid"], identity);
+    assert_eq!(retried["model_revision"], created["model_revision"]);
+    let mut collapse = fixture.command(&["workspace-group", "collapse", &identity]);
+    collapse.env("ZMUX_SURFACE_ID", "surface:999999");
+    assert_eq!(
+        value(collapse.output().unwrap())["group"]["collapsed"],
+        true,
+        "stable explicit group ignores unrelated ambient object claims"
+    );
+    let listed = fixture.value(&["workspace", "group", "list"]);
+    let alias = fixture.value(&["workspace-group", "list", "--json"]);
+    assert_eq!(listed, alias);
+    let source_window = before.model.windows[0].id;
+    let child = fixture.spawn(&["new-window", "--no-focus"]);
+    let open = fixture.pending(WindowKind::Open);
+    fixture.acknowledge(&open);
+    value(finish(child));
+    let now = desktop_snapshot::read(&fixture.desktop);
+    let foreign = now
+        .model
+        .windows
+        .iter()
+        .find(|w| w.id == open.window_id)
+        .unwrap()
+        .workspace_ids[0];
+    let other = fixture.value(&[
+        "workspace-group",
+        "create",
+        "--window",
+        &open.window_id.0.to_string(),
+        "--name",
+        "Other",
+        "--from",
+        &foreign.0.to_string(),
+        "--external-id",
+        "controller-project",
+    ]);
+    assert_ne!(
+        other["group"]["group_uuid"], identity,
+        "external identities are window scoped"
+    );
+    let stable = desktop_snapshot::read(&fixture.desktop).model.clone();
+    for args in [
+        vec![
+            "workspace-group",
+            "rename",
+            &identity,
+            "--name",
+            "Wrong",
+            "--window",
+            &open.window_id.0.to_string(),
+        ],
+        vec![
+            "workspace-group",
+            "add",
+            "--group",
+            &identity,
+            "--workspace",
+            &foreign.0.to_string(),
+        ],
+        vec![
+            "workspace-group",
+            "expand",
+            &identity,
+            "--expect-revision",
+            &(stable.revision - 1).to_string(),
+        ],
+        vec!["workspace-group", "delete", &identity, "--close-workspaces"],
+    ] {
+        assert!(
+            !fixture.command(&args).output().unwrap().status.success(),
+            "{args:?}"
+        );
+        assert_eq!(desktop_snapshot::read(&fixture.desktop).model, stable);
+    }
+    let mut stale = fixture.command(&["workspace-group", "list"]);
+    stale.env("ZMUX_WINDOW_ID", "window:999999");
+    assert!(!stale.output().unwrap().status.success());
+    fixture
+        .server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    assert_eq!(
+        fixture.value(&["workspace-group", "list"])["groups"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let denied = fixture
+        .command(&["workspace-group", "rename", &identity, "--name", "Denied"])
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    assert_eq!(desktop_snapshot::read(&fixture.desktop).model, stable);
+    fixture
+        .server
+        .set_policy(ControlPolicy::same_user(ControlAccess::Full))
+        .unwrap();
+    let dissolved = fixture.value(&["workspace-group", "delete", &identity]);
+    assert_eq!(dissolved["outcome"], "dissolved");
+    assert_eq!(dissolved["workspaces_closed"], 0);
+    let after = desktop_snapshot::read(&fixture.desktop);
+    assert_eq!(after.model.workspaces, stable.workspaces);
+    assert_eq!(after.model.focused_window, Some(source_window));
+}
