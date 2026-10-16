@@ -693,7 +693,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
         });
         let attached_receipt = attached.local_zellij_operations.last().unwrap();
         let attached_value = serde_json::to_value(attached_receipt).unwrap();
-        assert_eq!(attached_value["workload_exit"], expected);
+        assert_eq!(attached_value["workload_exit"], expected, "{attached_value}");
         assert!(
             attached_receipt.frontend_pid.is_none() && attached_receipt.error.is_none(),
             "{attached_value}"
