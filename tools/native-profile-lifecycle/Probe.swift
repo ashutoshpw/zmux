@@ -24,8 +24,12 @@ private struct Report: Codable, Sendable {
     var aViewReleased: Bool?
     var aStoreReleased: Bool?
     var heldDataRetained = false
+    var heldAObservation: String?
     var reopenedAEmpty = false
+    var reopenedAObservation: String?
+    var reopenedAStorageObservation: String?
     var separateBRetained = false
+    var separateBObservation: String?
     var removals: [Removal] = []
     var failure: String?
 }
@@ -157,7 +161,11 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         (aStore, aView) = makeView(profile: report.profileA, x: 0)
         guard let view = aView else { throw ProbeFailure(description: "A reopen is absent") }
         try await load(view)
-        report.reopenedAEmpty = try await evaluate(aView, "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:!document.cookie.includes('probe=')})") == "{\"empty\":true,\"cookie\":true}"
+        let observation = try await evaluate(aView, "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:!document.cookie.includes('probe=')})")
+        report.reopenedAObservation = String(observation.prefix(4096))
+        report.reopenedAEmpty = observation == "{\"empty\":true,\"cookie\":true}"
+        report.reopenedAStorageObservation = String(try await evaluate(aView,
+            "JSON.stringify({localValue:localStorage.getItem('probe'),cookieValue:document.cookie})").prefix(4096))
     }
     private func run() async {
         do {
@@ -176,14 +184,18 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             guard report.mountedA else { throw ProbeFailure(description: "A is not the actual mounted UUID store") }
             let held = try await remove(report.profileA, phase: "mounted_a_remove")
             guard held.errorDomain != nil else { throw ProbeFailure(description: "Public removal unexpectedly succeeded with mounted A") }
-            report.heldDataRetained = try await evaluate(aView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=A')})") == "{\"local\":\"A\",\"cookie\":true}"
+            let heldObservation = try await evaluate(aView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=A')})")
+            report.heldAObservation = String(heldObservation.prefix(4096))
+            report.heldDataRetained = heldObservation == "{\"local\":\"A\",\"cookie\":true}"
             guard report.heldDataRetained else { throw ProbeFailure(description: "Mounted removal failure did not preserve A data") }
             dropA()
             try await observeARelease()
             let released = try await remove(report.profileA, phase: "released_a_remove")
             guard released.errorDomain == nil else { throw ProbeFailure(description: "Public removal after releasing A failed; see exact callback error") }
             try await reopenA()
-            report.separateBRetained = try await evaluate(bView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=B')})") == "{\"local\":\"B\",\"cookie\":true}"
+            let separateObservation = try await evaluate(bView, "JSON.stringify({local:localStorage.getItem('probe'),cookie:document.cookie.includes('probe=B')})")
+            report.separateBObservation = String(separateObservation.prefix(4096))
+            report.separateBRetained = separateObservation == "{\"local\":\"B\",\"cookie\":true}"
             guard report.reopenedAEmpty, report.separateBRetained else { throw ProbeFailure(description: "Removal/recreation did not preserve profile isolation") }
             dropA()
             try await observeARelease()
