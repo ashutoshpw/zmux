@@ -207,6 +207,28 @@ static void native_transfer_receipts_are_session_bound(void) {
     assert(strstr(reply, "expected_session_id") != NULL);
     free(reply);
 
+    /* Acknowledged dispatch answers with the executor's own result, not queue acceptance. */
+    const char *not_trackable = "{\"version\":1,\"request_id\":92,\"payload\":{\"command\":\"input\",\"session_id\":1,\"text\":\"x\"}}";
+    ZmuxResult refused_kind = zmux_desktop_dispatch_acknowledged(desktop.value, (const uint8_t *)not_trackable, strlen(not_trackable));
+    assert(refused_kind.status == ZMUX_OK);
+    reply = consume(refused_kind.value);
+    assert(strstr(reply, "\"ok\":false") != NULL);
+    assert(strstr(reply, "\"outcome_unknown\":false") != NULL);
+    assert(strstr(reply, "only action and windows commands") != NULL);
+    free(reply);
+    const char *absent = "{\"version\":1,\"request_id\":93,\"payload\":{\"command\":\"action\",\"action\":{\"action\":\"close_surface\",\"surface_id\":987654321}}}";
+    ZmuxResult queued = zmux_desktop_dispatch(desktop.value, (const uint8_t *)absent, strlen(absent));
+    assert(queued.status == ZMUX_OK);
+    reply = consume(queued.value);
+    assert(strstr(reply, "\"ok\":true") != NULL); /* queued, whether or not the core later refuses it */
+    free(reply);
+    ZmuxResult executed = zmux_desktop_dispatch_acknowledged(desktop.value, (const uint8_t *)absent, strlen(absent));
+    assert(executed.status == ZMUX_OK);
+    reply = consume(executed.value);
+    assert(strstr(reply, "\"ok\":false") != NULL); /* the executor refused it, and the reply says so */
+    assert(strstr(reply, "\"outcome_unknown\":false") != NULL);
+    free(reply);
+
     snprintf(request, sizeof request, "{\"version\":1,\"request_id\":91,\"payload\":{\"command\":\"transfer\",\"action\":{\"operation\":\"paste_files\",\"surface_id\":%llu,\"expected_session_id\":%llu,\"paths\":[\"%s\"]}}}", (unsigned long long)surface, (unsigned long long)(session + 1), path);
     ZmuxResult stale = zmux_desktop_transfer_files(desktop.value, (const uint8_t *)request, strlen(request));
     assert(stale.status == ZMUX_OK);

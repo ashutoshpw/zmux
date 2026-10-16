@@ -291,6 +291,25 @@ struct FileCloseResolutionProbe {
             expect(p.allSatisfy { !$0.isDirty && !$0.model && $0.applied == 0 && $0.released == 0 }, "a refused close after Save changes nothing: the file is already on disk")
         }
 
+        // A quit is settled like a close but applied only when the application commits to
+        // terminating. Until then the answers are pending: the text stays, and a quit that is
+        // superseded or abandoned gives every discard back. `isDiscarding` is how the commit
+        // finds text nobody answered (typed after the sheet).
+        do {
+            let p = panels(["a", "b", "c"], clean: ["c"])
+            guard let quit = await settle(p, ["a": .discard, "b": .save]) else { abort("a quit's Don't Save settle was refused") }
+            expect(quit.isDiscarding(p[0]), "the answered panel is covered by the quit")
+            expect(!quit.isDiscarding(p[1]) && !quit.isDiscarding(p[2]), "a panel the quit did not answer is not covered")
+            expect(p[0].isDirty && !p[0].model && p[0].applied == 0 && p[0].gate.isDiscarding, "before the quit commits the text stays, held, with the model clean")
+            expect(!p[1].isDirty && !p[1].model, "a saved panel is clean and needs no discard")
+            quit.finish(closeSucceeded: false)
+            expect(!quit.isDiscarding(p[0]), "a released quit covers nothing")
+            expect(p[0].isDirty && p[0].model && p[0].applied == 0 && p[0].released == 1 && !p[0].gate.isDiscarding, "an abandoned quit leaves the text edited, the model dirty and no hold")
+            guard let committed = await settle(p, ["a": .discard]) else { abort("a quit's Don't Save settle was refused") }
+            committed.finish(closeSucceeded: true)
+            expect(!p[0].isDirty && p[0].applied == 1 && !committed.isDiscarding(p[0]), "a committed quit applies the discard once")
+        }
+
         // The command outcome the close waits for.
         do {
             let done = CommandOutcome()

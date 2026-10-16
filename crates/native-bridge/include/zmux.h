@@ -50,6 +50,14 @@ ZmuxResult zmux_desktop_create_configured(const uint8_t *request, size_t length)
    up to99328 bytes, with parsed text <=16384 UTF-8 bytes, admitted once as one unit.
    Queue acceptance never authorizes automatic retry after partial/unknown delivery. */
 ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_t length);
+/* Executes one action or windows command (<=16384 bytes) and replies with the executor's own
+   result: {ok:true,revision} once it ran, {ok:false,error:{message},outcome_unknown} when the
+   executor refused it. Dispatch above acknowledges only queue acceptance; use this when the
+   caller must not act (for example drop unsaved text) before the command really happened.
+   ZMUX_BUSY means the queue was full and nothing ran (retry). The call waits at most two
+   seconds and MUST run off the native UI thread. outcome_unknown=true (timeout, closed) must
+   NOT be replayed. */
+ZmuxResult zmux_desktop_dispatch_acknowledged(uint64_t desktop, const uint8_t *request, size_t length);
 /* Executes only ABI-v1 transfer/paste_files requests with expected_session_id. The call
    waits at most two seconds for that envelope's worker acknowledgement and MUST run off
    the native UI thread. A nonzero C status or outcome_unknown=true must not be retried. */

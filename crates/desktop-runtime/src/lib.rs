@@ -456,6 +456,22 @@ pub struct TransferExecutionError {
     pub outcome_unknown: bool,
 }
 
+/// The executor's own answer to one acknowledged command: what the executor did, not whether the
+/// command was queued.
+#[derive(Debug)]
+pub struct CommandExecution {
+    pub result: Result<(), DesktopError>,
+    pub revision: u64,
+}
+
+#[derive(Debug)]
+pub struct CommandExecutionError {
+    pub error: DesktopError,
+    /// True when the command may already have run (acknowledgement timed out or the desktop
+    /// closed); such a command must not be replayed.
+    pub outcome_unknown: bool,
+}
+
 #[derive(Debug)]
 pub struct ProfileAdmissionError {
     pub error: DesktopError,
@@ -747,6 +763,56 @@ impl Desktop {
             result: execution.result,
             revision: execution.snapshot.revision,
             upload_id: execution.created_uploads.into_iter().next(),
+        })
+    }
+
+    /// Execute one workspace action or window command on the executor and return the executor's
+    /// own result for it, unlike `submit`, which only reports that the command was queued. Native
+    /// closes use this so a close the executor refuses (a dirty file tab, a terminal restoration
+    /// in progress) is seen as refused. Waits up to two seconds: call off the native UI thread,
+    /// and never replay a result with `outcome_unknown`.
+    pub fn execute_acknowledged(
+        &self,
+        request: Request,
+    ) -> Result<CommandExecution, CommandExecutionError> {
+        let refused = |error: DesktopError| CommandExecutionError {
+            error,
+            outcome_unknown: false,
+        };
+        if request.version != 1 {
+            return Err(refused(DesktopError::Failure(
+                "acknowledged dispatch requires protocol version 1".into(),
+            )));
+        }
+        if !matches!(
+            &request.payload,
+            Command::Action { .. } | Command::Windows { .. }
+        ) {
+            return Err(refused(DesktopError::Failure(
+                "acknowledged dispatch accepts only action and windows commands".into(),
+            )));
+        }
+        self.validate(&request).map_err(refused)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Envelope {
+            request,
+            acknowledgement: Some(sender),
+            authorization: None,
+            reply_deadline: None,
+        })
+        .map_err(refused)?;
+        let execution = receiver
+            .recv_timeout(NATIVE_COMMAND_TIMEOUT)
+            .map_err(|error| CommandExecutionError {
+                error: match error {
+                    mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+                    mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+                },
+                outcome_unknown: true,
+            })?;
+        Ok(CommandExecution {
+            result: execution.result,
+            revision: execution.snapshot.revision,
         })
     }
 

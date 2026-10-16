@@ -28,8 +28,9 @@ enum UICommand: Sendable {
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
     case pointer(UInt64, TerminalPointerEvent)
-    /// Runs the wrapped command and reports whether the core accepted it. Used by closes that
-    /// discard unsaved file text only once the tab is really gone.
+    /// Runs the wrapped window, action or surface command and reports whether the core executed
+    /// it (the executor's own result, not queue acceptance). Used by closes that discard unsaved
+    /// file text only once the tab is really gone.
     indirect case tracked(UICommand, CommandOutcome)
 }
 
@@ -358,9 +359,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
 
     /// Runs one queued command against the core. A failure is thrown to the command loop, which
     /// shows it; a tracked command also reports it to whoever is waiting for the answer.
-    private func perform(_ command: UICommand) async throws {
+    /// `acknowledged` (only a tracked command sets it) waits for the executor's own result, so a
+    /// close the core refuses throws here rather than reading as accepted once it was queued.
+    private func perform(_ command: UICommand, acknowledged: Bool = false) async throws {
         switch command {
-        case .window(let operation, let window, let focus): try await bridge.window(operation, window: window, focus: focus)
+        case .window(let operation, let window, let focus): try await bridge.window(operation, window: window, focus: focus, acknowledged: acknowledged)
         case .windowEvent(let event): try await bridge.windowEvent(event)
         case .workspaceMove(let workspace, let destination, let focus): try await bridge.moveWorkspace(workspace, destination: destination, focus: focus)
         case .workspaceOrder(let workspace, let window, let index, let revision): try await bridge.reorderWorkspace(workspace, window: window, index: index, revision: revision)
@@ -373,9 +376,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         case .windowHistory(let window, let direction): try await bridge.action("navigate_focus_in_window", direction: direction, window: window)
         case .windowReopen(let window, let id): try await bridge.action("reopen_closed_in_window", closed: id, window: window)
         case .action(let action, let pane, let axis, let title, let workspace):
-            try await bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
+            try await bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace, acknowledged: acknowledged)
         case .surface(let action, let surface, let pane, let index, let closed):
-            try await bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
+            try await bridge.action(action, pane: pane, surface: surface, index: index, closed: closed, acknowledged: acknowledged)
         case .navigation(let action, let direction, let pane, let surface, let workspace, let focus):
             try await bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
         case .browser(let operation, let surface, let pane, let url, let title, let profile):
@@ -406,7 +409,13 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             try await bridge.resize(session: session, rows: rows, cols: cols)
         case .tracked(let inner, let outcome):
             do {
-                try await perform(inner)
+                // Only the commands the bridge can acknowledge are trackable; anything else would
+                // report queue acceptance as success, which is exactly what tracking exists to avoid.
+                switch inner {
+                case .window, .action, .surface: break
+                default: throw BridgeFailure(message: "Only window, action and surface commands can be tracked")
+                }
+                try await perform(inner, acknowledged: true)
                 outcome.finish(true)
             } catch {
                 outcome.finish(false)
@@ -687,14 +696,26 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     }
 
     /// Quit: resolves every dirty panel, and refuses to quit while an orphan still holds text.
-    /// Quitting is not a core close that can be refused: the application terminates next and asks
-    /// again if any panel still holds text, so a Don't Save is applied before it returns.
-    func resolveFilesBeforeQuit() async -> Bool {
+    /// Nil means do not quit. A settlement means every panel was answered but nothing is discarded
+    /// yet: Quit is not final until the caller has decided to terminate, so the caller finishes
+    /// the settlement through `commitQuit` at that point and not before.
+    func resolveFilesBeforeQuit() async -> FileCloseSettlement? {
         guard orphanedFiles.isEmpty else {
             presentNextOrphan()
+            return nil
+        }
+        return await resolveFilesBeforeClose(Array(files.keys), window: mainWindowHost.window)
+    }
+
+    /// Applies a quit's Don't Save answers in the same synchronous step that starts the shutdown.
+    /// False means a panel took text after it was answered (or an orphan appeared): the discards
+    /// are given back, nothing is lost, and the caller must ask again instead of terminating.
+    func commitQuit(_ settlement: FileCloseSettlement) -> Bool {
+        guard orphanedFiles.isEmpty,
+              files.values.allSatisfy({ !$0.hasUnsavedChanges || settlement.isDiscarding($0) }) else {
+            settlement.finish(closeSucceeded: false)
             return false
         }
-        guard let settlement = await resolveFilesBeforeClose(Array(files.keys), window: mainWindowHost.window) else { return false }
         settlement.finish(closeSucceeded: true)
         return true
     }

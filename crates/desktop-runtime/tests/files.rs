@@ -1111,8 +1111,11 @@ fn reload_is_refused_while_the_model_says_dirty_unless_discarding() {
 
 /// The two recoveries the native panel offers for a view holding unsaved text, and why it must
 /// choose by whether it still holds a binding: a kept binding recovers with `reload(discard)`
-/// because a re-attach as the same host is refused while the model is dirty; a lost binding
-/// (detached, so no host is bound) recovers with a plain attach even though the model is dirty.
+/// because a re-attach as the same host is refused while the model is dirty. A lost binding
+/// (here a detach, which also clears the model's dirty bit, so the model is clean) recovers with
+/// a plain attach. This test does not cover a lost binding over a dirty model: no such state
+/// exists in the service, because every path that loses the binding clears or recreates the
+/// entry and its dirty bit.
 #[test]
 fn a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach() {
     let fx = Fixture::new();
@@ -1127,9 +1130,15 @@ fn a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach()
     let reloaded = fx.desktop.file_reload(&owner, true).unwrap();
     assert_eq!(reloaded.body, b"disk");
 
-    // Lost binding: the host is released while the model still says dirty.
+    // Lost binding: the host is released. Detach clears the dirty bit, so from here the model is
+    // clean and the attach is not refused as `dirty`.
     fx.desktop.file_observe(&owner, true).unwrap();
+    assert!(file_surface(&fx.snapshot(), surface).unwrap().dirty);
     fx.desktop.file_detach(&owner).unwrap();
+    assert!(
+        !file_surface(&fx.snapshot(), surface).unwrap().dirty,
+        "detach clears the model's dirty bit; a lost binding is never observed over a dirty model"
+    );
     assert_eq!(
         failure(fx.desktop.file_reload(&owner, true)).code,
         "stale_owner",
@@ -1137,7 +1146,7 @@ fn a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach()
     );
     let reattached = fx
         .attach_as(surface, host)
-        .expect("a lost binding re-attaches even while the model is dirty");
+        .expect("a lost binding (no bound host, clean model) re-attaches");
     assert_eq!(reattached.body, b"disk");
     assert_ne!(reattached.owner.host_id, Uuid::nil());
 }

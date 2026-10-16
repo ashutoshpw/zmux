@@ -916,13 +916,35 @@ fn pin_a_close_the_core_refuses_gives_the_discard_back() {
         "case .tracked(let inner, let outcome):",
         "\n    }\n",
     );
-    let ran = at(perform, "try await perform(inner)");
+    let ran = at(perform, "try await perform(inner, acknowledged: true)");
     let ok = at(perform, "outcome.finish(true)");
     let failed = at(perform, "outcome.finish(false)");
     let rethrow = at(perform, "throw error");
     assert!(
         ran < ok && ok < failed && failed < rethrow,
         "a tracked command reports success only after it ran and still surfaces its error: {perform}"
+    );
+    // The executor's own answer, not queue acceptance: every trackable command forwards the flag
+    // to the bridge, and the tracked case refuses a command the bridge cannot acknowledge.
+    let performer = between(
+        &coordinator,
+        "private func perform(_ command: UICommand, acknowledged: Bool = false)",
+        "case .tracked(let inner, let outcome):",
+    );
+    for arm in [
+        "try await bridge.window(operation, window: window, focus: focus, acknowledged: acknowledged)",
+        "workspace: workspace, acknowledged: acknowledged)",
+        "closed: closed, acknowledged: acknowledged)",
+    ] {
+        assert!(
+            performer.contains(arm),
+            "a tracked close must reach the bridge as an acknowledged send; missing `{arm}`"
+        );
+    }
+    assert!(
+        perform.contains("case .window, .action, .surface: break")
+            && perform.contains("default: throw BridgeFailure("),
+        "only commands the bridge acknowledges may be tracked: {perform}"
     );
     let command_loop = between(
         &coordinator,
@@ -947,15 +969,54 @@ fn pin_a_close_the_core_refuses_gives_the_discard_back() {
         pending < orphan && retire[pending..orphan].contains("view.close()"),
         "a panel whose Don't Save is in flight is closed quietly; others with text are orphaned: {retire}"
     );
-    // Quitting cannot be refused by the core, so it applies the discard before terminating.
+    // Quit applies Don't Save only once termination is certain: the coordinator hands the
+    // settlement back unfinished, and the delegate commits it in the step that starts the
+    // shutdown, never before the application has decided to terminate.
     let quit = between(
         &coordinator,
-        "func resolveFilesBeforeQuit() async -> Bool {",
+        "func resolveFilesBeforeQuit() async -> FileCloseSettlement? {",
         "/// Sends a close command",
     );
     assert!(
-        quit.contains("settlement.finish(closeSucceeded: true)"),
-        "quit must apply the discard before the application asks again: {quit}"
+        !quit
+            .split("func commitQuit(")
+            .next()
+            .unwrap()
+            .contains("finish(closeSucceeded"),
+        "resolving a quit must not apply or release the settlement: {quit}"
+    );
+    let commit = between(&coordinator, "func commitQuit(", "\n    }\n");
+    assert!(
+        at(commit, "settlement.finish(closeSucceeded: false)")
+            < at(commit, "settlement.finish(closeSucceeded: true)")
+            && commit.contains("settlement.isDiscarding($0)"),
+        "a quit with text nobody answered gives the discards back; otherwise it applies them: {commit}"
+    );
+    let delegate = between(
+        &app,
+        "func applicationShouldTerminate(",
+        "private func beginTermination(",
+    );
+    assert!(
+        at(delegate, "coordinator.commitQuit(settlement)")
+            < at(
+                delegate,
+                "self.beginTermination(sender, coordinator: coordinator)"
+            ),
+        "the quit commits its discards and starts the shutdown in one synchronous step: {delegate}"
+    );
+    assert!(
+        !delegate.contains("if proceed {")
+            && delegate
+                .matches("sender.reply(toApplicationShouldTerminate: false)")
+                .count()
+                == 2,
+        "a refused or superseded quit replies cancel and applies nothing: {delegate}"
+    );
+    let begin = between(&app, "private func beginTermination(", "\n}\n\n@main");
+    assert!(
+        at(begin, "terminating = true") < at(begin, "coordinator.shutdown()"),
+        "{begin}"
     );
     // The panel keeps its text through the pending period and only drops it on apply.
     let panel = swift("FilePanelView.swift");
@@ -978,6 +1039,8 @@ fn pin_a_close_the_core_refuses_gives_the_discard_back() {
         "a refused close must leave the edited text and its marker",
         "a late success must not drop text after a refusal",
         "the first refusal must not lift the second close's hold",
+        "an abandoned quit leaves the text edited, the model dirty and no hold",
+        "a panel the quit did not answer is not covered",
     ] {
         assert!(
             fixture.contains(scenario),
@@ -988,8 +1051,10 @@ fn pin_a_close_the_core_refuses_gives_the_discard_back() {
     assert!(
         smoke.contains("pending.finish(closeSucceeded: false)")
             && smoke.contains("a refused close discarded the edits or left the discard held")
-            && smoke.contains("applied.finish(closeSucceeded: true)"),
-        "the smoke must refuse one close and accept the next"
+            && smoke.contains("applied.finish(closeSucceeded: true)")
+            && smoke.contains("coordinator.enqueueTracked(.surface(\"close_surface\", markdownID")
+            && smoke.contains("a close the core refused read as accepted"),
+        "the smoke must refuse one close and accept the next, and make the real core refuse one"
     );
 }
 
@@ -1283,7 +1348,10 @@ fn pin_a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading() {
     // Rust refuses a re-attach by the bound host while the model is dirty (see
     // `a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach` in
     // desktop-runtime), so the panel must pick the recovery by whether it still holds a token and
-    // must never leave a stale loaded panel without Reload and Copy Text.
+    // must never leave a stale loaded panel without Reload and Copy Text. A lost binding is
+    // re-attached because no host is bound and the entry's dirty bit was cleared with it (the
+    // desktop-runtime test asserts the bit is false after a detach); it is not a recovery that
+    // works over a dirty model.
     let panel = swift("FilePanelView.swift");
     let model = swift("FileEditorModel.swift");
     let banner = between(
@@ -2338,4 +2406,164 @@ fn swift_treats_the_bridge_statuses_that_ran_nothing_as_busy_and_rust_agrees_not
         find_file_surface(&v["model"]).is_some_and(|s| s["file"]["dirty"] == true)
     });
     assert_eq!(zmux_desktop_destroy(desktop), 0);
+}
+
+/// One JSON command through `zmux_desktop_dispatch` (queue acceptance) or
+/// `zmux_desktop_dispatch_acknowledged` (the executor's own result).
+fn dispatch_json(desktop: u64, payload: &Value, acknowledged: bool) -> (i32, Value) {
+    let request =
+        serde_json::to_vec(&json!({"version":1,"request_id":7,"payload":payload})).unwrap();
+    // SAFETY: the encoded request storage is readable for the whole call.
+    let result = unsafe {
+        if acknowledged {
+            zmux_desktop_dispatch_acknowledged(desktop, request.as_ptr(), request.len())
+        } else {
+            zmux_desktop_dispatch(desktop, request.as_ptr(), request.len())
+        }
+    };
+    if result.status != 0 {
+        return (result.status, Value::Null);
+    }
+    (0, serde_json::from_slice(&bytes_of(result.value)).unwrap())
+}
+
+/// The close queue used to finish a close as "succeeded" when `zmux_desktop_dispatch` answered
+/// `ok:true`, which only means the command was queued. A close the core then refuses (here a file
+/// tab the model holds as dirty; a terminal restoration in progress is refused the same way) left
+/// the tab open with its discarded text shown as clean. This drives the real exports: plain
+/// dispatch says `ok:true` for a close that is refused, and the acknowledged export that the
+/// tracked closes now use reports the refusal and later the success.
+#[test]
+fn an_acknowledged_close_reports_the_cores_refusal_where_plain_dispatch_reports_only_queueing() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let dir = TempDir::new();
+    let path = dir.0.join("dirty.txt");
+    std::fs::write(&path, "on disk\n").unwrap();
+    let desktop = zmux_desktop_create();
+    assert_eq!(desktop.status, 0);
+    let desktop = desktop.value;
+    snapshot(desktop, |v| {
+        !v["model"]["workspaces"].as_array().unwrap().is_empty()
+    });
+    let (opened, _) = call(
+        desktop,
+        &json!({"op":"open","items":[{"kind":"path","value":path}],"focus":false}),
+        &[],
+    );
+    assert_eq!(opened["ok"], true, "{opened}");
+    let surface = opened["result"]["items"][0]["surface"]["surface_id"]
+        .as_u64()
+        .expect("a file surface");
+    let state = snapshot(desktop, |v| {
+        v["files"]["entries"]
+            .as_array()
+            .is_some_and(|e| e.len() == 1)
+    });
+    let (attached, _) = call(
+        desktop,
+        &json!({"op":"attach","epoch":state["files"]["epoch"],"surface_id":surface,"host_id":Uuid::new_v4()}),
+        &[],
+    );
+    assert_eq!(attached["ok"], true, "{attached}");
+    // `observe` returns after the executor applied it, so the model is dirty from here on.
+    let (observed, _) = call(
+        desktop,
+        &json!({"op":"observe","owner":attached["owner"],"dirty":true}),
+        &[],
+    );
+    assert_eq!(observed["ok"], true, "{observed}");
+    let present = |expected: bool| {
+        let result = zmux_desktop_snapshot(desktop, 0);
+        assert_eq!((result.status, result.value != 0), (0, true));
+        let value: Value = serde_json::from_slice(&bytes_of(result.value)).unwrap();
+        let mut ids = Vec::new();
+        fn collect(value: &Value, out: &mut Vec<u64>) {
+            match value {
+                Value::Object(map) => {
+                    if map.get("kind") == Some(&json!("file")) && map.get("file").is_some() {
+                        out.push(map["id"].as_u64().expect("a surface id"));
+                    }
+                    map.values().for_each(|v| collect(v, out));
+                }
+                Value::Array(items) => items.iter().for_each(|v| collect(v, out)),
+                _ => {}
+            }
+        }
+        collect(&value["model"]["workspaces"], &mut ids);
+        assert_eq!(ids.contains(&surface), expected, "{ids:?}");
+        value
+    };
+    let close =
+        json!({"command":"action","action":{"action":"close_surface","surface_id":surface}});
+
+    // Plain dispatch: queued, so `ok:true`. The close itself is refused by the dirty guard, and
+    // the acknowledged call below runs behind it in the same executor queue, so by the time it
+    // answers the refused close has been executed and the tab is verifiably still there.
+    let (status, queued) = dispatch_json(desktop, &close, false);
+    assert_eq!((status, &queued["ok"]), (0, &json!(true)), "{queued}");
+
+    let (status, refused) = dispatch_json(desktop, &close, true);
+    assert_eq!(status, 0);
+    assert_eq!(
+        refused["ok"], false,
+        "the core refused the close: {refused}"
+    );
+    assert_eq!(refused["outcome_unknown"], false, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsaved changes"),
+        "{refused}"
+    );
+    present(true);
+
+    // Once the model is clean the same close runs, and the reply carries the executor's revision
+    // of the snapshot that already shows the tab gone: no polling is needed.
+    let (observed, _) = call(
+        desktop,
+        &json!({"op":"observe","owner":attached["owner"],"dirty":false}),
+        &[],
+    );
+    assert_eq!(observed["ok"], true, "{observed}");
+    let (status, closed) = dispatch_json(desktop, &close, true);
+    assert_eq!((status, &closed["ok"]), (0, &json!(true)), "{closed}");
+    let after = present(false);
+    assert_eq!(
+        closed["revision"], after["revision"],
+        "the reply names the revision that shows the close"
+    );
+
+    // Only action and windows commands are acknowledged this way; anything else is refused before
+    // it is queued.
+    let (status, other) = dispatch_json(
+        desktop,
+        &json!({"command":"input","session_id":1,"text":"x"}),
+        true,
+    );
+    assert_eq!((status, &other["ok"]), (0, &json!(false)), "{other}");
+    assert_eq!(other["outcome_unknown"], false);
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
+
+    // Swift drift guard: the tracked closes use the acknowledged export and a failed or unknown
+    // acknowledgement is an error, so a refused close can never read as a success.
+    let bridge = swift("NativeBridge.swift");
+    let send = between(
+        &bridge,
+        "private func send(_ payload: [String: Any], acknowledged: Bool = false)",
+        "nonisolated static func consume",
+    );
+    assert!(
+        send.contains("zmux_desktop_dispatch_acknowledged(")
+            && send.contains("guard response?[\"ok\"] as? Bool == true else")
+            && send.contains("throw BridgeFailure(message: message)")
+            && send.contains("outcome_unknown"),
+        "the acknowledged send must surface a refusal as an error: {send}"
+    );
+    let header =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("include/zmux.h"))
+            .unwrap();
+    assert!(header.contains("zmux_desktop_dispatch_acknowledged("));
 }

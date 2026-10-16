@@ -385,6 +385,12 @@ backoff and orphan flow are specified for S4 and recorded UNAVAILABLE.
   snapshot; per dirty file show Save / Don't Save / Cancel. Save = bridge `save`, then `observe(dirty:false)`, then
   close; Don't Save = `observe(dirty:false)` then close; Cancel aborts the whole operation. A
   failed save aborts the close. Quit does the same before session save.
+  Amended after review (cu14 fix round 10): "then close" means the core has executed the close.
+  `zmux_desktop_dispatch` replies `ok:true` once a command is queued, so the native close gestures
+  send it through `zmux_desktop_dispatch_acknowledged`, which replies with the executor's own
+  result; Don't Save is dropped from the view only when that reply is `ok:true`, and given back
+  (the view keeps its text and the model is marked dirty again) when the core refuses or the
+  outcome is unknown. Quit applies Don't Save in the step that starts the shutdown, not before.
 - Because a dirty file cannot be closed without a decision, the closed-item history can never
   hold unsaved text. `ReopenClosed` therefore only needs path + mode: `fresh_surface` copies
   `file` with `dirty = false` and the view reloads from disk when it attaches. The closed list
