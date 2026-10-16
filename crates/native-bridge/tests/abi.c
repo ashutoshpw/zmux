@@ -379,6 +379,149 @@ static void persistent_desktop_uses_requested_directory(void) {
     free(directory);
 }
 
+/* Trusted file channel: framed requests with a raw body, owner-fenced round trip. */
+static const char *file_host = "11111111-1111-4111-8111-111111111111";
+static ZmuxResult file_call(uint64_t desktop, const char *header, const char *body) {
+    size_t header_len = strlen(header);
+    size_t body_len = body == NULL ? 0 : strlen(body);
+    uint8_t *frame = malloc(4 + header_len + body_len);
+    assert(frame != NULL);
+    frame[0] = (uint8_t)(header_len >> 24);
+    frame[1] = (uint8_t)(header_len >> 16);
+    frame[2] = (uint8_t)(header_len >> 8);
+    frame[3] = (uint8_t)header_len;
+    memcpy(frame + 4, header, header_len);
+    if (body_len > 0) { memcpy(frame + 4 + header_len, body, body_len); }
+    ZmuxResult result = zmux_desktop_file(desktop, frame, 4 + header_len + body_len);
+    free(frame);
+    return result;
+}
+/* Returns the owned reply bytes; *header_len is the JSON header length (body follows it). */
+static uint8_t *file_reply(ZmuxResult result, size_t *header_len, size_t *total) {
+    assert(result.status == ZMUX_OK);
+    ZmuxResult length = zmux_buffer_length(result.value);
+    assert(length.status == ZMUX_OK && length.value >= 4);
+    uint8_t *bytes = malloc((size_t)length.value + 1);
+    assert(bytes != NULL);
+    assert(zmux_buffer_copy(result.value, bytes, (size_t)length.value) == ZMUX_OK);
+    assert(zmux_buffer_release(result.value) == ZMUX_OK);
+    *header_len = ((size_t)bytes[0] << 24) | ((size_t)bytes[1] << 16) | ((size_t)bytes[2] << 8) | bytes[3];
+    assert(4 + *header_len <= (size_t)length.value);
+    *total = (size_t)length.value;
+    bytes[length.value] = '\0';
+    return bytes;
+}
+static char *file_header(const uint8_t *reply, size_t header_len) {
+    char *header = malloc(header_len + 1);
+    assert(header != NULL);
+    memcpy(header, reply + 4, header_len);
+    header[header_len] = '\0';
+    return header;
+}
+static void native_file_channel_round_trip(void) {
+    ZmuxResult desktop = zmux_desktop_create();
+    assert(desktop.status == ZMUX_OK);
+    char *text = NULL;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        text = desktop_snapshot(desktop.value);
+        if (strstr(text, "\"focused_pane\"") != NULL) { break; }
+        free(text);
+        text = NULL;
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(text != NULL);
+    free(text);
+
+    /* Malformed frames fail with a C status before any queueing. */
+    assert(zmux_desktop_file(desktop.value, NULL, 8).status == ZMUX_INVALID_ARGUMENT);
+    const uint8_t short_frame[] = {0, 0, 0};
+    assert(zmux_desktop_file(desktop.value, short_frame, sizeof short_frame).status == ZMUX_INVALID_ARGUMENT);
+    const uint8_t overlong_header[] = {0, 0, 0, 200, '{'};
+    assert(zmux_desktop_file(desktop.value, overlong_header, sizeof overlong_header).status == ZMUX_INVALID_ARGUMENT);
+    assert(file_call(desktop.value, "{\"op\":\"format_disk\"}", NULL).status == ZMUX_INVALID_ARGUMENT);
+    assert(file_call(desktop.value, "{\"op\":\"attach\",\"surprise\":1}", NULL).status == ZMUX_INVALID_ARGUMENT);
+    uint8_t *too_big = calloc(ZMUX_FILE_MAX_SAVE_FRAME + 1, 1);
+    assert(too_big != NULL);
+    assert(zmux_desktop_file(desktop.value, too_big, ZMUX_FILE_MAX_SAVE_FRAME + 1).status == ZMUX_INVALID_ARGUMENT);
+    free(too_big);
+    assert(file_call(desktop.value + 1000, "{\"op\":\"open\",\"items\":[]}", NULL).status == ZMUX_INVALID_HANDLE);
+
+    char path[128];
+    snprintf(path, sizeof path, "/tmp/zmux-abi-file-%ld.txt", (long)getpid());
+    FILE *file = fopen(path, "w");
+    assert(file != NULL && fputs("hello from C\n", file) >= 0 && fclose(file) == 0);
+
+    char request[1024];
+    snprintf(request, sizeof request, "{\"op\":\"open\",\"items\":[{\"kind\":\"path\",\"value\":\"%s\"}],\"focus\":true}", path);
+    size_t header_len = 0, total = 0;
+    uint8_t *reply = file_reply(file_call(desktop.value, request, NULL), &header_len, &total);
+    char *header = file_header(reply, header_len);
+    assert(strstr(header, "\"ok\":true") != NULL && strstr(header, "\"mode\":\"text\"") != NULL);
+    char *surface_key = strstr(header, "\"surface_id\":");
+    assert(surface_key != NULL);
+    unsigned long long surface = strtoull(surface_key + strlen("\"surface_id\":"), NULL, 10);
+    free(header);
+    free(reply);
+
+    char *snapshot_text = desktop_snapshot(desktop.value);
+    char *epoch_key = strstr(snapshot_text, "\"files\":{\"epoch\":\"");
+    assert(epoch_key != NULL);
+    char epoch[37];
+    memcpy(epoch, epoch_key + strlen("\"files\":{\"epoch\":\""), 36);
+    epoch[36] = '\0';
+    free(snapshot_text);
+
+    snprintf(request, sizeof request, "{\"op\":\"attach\",\"epoch\":\"%s\",\"surface_id\":%llu,\"host_id\":\"%s\"}", epoch, surface, file_host);
+    reply = file_reply(file_call(desktop.value, request, NULL), &header_len, &total);
+    header = file_header(reply, header_len);
+    assert(strstr(header, "\"ok\":true") != NULL && strstr(header, "\"generation\":1") != NULL);
+    assert(total - 4 - header_len == strlen("hello from C\n"));
+    assert(memcmp(reply + 4 + header_len, "hello from C\n", strlen("hello from C\n")) == 0);
+    char *owner_key = strstr(header, "\"owner\":");
+    assert(owner_key != NULL);
+    char *owner_end = strchr(owner_key, '}');
+    assert(owner_end != NULL);
+    char owner[512];
+    size_t owner_len = (size_t)(owner_end - owner_key) + 1;
+    assert(owner_len < sizeof owner);
+    memcpy(owner, owner_key, owner_len);
+    owner[owner_len] = '\0';
+    free(header);
+    free(reply);
+
+    /* The raw body travels outside JSON and is written atomically. */
+    snprintf(request, sizeof request, "{\"op\":\"save\",%s,\"base_generation\":1,\"force\":false}", owner);
+    reply = file_reply(file_call(desktop.value, request, "saved from C\n"), &header_len, &total);
+    header = file_header(reply, header_len);
+    assert(strstr(header, "\"ok\":true") != NULL && strstr(header, "\"generation\":2") != NULL);
+    free(header);
+    free(reply);
+    char contents[64] = {0};
+    file = fopen(path, "r");
+    assert(file != NULL && fgets(contents, sizeof contents, file) != NULL && fclose(file) == 0);
+    assert(strcmp(contents, "saved from C\n") == 0);
+
+    /* A stale generation is refused without touching the disk. */
+    reply = file_reply(file_call(desktop.value, request, "stale write\n"), &header_len, &total);
+    header = file_header(reply, header_len);
+    assert(strstr(header, "\"ok\":false") != NULL && strstr(header, "\"code\":\"stale_view\"") != NULL);
+    free(header);
+    free(reply);
+    file = fopen(path, "r");
+    assert(file != NULL && fgets(contents, sizeof contents, file) != NULL && fclose(file) == 0);
+    assert(strcmp(contents, "saved from C\n") == 0);
+
+    snprintf(request, sizeof request, "{\"op\":\"detach\",%s}", owner);
+    reply = file_reply(file_call(desktop.value, request, NULL), &header_len, &total);
+    header = file_header(reply, header_len);
+    assert(strstr(header, "\"ok\":true") != NULL);
+    free(header);
+    free(reply);
+    assert(unlink(path) == 0);
+    assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
+    printf("{\"file_channel\":\"ok\",\"saved_bytes\":%zu}\n", strlen("saved from C\n"));
+}
+
 /* Foreign pointers/byte strings must be rejected before starting a runtime. */
 static void persistent_path_contract(void) {
     assert(zmux_desktop_create_persistent(NULL, 1).status == ZMUX_INVALID_ARGUMENT);
@@ -445,5 +588,6 @@ int main(void) {
     assert(zmux_core_destroy(replacement.value) == ZMUX_OK);
     native_transfer_receipts_are_session_bound();
     exited_desktop_survives_close();
+    native_file_channel_round_trip();
     return 0;
 }

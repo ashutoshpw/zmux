@@ -95,6 +95,72 @@ Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup of
 There are at most four desktop contexts and eight terminals per desktop, including pending or
 retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
 
+## Trusted native file channel
+
+`zmux_desktop_file` is the one export that carries file text and previews. It is trusted
+native-only: excluded from the local socket and from generic JSON dispatch, and the file
+bytes never travel in snapshots, control replies or logs. Follow the `zmux_desktop_download`
+pattern: call it off the UI thread, expect a reserved reply buffer (`ZMUX_CAPACITY` means
+nothing ran), and never replay after a nonzero status, a timeout or `outcome_unknown: true`.
+The single exception is `observe`, an idempotent absolute-state write of the view's dirty bit
+that the view retries (bounded backoff) until the snapshot's `file.dirty` agrees.
+
+Frame, in both directions: `u32 big-endian header_len | header JSON (UTF-8) | body bytes`.
+The body is raw: no JSON escaping and no base64.
+
+| Limit | Value |
+| --- | --- |
+| Request header | at most 16384 bytes (`ZMUX_FILE_MAX_HEADER`) |
+| Request frame, every op except `save` | at most 16384 bytes, empty body |
+| `save` request frame | header plus a body of at most 2097152 bytes (`ZMUX_FILE_MAX_SAVE_BODY`); frame at most 2113536 (`ZMUX_FILE_MAX_SAVE_FRAME`) |
+| Reply | at most the 8 MiB response cap; the largest file reply is 4 + 16384 + 7340032 |
+| Text / preview read cap | 2097152 / 7340032 bytes |
+| Waits | 2 s for attach, reload, observe, detach and open; 5 s for save |
+| Worker | 8 queued jobs plus one running; one operation in flight per tab; stalled after 5 s |
+
+A malformed, truncated, unknown-op, unknown-field, non-`save` body or oversized frame is
+`ZMUX_INVALID_ARGUMENT` before any work. Every other failure is a reply with status 0 whose header
+is `{"ok":false,"op_id":N|null,"outcome_unknown":bool,"error":{"code","message"}}`, plus
+`"conflict":{"kind":"modified"|"deleted","disk_sha256","disk_size"}` for a save conflict.
+
+Ops (request headers; `owner` is `{epoch, identity_namespace, surface_id, host_id}` as returned
+by attach and fenced on every call):
+
+```json
+{"op":"attach","epoch":"<uuid>","surface_id":9,"host_id":"<uuid>"}
+{"op":"reload","owner":{},"discard":false}
+{"op":"save","owner":{},"base_generation":3,"force":false}
+{"op":"observe","owner":{},"dirty":true}
+{"op":"detach","owner":{}}
+{"op":"open","items":[{"kind":"path","value":"/abs/x.md"}],"focus":true,"force_mode":null}
+```
+
+`attach` and `reload` reply with the file bytes as the body (a UTF-8 BOM is removed and reported
+as `bom`) and `{ok,op_id,owner,mode,size,generation,sha256,mtime_ns,writable,bom}`. `save`
+replies `{ok,op_id,generation,sha256,size,mtime_ns}`; its body must be valid UTF-8 without NUL
+bytes. Conflict detection compares content hashes, so a touched or identically rewritten file is
+not a conflict; `force: true` overwrites a modified file or recreates a deleted one. The save is
+an atomic same-directory replace that preserves the permission bits, refuses hard-linked files
+and has no in-place fallback. `observe`/`detach` reply `{ok,revision}`. `open` takes up to 16
+absolute paths (URLs are routed by the CLI, not this channel) and replies
+`{ok,result:{ok,items:[...]}}` with a per-item result; `force_mode:"markdown"` requires text.
+
+Error codes: `invalid_request`, `invalid_operand`, `not_found`, `permission_denied`,
+`is_directory`, `not_regular_file`, `too_large`, `binary_file`, `invalid_utf8`,
+`content_mismatch`, `path_not_utf8`, `io_error`, `probe_timeout`, `file_worker_unavailable`,
+`busy`, `file_capacity`, `tab_capacity`, `unknown_surface`, `stale_owner`, `host_conflict`,
+`timeout`, `dirty`, `stale_view`, `conflict`, `hard_linked`, `directory_not_writable`,
+`path_changed`, `sync_failed`, `closed`, `rejected`.
+
+The desktop snapshot gains `files`: `{epoch, worker:{state:"ok"|"stalled",stalled_ms},
+entries:[{surface_id,state,attached,generation,disk_generation,size,mtime_ns,error_code,
+last_op:{op_id,kind,state,code}}]}` with at most 16 entries and one bounded receipt each.
+`state` is `unattached|in_sync|changed|deleted|unreadable`; `last_op.state` is
+`pending|completed|failed|outcome_unknown`. A caller whose save timed out learns the outcome
+from `last_op` for the returned `op_id`, then reloads; the save is never repeated for it. Live
+reload is bounded polling (1 s per attached tab) on the file worker; a session restore rotates
+`epoch` so every old owner is stale.
+
 ## Workspace model version 7
 
 The JSON model carries `model_version: 7`; the function ABI/request envelope remains version 1.

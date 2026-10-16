@@ -27,6 +27,7 @@ pub struct Pending {
     pub persistence: usize,
     pub downloads: usize,
     pub connections: usize,
+    pub files: usize,
     pub native_downloads: usize,
     pub native_cleanup: bool,
     pub control: usize,
@@ -41,6 +42,7 @@ impl Pending {
             + self.persistence
             + self.downloads
             + self.connections
+            + self.files
             + self.control
             == 0
     }
@@ -270,6 +272,7 @@ impl Worker {
             }
         }
         self.downloads.begin_shutdown();
+        self.shared.files.request_shutdown();
         let mut flush_submitted = false;
         let mut connections = None;
         let mut connections_done = false;
@@ -317,6 +320,13 @@ impl Worker {
                 }
             };
             let persistence_done = self.poll_shutdown_persistence(&mut flush_submitted, deadline);
+            let files_done = match self.shared.files.poll_shutdown() {
+                Ok(done) => done,
+                Err(error) => {
+                    self.shutdown_issue(error);
+                    true
+                }
+            };
             let (downloads_done, native_downloads) = match self.downloads.poll_shutdown() {
                 Ok(state) => state,
                 Err(error) => {
@@ -374,6 +384,7 @@ impl Worker {
                 persistence: usize::from(!persistence_done) + usize::from(!messages_done),
                 downloads: usize::from(!downloads_done),
                 connections: usize::from(!connections_done),
+                files: usize::from(!files_done),
                 native_downloads,
                 native_cleanup: false,
                 control: 0,
