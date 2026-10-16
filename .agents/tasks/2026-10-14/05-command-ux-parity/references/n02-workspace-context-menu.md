@@ -19,6 +19,9 @@ No product change is delivered by this audit record.
 
 ## Screenshot inventory and current implementation
 
+This table records the audit baseline `8258ccb`. Subsequent implementation is
+tracked below; it must not be mistaken for completed native acceptance.
+
 | ID | Reference action | Current zmux behavior / required work |
 | --- | --- | --- |
 | CM01 | Pin / Unpin Workspace | Missing model, ordering tier, protected-close policy, persistence and native action. |
@@ -137,3 +140,19 @@ native-menu result. A label-presence assertion alone is insufficient.
   context-menu journey. Inspect screenshots and retain final-SHA execution and
   physical shutdown receipts. The user-deferred Save Accessibility test remains
   outside this gate; it does not block any menu implementation above.
+
+## Attention and identity implementation
+
+Source now exposes direct Move Up/Down/Top/Bottom controls, scoped Mark Workspace
+as Read, exact Clear Latest Notification, a bounded workspace Notifications
+submenu with closed-target/empty states, and Copy Workspace ID using the durable
+UUID. Workspace context menus refresh from the current projection when opened;
+their namespace guards reject a replaced desktop. The notification actions share
+the same acknowledged Rust owner as the status menu, retain epoch/cursor/exact
+targets, and never borrow foreground workspace scope.
+
+The packaged sidebar/status journey now invokes real context read/clear/clipboard
+selectors on an inactive workspace while another window retains unread attention.
+Hosted execution remains pending. Pinning, mute/manual-unread, descriptions/colors,
+empty groups, batch closing, deep links, Finder and other open rows above remain
+unfinished; these additions do not close the whole context-menu or V01 gate.

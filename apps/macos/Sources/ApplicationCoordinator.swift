@@ -16,6 +16,7 @@ enum UICommand: Sendable {
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
     case attention(String, UInt64?, UInt64?, Bool?)
+    case notificationMutation(NotificationMenuSelection)
     case browser(String, UInt64?, UInt64?, String, String?, UUID?)
     case browserAutomation(UInt64, BrowserAction)
     case downloadCancel(BrowserDownloadRecord)
@@ -56,6 +57,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     let splitLayouts = WorkspaceSplitPreferences()
     lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
     lazy var notificationDelivery = makeNotificationDelivery()
+    private(set) var statusMenu: StatusMenuController?
+    private var pendingStatusNotifications: Bool?
     private func makeNotificationDelivery() -> NotificationDelivery {
         NotificationDelivery(
             sendEvent: { [weak self] event in
@@ -165,6 +168,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         try await self.bridge.browserAction(surface: surface, action: action)
                     case .attention(let operation, let id, let through, let active):
                         try await self.bridge.attention(operation, id: id, through: through, active: active)
+                    case .notificationMutation(let selection):
+                        _ = try await self.bridge.notificationAction(.mutate(selection))
                     case .pasteFiles(let surface, let paths):
                         try await self.bridge.pasteFiles(surface: surface, paths: paths)
                     case .cancelUpload(let id):
@@ -226,6 +231,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             }
         }
         WindowLifecycleSmoke.trace("coordinator loops scheduled; before initial window activation")
+        statusMenu = StatusMenuController(coordinator: self)
+        statusMenu?.update(snapshot)
         mainWindowHost.installMenus()
         WindowLifecycleSmoke.trace("initial menus installed; before makeKeyAndOrderFront")
         mainWindowHost.window.makeKeyAndOrderFront(nil)
@@ -237,6 +244,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     }
 
     private func performShutdown() async throws {
+        statusMenu?.remove()
+        statusMenu = nil
+        pendingStatusNotifications = nil
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
@@ -377,6 +387,23 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         if active { notificationDelivery.refreshPermission() }
     }
 
+    func showFromStatusMenu(notifications: Bool = false) {
+        guard shutdownTask == nil else { return }
+        guard let host = mainWindowHosts.values.first(where: { $0 === mainWindowHost && $0.nativeReady })
+                ?? mainWindowHosts.values.first(where: { $0.nativeReady }) else {
+            if pendingStatusNotifications == nil {
+                pendingStatusNotifications = notifications
+                if !enqueue(.window("new", nil, true)) { pendingStatusNotifications = nil }
+            } else if notifications { pendingStatusNotifications = true }
+            return
+        }
+        host.installMenus()
+        if host.window.isMiniaturized { host.window.deminiaturize(nil) }
+        host.window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        if notifications { host.showNotifications() }
+    }
+
     private func reconcile(_ snapshot: DesktopSnapshot) throws {
         guard shutdownTask == nil else { return }
         // Validate canonical ownership before touching native registries. The
@@ -396,6 +423,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             windowEpoch = snapshot.windowEpoch
         }
         self.snapshot = snapshot
+        statusMenu?.update(snapshot)
         try splitLayouts.reconcile(snapshot)
         let retainedHistories = Set(snapshot.model.workspaces.flatMap { $0.root.panes }
             .flatMap { $0.surfaces }.filter { $0.sessionId == nil && $0.localZellijCompletion != nil }.map(\.id))
@@ -485,6 +513,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
         for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" { browsers[surface.id]?.update(surface) }
         for (host, selection, layout) in changes { host.completePresentation(selectionChanged: selection, layoutChanged: layout) }
+        if let notifications = pendingStatusNotifications, mainWindowHosts.values.contains(where: { $0.nativeReady }) {
+            pendingStatusNotifications = nil
+            showFromStatusMenu(notifications: notifications)
+        }
         let pending = Set(snapshot.windowRequests.map(\.operationId))
         windowTasks = windowTasks.filter { pending.contains($0.key) }
         for request in snapshot.windowRequests where windowTasks[request.operationId] == nil {

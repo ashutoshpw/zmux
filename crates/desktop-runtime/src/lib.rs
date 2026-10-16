@@ -765,7 +765,9 @@ impl Desktop {
             NativeAttentionAction::Open { .. }
             | NativeAttentionAction::OpenInbox { .. }
             | NativeAttentionAction::JumpToUnread => true,
-            NativeAttentionAction::Dismiss { .. } | NativeAttentionAction::Reply { .. } => false,
+            NativeAttentionAction::Dismiss { .. }
+            | NativeAttentionAction::Reply { .. }
+            | NativeAttentionAction::Mutate { .. } => false,
             NativeAttentionAction::Event { .. } => {
                 return Err(DesktopError::Failure(
                     "use native_notification_event for notification observations".into(),
@@ -2085,6 +2087,49 @@ impl Worker {
         let model = self.model.snapshot();
         self.attention.reconcile(&model);
         match action {
+            NativeAttentionAction::Mutate {
+                epoch,
+                identity_namespace,
+                through_id,
+                workspace_id,
+                notification_id,
+                mutation,
+            } => {
+                if identity_namespace != model.identity_namespace {
+                    return Err(attention::AttentionError::StaleTarget.into());
+                }
+                let filter = if let Some(id) = notification_id {
+                    if workspace_id.is_some() {
+                        return Err(attention::AttentionError::InvalidSelector(
+                            "native menu mutation accepts one scope",
+                        )
+                        .into());
+                    }
+                    NotificationFilter::Id(id)
+                } else if let Some(workspace_id) = workspace_id {
+                    if !model.workspaces.iter().any(|w| w.id == workspace_id) {
+                        return Err(attention::AttentionError::StaleTarget.into());
+                    }
+                    NotificationFilter::Workspace {
+                        identity_namespace,
+                        workspace_id,
+                    }
+                } else {
+                    NotificationFilter::All
+                };
+                let kind = match mutation {
+                    attention::NotificationMenuMutation::MarkRead => {
+                        NotificationMutationKind::MarkRead
+                    }
+                    attention::NotificationMenuMutation::Clear => NotificationMutationKind::Clear,
+                };
+                self.notification_mutation = Some(self.attention.apply_mutation(
+                    &filter,
+                    kind,
+                    Some(through_id),
+                    Some(epoch),
+                )?);
+            }
             NativeAttentionAction::Event { event } => self.attention.native_event(&model, event)?,
             NativeAttentionAction::Open { target } => {
                 self.open_notification(&target, true)?;

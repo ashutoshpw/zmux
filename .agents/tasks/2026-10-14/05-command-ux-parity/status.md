@@ -5,6 +5,16 @@
 
 ## Active implementation
 
+- Status-menu implementation now creates the actual NSStatusItem, original
+  attention icon and shared notification previews/read/clear/open actions, restores
+  windows, exposes Cloud Account and owns an IOKit keep-awake assertion. Context
+  menus gain scoped attention controls, notification previews, UUID copying and
+  direct ordering. Native mutations preserve the captured epoch/namespace/cursor
+  and exact scope. Red regression `5b086a0`, focused green and full `scripts/check`
+  pass (`/tmp/zmux-status-menu-check.log`). Native Swift type-check/link/runtime
+  verification requires the expanded packaged sidebar/status Actions suite.
+  N02/N03 retain the unfinished advanced menu actions; full parity is not claimed.
+
 - macOS menu-bar screenshot exposes another missing native surface: no NSStatusItem
   is constructed anywhere in the current app. N03 records icon/attention controls,
   search/resources/power/profiling/cloud/preferences/updates and shared shutdown

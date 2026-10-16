@@ -213,16 +213,46 @@ enum NativeNotificationEvent: Encodable, Sendable {
     }
 }
 
+enum NotificationMenuMutation: String, Sendable { case markRead = "mark_read", clear }
+
+struct NotificationMenuSelection: Sendable {
+    let epoch: UUID
+    let namespace: UUID
+    let throughId: UInt64
+    var workspaceId: UInt64? = nil
+    var notificationId: UInt64? = nil
+    let mutation: NotificationMenuMutation
+
+    init(snapshot: DesktopSnapshot, workspace: UInt64? = nil, notification: UInt64? = nil,
+         mutation: NotificationMenuMutation) {
+        epoch = snapshot.nativeNotifications.epoch
+        namespace = snapshot.model.identityNamespace
+        throughId = snapshot.notifications.map(\.id).max() ?? 0
+        workspaceId = workspace; notificationId = notification; self.mutation = mutation
+    }
+}
+
 enum NativeAttentionAction: Encodable, Sendable {
+    case mutate(NotificationMenuSelection)
     case open(target: NotificationTarget)
     case openInbox(target: NotificationTarget)
     case dismiss(target: NotificationTarget)
     case jumpToUnread
     case reply(target: NotificationTarget, text: String)
-    private enum CodingKeys: String, CodingKey { case action, target, text }
+    private enum CodingKeys: String, CodingKey {
+        case action, target, text, epoch, identityNamespace, throughId, workspaceId, notificationId, mutation
+    }
     func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .mutate(let selection):
+            try c.encode("mutate", forKey: .action)
+            try c.encode(selection.epoch, forKey: .epoch)
+            try c.encode(selection.namespace, forKey: .identityNamespace)
+            try c.encode(selection.throughId, forKey: .throughId)
+            try c.encodeIfPresent(selection.workspaceId, forKey: .workspaceId)
+            try c.encodeIfPresent(selection.notificationId, forKey: .notificationId)
+            try c.encode(selection.mutation.rawValue, forKey: .mutation)
         case .open(let target): try c.encode("open", forKey: .action); try c.encode(target, forKey: .target)
         case .openInbox(let target): try c.encode("open_inbox", forKey: .action); try c.encode(target, forKey: .target)
         case .dismiss(let target): try c.encode("dismiss", forKey: .action); try c.encode(target, forKey: .target)

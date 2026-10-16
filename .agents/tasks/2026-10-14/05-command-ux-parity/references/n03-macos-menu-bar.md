@@ -1,14 +1,15 @@
 # macOS menu bar parity correction
 
-**Audited:** 2026-10-16. **State:** missing; no implementation delivered here.
+**Audited:** 2026-10-16. **State:** status/attention implementation in progress;
+packaged native acceptance pending. Advanced action owners remain open.
 Reference: read-only cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
-Current zmux: `8258ccb` (application source unchanged from `cdbb392`).
+Audit baseline: zmux `8258ccb` (application source unchanged from `cdbb392`).
 
 The user's screenshot shows the application status menu in the top-right macOS
 menu bar. This is separate from the Dock, the main application menus, desktop
 notification banners and the in-window sidebar bell.
 
-## Verified cause
+## Verified cause at audit baseline
 
 `apps/macos/Sources` contains no `NSStatusBar`/`NSStatusItem` or `MenuBarExtra`
 owner. `AppDelegate` starts the `ApplicationCoordinator`; window hosts install
@@ -87,3 +88,38 @@ copied or translated into the MIT implementation.
 This correction supplements [N02 workspace context menu](n02-workspace-context-menu.md)
 and the broader audit. Neither an icon-only slice nor this audit record establishes
 full cmux parity or authorizes describing a new artifact that way.
+
+## Status and attention implementation
+
+`StatusMenuController` now creates one original template icon/NSStatusItem, retained
+by `ApplicationCoordinator` after startup and removed before shared shutdown.
+Its menu exposes recent previews, Show zmux, Show Notifications, Jump to Latest
+Unread, Mark All Read, Clear All, Cloud Account, desktop-notification permission,
+Keep Mac Awake and normal application Quit. Show zmux restores minimized windows
+and requests a new window through the existing owner when all windows are closed.
+Keep-awake uses an owned IOKit assertion and releases it on toggle/shutdown.
+
+The menu reads the complete application snapshot across windows. Rendering updates
+only when attention/availability state changes; terminal output alone does not
+rebuild NSMenu. Open menus retain their displayed targets and history boundary.
+Native `mutate` actions reuse the shared Rust notification filter/mutation owner
+with epoch, model namespace, cursor and optional exact workspace/record scope.
+Mutations return no focus/activation receipt. Normal preview opening reuses the
+existing acknowledged exact-target notification navigation.
+
+The actual Desktop regression was committed first as `5b086a0`; it fails because
+native `mutate` is absent. The same test passes after the shared repair and also
+covers mixed-scope rejection and exact-record removal. Logs:
+`/tmp/zmux-status-menu-owner-{red,green}.log`.
+
+The existing packaged sidebar suite now additionally exercises the actual system
+status button/menu, context attention/UUID actions on an inactive workspace,
+notifications in another real window, arrivals after menu opening, exact preview
+activation, minimized-window restoration and keep-awake release. It retains the
+actual icon PNG and `native-status-menu.json`; all nine additional flags and
+post-shutdown item/assertion removal are required. No Save-dialog/Accessibility
+test is added or re-enabled. Hosted execution remains pending.
+
+Full search, task manager, Sleepy Mode, profiling, preferences, verified updating,
+cloud VM creation/machine menus and menu-bar-only preferences remain open. There
+are no inert menu entries claiming those owners are implemented.

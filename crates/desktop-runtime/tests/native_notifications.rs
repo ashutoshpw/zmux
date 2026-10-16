@@ -114,6 +114,23 @@ fn native_menu_mutations_capture_scope_cursor_and_epoch_without_changing_focus()
         );
         assert_eq!(wait(&desktop, |_| true).notifications.len(), 3);
     }
+    let mut exact_remove = serde_json::json!({
+        "action":"mutate", "mutation":"clear", "notification_id":first_id,
+        "through_id":cursor, "epoch":epoch, "identity_namespace":namespace,
+    });
+    exact_remove["workspace_id"] = serde_json::json!(first);
+    assert!(
+        desktop
+            .native_notification_action(serde_json::from_value(exact_remove.clone()).unwrap())
+            .is_err()
+    );
+    assert_eq!(wait(&desktop, |_| true).notifications.len(), 3);
+    exact_remove.as_object_mut().unwrap().remove("workspace_id");
+    desktop
+        .native_notification_action(serde_json::from_value(exact_remove).unwrap())
+        .unwrap();
+    let removed = wait(&desktop, |s| s.notifications.len() == 2);
+    assert!(removed.notifications.iter().all(|n| n.id != first_id));
     desktop
         .native_notification_action(mutation("clear", None, epoch, namespace))
         .unwrap();
