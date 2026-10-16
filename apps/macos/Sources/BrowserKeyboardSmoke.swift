@@ -83,9 +83,22 @@ enum BrowserKeyboardSmoke {
             @MainActor func observe() async throws -> Observation {
                 try decode(Envelope<Observation>.self, await cli(["browser", "eval", "({value:document.getElementById('entry').value,checked:document.getElementById('box').checked,submits:zmuxSubmits,start:document.getElementById('entry').selectionStart,end:document.getElementById('entry').selectionEnd,events:zmuxKeyEvents})"] + target, false)).value
             }
+            var actionCase = 0
             @MainActor func action(_ operation: String, _ token: String, synthetic: Bool = false, after: Bool = false, snapshotTitle: String? = nil) async throws {
+                actionCase += 1
                 let generation = view.documentGeneration
-                let reply = try decode(Reply.self, await cli(["browser", operation, "--key", token] + target + (after ? ["--snapshot-after"] : []), false))
+                let unownedGeneration = events.unownedKeyGeneration
+                let reply: Reply
+                do {
+                    reply = try decode(Reply.self, await cli(["browser", operation, "--key", token] + target + (after ? ["--snapshot-after"] : []), false))
+                } catch {
+                    // These keys and DOM events belong only to the generated fixture;
+                    // production mismatch messages redact printable user key content.
+                    let observed: String
+                    do { observed = String(decoding: try JSONEncoder().encode(try await observe()), as: UTF8.self) }
+                    catch { observed = "Fixture observation unavailable: " + error.localizedDescription }
+                    throw BridgeFailure(message: "Keyboard fixture case=\(actionCase), operation=\(operation), key=\(token), snapshotAfter=\(after), hostRetained=\(view.hostID == host), generationBefore=\(generation), generationAfter=\(view.documentGeneration), unownedBefore=\(unownedGeneration), unownedAfter=\(events.unownedKeyGeneration), appActive=\(NSApp.isActive), keyWindowRetained=\(NSApp.keyWindow === keyWindow), responderRetained=\(keyWindow?.firstResponder === responder), detached=\(view.webView.window == nil); callback=\(error.localizedDescription); fixtureObservation=\(String(observed.prefix(4096)))")
+                }
                 guard reply.value.dispatched, reply.value.input == (synthetic ? "synthetic" : "native"),
                       !synthetic || reply.value.nativeDefaults == false,
                       synthetic || reply.value.nativeEventObserved == true,
