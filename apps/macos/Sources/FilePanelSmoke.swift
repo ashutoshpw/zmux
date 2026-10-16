@@ -387,7 +387,12 @@ enum FilePanelSmoke {
 
         // 13. Sixteen file tabs from one command all load: the load gate queues them instead of
         // overflowing the Rust file worker (which answers busy past eight queued jobs), none ends
-        // in an error state, and no more than the gate's limit was ever in flight.
+        // in an error state, and no more than the gate's limit was ever in flight. The core admits
+        // sixteen file tabs across the whole desktop, so the tabs the earlier steps kept (the
+        // image, the PDF and the reopened error tab, all clean) are closed first: opened beside
+        // them the last three of sixteen new files would be answered `file_capacity`.
+        for keptID in [imageID, pdfID, brokenID] { host.closeTerminalTab(keptID) }
+        try await wait("every earlier file tab closed") { coordinator.snapshot.map { fileSurfaces($0).isEmpty } == true && coordinator.files.isEmpty }
         let manyPaths = try await writeManyFiles(count: 16, in: f.directory)
         let manyOpened = try openResult(try await cli(["open"] + manyPaths, false))
         guard manyOpened["ok"] as? Bool == true, (manyOpened["items"] as? [[String: Any]])?.count == 16 else {

@@ -959,6 +959,10 @@ close and (fix round 2) discard sheets are answered through the panel's own seam
     `not_found` error state; the file is written back and `retry()` loads it.
     Cleanup then checks with `lsof` that this process holds no descriptor under the fixture
     directory after every tab is closed (polled up to 5 s because detach is asynchronous).
+13. (fix round 8, corrected in fix round 9) The image, PDF and reopened error tab that earlier steps
+    keep open are closed first (the core admits 16 file tabs across the whole desktop), then 16 new
+    files are opened with one `zmux open`: all 16 load, none shows an error state, and the load
+    gate's `peakInFlightCount` is between 1 and 3 with nothing queued afterwards.
 Session quit/restore (the `files.epoch` rotation) is NOT exercised by the smoke, see "Fix round 2".
 Step 2 also (fix round 1) waits for the keyboard to land in the rendered Markdown view of the tab
 that `zmux open` selected while it was loading.
@@ -1034,7 +1038,7 @@ around `beginSheetModal` in `presentSheet`.
 - `scripts/check` (fmt, `cargo test --workspace --locked`, clippy `-D warnings`,
   `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 549 tests
   passed, 0 failed, 2 ignored, 79 test binaries (546 before the slice plus the 3 new tests; this is
-  the count at the slice commit, each fix round below records its own, 573 after round 8). The
+  the count at the slice commit, each fix round below records its own, 573 after round 8, 574 after round 9). The
   license inventory and `THIRD_PARTY_NOTICES.md` are unchanged (no dependency was added).
 - `cargo test -p zmux-native-bridge --test swift_file_contract`: 3 passed; mutation and
   determinism evidence above.
@@ -1506,8 +1510,8 @@ Tests added or changed:
   waiting or backing off never reaches the service and passes its slot on; the waiting and retrying
   texts. UNAVAILABLE here (needs `xcrun swiftc`): never compiled or run, so even its syntax is
   unproven; expected values were traced by hand.
-- `crates/native-bridge/tests/swift_file_contract.rs`, now 26 tests (22 before, 4 added), all of which
-  run on Linux:
+- `crates/native-bridge/tests/swift_file_contract.rs`, 26 tests after round 8 (22 before, 4 added; 27 after
+  round 9), all of which run on Linux:
   - `the_swift_load_gate_keeps_sixteen_tabs_inside_what_the_rust_worker_admits` (contract; executes
     real Rust). It reads `defaultMaxInFlight`, `defaultMaxAttempts`, `defaultBackoffMilliseconds` and
     `defaultTransientCodes` from the Swift, checks the arithmetic against the worker's real
@@ -1536,7 +1540,9 @@ Tests added or changed:
     `await sendLoad(.reload` (the same ordering assertions otherwise).
 - `FilePanelSmoke` step 13 (UNAVAILABLE here, not run): writes 16 files, opens them with one `zmux
   open`, waits until all 16 panels are loaded, requires none to show an error state and the gate's
-  `peakInFlightCount` to be between 1 and 3 with nothing left queued.
+  `peakInFlightCount` to be between 1 and 3 with nothing left queued. **As written in round 8 this step
+  could never pass** (it ran with three other file tabs open and the core refused three of the 16 with
+  `file_capacity`); fixed in round 9 below.
 
 Mutation checks on Linux (applied, run, restored): `defaultMaxInFlight = 3` raised to `5` fails the
 arithmetic assertion; `defaultTransientCodes` with `"busy"` removed fails the overload-code
@@ -1584,3 +1590,46 @@ Limits and deviations:
   sooner, bounded by the four tries.
 - The retry count and delays are constants, not user settings.
 
+### Fix round 9 (S4 review finding, one blocking, valid and fixed)
+
+Base of the round: `08155d2`. Swift still cannot be compiled or run here (no Swift toolchain, Linux).
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | `FilePanelSmoke` step 13 can never pass: the image tab, the PDF tab and the reopened `broken` text tab are still open when it runs `zmux open` on 16 new files, and the core allows `MAX_FILE_SURFACES` = 16 file tabs desktop-wide, so the last three items come back as `file_capacity`, the CLI exits 1 and `nativeCLI(expectFailure: false)` throws before the `ok == true` and `count == 16` guards. | Yes. By reading the smoke: before step 13 the only closes are the text tab (step 8, reopened as `reopenedID`), `markdownID` and `reopenedID` (step 10 burst) and the second text tab (step 12); step 9 only deletes the image file; so `imageID`, `pdfID` and `brokenID` remain (3 tabs). By reading Rust: `files.rs` counts every file surface in the model and refuses a new path at `>= MAX_FILE_SURFACES` with `file_capacity` (`MAX_OPEN_ITEMS` is also 16). By execution on Linux with the real `zmux_desktop_file` export (the new test): 3 file tabs open, then 16 new files in one `open` gives failing items 13, 14 and 15, all `file_capacity`. | Step 13 now begins with `for keptID in [imageID, pdfID, brokenID] { host.closeTerminalTab(keptID) }` and waits until the snapshot has no file surface and `coordinator.files` is empty (the same condition cleanup waits for; the three tabs are clean, so no sheet appears). The step comment and the receipt list now state that step 13 needs an empty desktop. |
+
+Tests added or changed:
+
+- `crates/native-bridge/tests/swift_file_contract.rs`, now 27 tests (26 before, 1 added), all run on Linux:
+  `the_sixteen_file_open_needs_every_earlier_file_tab_closed_and_the_smoke_closes_them`. Real Rust
+  through the real `zmux_desktop_file` / `zmux_desktop_dispatch` exports: with 3 file tabs open a
+  16-file `open` fails exactly items 13, 14, 15 with `file_capacity`; closing every file tab (a
+  clean-tab `close_surface` is accepted) empties the workspaces' file surfaces (`closed_items`, the
+  reopen stack, is deliberately excluded); then 16 new files all open. It also asserts
+  `MAX_FILE_SURFACES == MAX_OPEN_ITEMS == 16`. A structure pin on the smoke (never runs the Swift)
+  requires the close loop over exactly `imageID, pdfID, brokenID`, the wait on `fileSurfaces($0).isEmpty`
+  and `coordinator.files.isEmpty`, all before `let manyPaths`, and that those three ids are tabs opened
+  earlier in the journey. The Rust half of the test is the reproduction of the finding and is the real
+  evidence; the pin only keeps the Swift from regressing, and cannot prove the Swift behaves.
+
+Mutation check on Linux (applied, run, restored): changing the close loop to `[imageID, pdfID]`
+(leaving the error tab open) fails the new test. The real-Rust half cannot be broken by a Swift edit,
+by design.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test result
+lines, 574 passed, 0 failed, 2 ignored, the previous 573 plus 1; clippy `-D warnings`; license
+inventory; `scripts/check-native-bridge`). Determinism of the changed binary (`swift_file_contract`,
+27 tests, the new one drives a real Desktop with its own temp directory and waits on snapshot
+conditions, not sleeps): 20 serial runs, 0 failures; then 5 rounds of 8 copies started together and
+waited for individually, beside 24 busy-loop CPU hogs, 40 runs, 0 failures; 60 of 60 logs carry
+`27 passed; 0 failed`.
+
+Still UNAVAILABLE (unchanged; no Swift toolchain, Linux): `scripts/check-macos-sources` (type-checks the
+edited `FilePanelSmoke.swift`), `scripts/check-file-load-gate`, `scripts/check-file-editor-model`,
+`scripts/check-file-close-resolution`, `scripts/build-macos-dev`, `scripts/check-macos-app`, the
+`file_panel` smoke stage and every hosted macOS workflow. The edited statement uses only names already
+in scope in the journey (`host.closeTerminalTab`, `wait`, `fileSurfaces`, `coordinator.files`), but it
+has not been compiled.
+
+Limits: step 13 is still only as good as the macOS run that has not happened; the smoke now assumes
+that closing the image tab (which shows the deleted banner) needs no sheet because it is clean.
