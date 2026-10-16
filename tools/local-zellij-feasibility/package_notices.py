@@ -109,6 +109,7 @@ def collect(producer_directory, destination, sysroot, digest):
     packages = {package["id"]: package for package in metadata["packages"]}
     producer_lock = json.loads((producer_directory / "receipt.json").read_text())["lock"]
     source = producer_directory / "source" / ("zellij-" + producer_lock["source_commit"])
+    readiness = json.loads((producer_directory / "receipt.json").read_text()).get("input_readiness", {}).get("requested") is True
     lock = tomllib.loads((source / "Cargo.lock").read_text())
     checksums = {(entry["name"], entry["version"], entry.get("source")): entry.get("checksum") for entry in lock["package"]}
     components = {}
@@ -157,6 +158,8 @@ def collect(producer_directory, destination, sysroot, digest):
                 "metadata_only_text_supplements": policy["metadata_only_text_supplements"],
                 "supplement_review_scope": policy["supplement_review_scope"],
                 "rust_std_scope": "exact installed toolchain aggregate standard-library copyright inventory and referenced license directory; native plus wasm32-wasip1 target use"}
+    if readiness:
+        document["source_availability"] += "; original MIT readiness reporter/patch/protocol/source inventory retained under SOURCES/input-readiness-v1 with exact reconstruction instructions"
     path = destination / "components.json"
     path.write_text(json.dumps(document, indent=2) + "\n")
     lines = ["# Third-party component notices", "", document["source_availability"], "",

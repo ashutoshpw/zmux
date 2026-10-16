@@ -29,7 +29,12 @@ REQUIRED_TESTS = {
         "local_zellij::broker::tests::rejected_real_socket_input_retains_hash_and_pre_send_cancellation_phase",
         "local_zellij::supervisor::tests::configured_bootstrap_waits_for_fragmented_frames_on_an_initially_nonblocking_socket",
         "local_zellij::broker::tests::real_socket_backpressure_preserves_order_and_half_close_with_bounded_buffers",
-        "local_zellij::broker::tests::real_kernel_peers_reject_wrong_owned_child_before_connect_and_changed_backend_before_forwarding"
+        "local_zellij::broker::tests::real_kernel_peers_reject_wrong_owned_child_before_connect_and_changed_backend_before_forwarding",
+        "local_zellij::input_readiness::tests::actual_retained_peer_requires_accepted_eof_before_admission",
+        "local_zellij::input_readiness::tests::actual_retained_peer_wrong_nonce_and_trailing_frame_never_admit",
+        "local_zellij::input_readiness::tests::a_different_actual_direct_child_cannot_assert_readiness_for_the_retained_frontend",
+        "local_zellij::input_readiness::tests::replacing_the_actual_readiness_socket_cannot_admit_a_frontend",
+        "local_zellij::input_readiness::tests::fixed_monotonic_budget_and_changed_retained_identity_fail_closed"
     ],
     "owner-2": [
         "foreground_zellij_grammar_refuses_unsupported_lifecycle_before_any_owner",
@@ -39,6 +44,19 @@ REQUIRED_TESTS = {
         "real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workload"
     ]
 }
+
+
+def owner_checks(*, toolchain=None):
+    """One command owner for produced and app-bundled dependency validation."""
+    cargo = ["cargo"] + ([toolchain] if toolchain else [])
+    return [
+        cargo + ["test", "--locked", "-p", "zmux-session-runtime", "--test", "child", "--test", "lifecycle", "--test", "shutdown", "--", "--nocapture"],
+        # This ignored entrypoint is a child-process fixture, not an outer test.
+        # Actual protocol tests above still spawn it with --exact --ignored.
+        cargo + ["test", "--locked", "-p", "zmux-remote-runtime", "--lib", "local_zellij", "--", "--nocapture",
+                 "--skip", "local_zellij::input_readiness::tests::retained_readiness_peer"],
+        cargo + ["test", "--locked", "-p", "zmux", "--features", "local-zellij-conformance", "--test", "local_zellij", "--test", "local_zellij_owner", "--", "--nocapture"],
+    ]
 
 
 def source_hashes(root, digest):

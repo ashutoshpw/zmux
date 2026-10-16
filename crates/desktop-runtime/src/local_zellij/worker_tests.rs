@@ -179,3 +179,6 @@ fn configured_cli_exec_admission_rejects_unrelated_image_and_departed_child() {
         "{error}"
     );
 }
+
+#[path = "worker_tests/readiness.rs"]
+mod readiness;

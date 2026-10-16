@@ -372,6 +372,8 @@ struct DesktopConfiguration {
     profile_lease_directory: Option<PathBuf>,
     #[serde(default)]
     terminal_engine: zmux_desktop_runtime::terminal_engine::TerminalEngineConfig,
+    #[serde(default)]
+    local_zellij: Option<zmux_desktop_runtime::local_zellij::Configuration>,
 }
 
 /// Explicit host configuration; ordinary constructors keep their default engine.
@@ -402,9 +404,13 @@ pub unsafe extern "C" fn zmux_desktop_create_configured(
                 return Err(INVALID_ARGUMENT);
             }
         }
+        if let Some(local_zellij) = &configuration.local_zellij {
+            local_zellij.validate().map_err(|_| INVALID_ARGUMENT)?;
+        }
         create_configured_desktop_with_leases(
             zmux_desktop_runtime::DesktopOptions {
                 state_directory: configuration.state_directory,
+                local_zellij: configuration.local_zellij,
                 terminal_engine: configuration.terminal_engine,
                 ..Default::default()
             },

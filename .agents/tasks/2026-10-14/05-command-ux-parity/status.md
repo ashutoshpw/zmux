@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- Atomic readiness native configuration is prepared in isolated
+  `ci/input-readiness-native`, combining frozen consumer semantics with current
+  main and reviewed package tooling. Foreign ABI red/green, repository396 tests,
+  actual Linux public3+22 and strict feature Clippy pass. No exact readiness
+  admission tuple, AppKit startup adapter, final relocated bundle or default
+  activation is claimed. See [native configuration](references/r03-input-readiness-native-config.md).
+
 - T01 wrapped-word selection integrated as `a6c8e3b`/`a14d94d` after actual native
   red `38853562903` and green `38854246653`. All32 clipboard cases and shared
   shutdown pass;266 source hashes/archive/bridge verified. Production terminal
@@ -193,6 +200,18 @@
 - Real finite completion regression committed locally `a170f29`; completed-history
   no-launch restore regression committed `2a16e93`. Both intended red receipts are
   retained; publication waits for the corresponding reviewed green implementation.
+- Observer4 consumer is implemented in isolated `ci/input-readiness-integration`.
+  Actual Linux public22 tests pass with silent first-line delivery on two distinct
+  attachments, startup1, actual7 Saved/physical joins, and terminal0/7 before
+  readiness without interactive admission. Completion-before-connect and namespace
+  fixture races retain exact red/green evidence. Queued historical transport
+  retains only an independently authenticated, identical correlated terminal fact;
+  changed live frontend identities still fail and cannot seed readiness. Strict feature Clippy passes;
+  final repository check passes362 tests plus three owned subprocess fixtures,
+  strict workspace Clippy, license inventory and C ABI. Parent source review is
+  complete; isolated diagnostic delivery is authorized. Main activation, Swift
+  presentation and consumer Darwin acceptance remain gated by the matching package. See
+  [consumer evidence](references/r03-input-readiness-consumer.md).
 
 - R03 runtime/checkpoint prerequisite committed `dc43608` after all 21 staged
   source hashes matched the independently reviewed freeze. Isolated `scripts/check`

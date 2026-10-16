@@ -29,6 +29,7 @@ enum State {
     Authorized,
     Bound,
     Connected,
+    InputReady,
     CompletionAuthorized,
     Finished,
 }
@@ -38,6 +39,26 @@ pub(super) struct Observer {
     descriptor: Descriptor,
     sequence: u64,
     state: State,
+}
+pub(super) fn requested_deadline(default: Instant) -> io::Result<(Instant, bool)> {
+    let Some(path) = std::env::var_os(ENV).map(PathBuf::from) else {
+        return Ok((default, false));
+    };
+    let descriptor: Descriptor = serde_json::from_slice(&files::read_private(&path, FRAME_LIMIT)?)
+        .map_err(io::Error::other)?;
+    match (&descriptor.input_readiness, descriptor.version) {
+        (Some(request), 4) => {
+            request.validate()?;
+            Ok((
+                default.min(super::input_readiness::local_deadline(
+                    request.deadline_monotonic_ms,
+                )?),
+                true,
+            ))
+        }
+        (None, 1..=3) => Ok((default, false)),
+        _ => Err(fail("mixed observer version and readiness capability")),
+    }
 }
 impl Observer {
     pub(super) fn configured(
@@ -53,7 +74,7 @@ impl Observer {
             serde_json::from_slice(&files::read_private(&path, FRAME_LIMIT)?)
                 .map_err(|error| fail(format!("invalid observer descriptor: {error}")))?;
         descriptor.context.validate()?;
-        if !matches!(descriptor.version, 1..=3)
+        if !matches!(descriptor.version, 1..=4)
             || descriptor.nonce.len() != 64
             || !descriptor
                 .nonce
@@ -61,6 +82,11 @@ impl Observer {
                 .all(|byte| byte.is_ascii_hexdigit())
         {
             return Err(fail("invalid observer version or one-use nonce"));
+        }
+        match (&descriptor.input_readiness, descriptor.version) {
+            (Some(request), 4) => request.validate()?,
+            (None, 1..=3) => (),
+            _ => return Err(fail("mixed observer version and readiness capability")),
         }
         let root = descriptor
             .socket
@@ -233,6 +259,7 @@ impl Observer {
         &mut self,
         owner_uuid: Uuid,
         frontend: &ProcessIdentity,
+        attachment_id: Option<Uuid>,
     ) -> io::Result<()> {
         if self.state != State::Bound {
             return Err(fail("observer transport transition rejected"));
@@ -243,11 +270,42 @@ impl Observer {
             Event::TransportConnected {
                 owner_uuid,
                 frontend: frontend.clone(),
+                attachment_id,
             },
             None,
             || Ok(()),
         )?;
         self.state = State::Connected;
+        Ok(())
+    }
+    pub(super) fn readiness(&self) -> Option<&super::observer_protocol::ReadinessRequest> {
+        self.descriptor.input_readiness.as_ref()
+    }
+    pub(super) fn input_ready(
+        &mut self,
+        owner_uuid: Uuid,
+        owner_generation: Uuid,
+        attachment_id: Uuid,
+        frontend: &ProcessIdentity,
+    ) -> io::Result<()> {
+        if self.descriptor.version != 4 || self.state != State::Connected || attachment_id.is_nil()
+        {
+            return Err(fail("observer input readiness transition rejected"));
+        }
+        self.readiness()
+            .ok_or_else(|| fail("input readiness capability missing"))?
+            .validate()?;
+        self.emit(
+            Event::InputReady {
+                owner_uuid,
+                owner_generation,
+                attachment_id,
+                frontend: frontend.clone(),
+            },
+            None,
+            || Ok(()),
+        )?;
+        self.state = State::InputReady;
         Ok(())
     }
     pub(super) fn version(&self) -> u8 {
@@ -265,7 +323,12 @@ impl Observer {
         deadline: Instant,
         mut tick: impl FnMut() -> io::Result<()>,
     ) -> io::Result<u64> {
-        if self.descriptor.version < 2 || !matches!(self.state, State::Bound | State::Connected) {
+        if self.descriptor.version < 2
+            || !matches!(
+                self.state,
+                State::Bound | State::Connected | State::InputReady
+            )
+        {
             return Err(fail("completion requires observer v2 bound state"));
         }
         self.emit(
@@ -333,7 +396,7 @@ impl Observer {
     ) -> io::Result<()> {
         if !matches!(
             self.state,
-            State::Bound | State::Connected | State::CompletionAuthorized
+            State::Bound | State::Connected | State::InputReady | State::CompletionAuthorized
         ) {
             return Err(fail("observer finished transition rejected"));
         }

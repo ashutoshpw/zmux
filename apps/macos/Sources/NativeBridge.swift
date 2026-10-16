@@ -62,7 +62,7 @@ actor NativeBridge {
     private var revision: UInt64 = 0
     private let profileLeaseEpoch = UUID()
 
-    func start(storage: NativeDesktopStorage = .transient, terminalEngine: String? = nil) throws {
+    func start(storage: NativeDesktopStorage = .transient, terminalEngine: String? = nil, localZellij: NativeLocalZellijConfiguration? = nil) throws {
         guard zmux_abi_version() == 1 else { throw BridgeFailure(message: "Unsupported native bridge version") }
         let stateDirectory: String?
         switch storage {
@@ -80,7 +80,7 @@ actor NativeBridge {
             stateDirectory = try NativeStoragePath.resolve(directory.path)
         }
         let result: ZmuxResult
-        if terminalEngine != nil || stateDirectory != nil {
+        if terminalEngine != nil || stateDirectory != nil || localZellij != nil {
             var configuration: [String: Any] = [:]
             if let terminalEngine {
                 guard terminalEngine.utf8.count <= 2048 else { throw BridgeFailure(message: "Terminal engine configuration exceeds its bound") }
@@ -90,7 +90,11 @@ actor NativeBridge {
                 configuration["state_directory"] = stateDirectory
                 configuration["profile_lease_directory"] = try BrowserProfileLeaseDirectory.resolve()
             }
+            if let localZellij {
+                configuration["local_zellij"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(localZellij))
+            }
             let data = try JSONSerialization.data(withJSONObject: configuration)
+            guard data.count <= 8192 else { throw BridgeFailure(message: "Native desktop configuration exceeds its bound") }
             result = data.withUnsafeBytes { storage in
                 zmux_desktop_create_configured(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
             }
@@ -99,6 +103,10 @@ actor NativeBridge {
         }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
+    }
+    func localZellij(_ request: NativeLocalZellijRequest) async throws {
+        let value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request))
+        try await send(["command": "local_zellij", "request": value])
     }
     func acquireBrowserProfileLease(profile: UUID, store: UUID) async throws -> BrowserProfileLeaseToken {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed; profile store acquisition was not admitted.") }
