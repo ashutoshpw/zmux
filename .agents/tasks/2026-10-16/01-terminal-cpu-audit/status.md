@@ -4,6 +4,17 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Actions38940969866 again passes native repaint/sidebar/status-menu and system
+  Bash lifecycle tests but fails the real plain SSH disconnect10s cleanup. Group
+  HUP simulation is insufficient evidence for Darwin's real SSH disconnect path.
+  Reassessing actual transport before further runtime changes; no artifact handoff.
+- Added a manual Rust-only macOS SSH lifecycle probe, reusing the existing ABI
+  acceptance driver. On cleanup failure it retains only controlled provider
+  PID/PPID/group/session/foreground-group, ignored-signal flags, bounded process
+  names (no argv) and private lease filenames. No credentials/terminal contents.
+  It checks both plain and nested connections even if the first fails, and fails
+  the job if either fails. Local existing-driver plain/nested and syntax checks
+  remain required; product sources are unchanged since362ea5c.
 - Focused macOS Actions38940969866 at362ea5c passes actual system-Bash group-HUP
   cleanup and Ctrl-C, user startup and local Claude completion. Native repaint
   and packaged SSH/tmux checks remain in progress before artifact upload.

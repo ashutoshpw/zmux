@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import time
 import shlex
+import sys
+from itertools import islice
 
 REPO = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('zmux_ssh_fixture', REPO / 'scripts/native-ssh-fixture.py')
@@ -60,12 +62,17 @@ def main():
         home.mkdir(mode=0o700)
         provider = root / 'claude'
         provider.write_text('''#!/usr/bin/python3
-import json,os,pathlib,subprocess,sys,time
+import json,os,pathlib,signal,subprocess,sys,time
 args=sys.argv[1:]
 assert args[-1]=='literal $HOME ; text',args
 plugins=[args[i+1] for i,arg in enumerate(args[:-1]) if arg=='--plugin-dir']
 assert len(plugins)==1,args
 pathlib.Path(os.environ['HOME'],'plugin-path').write_text(plugins[0])
+pathlib.Path(os.environ['HOME'],'provider-process.json').write_text(json.dumps({
+ 'pid':os.getpid(),'parent_pid':os.getppid(),'process_group':os.getpgrp(),
+ 'session':os.getsid(0),'tty_foreground_group':os.tcgetpgrp(0),
+ 'hup_ignored':signal.getsignal(signal.SIGHUP)==signal.SIG_IGN,
+ 'int_ignored':signal.getsignal(signal.SIGINT)==signal.SIG_IGN}))
 for entry in json.loads((pathlib.Path(plugins[0])/'hooks/hooks.json').read_text())['hooks']['Stop']:
  for hook in entry['hooks']:
   subprocess.run(hook['command'],shell=True,input=b'{"hook_event_name":"Stop","session_id":"remote-fixture"}',check=True,timeout=3)
@@ -153,6 +160,25 @@ time.sleep(30)
                 deadline = time.monotonic() + 10
                 while plugin.exists() and time.monotonic() < deadline:
                     time.sleep(.05)
+                if plugin.exists():
+                    # Only this finite fixture's known process IDs and private
+                    # lease filenames; no command arguments or file contents.
+                    identity = json.loads((home / 'provider-process.json').read_text())
+                    ids = {int(value) for key, value in identity.items()
+                           if key not in ('hup_ignored', 'int_ignored') and int(value) > 1}
+                    local_ssh = remote['frames'][0].get('process_id')
+                    if local_ssh:
+                        ids.add(int(local_ssh))
+                    states = subprocess.run(['ps','-p',','.join(map(str,sorted(ids))),
+                                             '-o','pid=,ppid=,pgid=,stat=,comm='],
+                                            capture_output=True,text=True,timeout=3,check=False)
+                    print(json.dumps({'fixture_cleanup_failure':True,'provider':identity,
+                                      'local_ssh_pid':local_ssh,
+                                      'lease_path':str(plugin.parent),
+                                      'lease_entries':[p.relative_to(plugin.parent).as_posix()
+                                                       for p in islice(plugin.parent.rglob('*'),32)],
+                                      'owned_process_states':states.stdout[:4000],
+                                      'process_probe_error':states.stderr[:500]}),file=sys.stderr)
                 assert not plugin.exists(), 'Remote session hook directory survived SSH close'
                 print(json.dumps({'authenticated_ssh':True, 'plain_claude_plugin':True,
                                   'via_tmux':args.via_tmux,
