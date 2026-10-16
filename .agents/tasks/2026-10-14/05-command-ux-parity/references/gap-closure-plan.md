@@ -36,7 +36,7 @@ complete; it is extended and reverified against its full contract.
 | M3 — browser and configuration | S02, B01, then B02 | Persistent profiles, downloads/dialogs, complete browser control and shared settings/shortcuts/palette. Native lifecycle, permission, data-isolation and browser automation gates pass. |
 | M4 — content and automation | A01 may start after M0/T02; C01 after S01/S02 | Inspection/events/rules/metadata/tmux compatibility plus markdown/diff/review/editor/project/file/search surfaces. Remote file providers finish with R02. |
 | M5 — agent workflows | A02, then A03; finish R02 session move; X01 | Real agent hooks/messages/recovery/team tools and separately permissioned Computer Use. Provider versions, authenticated clients, TCC and failure/recovery tested. |
-| M6 — independent cloud | H01 can start after M0; H02/H03 require external decisions and remote dependencies | PR #1 auth/org/MFA/mail/admin requirements, deployed control plane and complete VM/relay/network/file/snapshot/dev workflows. Every deployed journey runs through Actions against owned infrastructure. |
+| M6 — independent cloud | H01 can start after M0; H02/H03 require external decisions and remote dependencies | PR #1 auth/org/MFA/mail/admin requirements, deployed control plane and complete VM/relay/network/file/snapshot/dev workflows. Local Docker service runs first; public tunnel and provider journeys need independent verification. |
 | M7 — platform and release | X02/X03; complete D01 | iOS/mobile/VPN, Simulator/capture/privilege, localization, polished accessible UI, trusted updates and production distribution. Signing/device/permission dependencies remain explicit. |
 | M8 — parity signoff | V01 after all applicable package gates | No unresolved required feature, option, alias, public entrypoint or dependency gate. Publish accepted macOS artifact and exact evidence matrix. |
 
@@ -66,8 +66,8 @@ commit. Re-estimate milestone capacity after M0 using actual implementation thro
 
 Run F04 measurements and engine evaluation alongside this batch. Engine replacement
 must not block managed SSH metadata/transfer work, but T01 protocol/render completion
-requires that decision. Publish a development artifact for each coherent integrated
-runtime batch with clear implemented and pending capabilities.
+requires that decision. Build diagnostic development artifacts for coherent integrated runtime batches. Share
+the requested user-facing artifact only after the full V01 parity gate.
 
 ## Contracts and coverage enforcement
 
@@ -139,15 +139,18 @@ for the applicable native, two-host, deployed-service and stability gates.
 
 | Decision/dependency | Blocks | Work that continues |
 | --- | --- | --- |
-| Cloud hosting/database/provider/budget and deployment credentials | Live H01–H03 deployment/provider acceptance | Local core/CLI/UI/SSH/transfers; auth contracts, disposable DB tests, provider interfaces and Actions definitions |
+| Public Cloudflare tunnel and VM/relay provider configuration | Public H01–H03/provider acceptance | Authorized local Docker service on derived port3530, auth contracts, core/CLI/UI/SSH/transfers and provider interfaces |
 | Developer signing/notarization and helper/extension identities | Production D01, signed X01/X02/X03 acceptance | Development artifacts, core adapters and controlled fixtures; never substitute an ad hoc helper for real TCC evidence |
 | Dedicated Mac, Intel runtime and physical/paired devices | Relevant native/AX/mobile/performance gates | Portable tests, synthetic smoke, source implementation; keep dependent rows unverified |
 | Supported provider CLIs/versions and legitimate service credentials | A03 external integration and real cloud journeys | Safe argument forwarding, missing-tool paths and isolated adapter tests |
 
-Cloud origin is `https://zmux.w3dev.app`. All deployment/migration execution is through
-GitHub Actions. Do not choose a hosting/database provider, provision paid infrastructure
-or treat missing approval/credentials as supplied by elapsed time. Ordinary SSH, transfers
-and local remote-session support are independent of hosted cloud.
+Cloud origin is `https://zmux.w3dev.app`. The user's later instruction defers cloud
+workflow deployment: run the service locally with Docker or PM2, derive its port with
+`bunx path-to-port`, and let the user configure the Cloudflare tunnel. The current Docker
+service is healthy at `http://127.0.0.1:3530/ready`; public DNS/tunnel and VM/relay/email
+readiness remain separate gates. macOS build delivery still uses GitHub Actions. Do not
+provision paid infrastructure or treat missing credentials as supplied by elapsed time.
+Ordinary SSH, transfers and local remote sessions are independent of hosted cloud.
 
 The [PR #1 requirements](../../01-build-zmux/references/pr-1-parity.md) remain required:
 owned config/origins, Better Auth organizations and S256 PKCE, session/member/client
