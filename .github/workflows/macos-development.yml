@@ -71,7 +71,7 @@ jobs:
       - name: Build universal native development app
         run: scripts/build-macos-dev
       - name: Exercise packaged app and native rendering
-        run: scripts/check-macos-app
+        run: scripts/check-macos-app --skip-accessibility-save-tests
       - name: Upload downloadable development build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

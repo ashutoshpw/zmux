@@ -1,0 +1,40 @@
+name: Native Save dialog Accessibility (disabled)
+
+# Deferred by the user: no authorized macOS Accessibility runner is available.
+# Re-enable only after selecting a runner with the required UI permissions.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-save-dialog:
+    if: ${{ false }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Install isolated tmux fixture dependency
+        run: |
+          if ! command -v tmux >/dev/null; then brew install tmux; fi
+          tmux -V
+      - name: Build universal native development app
+        run: scripts/build-macos-dev
+      - name: Exercise real Save dialog and dependent download checks
+        run: scripts/check-macos-app
+      - name: Retain native validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-save-dialog-${{ github.sha }}
+          path: |
+            dist/native-*.json
+            dist/native-*.log
+            dist/build-info.json
+          if-no-files-found: error
+          retention-days: 14

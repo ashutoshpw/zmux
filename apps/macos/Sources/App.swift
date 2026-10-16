@@ -1684,14 +1684,14 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await stages.begin("terminal_special_keys")
         try await smokeTerminalSpecialKeys()
         try await stages.complete("terminal_special_keys")
-        try await stages.begin("browser_downloads_native")
-        try await BrowserDownloadSmoke.validate(origin: origin, window: window, report: report, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
+        try await stages.begin("browser_download_checks")
+        let downloadSaveVerified = try await BrowserDownloadSmoke.validate(origin: origin, window: window, report: report, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.snapshot }, browser: { self.browsers[$0] })
         guard let downloadsItem = NSApp.mainMenu?.items.flatMap({ $0.submenu?.items ?? [] }).first(where: { $0.action == #selector(showBrowserDownloads(_:)) }),
               let downloadsMenu = downloadsItem.menu else { throw BridgeFailure(message: "Downloads menu is unavailable") }
         downloadsMenu.performActionForItem(at: downloadsMenu.index(of: downloadsItem))
         guard let downloadsWindow = NSApp.windows.first(where: { $0.title == "Downloads" && $0.isVisible }) else { throw BridgeFailure(message: "Downloads menu did not open its native history") }
         downloadsWindow.close()
-        try await stages.complete("browser_downloads_native")
+        try await stages.complete("browser_download_checks")
         let evidence: [String: Any] = [
             "success": true,
             "notification_permission_ordering": true,
@@ -1715,7 +1715,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "browser_interactions": true,
             "browser_edit_scroll": true,
             "browser_keyboard": true,
-            "browser_downloads_native": true,
+            "browser_downloads_native": downloadSaveVerified,
+            "browser_downloads_cancel_native": true,
+            "native_save_dialog_accessibility": downloadSaveVerified ? "passed" : "skipped_user_deferred",
             "local_tmux_cli_native_reopen": true,
             "browser_never_selected_viewport": true,
             "browser_csp_eval_once": true,
