@@ -420,7 +420,11 @@ fn private_file(
     check_file(&file, limit, label)?;
     Ok(file)
 }
-fn check_file(file: &File, limit: usize, label: &'static str) -> Result<(), PersistenceError> {
+pub(crate) fn check_file(
+    file: &File,
+    limit: usize,
+    label: &'static str,
+) -> Result<(), PersistenceError> {
     let metadata = file
         .metadata()
         .map_err(|e| io_error("inspect private session file", e))?;
@@ -449,7 +453,7 @@ fn read_bounded(
     }
     Ok(bytes)
 }
-fn state_directory(path: &Path) -> Result<File, PersistenceError> {
+pub(crate) fn state_directory(path: &Path) -> Result<File, PersistenceError> {
     if !path.is_absolute()
         || path
             .components()
@@ -673,6 +677,11 @@ fn save(
     let bytes = serialize_bounded(&document, MAX_DOCUMENT_BYTES, "session document")?;
     let state = state_directory(state)?;
     let (directory, name) = parent(path)?;
+    // An exporter can target another desktop's state directory. Never replace
+    // the process-independent lease namespace, even outside our own directory.
+    if crate::profile_leases::is_reserved_name(&name) {
+        return Err(PersistenceError::ReservedStatePath);
+    }
     if name == LOCK_NAME
         || name == LEDGER_NAME
         || name == crate::profiles::CATALOG_NAME
@@ -801,11 +810,36 @@ fn profile_catalog(
     state: &Path,
     command: Option<crate::profiles::ProfileCommand>,
 ) -> Result<crate::profiles::Catalog, PersistenceError> {
-    use crate::profiles::{CATALOG_NAME, Catalog, MAX_PROFILE_BYTES};
+    use crate::profiles::{CATALOG_NAME, MAX_PROFILE_BYTES};
     let directory = state_directory(state)?;
     let _lock = lock_named(&directory, "browser-profiles.lock")?;
-    let mut catalog = match private_file(
-        &directory,
+    let mut catalog = read_profile_catalog(&directory)?;
+    if let Some(command) = command {
+        match command {
+            crate::profiles::ProfileCommand::Add { name } => catalog.add(name),
+            crate::profiles::ProfileCommand::Rename { profile, name } => {
+                catalog.rename(&profile, name)
+            }
+        }
+        .map_err(PersistenceError::InvalidDocument)?;
+        let bytes = serialize_bounded(&catalog, MAX_PROFILE_BYTES, "browser profile catalog")?;
+        atomic_write(&directory, OsStr::new(CATALOG_NAME), &bytes, true)?;
+    }
+    Ok(catalog)
+}
+
+/// Anchored catalog identity check for the dedicated native lifetime-lease worker.
+pub(crate) fn profile_exists(directory: &File, id: Uuid) -> Result<bool, PersistenceError> {
+    let _lock = lock_named(directory, "browser-profiles.lock")?;
+    Ok(read_profile_catalog(directory)?
+        .profiles
+        .iter()
+        .any(|profile| profile.id == id))
+}
+fn read_profile_catalog(directory: &File) -> Result<crate::profiles::Catalog, PersistenceError> {
+    use crate::profiles::{CATALOG_NAME, Catalog, MAX_PROFILE_BYTES};
+    let catalog = match private_file(
+        directory,
         OsStr::new(CATALOG_NAME),
         MAX_PROFILE_BYTES,
         "browser profile catalog",
@@ -826,16 +860,5 @@ fn profile_catalog(
     catalog
         .validate()
         .map_err(PersistenceError::InvalidDocument)?;
-    if let Some(command) = command {
-        match command {
-            crate::profiles::ProfileCommand::Add { name } => catalog.add(name),
-            crate::profiles::ProfileCommand::Rename { profile, name } => {
-                catalog.rename(&profile, name)
-            }
-        }
-        .map_err(PersistenceError::InvalidDocument)?;
-        let bytes = serialize_bounded(&catalog, MAX_PROFILE_BYTES, "browser profile catalog")?;
-        atomic_write(&directory, OsStr::new(CATALOG_NAME), &bytes, true)?;
-    }
     Ok(catalog)
 }

@@ -10,6 +10,7 @@ pub mod inspection;
 pub mod local_tmux;
 pub mod metadata;
 pub mod persistence;
+pub mod profile_leases;
 pub mod profiles;
 mod replies;
 pub mod sessions;
