@@ -763,3 +763,61 @@ checks. No native red/green execution has occurred locally, and source reasoning
 is not substituted for that required hosted result. Portable numbered mapping/PTY
 checks remain unchanged and passed; exact-source strict Swift and native execution
 remain pending.
+
+## Workspace group domain continuation (2026-10-16)
+
+Baseline `ab7930750b2b56f8f17e14f070e7166fffa2464c`; isolated tracking worktree
+`feat/workspace-groups`. Parent owns main and concurrent native integration. This
+is original MIT Zmux code. Behavioral research reads only the frozen public
+`docs/workspace-groups.md` and group command entry in `docs/cli-contract.md` at
+cmux `3ba653b9e5afb11d0bc578031142950d6136697e`; no reference implementation,
+tests or assets are imported or translated.
+
+First useful slice: groups of explicitly provided existing workspaces, with
+stable group identity, window ownership, name, collapse state and optional
+window-scoped external identity. Their first member is the anchor. Group members
+occupy one contiguous block of canonical window order. Creating a group compacts
+its explicitly ordered members at the first requested workspace's position;
+no process, pane, workspace or session is created, replaced or focused. Repeating
+an external identity returns the existing group without allocating another ID.
+Names are labels, not identities.
+
+Shared actions cover create, rename, collapse/expand, add/remove member,
+set-anchor, move one entire group block, and non-destructive ungroup/delete.
+Removing/moving/closing an anchor promotes the next surviving member; removing
+the last member deletes the group. Cross-window workspace moves keep their
+existing focus/session semantics and detach only that workspace from its source
+group. Closing a window removes its groups. Existing workspace reorder may not
+split a group or move its anchor behind a member; rejection must leave state,
+revision and allocator unchanged. Reopened closed workspaces remain ungrouped;
+this slice does not invent group undo history.
+
+Group data is additive to the current model v6 projection (existing native
+presenters ignore the new group rows). A new session document version explicitly
+stores group data, migrates earlier versions to no groups, and validates bounded
+names/identities, live window/membership, contiguous ordering, nonempty groups,
+unique membership, group IDs and global cross-kind ID collisions before restore.
+Logical group/workspace/window IDs survive save/restart; ordinary shell Sessions
+remain fresh under the existing durable allocation rules.
+
+Delivery sequence: (1) demonstrate a real public core action regression, then
+implement domain lifecycle/order and persistence migration; (2) expose shared
+socket actions and CLI with stable selectors, stale-revision refusal and bounded
+input, then verify actual socket/PTY and filesystem save/restart journeys. Run
+full `scripts/check` before cohesive commits. The domain test protects ownership,
+atomicity and migration; runtime/CLI tests cover distinct transport, caller scope,
+real process identity and physical persistence risks. No test-only production
+seam is needed.
+
+Empty generated anchors, pin tiers, colors/icons, new-workspace placement,
+explicit destructive group close, grouped undo-close, native rendering,
+group-aware navigation, physical input/accessibility and full T03/V01 parity
+remain open. Unsupported forms must refuse explicitly, never report scaffold
+success. No native acceptance is implied by portable domain/CLI validation.
+
+The first public core regression compiled and failed for the intended missing
+`workspace_group` action, before implementation. Focused command:
+`cargo test --locked -p zmux-workspace-core --test workspace_groups -- --nocapture`;
+log `/tmp/zmux-t03-groups-domain-red.log`. The test checks existing-object
+preservation, contiguous canonical order, idempotent allocation, atomic refusal
+of a split group, anchor promotion and non-destructive ungrouping.
