@@ -58,6 +58,7 @@ actor NativeBridge {
     private var handle: UInt64 = 0
     private var requestId: UInt64 = 0
     private var revision: UInt64 = 0
+    private let profileLeaseEpoch = UUID()
 
     func start(storage: NativeDesktopStorage = .transient, terminalEngine: String? = nil) throws {
         guard zmux_abi_version() == 1 else { throw BridgeFailure(message: "Unsupported native bridge version") }
@@ -77,25 +78,33 @@ actor NativeBridge {
             stateDirectory = try NativeStoragePath.resolve(directory.path)
         }
         let result: ZmuxResult
-        if let terminalEngine {
-            guard terminalEngine.utf8.count <= 2048 else { throw BridgeFailure(message: "Terminal engine configuration exceeds its bound") }
-            let engine = try JSONSerialization.jsonObject(with: Data(terminalEngine.utf8))
-            var configuration: [String: Any] = ["terminal_engine": engine]
-            if let stateDirectory { configuration["state_directory"] = stateDirectory }
+        if terminalEngine != nil || stateDirectory != nil {
+            var configuration: [String: Any] = [:]
+            if let terminalEngine {
+                guard terminalEngine.utf8.count <= 2048 else { throw BridgeFailure(message: "Terminal engine configuration exceeds its bound") }
+                configuration["terminal_engine"] = try JSONSerialization.jsonObject(with: Data(terminalEngine.utf8))
+            }
+            if let stateDirectory {
+                configuration["state_directory"] = stateDirectory
+                configuration["profile_lease_directory"] = try BrowserProfileLeaseDirectory.resolve()
+            }
             let data = try JSONSerialization.data(withJSONObject: configuration)
             result = data.withUnsafeBytes { storage in
                 zmux_desktop_create_configured(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
-            }
-        } else if let stateDirectory {
-            let path = Data(stateDirectory.utf8)
-            result = path.withUnsafeBytes { storage in
-                zmux_desktop_create_persistent(storage.bindMemory(to: UInt8.self).baseAddress, storage.count)
             }
         } else {
             result = zmux_desktop_create()
         }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
+    }
+    func acquireBrowserProfileLease(profile: UUID, store: UUID) async throws -> BrowserProfileLeaseToken {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed; profile store acquisition was not admitted.") }
+        return try await BrowserProfileLeaseClient.acquire(desktop: handle,
+            owner: BrowserProfileLeaseOwner(epoch: profileLeaseEpoch, store: store), profile: profile)
+    }
+    func releaseUnconstructedBrowserProfileLease(_ token: BrowserProfileLeaseToken) async throws {
+        try await BrowserProfileLeaseClient.releaseUnconstructed(token)
     }
     func poll() throws -> DesktopSnapshot? {
         guard handle != 0 else { return nil }
@@ -515,7 +524,7 @@ actor NativeBridge {
             return
         }
     }
-    private nonisolated static func consume(_ token: UInt64) throws -> Data {
+    nonisolated static func consume(_ token: UInt64) throws -> Data {
         defer {
             let status = zmux_buffer_release(token)
             if status != 0 { FileHandle.standardError.write(Data("Zmux buffer release failed: \(status)\n".utf8)) }

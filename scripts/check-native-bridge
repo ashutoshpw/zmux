@@ -3,6 +3,8 @@
 from pathlib import Path
 import json
 import os
+import tempfile
+from importlib.util import module_from_spec, spec_from_file_location
 import subprocess
 import sys
 
@@ -37,3 +39,19 @@ assert responses[4]["error"]["code"] == "invalid_request"
 assert responses[5]["snapshot"] == created["snapshot"]
 assert responses[6]["snapshot"]["revision"] == 0 and responses[6]["snapshot"]["workspaces"] == []
 print("C ABI checks passed: wire decoding, ownership, stale handles, bounded copy, and capacity-before-mutation.")
+
+lease_executable = libdir / "zmux-native-profile-lease-check"
+subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+                "-I", str(root / "crates/native-bridge/include"), str(root / "crates/native-bridge/tests/profile_leases.c"),
+                "-L", str(libdir), "-lzmux_native_bridge", f"-Wl,-rpath,{libdir}", "-o", str(lease_executable)], check=True)
+runner_spec = spec_from_file_location("profile_lease_owned_process_runner", root / "tools/terminal-feasibility/run.py")
+runner = module_from_spec(runner_spec)
+runner_spec.loader.exec_module(runner)
+phases = []
+with tempfile.TemporaryDirectory(prefix="zmux-native-lease-", dir=libdir) as lease_fixture:
+    canonical_fixture = Path(lease_fixture).resolve(strict=True)
+    lease_output = runner.run([str(lease_executable), str(canonical_fixture)], "profile-lease-abi", libdir, phases,
+                              timeout=30, cwd=root, env=environment)
+    assert phases[-1]["log_bytes_seen"] == phases[-1]["log_bytes_retained"]
+    assert lease_output.strip() == "native_profile_lease_passed"
+print("Native profile lease C ABI passed: capacity before acquisition, independent-process contention, original-owner status and lease retention after Desktop shutdown.")

@@ -2049,7 +2049,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         open.performClick(nil)
         try await waitUntil { value in
             guard let selected = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
-            return !priorSurfaces.contains(selected.id) && selected.browserProfileId == profile.id
+            return !priorSurfaces.contains(selected.id) && selected.browserProfileId == profile.id && browsers[selected.id]?.webView.configuration.websiteDataStore.identifier == profile.id
         }
         guard let surface = focusedPane?.selectedSurface,
               browsers[surface]?.webView.configuration.websiteDataStore.identifier == profile.id else {
@@ -2069,6 +2069,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         // Real manager and CLI rename the same live UUID without replacing its host
         // or losing existing website data, then survive close/reopen through the manager.
         guard let retainedHost = browsers[surface] else { throw BridgeFailure(message: "Managed profile host disappeared") }
+        try await BrowserProfileLeaseSmoke.run(profile: profile.id, browser: retainedHost)
         let renamedName = "Renamed " + UUID().uuidString
         renameName.stringValue = renamedName
         rename.performClick(nil)

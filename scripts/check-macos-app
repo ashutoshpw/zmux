@@ -47,6 +47,10 @@ subprocess.run(["xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
                 "-framework", "AppKit", "-framework", "ApplicationServices",
                 "-o", str(dist / "native-save-panel-driver")], check=True, timeout=60)
 
+subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+                str(root / "tools/native-fixtures/profile-lease-probe.c"),
+                "-o", str(dist / "native-profile-lease-probe")], check=True, timeout=30)
+
 report = dist / "native-smoke.json"
 if report.exists(): report.unlink()
 stdout = dist / "native-stdout.log"
