@@ -302,3 +302,21 @@ The first attempt lost downloadable evidence to GitHub artifact-service timeouts
 the second supplies retained evidence. This fixture establishes native presentation
 of generated saved documents, not live supervisor authentication or actual Darwin
 execution-admission acceptance. The separate runtime package gate remains open.
+
+## Retained Darwin runtime and main integration — 2026-10-16
+
+Run `38849188824` at `b15fb47` passes the executed ARM64 owner scope: 51 tests
+across six targets, nine successful untruncated phases, 293 source hashes matched
+against Git, retained dependency identity and archive integrity. Review SHA256
+`83221b29e52c2b3639b35e9ffad8ecae33e1b096a26e39636b820c8652d7345c`;
+native receipt SHA256
+`396bce42c283a698e91858b6ec62ad0f95bb3ef562716c01e3be5314f2881d67`.
+The workflow does not execute the separate CLI `execution_admission` target; its
+Linux evidence remains separate. No observer4 readiness, Intel, minimum OS or
+default-activation claim follows from this run.
+
+Main integration through `58fbd92` preserves the V8 and immediate-exit regression
+commits, then the reviewed runtime and presentation changes. All 42 files touched
+by this cohort exactly match the accepted branch. Existing browser obsolete-event
+and window-backpressure work remains. Integrated repository checks pass 357 tests, strict Clippy, notices and both
+foreign ABI checks.

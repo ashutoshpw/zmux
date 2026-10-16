@@ -5,6 +5,37 @@
 
 ## Active implementation
 
+- V2 runtime/history cohort integrated locally through `58fbd92`, preserving the
+  two regression commits. All 42 touched files exactly match reviewed `b15fb47`.
+  Darwin package run `38849188824` passes 51 executed owner tests with 293 source
+  hashes, 9 phase logs, retained dependency and app archive verified. Review receipt
+  `83221b29e52c2b3639b35e9ffad8ecae33e1b096a26e39636b820c8652d7345c`.
+  This accepts executed ARM64 runtime scope; observer4/InputReady, Intel/minimum OS
+  and default activation remain separate. Integrated full local checks pass 357 tests,
+  strict Clippy, notices and both foreign ABI checks.
+- B01 physical clear/removal run `38849912294` passes at `538ada1`, with all six
+  source copies verified: mounted rejection preserves A, exact inactive A store is
+  empty before UUID removal, fresh A remains empty and B cookies/storage survive,
+  then both public cleanup callbacks and actual owned exits pass. Production
+  clear/delete admission and recovery owner is now being planned from this evidence.
+
+- Main `15aee7b` pushed with `e595515` window stress/backpressure repair; local
+  checks pass 346 tests, 1 ignored. Native full run `38848268523` at `4afb224`
+  builds universal successfully, passes earlier browser/workspace checks, then fails
+  the native download Save-panel driver preflight: Accessibility trust and event
+  access are both false on the hosted runner. No TCC changes or weakened assertions.
+  Requested self-hosted macOS runner labels asynchronously; independent work continues.
+- B01 baseline run `38849145986` at `1d3bbb2` passes cookie retention and strict
+  public cleanup after the fresh-B helper lifetime repair. This is a no-removal
+  fixture, not production clear/delete acceptance. Next isolated clear/removal
+  scenario retains B and independently checks A clear before namespace removal.
+- Input readiness Linux dependency and actual Desktop/CLI silent-first-line cases
+  pass; actual Darwin dependency run `38849682804` at `d36bc91` remains pending.
+  Execution-admission native package run `38849188824` at `b15fb47` is separate.
+- A02 queued-message restart regression has a committed red and passing first
+  implementation through the real CLI/socket/two PTYs. Consumer generation and
+  handoff hardening remains in progress; no full messaging parity claim.
+
 - Main `scripts/check` exposed intermittent terminal-capacity rejection in the
   40-generation native close-before-open-ack test. Its admission predicate waited
   for success after a valid rejection, ignoring asynchronous terminal retirement.

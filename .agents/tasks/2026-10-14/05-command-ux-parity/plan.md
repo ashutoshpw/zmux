@@ -52,6 +52,9 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [V2 execution runtime](references/r03-runtime-execution-admission.md) — pre-execution durable binding and admitted child lifetime; integrated after Linux and retained Darwin owner checks.
+- [V8 history contract](references/r03-v8-history.md) — explicit admitted-lifetime persistence, legacy compatibility and native decoder/presentation evidence.
+
 - [A02 durable agent messages](references/a02-agent-messages.md) — queued messages, replies, independent sender attribution and bounded consumer leases; isolated Rust/CLI implementation underway.
 
 - [Native browser event dispositions](references/b02-browser-event-disposition.md) — exact retired owners and immutable late terminal receipts across runtime/ABI/Swift.
