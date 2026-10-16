@@ -10,11 +10,13 @@ mod windows;
 pub mod workspace_order;
 pub use restore::{
     MAX_NEXT_IDENTIFIER, PreparedSessionRestore, RestoreError, RestoreLimits,
-    SESSION_DOCUMENT_VERSION, SavedContent, SavedPane, SavedSshConnection, SavedSurface, SavedTree,
-    SavedWindowLayout, SavedWorkspace, SessionDocument, ValidatedSessionDocument,
+    SESSION_DOCUMENT_VERSION, SavedContent, SavedPane, SavedSshConnection, SavedSurface,
+    SavedTodos, SavedTree, SavedWindowLayout, SavedWorkspace, SessionDocument,
+    ValidatedSessionDocument,
 };
 pub use windows::{MAX_WINDOWS, Window};
 pub mod targets;
+pub mod todo;
 pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Navigation};
 use surfaces::PendingRestore;
 pub use surfaces::{ClosedContent, ClosedItem, Surface, SurfaceKind};
@@ -167,6 +169,9 @@ pub struct Workspace {
     pub name: String,
     pub focused_pane: PaneId,
     pub root: PaneTree,
+    /// Canonical durable data; the metadata projection is its public wire owner.
+    #[serde(skip_serializing)]
+    pub todos: Vec<todo::TodoEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -450,6 +455,8 @@ impl WorkspaceStore {
         );
         let result = candidate.apply_inner(action)?;
         candidate.check_window_layout()?;
+        candidate.trim_todo_history()?;
+        candidate.validate_todos()?;
         candidate.record_focus(prior, prior_window, is_history_navigation, record_current);
         *self = candidate;
         Ok(result)
@@ -663,6 +670,7 @@ impl WorkspaceStore {
             local_tmux: None,
         });
         self.state.workspaces.push(Workspace {
+            todos: Vec::new(),
             id: workspace_id,
             name,
             focused_pane: pane.id,

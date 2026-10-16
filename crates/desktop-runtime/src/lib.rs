@@ -1546,14 +1546,17 @@ impl Worker {
                 }
                 let workspace = targets::metadata_workspace(&model, &request.scope, &caller)?;
                 self.metadata.reconcile(&model);
-                self.metadata_result = Some(self.metadata.apply(
-                    workspace,
-                    model.object_uuid(
-                        zmux_workspace_core::targets::TargetKind::Workspace,
-                        workspace.0,
-                    ),
-                    action,
-                )?);
+                let todo_write = action.is_todo() && !action.is_read();
+                let change = self.metadata.plan(&model, workspace, action)?;
+                if todo_write {
+                    let mut candidate = self.model.clone();
+                    candidate
+                        .replace_workspace_todos(workspace, change.result.todos.clone())
+                        .map_err(|error| DesktopError::Failure(error.to_string()))?;
+                    self.validate_todo_candidate(&candidate)?;
+                    self.model = candidate;
+                }
+                self.metadata_result = Some(self.metadata.commit(change));
                 Ok(())
             }
             TargetOperation::Notifications { action } => {
@@ -1900,13 +1903,48 @@ impl Worker {
         }
         Ok(())
     }
+    pub(crate) fn validate_todo_candidate(
+        &self,
+        candidate: &WorkspaceStore,
+    ) -> Result<(), DesktopError> {
+        let snapshot = candidate.snapshot();
+        self.metadata.validate_model(&snapshot)?;
+        if snapshot
+            .workspaces
+            .iter()
+            .any(|workspace| !workspace.todos.is_empty())
+        {
+            self.validate_todo_document(candidate)?;
+        }
+        Ok(())
+    }
+    pub(crate) fn validate_restored_todos(
+        &self,
+        candidate: &WorkspaceStore,
+    ) -> Result<(), DesktopError> {
+        // A committed restore replaces transient channels even when its saved
+        // namespace matches a prior empty model. Never charge or revive old rows.
+        metadata::MetadataStore::default().validate_model(&candidate.snapshot())?;
+        self.validate_todo_document(candidate)
+    }
+    fn validate_todo_document(&self, candidate: &WorkspaceStore) -> Result<(), DesktopError> {
+        let captured = self.capture_session_metadata(candidate.clone());
+        let document = captured
+            .session_document()
+            .map_err(|error| DesktopError::Failure(error.to_string()))?;
+        persistence::validate_document_size(&document)
+            .map_err(|error| DesktopError::Failure(error.to_string()))?;
+        Ok(())
+    }
     pub(crate) fn model_with_session_metadata(&self) -> WorkspaceStore {
-        let mut candidate = self.model.clone();
+        self.capture_session_metadata(self.model.clone())
+    }
+    fn capture_session_metadata(&self, mut candidate: WorkspaceStore) -> WorkspaceStore {
         for (id, slot) in &self.slots {
             if let Some(cwd) = slot
                 .cached
                 .as_ref()
-                .and_then(|s| s.viewport.working_directory.clone())
+                .and_then(|snapshot| snapshot.viewport.working_directory.clone())
             {
                 candidate.set_session_cwd(*id, cwd);
             }
@@ -1993,6 +2031,7 @@ impl Worker {
             )));
         }
         self.profiles.validate_model(&candidate.snapshot())?;
+        self.validate_todo_candidate(&candidate)?;
         self.ensure_reserved(&candidate)?;
         let mut move_windows = None;
         let native_focus = if let Some((_, _, destination, true)) = move_context {
@@ -2338,13 +2377,14 @@ impl Worker {
             .into_iter()
             .filter(|identity| identity.kind == zmux_workspace_core::targets::TargetKind::Workspace)
             .collect();
+        let workspace_metadata = self.metadata.snapshot(&model);
         let published = Arc::new(Snapshot {
             revision: self.revision,
             workspace_identities,
             model,
             frames,
             notifications: self.attention.items.clone(),
-            workspace_metadata: self.metadata.snapshot(),
+            workspace_metadata,
             notifications_dropped: self.attention.dropped,
             notification_cursor: self.attention.cursor(),
             native_notifications,

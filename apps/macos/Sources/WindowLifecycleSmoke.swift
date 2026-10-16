@@ -20,6 +20,7 @@ enum WindowLifecycleSmoke {
         let workspaceMove: Bool
         let ratioKey: String
         let ratio: Double
+        let todoIDs: [UUID]
     }
 
     private static var traceLines = 0
@@ -66,12 +67,27 @@ enum WindowLifecycleSmoke {
                   abs(Double(split.fraction) - saved.ratio) < 0.01 else {
                 throw BridgeFailure(message: "Workspace split ratio did not persist across app restart")
             }
+            guard let metadata = snapshot.workspaceMetadata?.first(where: { $0.workspaceId == saved.workspace }),
+                  metadata.todos.map(\.id) == saved.todoIDs, metadata.todos.count == 2,
+                  metadata.todos[0].text == "Saved pending checklist item", metadata.todos[0].state == .pending, metadata.todos[0].origin == .user,
+                  metadata.todos[1].text == "Saved completed checklist item", metadata.todos[1].state == .completed, metadata.todos[1].origin == .agent,
+                  metadata.statuses.isEmpty, metadata.progress == nil, metadata.logs.isEmpty, metadata.pullRequest == nil else {
+                throw BridgeFailure(message: "Fresh native process lost saved todo identity/order/state/origin or restored transient channels")
+            }
+            first.window.contentView?.layoutSubtreeIfNeeded()
+            guard let row = rows(first.window.contentView).first,
+                  row.accessibilityLabel()?.contains("2 todo items") == true,
+                  row.subviews.compactMap({ $0 as? NSTextField }).contains(where: { !$0.isHidden && $0.stringValue.contains("1/2 todos completed") }) else {
+                throw BridgeFailure(message: "Saved todo state did not render in the fresh native workspace row")
+            }
             let evidence: [String: Any] = [
                 "success": true, "source_sha": saved.sourceSHA,
                 "restored_namespace": saved.namespace.uuidString.lowercased(),
                 "restored_window": saved.window, "restored_workspace": saved.workspace,
                 "restored_surface": saved.surface, "fresh_process": true,
-                "native_input": true, "workspace_split_ratio_restored": true
+                "native_input": true, "workspace_split_ratio_restored": true,
+                "workspace_todos_restored": true, "transient_metadata_not_restored": true,
+                "workspace_todo_row_rendered": true
             ]
             try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
                 .write(to: report.appendingPathExtension("reopened.json"), options: .atomic)
@@ -148,11 +164,30 @@ enum WindowLifecycleSmoke {
               let finalWorkspace = final.model.windows.first?.selectedWorkspace else {
             throw BridgeFailure(message: "Last window lost its saveable terminal layout")
         }
+        let target = ["--workspace", String(finalWorkspace)]
+        _ = try await command(first, ["todo", "add", "Saved pending checklist item"] + target)
+        let added = try await command(first, ["todo", "add", "Saved completed checklist item", "--state", "completed", "--origin", "agent"] + target)
+        guard let items = added["todos"] as? [[String: Any]], items.count == 2 else {
+            throw BridgeFailure(message: "Close preparation did not create the exact saved checklist")
+        }
+        let todoIDs = items.compactMap { item in (item["id"] as? String).flatMap(UUID.init(uuidString:)) }
+        guard todoIDs.count == 2, Set(todoIDs).count == 2,
+              let owner = final.workspaceIdentities.first(where: { $0.workspaceId == finalWorkspace })?.uuid else {
+            throw BridgeFailure(message: "Saved checklist omitted stable item/workspace identities")
+        }
+        _ = try await command(first, ["set-status", "temporary", "Do not restore this status"] + target)
+        _ = try await command(first, ["set-progress", "0.5"] + target)
+        _ = try await command(first, ["log", "Do not restore this log"] + target)
+        try await WorkspacePullRequestSmoke.set(workspace: owner, number: 17, url: "https://github.com/acme/project/pull/17")
+        try await wait(coordinator) { state in
+            guard let metadata = state.workspaceMetadata?.first(where: { $0.workspaceId == finalWorkspace }) else { return false }
+            return metadata.todos.map(\.id) == todoIDs && metadata.statuses.count == 1 && metadata.progress?.value == 0.5 && metadata.logs.count == 1 && metadata.pullRequest?.number == 17
+        }
         let prepared = Prepared(sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local",
             namespace: initial.model.identityNamespace, window: firstID, workspace: finalWorkspace,
             surface: retained.surface, oldPID: pid, noFocus: true, independentResize: true,
             nativeInput: true, nativeClose: true, emptyWindow: true, cliClose: true,
-            workspaceMove: true, ratioKey: movedRatio.0, ratio: movedRatio.1)
+            workspaceMove: true, ratioKey: movedRatio.0, ratio: movedRatio.1, todoIDs: todoIDs)
         try JSONEncoder().encode(prepared).write(to: report, options: .atomic)
         trace("preparation receipt written; requesting last-main-window close")
         // Auxiliary native windows do not redefine the last-main-window policy.
@@ -237,6 +272,10 @@ enum WindowLifecycleSmoke {
         return (ratioKey, 0.63)
     }
 
+    private static func rows(_ view: NSView?) -> [WorkspaceRowView] {
+        guard let view else { return [] }
+        return ((view as? WorkspaceRowView).map { [$0] } ?? []) + view.subviews.flatMap { rows($0) }
+    }
     private static func splits(_ view: NSView?) -> [PaneSplitView] {
         guard let view else { return [] }
         return ((view as? PaneSplitView).map { [$0] } ?? []) + view.subviews.flatMap { splits($0) }

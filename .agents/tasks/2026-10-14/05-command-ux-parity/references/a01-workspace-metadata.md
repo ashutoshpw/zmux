@@ -2,6 +2,128 @@
 
 Updated: 2026-10-15. This is a partial A01 slice; the package remains open.
 
+## A01e todo persistence implementation (2026-10-16; native acceptance pending)
+
+S01 currently writes version 4 documents through `stable_document()` and the
+bounded filesystem worker. Autosave compares whole committed documents; explicit
+save/export and final shutdown use the same capture. Restore validates and reserves
+IDs, launches an isolated candidate, then publishes it only after successful
+completion. Corrupt startup data remains intact and disables automatic overwrite.
+The storage owner reports no overlapping persistence edits. Preserve these owners,
+receipts, no-follow traversal, atomic publication and physical shutdown barriers.
+
+Make the durable checklist one authoritative value on the canonical workspace.
+Move todo item/state/origin value types and validation into workspace-core; keep
+all public todo requests at the existing serialized metadata action owner. The
+metadata owner plans a candidate against the existing aggregate budget and commits
+its canonical todo change only after validation. Transient status/progress/log/PR
+remain in MetadataStore and are never captured. Native and CLI metadata snapshots
+project canonical todos through the existing `todos` response field; hide the
+internal workspace list from generic topology JSON to avoid duplicating its wire
+payload. Existing item UUIDs, order, state and origin are preserved, including
+completed items. Pure core changes perform no I/O or random identity generation.
+
+Write session version 5 with a required todo array per SavedWorkspace. Share the
+same item validation between wire mutation and document validation: nonzero unique
+UUIDs, existing text/control/state/origin rules, 50 items per workspace and bounded
+aggregate data. Retain explicit readers for versions 1–4, which migrate to empty
+checklists and reject injected newer fields; version 5 rejects missing/null lists,
+unknown fields, duplicate IDs, malformed items and excessive counts/bytes. Older
+apps will visibly refuse version 5 rather than discard its data. Imported legacy
+source remains untouched by loading; a successful committed autosave may write a
+new version 5 authoritative file under the existing S01 policy.
+
+The session document and metadata budgets are independently capped at 512 KiB.
+Todo admission must account for the full candidate saved topology, not merely a
+list that fits the metadata budget, using the existing bounded serializer without
+disk I/O on the executor. Loading rejects an oversized file before parsing and
+validates all lists before reserving/launching. The prepared candidate owns restored
+todos until model commit; failed/late/cancelled restoration cannot replace the old
+model or metadata, and final save never captures an uncommitted restore. Existing
+reservation/fresh terminal-session identity rules remain unchanged. Metadata writes
+and explicit save admission are distinct: mutation is not a durable save receipt;
+existing persistence status/operation receipts report failures.
+
+Lifecycle boundary: app quit/reopen, explicit export/import and live workspace
+moves preserve todo UUIDs/order/state/origin with the saved workspace. Closing a
+workspace removes it from the live document; undo-close retains the checklist in
+that exact bounded recovery descriptor and rebinds it to the newly created
+workspace identity without regenerating item IDs. Closing a pane/tab in a surviving
+workspace leaves its current checklist intact. If closing the last pane/tab removes
+the workspace, attach its checklist only to the recovery item that actually removed
+it; do not snapshot stale lists into every tab history entry. Reopening into an
+existing workspace never overwrites its newer checklist. Recovery failure retains
+the original recovery payload; history pruning/eviction drops it. Recovery history
+remains process-local and is excluded from session files. Checklist recovery must
+remain bounded and cannot let user edits or autosave publish a partially restored
+owner; final implementation must verify the existing undo transaction boundary.
+
+Verification boundary: extend actual core document migration/corruption and
+undo-close tests, plus S01 real-filesystem/real-PTY transactions. First retain a
+focused failing test showing exact UUID/order/state/origin lost across real save,
+shutdown and fresh reopen, then run the same focused command green. Assert other
+metadata is absent after reopen, autosave observes a todo-only change, export/import
+uses the same data, clear stays cleared, and startup/explicit corruption or failed
+launch preserves files and authoritative state. Exercise close-workspace and
+last-tab undo plus surviving-workspace tab undo at the existing recovery owner.
+Native packaged close/save/reopen must later verify rendered saved checklist state;
+Linux source/portable acceptance cannot establish that native gate. Broader todo
+edit/set/reorder/open command parity remains outside this lifecycle slice.
+
+Implemented evidence and boundaries:
+
+- `Workspace.todos` is the sole authoritative list. MetadataStore stores only
+  transient channels and projects canonical todos; all combined candidates are
+  checked before canonical/transient commit. Core setters/actions and v5 import
+  validate lists independently, including duplicate UUIDs across live workspaces.
+- Undo retains at most 512 KiB of todo payload in addition to the existing 32-entry
+  history cap. It evicts oldest settled descriptors, never an in-flight or newest
+  descriptor. If no eligible older descriptor can free space, close fails atomically.
+  Full-workspace and last-tab/last-pane recovery preserve IDs; surviving owners keep
+  newer lists. Failed launches keep the exact recovery payload available for retry.
+  Capture happens in the exact close descriptor, never generic topology cleanup.
+- Compatibility gap: moving the last surface out of a workspace with todos is
+  refused atomically with an instruction to move the workspace or clear its
+  checklist. Moving one of several surfaces keeps the source checklist; an empty
+  checklist preserves existing last-surface move behavior. Existing descriptors
+  always recreate saved surfaces, so archiving the moved surface would duplicate
+  it on undo. Supporting this move without losing checklist ownership requires a
+  future checklist-only owner/archive representation; this is not parity-complete.
+  The focused move regression first detects the unrelated old-history payload
+  graft, independently of refusal, then verifies both history and model unchanged.
+- Todo-only changes preserve topology `model_revision`; a new desktop publication
+  revision carries metadata changes. `--expect-revision` guards topology/target
+  identity, not todo-list CAS. S01 compares whole captured documents, and actual
+  disk payload verifies todo-only autosave even when its saved model revision is
+  unchanged. Native row rebuild/target-resolution guards were checked against this
+  distinction. Generic Snapshot/Workspace are Serialize-only display types; the
+  C ABI accepts only snapshot reads or typed Action mutations. S01 SessionDocument
+  validation/preparation is the explicit durable replacement path.
+- Candidate size preflight and stable save share live cwd enrichment and the same
+  bounded serializer. A real eight-PTY OSC7 fixture proves oversized enriched
+  admission fails atomically before autosave latches an error. Restore checks the
+  migrated document size even when legacy lists are empty, excludes old transient
+  charges, and resets transient channels only at successful candidate commit.
+- The real save/shutdown/fresh reopen regression first loses all three exact item
+  identities and states, retained in `/tmp/zmux-a01e-todo-persistence-baseline-red.log`.
+  Focused green verifies save/reopen, actual todo-only autosave, export/import,
+  durable clear, corrupted input and failed PTY startup. Populated same-namespace
+  import rejects with current channels unchanged; successful import is admitted
+  only after explicit close (which already prunes transient rows). No unreachable
+  live-channel replacement case or test-only production seam is claimed.
+- Core document/recovery tests cover v1–4 migration, injected empty new fields,
+  missing/null/invalid v5 arrays, malformed entries, direct mutation validation,
+  duplicate recovery atomicity, history eviction and in-flight preservation.
+  Existing legacy fixtures explicitly omit todos so their older browser/tmux/window
+  negative controls still fail for the intended contract, not a new-field guard.
+- The existing packaged close/save/reopen journey now creates two real CLI todos
+  and transient channels, verifies saved v5 IDs/order/state/origin externally, then
+  checks exact restored values and the real rendered completion count. Its new
+  required receipt flags are `workspace_todos_restored`,
+  `transient_metadata_not_restored` and `workspace_todo_row_rendered`. Swift6 typing
+  and actual packaged execution remain pending on macOS; no local native success
+  is inferred. No browser, idle startup or application profile is modified.
+
 ## A01d workspace todo implementation (2026-10-16; native acceptance pending)
 
 This slice implements `todo add/list/check/uncheck/start/rm/clear` through the

@@ -177,6 +177,9 @@ fn legacy_window_and_sessions_share_durable_generations_even_without_terminals()
         }
         let mut wire = serde_json::to_value(&original).unwrap();
         wire["version"] = serde_json::json!(3);
+        for workspace in wire["workspaces"].as_array_mut().unwrap() {
+            workspace.as_object_mut().unwrap().remove("todos");
+        }
         wire.as_object_mut().unwrap().remove("window_layout");
         let source = serde_json::to_vec(&wire).unwrap();
         write_private(&path, &source);

@@ -1,4 +1,5 @@
-//! In-process workspace metadata. All access runs on the desktop action executor.
+//! Transient metadata channels and projection of canonical workspace todos.
+//! All access runs on the desktop action executor; no I/O belongs here.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -6,7 +7,7 @@ use uuid::Uuid;
 use zmux_workspace_core::{Snapshot, WorkspaceId};
 
 pub const MAX_STATUS_ENTRIES: usize = 64;
-pub const MAX_TODO_ENTRIES: usize = 50;
+pub use zmux_workspace_core::todo::{MAX_TODO_ENTRIES, TodoEntry, TodoOrigin, TodoState};
 pub const MAX_LOG_ENTRIES: usize = 256;
 pub const MAX_TEXT_BYTES: usize = 2048;
 pub const MAX_NAME_BYTES: usize = 128;
@@ -72,21 +73,6 @@ pub enum MetadataAction {
         limit: Option<usize>,
     },
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TodoState {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TodoOrigin {
-    #[default]
-    User,
-    Agent,
-}
 /// Item positions are one-based and resolved only at the serialized owner.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
@@ -123,13 +109,6 @@ impl TodoSelector {
         }
         .ok_or(MetadataError::TodoNotFound)
     }
-}
-#[derive(Clone, Debug, Serialize)]
-pub struct TodoEntry {
-    pub id: Uuid,
-    pub text: String,
-    pub state: TodoState,
-    pub origin: TodoOrigin,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -288,18 +267,6 @@ impl WorkspaceMetadata {
             && self.progress.is_none()
             && self.logs.is_empty()
     }
-    fn empty(workspace_id: WorkspaceId, workspace_uuid: Uuid) -> Self {
-        Self {
-            workspace_id,
-            workspace_uuid,
-            pull_request: None,
-            todos: Vec::new(),
-            statuses: Vec::new(),
-            progress: None,
-            logs: Vec::new(),
-            logs_dropped: 0,
-        }
-    }
 }
 #[derive(Debug, Error)]
 pub enum MetadataError {
@@ -344,12 +311,8 @@ impl MetadataAction {
     pub fn validate(&self) -> Result<(), MetadataError> {
         match self {
             Self::AddTodo { text: value, .. } => {
-                text(value)?;
-                if value.trim().is_empty() {
-                    return Err(MetadataError::Invalid(
-                        "todo text must contain nonwhitespace content",
-                    ));
-                }
+                zmux_workspace_core::todo::validate_text(value)
+                    .map_err(|error| MetadataError::Invalid(error.0))?;
             }
             Self::SetTodoState {
                 item: TodoSelector::Index { index: 0 },
@@ -438,38 +401,113 @@ fn text(value: &str) -> Result<(), MetadataError> {
     }
     Ok(())
 }
+#[derive(Clone, Default)]
+struct TransientMetadata {
+    pull_request: Option<PullRequest>,
+    statuses: Vec<StatusEntry>,
+    progress: Option<Progress>,
+    logs: Vec<LogEntry>,
+    logs_dropped: u64,
+}
+impl TransientMetadata {
+    fn from_response(response: &WorkspaceMetadata) -> Self {
+        Self {
+            pull_request: response.pull_request.clone(),
+            statuses: response.statuses.clone(),
+            progress: response.progress.clone(),
+            logs: response.logs.clone(),
+            logs_dropped: response.logs_dropped,
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.pull_request.is_none()
+            && self.statuses.is_empty()
+            && self.progress.is_none()
+            && self.logs.is_empty()
+    }
+}
 #[derive(Default)]
 pub(crate) struct MetadataStore {
     namespace: Option<Uuid>,
-    workspaces: BTreeMap<u64, WorkspaceMetadata>,
+    workspaces: BTreeMap<u64, TransientMetadata>,
     sequence: u64,
-    retained_bytes: usize,
+}
+pub(crate) struct MetadataChange {
+    pub result: WorkspaceMetadata,
+    workspace: WorkspaceId,
+    transient: TransientMetadata,
+    sequence: u64,
+    write: bool,
 }
 impl MetadataStore {
     pub fn reconcile(&mut self, model: &Snapshot) {
         if self.namespace != Some(model.identity_namespace) {
             self.workspaces.clear();
             self.sequence = 0;
-            self.retained_bytes = 0;
             self.namespace = Some(model.identity_namespace);
         }
         self.workspaces
             .retain(|id, _| model.workspaces.iter().any(|w| w.id.0 == *id));
-        self.retained_bytes = self
+    }
+    fn record(
+        &self,
+        model: &Snapshot,
+        workspace: &zmux_workspace_core::Workspace,
+    ) -> WorkspaceMetadata {
+        let channels = if self.namespace == Some(model.identity_namespace) {
+            self.workspaces
+                .get(&workspace.id.0)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            TransientMetadata::default()
+        };
+        WorkspaceMetadata {
+            workspace_id: workspace.id,
+            workspace_uuid: model.object_uuid(
+                zmux_workspace_core::targets::TargetKind::Workspace,
+                workspace.id.0,
+            ),
+            todos: workspace.todos.clone(),
+            pull_request: channels.pull_request,
+            statuses: channels.statuses,
+            progress: channels.progress,
+            logs: channels.logs,
+            logs_dropped: channels.logs_dropped,
+        }
+    }
+    pub fn snapshot(&self, model: &Snapshot) -> Vec<WorkspaceMetadata> {
+        let mut records: Vec<_> = model
             .workspaces
-            .values()
+            .iter()
+            .map(|workspace| self.record(model, workspace))
+            .filter(|record| !record.is_empty())
+            .collect();
+        records.sort_by_key(|record| record.workspace_id.0);
+        records
+    }
+    pub fn validate_model(&self, model: &Snapshot) -> Result<(), MetadataError> {
+        let records = self.snapshot(model);
+        if records
+            .iter()
             .map(WorkspaceMetadata::encoded_bound)
-            .sum();
+            .sum::<usize>()
+            + records.len()
+            + 2
+            > MAX_RETAINED_BYTES
+        {
+            return Err(MetadataError::ByteCapacity);
+        }
+        Ok(())
     }
-    pub fn snapshot(&self) -> Vec<WorkspaceMetadata> {
-        self.workspaces.values().cloned().collect()
-    }
-    pub fn apply(
-        &mut self,
+    /// Plan without mutation. The executor commits canonical todos first, then
+    /// the transient channels, so a rejected core/file-capacity candidate is atomic.
+    pub fn plan(
+        &self,
+        model: &Snapshot,
         workspace: WorkspaceId,
-        workspace_uuid: Uuid,
         action: MetadataAction,
-    ) -> Result<WorkspaceMetadata, MetadataError> {
+    ) -> Result<MetadataChange, MetadataError> {
         action.validate()?;
         let read = action.is_read();
         let limit = if let MetadataAction::ListLog { limit } = &action {
@@ -477,11 +515,15 @@ impl MetadataStore {
         } else {
             None
         };
-        let mut state = self
+        let owner = model
             .workspaces
-            .get(&workspace.0)
-            .cloned()
-            .unwrap_or_else(|| WorkspaceMetadata::empty(workspace, workspace_uuid));
+            .iter()
+            .find(|owner| owner.id == workspace)
+            .ok_or(MetadataError::Invalid(
+                "workspace metadata owner no longer exists",
+            ))?;
+        let before = self.record(model, owner);
+        let mut state = before.clone();
         let mut sequence = self.sequence;
         match action {
             MetadataAction::AddTodo {
@@ -573,32 +615,45 @@ impl MetadataStore {
             | MetadataAction::ListTodos {} => (),
         }
         if !read {
-            let previous = self
-                .workspaces
-                .get(&workspace.0)
-                .map_or(0, WorkspaceMetadata::encoded_bound);
+            let existing = self.snapshot(model);
+            let total: usize = existing.iter().map(WorkspaceMetadata::encoded_bound).sum();
+            let previous = if before.is_empty() {
+                0
+            } else {
+                before.encoded_bound()
+            };
             let candidate = if state.is_empty() {
                 0
             } else {
                 state.encoded_bound()
             };
-            let retained_bytes = self.retained_bytes - previous + candidate;
-            // Two bytes for the outer JSON array and one comma per workspace.
-            if retained_bytes + self.workspaces.len() + 3 > MAX_RETAINED_BYTES {
+            let rows = existing.len() + usize::from(before.is_empty() && !state.is_empty());
+            if total - previous + candidate + rows + 2 > MAX_RETAINED_BYTES {
                 return Err(MetadataError::ByteCapacity);
             }
-            self.retained_bytes = retained_bytes;
-            self.sequence = sequence;
-            if state.is_empty() {
-                self.workspaces.remove(&workspace.0);
-            } else {
-                self.workspaces.insert(workspace.0, state.clone());
-            }
         }
+        let transient = TransientMetadata::from_response(&state);
         if let Some(limit) = limit {
             let remove = state.logs.len().saturating_sub(limit);
             state.logs.drain(..remove);
         }
-        Ok(state)
+        Ok(MetadataChange {
+            result: state,
+            workspace,
+            transient,
+            sequence,
+            write: !read,
+        })
+    }
+    pub fn commit(&mut self, change: MetadataChange) -> WorkspaceMetadata {
+        if change.write {
+            self.sequence = change.sequence;
+            if change.transient.is_empty() {
+                self.workspaces.remove(&change.workspace.0);
+            } else {
+                self.workspaces.insert(change.workspace.0, change.transient);
+            }
+        }
+        change.result
     }
 }

@@ -109,6 +109,445 @@ fn ready(snapshot: &Snapshot) -> bool {
 }
 
 #[test]
+fn workspace_todos_survive_real_save_shutdown_and_fresh_reopen_without_transient_channels() {
+    use zmux_desktop_runtime::{
+        metadata::{MetadataAction, PullRequest, TodoOrigin, TodoSelector, TodoState},
+        targets::{TargetOperation, TargetRequest},
+    };
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    let initial = wait(&desktop, ready);
+    let workspace = initial.model.workspaces[0].id;
+    let metadata = |action| Command::Targeted {
+        request: TargetRequest {
+            scope: zmux_workspace_core::targets::TargetScope {
+                workspace: Some(workspace.0.to_string().parse().unwrap()),
+                ..Default::default()
+            },
+            operation: TargetOperation::Metadata { action },
+            ..Default::default()
+        },
+    };
+    let actions = [
+        MetadataAction::AddTodo {
+            text: "first pending item".into(),
+            state: TodoState::Pending,
+            origin: TodoOrigin::User,
+        },
+        MetadataAction::AddTodo {
+            text: "second active item".into(),
+            state: TodoState::InProgress,
+            origin: TodoOrigin::Agent,
+        },
+        MetadataAction::AddTodo {
+            text: "third completed item".into(),
+            state: TodoState::Completed,
+            origin: TodoOrigin::User,
+        },
+        MetadataAction::SetStatus {
+            key: "temporary".into(),
+            value: "do not persist".into(),
+            icon: None,
+            color: None,
+            priority: 0,
+        },
+        MetadataAction::SetProgress {
+            value: 0.5,
+            label: None,
+        },
+        MetadataAction::Log {
+            message: "transient log".into(),
+            level: Default::default(),
+            source: None,
+        },
+        MetadataAction::SetPullRequest {
+            pull_request: PullRequest::parse("https://github.com/acme/project/pull/17").unwrap(),
+        },
+    ];
+    for (index, action) in actions.into_iter().enumerate() {
+        let id = 100 + index as u64;
+        send(&desktop, id, metadata(action));
+        let applied = wait(&desktop, |snapshot| snapshot.last_request_id == id);
+        assert!(applied.last_error.is_none(), "{:?}", applied.last_error);
+    }
+    let before = desktop_snapshot::read(&desktop);
+    let expected = serde_json::to_value(&before.workspace_metadata[0].todos).unwrap();
+    assert_eq!(expected.as_array().unwrap().len(), 3);
+    send(
+        &desktop,
+        200,
+        Command::Session {
+            action: SessionCommand::Save,
+        },
+    );
+    wait(&desktop, |snapshot| {
+        snapshot.persistence.operations.iter().any(|operation| {
+            operation.kind == "save" && matches!(operation.state, OperationState::Completed)
+        })
+    });
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let reopened = directory.desktop();
+    let restored = wait(&reopened, ready);
+    assert_eq!(restored.model.workspaces[0].id, workspace);
+    assert_eq!(
+        restored.model.identity_namespace,
+        before.model.identity_namespace
+    );
+    let restored_todos = restored
+        .workspace_metadata
+        .iter()
+        .find(|row| row.workspace_id == workspace)
+        .map(|row| serde_json::to_value(&row.todos).unwrap());
+    assert_eq!(
+        restored_todos,
+        Some(expected),
+        "saved checklist identities/order/state/origin must survive fresh process ownership"
+    );
+    let row = restored
+        .workspace_metadata
+        .iter()
+        .find(|row| row.workspace_id == workspace)
+        .unwrap();
+    assert!(
+        row.statuses.is_empty()
+            && row.progress.is_none()
+            && row.logs.is_empty()
+            && row.pull_request.is_none()
+    );
+    let first_id = row.todos[0].id;
+    send(
+        &reopened,
+        201,
+        metadata(MetadataAction::SetTodoState {
+            item: TodoSelector::Id { id: first_id },
+            state: TodoState::Completed,
+        }),
+    );
+    let autosaved = wait(&reopened, |snapshot| {
+        if snapshot.last_request_id != 201 {
+            return false;
+        }
+        let disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+        disk["workspaces"][0]["todos"][0]["state"] == "completed"
+    });
+    assert_eq!(
+        autosaved.model.revision, restored.model.revision,
+        "todo metadata must not replace native rows by advancing topology revision"
+    );
+    assert!(
+        autosaved.revision > restored.revision,
+        "metadata still publishes a new desktop revision"
+    );
+    let changed = serde_json::to_value(&autosaved.workspace_metadata[0].todos).unwrap();
+    assert_eq!(changed[0]["id"], first_id.to_string());
+    assert_eq!(changed[0]["state"], "completed");
+    let disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    assert_eq!(disk["version"], 5);
+    assert_eq!(
+        disk["workspaces"][0]["todos"], changed,
+        "todo-only mutation must autosave without another topology action"
+    );
+    let export = directory.0.join("todo-export.json");
+    send(
+        &reopened,
+        202,
+        Command::Session {
+            action: SessionCommand::Export {
+                path: export.clone(),
+                force: false,
+            },
+        },
+    );
+    wait(&reopened, |snapshot| {
+        snapshot.persistence.operations.iter().any(|operation| {
+            operation.kind == "export" && matches!(operation.state, OperationState::Completed)
+        })
+    });
+    let exported = fs::read(&export).unwrap();
+    let export_document: serde_json::Value = serde_json::from_slice(&exported).unwrap();
+    assert_eq!(export_document["workspaces"][0]["todos"], changed);
+    for (offset, action) in [
+        MetadataAction::SetStatus {
+            key: "live".into(),
+            value: "preserve on rejection".into(),
+            icon: None,
+            color: None,
+            priority: 0,
+        },
+        MetadataAction::SetProgress {
+            value: 0.75,
+            label: None,
+        },
+        MetadataAction::Log {
+            message: "live transient".into(),
+            level: Default::default(),
+            source: None,
+        },
+        MetadataAction::SetPullRequest {
+            pull_request: PullRequest::parse("https://github.com/acme/project/pull/18").unwrap(),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request_id = 210 + offset as u64;
+        send(&reopened, request_id, metadata(action));
+        wait(&reopened, |snapshot| snapshot.last_request_id == request_id);
+    }
+    let live = desktop_snapshot::read(&reopened);
+    let live_metadata = serde_json::to_value(&live.workspace_metadata).unwrap();
+    send(
+        &reopened,
+        214,
+        Command::Session {
+            action: SessionCommand::Restore {
+                path: Some(export.clone()),
+            },
+        },
+    );
+    let rejected = wait(&reopened, |snapshot| snapshot.last_request_id == 214);
+    assert!(
+        rejected
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("empty desktop")
+    );
+    assert_eq!(
+        serde_json::to_value(&rejected.workspace_metadata).unwrap(),
+        live_metadata,
+        "failed same-namespace admission must preserve current todos and transient channels"
+    );
+    send(&reopened, 220, metadata(MetadataAction::ClearTodos {}));
+    wait(&reopened, |snapshot| {
+        if snapshot.last_request_id != 220 {
+            return false;
+        }
+        let disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+        disk["workspaces"][0]["todos"] == serde_json::json!([])
+    });
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+    let cleared = directory.desktop();
+    let after_clear = wait(&cleared, ready);
+    assert!(after_clear.workspace_metadata.is_empty());
+    send(
+        &cleared,
+        221,
+        Command::Action {
+            action: Action::CloseWorkspace {
+                workspace_id: workspace,
+            },
+        },
+    );
+    let empty = wait(&cleared, |snapshot| {
+        snapshot.model.workspaces.is_empty()
+            && snapshot.pending_launches == 0
+            && snapshot.control_frames.is_empty()
+    });
+    let empty_model = empty.model.clone();
+    let mut invalid_import = export_document.clone();
+    invalid_import["workspaces"][0]["todos"][1]["id"] =
+        invalid_import["workspaces"][0]["todos"][0]["id"].clone();
+    let corrupt = directory.0.join("invalid-todos.json");
+    let corrupt_bytes = serde_json::to_vec(&invalid_import).unwrap();
+    fs::write(&corrupt, &corrupt_bytes).unwrap();
+    fs::set_permissions(&corrupt, fs::Permissions::from_mode(0o600)).unwrap();
+    send(
+        &cleared,
+        222,
+        Command::Session {
+            action: SessionCommand::Restore {
+                path: Some(corrupt.clone()),
+            },
+        },
+    );
+    let failed = wait(&cleared, |snapshot| {
+        snapshot.persistence.operations.iter().any(|operation| {
+            operation.kind == "restore" && matches!(operation.state, OperationState::Failed)
+        })
+    });
+    assert_eq!(failed.model, empty_model);
+    assert!(failed.workspace_metadata.is_empty());
+    assert_eq!(fs::read(&corrupt).unwrap(), corrupt_bytes);
+    send(
+        &cleared,
+        223,
+        Command::Session {
+            action: SessionCommand::Restore {
+                path: Some(export.clone()),
+            },
+        },
+    );
+    let imported = wait(&cleared, |snapshot| {
+        ready(snapshot)
+            && snapshot.persistence.operations.iter().any(|operation| {
+                operation.kind == "restore" && matches!(operation.state, OperationState::Completed)
+            })
+    });
+    assert_eq!(
+        imported.model.identity_namespace,
+        before.model.identity_namespace
+    );
+    assert_eq!(
+        serde_json::to_value(&imported.workspace_metadata[0].todos).unwrap(),
+        changed
+    );
+    let row = &imported.workspace_metadata[0];
+    assert!(
+        row.statuses.is_empty()
+            && row.progress.is_none()
+            && row.logs.is_empty()
+            && row.pull_request.is_none()
+    );
+    assert_eq!(
+        fs::read(&export).unwrap(),
+        exported,
+        "import must not rewrite its source document"
+    );
+    cleared.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn todo_file_capacity_uses_enriched_live_cwd_before_admission_without_latching_a_failed_save() {
+    use zmux_desktop_runtime::{
+        metadata::MetadataAction,
+        targets::{TargetOperation, TargetRequest},
+    };
+    let directory = Directory::new();
+    let desktop = directory.desktop();
+    wait(&desktop, ready);
+    for request_id in 1..8 {
+        send(
+            &desktop,
+            request_id,
+            Command::Action {
+                action: Action::CreateWorkspace {
+                    name: format!("bounded owner {request_id}"),
+                },
+            },
+        );
+        wait(&desktop, |snapshot| {
+            ready(snapshot) && snapshot.last_request_id == request_id
+        });
+    }
+    let before_observation = desktop_snapshot::read(&desktop);
+    let expected_cwd = format!("/{}", "0".repeat(3500));
+    for (index, frame) in before_observation.control_frames.iter().enumerate() {
+        send(
+            &desktop,
+            100 + index as u64,
+            Command::Input {
+                session_id: frame.session_id,
+                text: "printf '\\033]7;file:///%03500d\\007' 0\n".into(),
+            },
+        );
+    }
+    let observed = wait(&desktop, |snapshot| {
+        snapshot.control_frames.len() == 8
+            && snapshot.control_frames.iter().all(|frame| {
+                frame.snapshot.as_ref().is_some_and(|terminal| {
+                    terminal.viewport.working_directory.as_deref() == Some(expected_cwd.as_str())
+                })
+            })
+    });
+    assert_eq!(observed.model.revision, before_observation.model.revision);
+    assert!(
+        observed
+            .model
+            .workspaces
+            .iter()
+            .all(
+                |workspace| workspace.root.panes()[0].selected().cwd.as_deref()
+                    != Some(expected_cwd.as_str())
+            ),
+        "the preflight must use enriched capture, not already-copied model cwd"
+    );
+    let owners: Vec<_> = observed
+        .model
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.id)
+        .collect();
+    let mut accepted = 0;
+    let mut refused = false;
+    for index in 0..200 {
+        let before = desktop_snapshot::read(&desktop);
+        let request_id = 1000 + index as u64;
+        send(
+            &desktop,
+            request_id,
+            Command::Targeted {
+                request: TargetRequest {
+                    scope: zmux_workspace_core::targets::TargetScope {
+                        workspace: Some(owners[index / 50].0.to_string().parse().unwrap()),
+                        ..Default::default()
+                    },
+                    operation: TargetOperation::Metadata {
+                        action: MetadataAction::AddTodo {
+                            text: "\\".repeat(2048),
+                            state: Default::default(),
+                            origin: Default::default(),
+                        },
+                    },
+                    ..Default::default()
+                },
+            },
+        );
+        let result = wait(&desktop, |snapshot| snapshot.last_request_id == request_id);
+        if let Some(error) = &result.last_error {
+            assert!(
+                error.contains("session document exceeds its byte limit"),
+                "candidate must fail the full enriched document bound before a later metadata bound: {error}"
+            );
+            assert_eq!(result.model, before.model);
+            assert_eq!(
+                serde_json::to_value(&result.workspace_metadata).unwrap(),
+                serde_json::to_value(&before.workspace_metadata).unwrap()
+            );
+            assert!(
+                result.persistence.error.is_none(),
+                "rejected admission must not create a failed autosave"
+            );
+            refused = true;
+            break;
+        }
+        accepted += 1;
+    }
+    assert!(refused);
+    send(
+        &desktop,
+        5000,
+        Command::Session {
+            action: SessionCommand::Save,
+        },
+    );
+    wait(&desktop, |snapshot| {
+        snapshot.persistence.operations.iter().any(|operation| {
+            operation.kind == "save" && matches!(operation.state, OperationState::Completed)
+        })
+    });
+    let bytes = fs::read(directory.0.join("session.json")).unwrap();
+    assert!(bytes.len() <= zmux_desktop_runtime::persistence::MAX_DOCUMENT_BYTES);
+    let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        saved["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|workspace| workspace["todos"].as_array().unwrap().len())
+            .sum::<usize>(),
+        accepted
+    );
+    assert!(saved["workspaces"].as_array().unwrap().iter().all(
+        |workspace| workspace["root"]["pane"]["surfaces"][0]["content"]["cwd"] == expected_cwd
+    ));
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
 fn moved_membership_and_empty_source_persist_without_replacing_live_sessions() {
     use zmux_desktop_runtime::windows::{
         NativeWindowEvent, WindowAction, WindowHostToken, WindowRequest,
@@ -432,10 +871,43 @@ fn startup_restores_topology_fresh_shells_and_shutdown_flushes_latest_committed_
     restarted.shutdown(Duration::from_secs(5)).unwrap();
 }
 
+fn with_checklist(mut store: WorkspaceStore) -> WorkspaceStore {
+    let workspace = store.snapshot().workspaces[0].id;
+    store
+        .replace_workspace_todos(
+            workspace,
+            vec![zmux_workspace_core::todo::TodoEntry {
+                id: uuid::Uuid::from_u128(321),
+                text: "validated durable item".into(),
+                state: Default::default(),
+                origin: Default::default(),
+            }],
+        )
+        .unwrap();
+    store
+}
+
 #[test]
 fn corrupt_unsafe_versioned_and_overcapacity_startup_files_are_retained_and_protected() {
-    let store = fixture();
+    let store = with_checklist(fixture());
     let document = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    let mut invalid_todo = document.clone();
+    invalid_todo["workspaces"][0]["todos"][0]["id"] = serde_json::json!(uuid::Uuid::nil());
+    let mut missing_todos = document.clone();
+    missing_todos["workspaces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("todos");
+    let mut duplicated = store.clone();
+    duplicated
+        .apply(Action::CreateWorkspace {
+            name: "other owner".into(),
+        })
+        .unwrap();
+    let mut duplicate_document =
+        serde_json::to_value(duplicated.session_document().unwrap()).unwrap();
+    duplicate_document["workspaces"][1]["todos"] =
+        duplicate_document["workspaces"][0]["todos"].clone();
     let mut future = document.clone();
     future["version"] = 999.into();
     let mut oversized = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
@@ -448,6 +920,21 @@ fn corrupt_unsafe_versioned_and_overcapacity_startup_files_are_retained_and_prot
     }
     for (label, bytes, mode) in [
         ("corrupt", b"{incomplete".to_vec(), 0o600),
+        (
+            "invalid todo",
+            serde_json::to_vec(&invalid_todo).unwrap(),
+            0o600,
+        ),
+        (
+            "missing todos",
+            serde_json::to_vec(&missing_todos).unwrap(),
+            0o600,
+        ),
+        (
+            "duplicate across owners",
+            serde_json::to_vec(&duplicate_document).unwrap(),
+            0o600,
+        ),
         ("future", serde_json::to_vec(&future).unwrap(), 0o600),
         ("unsafe", serde_json::to_vec(&document).unwrap(), 0o644),
         (
@@ -494,7 +981,7 @@ fn corrupt_unsafe_versioned_and_overcapacity_startup_files_are_retained_and_prot
 #[test]
 fn failed_startup_launch_keeps_original_file_and_never_commits_candidate() {
     let directory = Directory::new();
-    let mut store = fixture();
+    let mut store = with_checklist(fixture());
     let source = store.snapshot();
     let session = source.workspaces[0].root.panes()[0].session_id().unwrap();
     store.set_session_cwd(
@@ -508,6 +995,10 @@ fn failed_startup_launch_keeps_original_file_and_never_commits_candidate() {
     assert_ne!(snapshot.model.identity_namespace, source.identity_namespace);
     assert_eq!(snapshot.model.workspaces[0].name, "Terminal");
     assert!(!snapshot.persistence.autosave_enabled);
+    assert!(
+        snapshot.workspace_metadata.is_empty(),
+        "failed candidate must not publish its durable todos"
+    );
     desktop.shutdown(Duration::from_secs(5)).unwrap();
     assert_eq!(fs::read(directory.0.join("session.json")).unwrap(), bytes);
 }
