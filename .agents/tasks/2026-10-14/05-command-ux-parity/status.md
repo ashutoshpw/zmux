@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Run `38909353414` at `5d1858d` fails hidden-application restoration after the
+  earlier menu/minimization/power steps. Isolate AppKit activation with the finite
+  standalone native-control activation scenario before changing production again.
+  Its actual framework observations are diagnostic, never a product acceptance
+  result. All failed runs retain actual app/socket cleanup/PID absence evidence.
+  The portable recheck hit an existing multiplexer elapsed-time bound during host
+  load1378/24CPUs; the same exact test passes isolated. An unchanged full rerun with
+  `RUST_TEST_THREADS=2` is running; neither the timeout nor assertions are relaxed.
+
 - Reassessment after native run `38907593402` at `f712e5e`: minimized restoration
   passes, but the new close-all scenario incorrectly assumes menu-bar-only mode.
   The existing shared contract intentionally saves/quits on final close. Keep its

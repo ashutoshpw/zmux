@@ -162,3 +162,13 @@ unchanged, and final status-item/IOKit cleanup remains required. No regular-mode
 window policy is changed, no failing product regression is disabled, and no
 menu-bar-only implementation is claimed. Physical cleanup/PID absence passed
 on the failed run; the corrected native journey still needs hosted acceptance.
+
+Run `38909353414` at `5d1858d` passes prior checks but fails hidden-application
+restoration. Before another production activation change, isolate public AppKit
+ordering/activation behavior in `tools/native-activation-probe/main.swift`, through
+the manual `native-control-probe.yml` activation scenario. It records actual
+hidden/active/visible/key-window state for order-then-activate, activate-then-order,
+waiting for active state and exact-process NSRunningApplication activation, with
+unique-PID Launch Services controls. This is diagnostic evidence, not product
+acceptance. The probe has no Desktop/PTY, uses its own unique bundle ID and exits
+after its finite observation sequence. Original control-action probing is retained.
