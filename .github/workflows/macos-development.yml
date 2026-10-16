@@ -6,7 +6,7 @@ on:
       suite:
         description: Native validation suite
         type: choice
-        options: [full, terminal-selection, completed-history]
+        options: [full, terminal-selection, completed-history, profile-operations]
         default: full
         required: true
   push:
@@ -196,5 +196,51 @@ jobs:
             ${{ runner.temp }}/native-completed-history/*.zip
             ${{ runner.temp }}/native-completed-history/source/
           include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  profile-operations:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'profile-operations'
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Type-check both native source slices before build or execution
+        run: scripts/check-macos-sources
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Verify portable owner and foreign ABI
+        run: |
+          if ! command -v tmux >/dev/null; then brew install tmux; fi
+          scripts/check
+      - name: Build universal packaged app
+        run: scripts/build-macos-dev
+      - name: Exercise production profiles and original process shutdown
+        run: scripts/check-native-profile-operations
+      - name: Retain package, exact fixture sources and partial evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-profile-operations-${{ github.sha }}
+          include-hidden-files: true
+          path: |
+            dist/zmux-dev-universal-*.zip
+            dist/zmux-dev-universal-*.zip.sha256
+            dist/build-info.json
+            dist/native-profile-operations.json
+            dist/native-profiles-*
+            apps/macos/Sources/
+            crates/desktop-runtime/src/
+            crates/native-bridge/src/
+            crates/native-bridge/include/zmux.h
+            apps/cli/src/
+            scripts/check-native-profile-operations
+            scripts/check-macos-sources
+            scripts/build-macos-dev
+            tools/native-fixtures/profile-lease-holder.c
           if-no-files-found: warn
           retention-days: 7
