@@ -197,6 +197,8 @@ pub enum DesktopError {
     Metadata(#[from] metadata::MetadataError),
     #[error("{0}")]
     Browser(#[from] browser::BrowserError),
+    #[error(transparent)]
+    Profile(#[from] profiles::ProfileError),
     #[error("{0}")]
     Download(#[from] downloads::DownloadError),
     #[error("{0}")]
