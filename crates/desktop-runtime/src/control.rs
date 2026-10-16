@@ -1016,6 +1016,7 @@ fn mutate(
         DesktopError::Policy(error) => (error.code(), error.to_string()),
         DesktopError::Target(error) => (error.code(), error.to_string()),
         DesktopError::Browser(error) => (error.code(), error.to_string()),
+        DesktopError::Profile(error) => (error.code(), error.to_string()),
         DesktopError::Download(error) => (error.code, error.to_string()),
         DesktopError::Attention(error) => (error.code(), error.to_string()),
         DesktopError::Metadata(error) => (error.code(), error.to_string()),
@@ -1165,6 +1166,7 @@ fn desktop_error(error: DesktopError) -> (&'static str, String) {
     let code = match error {
         DesktopError::Attention(ref error) => error.code(),
         DesktopError::Metadata(ref error) => error.code(),
+        DesktopError::Profile(ref error) => error.code(),
         DesktopError::Policy(ref error) => error.code(),
         DesktopError::NotTerminal => "not_terminal",
         DesktopError::TerminalUnavailable => "terminal_not_ready",

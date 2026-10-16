@@ -1148,7 +1148,7 @@ fn start_profile_app(fixture: &Fixture, state: &Path, socket: &Path) -> ProfileA
         )
         .unwrap(),
     );
-    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+    let server = ControlServer::start(socket, Arc::clone(&desktop)).unwrap();
     let running = ProfileApp { desktop, server };
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

@@ -201,3 +201,37 @@ its intended red:9 existing browser CLI tests passed, only the new native-owner
 classification test failed. Log:
 `/tmp/zmux-b01-production-regression-repository-red-20261016.log`. This intentional
 regression commit precedes production changes; it is not a green implementation.
+
+## Foundation implementation evidence
+
+The same focused public-control command now passes. The first full check found a
+Clippy needless-borrow in the extracted CLI fixture; it was repaired without bypassing
+checks. Final `CARGO_TARGET_DIR=target/agent-validation/profile-destructive-owner/cargo
+scripts/check` passed (log `/tmp/zmux-b01-foundation-repository-check-final-20261016.log`).
+This executes workspace tests, warnings-as-errors Clippy, license inventory and the
+real foreign C bridge/lease processes. It is portable evidence, not native WebKit execution.
+
+The dedicated lease worker now owns initial/cached construction admission, exact
+controller/intent writer tokens, local-share surrender/restoration, durable bounded
+phase records, a synced stable-inode compatibility sentinel and correlated catalog-only
+commit. Physical writer capacity8 and construction admission capacity32 supplement the
+64 lifetime-token limit; steady retained lock descriptors are bounded by64 lifetime,
+32 constructor admission and16 writer admission/lifetime descriptors, plus bounded
+transient catalog/journal I/O. A temporary destructive store gets a logical lifetime
+owner before native execution, so known failure can restore a share even without an
+original cached store. Lost acknowledgments retain the original maps and gates.
+
+Six production-owner lease tests pass with two intentionally ignored subprocess entry
+helpers invoked by those tests. They cover independent-process crash quarantine,
+foreign lifetime rejection plus restored local authority, pending/cached constructors,
+forged/out-of-order phases, byte-identical catalog until known removal, clear/delete
+semantics with concurrent rename preservation, stable inode/sentinel release, known
+partial failure and original catalog-only retry after directory-identity failure.
+The restart status identifies original intent/action/phase without catalog membership;
+no native replay or expiry recovery exists. Reserved names include admission and intent
+files. Generic catalog commands refuse destructive mutation. Constructed native tokens
+cannot be released through the unconstructed-release ABI.
+
+This slice does not yet register a native destructive owner, issue public WebKit effects,
+wire clear/delete CLI/manager actions, or establish native physical/shutdown acceptance.
+The public native-unavailable behavior remains deliberate until the connected owner is ready.
