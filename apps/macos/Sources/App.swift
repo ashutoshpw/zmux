@@ -1329,7 +1329,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 self.showError("Choose at most \(FileHostLimits.maxOpenItems) files at a time")
                 return
             }
-            self.enqueue(.fileOpen(paths, true, false))
+            self.coordinator.enqueueFile(.open(paths, true, false))
         }
     }
     @objc private func saveFile(_ sender: Any?) { focusedFilePanel?.save() }

@@ -75,6 +75,8 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     var onFocus: (() -> Void)?
     /// Replaces the conflict sheet; used by the in-app smoke so no human has to click it.
     var conflictChooser: (@MainActor (FileConflict) async -> FileConflictChoice)?
+    /// Replaces the "discard unsaved changes and reload" sheet; used by the in-app smoke only.
+    var discardConfirmation: (@MainActor () async -> Bool)?
 
     // Rust-owned binding and the last baseline this view loaded or saved.
     private var phase = Phase.idle
@@ -554,34 +556,53 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         catch { return .failure(FileHostFailure(code: "internal", message: error.localizedDescription, outcomeUnknown: true)) }
     }
 
-    private func beginAttach() {
-        guard !busy, !closed, let epoch = latestEpoch else { return }
+    /// Marks the panel busy and builds the attach request, or returns nil when an attach cannot
+    /// start (another operation is running, the tab is closing, or no snapshot has arrived yet).
+    private func prepareAttach() -> FileHostRequest? {
+        guard !busy, !closed, let epoch = latestEpoch else { return nil }
         busy = true
         phase = .attaching
         if !isLoaded { showLoading("Opening " + title + "…") }
-        let request = FileHostRequest.attach(epoch: epoch, surface: surfaceID, host: hostID)
-        Task { [weak self] in
-            guard let self else { return }
-            let result = await self.send(request)
-            self.busy = false
-            if self.closed {
-                // The tab closed while the attach was in flight; release the binding it created.
-                if case .success(let reply) = result, let token = reply.header.owner { self.owner?.filePanelDetach(token) }
-                return
-            }
-            switch result {
-            case .success(let reply): self.apply(reply)
-            case .failure(let failure): self.loadFailed(failure)
-            }
-        }
+        return FileHostRequest.attach(epoch: epoch, surface: surfaceID, host: hostID)
     }
 
-    /// Public so the menu and the failed-state button can both retry from disk.
+    private func finishAttach(_ request: FileHostRequest) async {
+        let result = await send(request)
+        busy = false
+        if closed {
+            // The tab closed while the attach was in flight; release the binding it created.
+            if case .success(let reply) = result, let token = reply.header.owner { owner?.filePanelDetach(token) }
+            return
+        }
+        switch result {
+        case .success(let reply): apply(reply)
+        case .failure(let failure): loadFailed(failure)
+        }
+        refreshHeader()
+    }
+
+    private func beginAttach() {
+        guard let request = prepareAttach() else { return }
+        Task { [weak self] in await self?.finishAttach(request) }
+    }
+
+    /// Re-attaches a loaded panel whose binding was lost and waits for the outcome. The caller has
+    /// already confirmed that unsaved text may be replaced; a failure leaves the text, the
+    /// `ownerLost` banner and `File > Reload from Disk` in place so the person can try again.
+    private func reattach() async {
+        guard let request = prepareAttach() else {
+            if !busy && !closed { owner?.filePanelReport("The file service state is not available yet; try again in a moment.") }
+            return
+        }
+        await finishAttach(request)
+    }
+
+    /// Retry from the failed-state button and the load-failed banner. A panel with a lost binding
+    /// recovers through `reloadFromDisk`, which also asks before replacing unsaved text.
     func retry() {
         guard !busy, !closed else { return }
         phase = .idle
-        staleOwner = false
-        setBanner(.none)
+        if case .loadFailed = banner { setBanner(.none) }
         beginAttach()
     }
     @objc private func retryTapped() { retry() }
@@ -608,6 +629,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         case .pdf: applyPDF(reply.body)
         }
         if case .loadFailed = banner { setBanner(.none) }
+        if case .ownerLost = banner { setBanner(.none) }
         if isExternalBanner || banner == .saveResolved { setBanner(.none) }
     }
 
@@ -675,10 +697,17 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     private func loadFailed(_ failure: FileHostFailure) {
         phase = .failed
-        if failure.isOwnerLoss && isLoaded {
-            ownerToken = nil
+        // A loaded panel without a working binding, or one holding unsaved text, never turns a
+        // failed re-attach into a dead end: it stays stale, keeps its text and keeps offering
+        // Reload from Disk (retried, and confirmed before text is replaced) and Copy Text.
+        if isLoaded && (failure.isOwnerLoss || staleOwner || ownerToken == nil || hasUnsavedChanges) {
+            if failure.isOwnerLoss { ownerToken = nil }
             staleOwner = true
-            setBanner(.ownerLost("This view is no longer attached to the file service (" + failure.code + "). Reload from disk to continue; unsaved text is kept until then."))
+            if failure.isOwnerLoss {
+                setBanner(.ownerLost("This view is no longer attached to the file service (" + failure.code + "). Reload from disk to continue; unsaved text is kept until then."))
+            } else {
+                setBanner(.ownerLost("Could not reconnect to the file service: " + failure.message + " (" + failure.code + "). Your text is kept. Reload from disk to try again, or copy it out first."))
+            }
             return
         }
         showFailure(FilePanelFailure(code: failure.code, message: failure.message))
@@ -697,24 +726,24 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     // MARK: - Reload
 
-    /// `File > Reload from Disk`.
+    /// `File > Reload from Disk`, and every banner button that reloads. This is the one manual
+    /// route that replaces the buffer, so it is the one place that asks before discarding
+    /// unsaved text.
     func reloadFromDisk() {
         if phase == .failed && !isLoaded { retry(); return }
-        guard canReload else { return }
-        if hasUnsavedChanges {
-            Task { [weak self] in
-                guard let self else { return }
-                guard await self.confirmDiscard() else { return }
-                await self.performReload(discard: true, automatic: false)
-            }
-        } else if ownerToken == nil {
-            retry()
-        } else {
-            startReload(discard: true, automatic: false)
+        guard canReload else {
+            if busy && !closed { owner?.filePanelReport("Another file operation is still running; try again in a moment.") }
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            if self.hasUnsavedChanges { guard await self.confirmDiscard() else { return } }
+            await self.performReload(discard: true, automatic: false)
         }
     }
 
     private func confirmDiscard() async -> Bool {
+        if let confirm = discardConfirmation { return await confirm() }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Reload “" + title + "” from disk?"
@@ -735,9 +764,14 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     /// `discard` is always true: a clean view has nothing to lose and a dirty view only reloads
     /// after the person chose to discard (or the reload is deferred, see below).
     private func performReload(discard: Bool, automatic: Bool) async {
-        guard !busy, !closed else { return }
+        guard !busy, !closed else {
+            if busy && !closed && !automatic { owner?.filePanelReport("Another file operation is still running; try again in a moment.") }
+            return
+        }
         guard let token = ownerToken else {
-            if staleOwner { retry() }
+            // The binding is gone (restart, lost owner): attach again. A bound host with a dirty
+            // model is refused by Rust, which is why a kept binding reloads instead (below).
+            await reattach()
             return
         }
         // One automatic attempt per observed disk generation; a failed attempt shows a banner and
@@ -1200,20 +1234,19 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     private func bannerAction(primary: Bool) {
         switch (banner, primary) {
-        case (.changedOnDisk, true), (.unreadable, true), (.saveResolved, true):
-            startReload(discard: true, automatic: false)
+        case (.changedOnDisk, true), (.unreadable, true), (.saveResolved, true), (.ownerLost, true):
+            // Replaces the buffer, so it asks first when there is unsaved text.
+            reloadFromDisk()
         case (.changedOnDisk(let diskGeneration), false):
             dismissedDiskGeneration = diskGeneration
             setBanner(.none)
         case (.deletedOnDisk, true):
             dismissedDeleted = true
             setBanner(.none)
-        case (.ownerLost, true):
-            retry()
         case (.ownerLost, false):
             copyTextToPasteboard()
         case (.saveUnknown(let operation), true) where operation == 0:
-            startReload(discard: true, automatic: false)
+            reloadFromDisk()
         case (.saveUnknown(let operation), false) where operation == 0:
             setBanner(.none)
         case (.saveResolved, false):
@@ -1225,6 +1258,16 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         default:
             break
         }
+    }
+
+    /// Presses a banner button through the control itself (the in-app smoke); false when that
+    /// button is not currently shown.
+    @discardableResult
+    func clickBannerButton(primary: Bool) -> Bool {
+        let button = primary ? bannerPrimary : bannerSecondary
+        guard !bannerView.isHidden, !button.isHidden else { return false }
+        button.performClick(nil)
+        return true
     }
 
     func copyTextToPasteboard() {

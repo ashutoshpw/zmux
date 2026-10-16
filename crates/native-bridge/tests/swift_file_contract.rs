@@ -664,3 +664,224 @@ fn the_dirty_observation_never_gives_up_after_a_count() {
         "the notice must clear once the model agrees"
     );
 }
+
+#[test]
+fn every_manual_reload_asks_before_discarding_unsaved_text() {
+    let panel = swift("FilePanelView.swift");
+    // Banner buttons used to start a discarding reload directly, bypassing the confirmation that
+    // File > Reload from Disk shows.
+    let banner = between(
+        &panel,
+        "private func bannerAction(primary: Bool)",
+        "@discardableResult\n    func clickBannerButton",
+    );
+    assert!(
+        !banner.contains("startReload(") && !banner.contains("performReload("),
+        "a banner button must not reload without going through reloadFromDisk()"
+    );
+    for case in [
+        "case (.changedOnDisk, true), (.unreadable, true), (.saveResolved, true), (.ownerLost, true):",
+        "case (.saveUnknown(let operation), true) where operation == 0:",
+    ] {
+        let at = banner
+            .find(case)
+            .unwrap_or_else(|| panic!("banner case `{case}` is missing"));
+        let arm = &banner[at + case.len()..];
+        let arm = &arm[..arm.find("case (").unwrap_or(arm.len())];
+        assert!(
+            arm.contains("reloadFromDisk()"),
+            "`{case}` must reload through reloadFromDisk(): {arm}"
+        );
+    }
+    // The only remaining use of the unconfirmed route is the automatic reload of a clean view.
+    assert_eq!(
+        panel.matches("startReload(").count(),
+        2,
+        "one definition and one caller expected"
+    );
+    assert!(
+        panel.contains("startReload(discard: true, automatic: true)")
+            && panel.contains("if !hasUnsavedChanges {"),
+        "only the automatic reload of a view without unsaved text may skip the confirmation"
+    );
+    let reload = between(
+        &panel,
+        "func reloadFromDisk() {",
+        "private func confirmDiscard()",
+    );
+    let ask = reload
+        .find("confirmDiscard()")
+        .expect("reloadFromDisk must confirm");
+    let run = reload
+        .find("performReload(discard: true, automatic: false)")
+        .expect("reloadFromDisk must reload");
+    assert!(
+        reload.contains("if self.hasUnsavedChanges") && ask < run,
+        "unsaved text must be confirmed before the reload runs"
+    );
+    let smoke = swift("FilePanelSmoke.swift");
+    assert!(
+        smoke.contains("DiscardScript([false, true])")
+            && smoke.contains("clickBannerButton(primary: true)")
+            && smoke.contains("Cancel in the discard confirmation still replaced the unsaved text"),
+        "the smoke must press a banner Reload on a dirty panel, cancel once, then discard"
+    );
+}
+
+#[test]
+fn a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading() {
+    // Rust refuses a re-attach by the bound host while the model is dirty (see
+    // `a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach` in
+    // desktop-runtime), so the panel must pick the recovery by whether it still holds a token and
+    // must never leave a stale loaded panel without Reload and Copy Text.
+    let panel = swift("FilePanelView.swift");
+    let banner = between(
+        &panel,
+        "private func bannerAction(primary: Bool)",
+        "@discardableResult\n    func clickBannerButton",
+    );
+    assert!(
+        !banner.contains("retry()") || banner.contains("(.loadFailed, true)"),
+        "retry() is only for the load-failed banner"
+    );
+    assert!(
+        !banner.contains("case (.ownerLost, true):\n            retry()"),
+        "the owner-lost banner must not blindly re-attach with the same host"
+    );
+    let perform = between(
+        &panel,
+        "private func performReload(discard: Bool, automatic: Bool) async",
+        "// MARK: - Save",
+    );
+    let token = between(perform, "guard let token = ownerToken else {", "}");
+    assert!(
+        token.contains("await reattach()") && !token.contains("staleOwner"),
+        "with no binding the reload attaches again whatever the stale flag says: {token}"
+    );
+    let retry = between(&panel, "func retry() {", "@objc private func retryTapped");
+    assert!(
+        !retry.contains("staleOwner = false")
+            && !retry.contains("setBanner(.none)\n        beginAttach"),
+        "retry must not clear the stale state or the recovery banner before the attach succeeds"
+    );
+    let failed = between(
+        &panel,
+        "private func loadFailed(",
+        "private func showFailure(",
+    );
+    assert!(
+        failed.contains("ownerToken == nil")
+            && failed.contains("hasUnsavedChanges")
+            && failed.contains("staleOwner = true")
+            && failed.contains(".ownerLost("),
+        "a failed re-attach of a loaded panel must stay stale with the owner-lost banner (Reload and Copy Text)"
+    );
+    let apply = between(
+        &panel,
+        "private func apply(_ reply: FileHostReply)",
+        "private func applyText",
+    );
+    assert!(
+        apply.contains("if case .ownerLost = banner { setBanner(.none) }"),
+        "a successful re-attach clears the owner-lost banner"
+    );
+    let attach = between(
+        &panel,
+        "private func reattach() async",
+        "/// Retry from the failed-state",
+    );
+    assert!(
+        attach.contains("prepareAttach()") && attach.contains("await finishAttach("),
+        "reattach is the awaited form of the attach"
+    );
+}
+
+#[test]
+fn file_service_waits_have_their_own_bounded_queue_off_the_terminal_input_path() {
+    let coordinator = swift("ApplicationCoordinator.swift");
+    let commands = between(&coordinator, "enum UICommand: Sendable {", "\n}\n");
+    assert!(
+        !commands.contains("fileOpen") && !commands.contains("fileDetach"),
+        "file open and detach wait on the file worker and must not ride the terminal command queue"
+    );
+    let terminal_loop = between(
+        &coordinator,
+        "commandTask = Task { [weak self, stream] in",
+        "fileCommandTask = Task {",
+    );
+    assert!(
+        !terminal_loop.contains("fileOpen(") && !terminal_loop.contains("fileDetach("),
+        "the terminal input loop must not await the file service"
+    );
+    let file_loop = between(
+        &coordinator,
+        "fileCommandTask = Task {",
+        "pollingTask = Task {",
+    );
+    assert!(
+        file_loop.contains("self.bridge.fileOpen(")
+            && file_loop.contains("self.bridge.fileDetach("),
+        "the dedicated file task performs the waits"
+    );
+    assert!(
+        coordinator.contains("static let fileCommandCapacity = 32")
+            && coordinator.contains(".bufferingOldest(Self.fileCommandCapacity)"),
+        "the file queue is bounded"
+    );
+    let enqueue = between(&coordinator, "func enqueueFile(", "func reportError(");
+    assert!(
+        enqueue.contains("case .dropped:")
+            && enqueue.contains("The file queue is full")
+            && enqueue.contains("case .terminated:"),
+        "overload and a closed desktop are reported, never silent"
+    );
+    assert!(
+        coordinator.contains("enqueueFile(.detach(owner))"),
+        "releasing a binding uses the file queue"
+    );
+    assert!(
+        coordinator.contains("fileContinuation.finish()")
+            && coordinator.contains("fileCommandTask?.cancel()"),
+        "shutdown ends the file queue and task"
+    );
+    assert!(
+        swift("App.swift").contains("coordinator.enqueueFile(.open(paths, true, false))"),
+        "File > Open... uses the file queue"
+    );
+}
+
+#[test]
+fn the_smoke_covers_error_state_retry_and_descriptor_release_and_names_the_restore_gap() {
+    let smoke = swift("FilePanelSmoke.swift");
+    for needed in [
+        "presentationSummary == \"error:not_found\"",
+        "broken.retry()",
+        "Retry loaded the file",
+        "openDescriptorPaths(under:",
+        "verifyDescriptors: true",
+        "descriptors still open on the fixture after every tab was closed",
+    ] {
+        assert!(smoke.contains(needed), "the smoke lost `{needed}`");
+    }
+    assert!(
+        smoke.contains("Session\n/// quit/restore (the `files.epoch` rotation) is not exercised"),
+        "the smoke must state that session restore is not exercised"
+    );
+    // The epoch rotation is still pinned structurally: a clean panel re-attaches, a dirty one keeps
+    // its text and says so, and neither path discards anything.
+    let panel = swift("FilePanelView.swift");
+    let epoch = between(
+        &panel,
+        "private func epochChanged() {",
+        "private func reconcileExternal",
+    );
+    assert!(
+        epoch.contains("if isLoaded && hasUnsavedChanges")
+            && epoch.contains("staleOwner = true")
+            && epoch.contains(".ownerLost(")
+            && epoch.contains("phase = .idle")
+            && !epoch.contains("setDirty(false)")
+            && !epoch.contains("editor.string"),
+        "an epoch change must keep unsaved text and re-attach only clean panels"
+    );
+}

@@ -824,7 +824,8 @@ Changed Swift:
 - `NativeBridge.swift`: actor method `file(_:body:)` (detached blocking call, `Self.consume`).
 - `ApplicationCoordinator.swift`: `files` registry, `reconcileFilePanels` (create, update, prune,
   re-create when the path differs, reset on identity-namespace change), `FilePanelOwner`
-  conformance, `UICommand.fileOpen` and `.fileDetach` with `commandTask` arms, orphan handling
+  conformance, `FileCommand.open` and `.detach` on their own bounded queue and task (fix round 2; the
+  original slice put them in `UICommand`/`commandTask`, which stalled terminal input), orphan handling
   (a panel whose tab vanished while holding unsaved text is kept aside and the person chooses Copy
   Text or Discard; quit is refused until then), `resolveFilesBeforeClose` / `resolveFilesBeforeQuit`
   (Save / Don't Save / Cancel per dirty file, then a forced dirty-mirror sync, a failed save or
@@ -848,9 +849,9 @@ Command-Option arrows/braces/brackets; none of the new ones collide):
 
 | Item | Key | Notes |
 | --- | --- | --- |
-| File > Open File... | Cmd-O | `NSOpenPanel`, up to 16 files, then bridge `open` through `UICommand.fileOpen` |
+| File > Open File... | Cmd-O | `NSOpenPanel`, up to 16 files, then bridge `open` through the file command queue (`FileCommand.open`) |
 | File > Save | Cmd-S | enabled only for a dirty, writable, attached text or Markdown panel |
-| File > Reload from Disk | none | confirms when the buffer is dirty |
+| File > Reload from Disk | none | confirms when the buffer is dirty; every banner Reload button takes the same route (fix round 2) |
 | File > Toggle Word Wrap | Opt-Cmd-L | checkmark follows the preference |
 | File > Show Markdown Source / Show Rendered Markdown | Opt-Cmd-P | title follows state |
 | Edit > Undo / Redo / Cut | Cmd-Z / Shift-Cmd-Z / Cmd-X | no target: responder chain, disabled elsewhere |
@@ -885,7 +886,8 @@ that `PaneTree.key` carries no dirty state; adding a site fails it with instruct
 Swift cannot be compiled or executed here, so there is no red-then-green for the Swift itself and
 none is claimed. The Linux-testable part is the contract between Rust and Swift:
 `crates/native-bridge/tests/swift_file_contract.rs`, three contract tests in the original slice
-(eight tests after fix round 1, which added five structure tests, see below), all green:
+(eight tests after fix round 1, which added five structure tests; twelve after fix round 2, which
+added four more, see below), all green:
 
 - `swift_decodables_name_exactly_the_fields_the_real_rust_wire_carries`: runs a real Desktop
   (open with one good and one missing path, attach, save, observe, a content conflict, a refused
@@ -921,8 +923,8 @@ that slice. Fix round 1 re-ran the 8-test binary, see its own Determinism paragr
 
 Stage `file_panel` at the end of `runSmokeTest` (after the browser download checks), driven through
 the real bundled CLI, the real File menu key equivalents and a real directory; only the conflict
-and close sheets are answered through the panel's own seams (`conflictChooser`,
-`fileCloseChoiceOverride`) so no human is needed:
+close and (fix round 2) discard sheets are answered through the panel's own seams (`conflictChooser`,
+`fileCloseChoiceOverride`, `discardConfirmation`) so no human is needed:
 1. `zmux open` of md, txt, png, pdf, a binary, a folder and a missing path: exit failure with seven
    per-item results, four tabs, error codes `binary_file`, `is_directory`, `not_found`.
 2. Rendered Markdown shows no syntax and an https link; Source toggle shows the exact source;
@@ -941,6 +943,13 @@ and close sheets are answered through the panel's own seams (`conflictChooser`,
 10. (fix round 1) Two dirty panels, `resolveFilesBeforeClose` answered Don't Save then Cancel: the
     close is refused and both panels keep their text, dirty marker and model dirty bit; then two
     back-to-back `closeTerminalTab` calls with Don't Save both close their tabs.
+11. (fix round 2) A dirty panel with the changed-on-disk banner: pressing the banner's Reload button
+    asks first; Cancel keeps the text, Discard adopts the disk version.
+12. (fix round 2) A closed clean tab whose file was deleted is reopened: the panel shows the
+    `not_found` error state; the file is written back and `retry()` loads it.
+    Cleanup then checks with `lsof` that this process holds no descriptor under the fixture
+    directory after every tab is closed (polled up to 5 s because detach is asynchronous).
+Session quit/restore (the `files.epoch` rotation) is NOT exercised by the smoke, see "Fix round 2".
 Step 2 also (fix round 1) waits for the keyboard to land in the rendered Markdown view of the tab
 that `zmux open` selected while it was loading.
 Cleanup closes the tabs, removes the directory and restores the original selection and responder.
@@ -980,9 +989,10 @@ around `beginSheetModal` in `presentSheet`.
 - Rendered Markdown known gaps (design section 7, unchanged): tables degrade to tab-separated text,
   thematic breaks, images and raw HTML are not drawn, relative links are inert, only http, https and
   mailto links open. Scroll position is not kept across a reload (selection is clamped and kept).
-- `UICommand` only gained `fileOpen` and `fileDetach`. Save, reload and observe need their reply
-  (conflict, generation, op id) so the panel awaits `NativeBridge.file` through the
-  `FilePanelOwner` protocol instead of a fire-and-forget command.
+- File open and detach are fire-and-forget commands on a dedicated `FileCommand` queue (fix round 2;
+  they were first added to `UICommand`). Save, reload and observe need their reply (conflict,
+  generation, op id) so the panel awaits `NativeBridge.file` through the `FilePanelOwner` protocol
+  instead of a command.
 - The smoke is a stage of the existing `--smoke-test` run instead of a new launch flag, so it needs
   no new workflow, `AppStartup` argument list or storage case. `scripts/check-macos-app` was not
   edited (scripts are outside this slice), so it does not yet require the `file_panel` evidence
@@ -990,8 +1000,9 @@ around `beginSheetModal` in `presentSheet`.
 - `-framework PDFKit` was not added to `scripts/build-macos-dev` for the same reason. `swiftc`
   autolinks imported system frameworks, as it does for the other imports there; if the macOS link
   step reports undefined `PDFView` / `PDFDocument` symbols, add the flag.
-- The detach command bypasses `enqueue`'s "clear the last error" step so an automatic release
-  cannot erase an error message the person has not read; a full command queue is reported.
+- The detach command bypasses the "clear the last error" step of `enqueue`/`enqueueFile(.open)` so an
+  automatic release cannot erase an error message the person has not read; a full file queue is
+  reported.
 - Tab dirty marker and header edited state read the view's own dirty bit first and the model
   mirror second, so they react before the `observe` acknowledgement (design D7a).
 - Orphan sheet: Copy Text and Discard only. Save As does not exist in v1, as designed.
@@ -1004,6 +1015,8 @@ around `beginSheetModal` in `presentSheet`.
 - If the file service is stalled, Save, Reload and `observe` surface `file_worker_unavailable`
   or `busy`; `observe` retries at a bounded rate, the others show a banner and wait for the person.
 - The Swift cannot prove first-responder retention, sheet flows or decode; CI is the verifier.
+- No test, native or Linux, drives the Swift reaction to a `files.epoch` rotation (session restore)
+  end to end; see "Fix round 2" for what is pinned structurally and why the smoke omits it.
 
 ### Checks run
 
@@ -1073,3 +1086,57 @@ Deviations and limits:
   particular the `Banner == Banner.none` comparison and the `Task` closures capturing `self` weakly
   in `drainFileCloses`), `scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke
   stage and the hosted macOS workflows. None is recorded as passed.
+
+### Fix round 2 (S4 review findings, four valid and fixed, one fixed in part)
+
+Base of the round: `9b9a848`. Swift still cannot be compiled or run here. Each fix below is checked
+by reading the code path and by a Linux structure test that fails when the fix is reverted; the
+smoke additions are UNAVAILABLE here and have not run.
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | A loaded dirty panel that lost its binding and then failed to re-attach ended with Save, Reload and Copy Text all gone | Yes, by reading: `retry()` cleared `staleOwner` and the banner before the attach, `loadFailed` then raised a Dismiss-only `.loadFailed` banner, and `performReload`'s `if staleOwner { retry() }` returned silently | `retry()` no longer clears the stale state or the recovery banner. `loadFailed` keeps a loaded panel stale (`staleOwner = true`, `ownerLost` banner with Reload from Disk and Copy Text) whenever it has no token, was stale or holds unsaved text, with the failure code in the text. `performReload` with no token now awaits `reattach()` regardless of the stale flag, so the confirmed reload does something. A successful attach clears the `ownerLost` banner. |
+| 2 | Banner Reload buttons (`unreadable`, `saveResolved`, `saveUnknown(0)`, also `changedOnDisk`) discarded unsaved text with no confirmation | Yes: they called `startReload(discard: true, automatic: false)`; only `reloadFromDisk()` confirmed | Every manual reload, banner or menu, goes through `reloadFromDisk()`, which asks (`confirmDiscard`) when `hasUnsavedChanges`. `startReload` remains only for the automatic reload of a view without unsaved text. A reload requested while another operation runs now says so instead of doing nothing. |
+| 3 | `UICommand.fileOpen` / `.fileDetach` were awaited inside the single terminal command loop, so a probe plus executor wait (about 3 s) stalled `.input`, `.key`, `.paste`, `.wheel`, `.resize` behind it | Yes: both arms awaited the bridge inside `commandTask` | New `FileCommand` enum with its own `AsyncStream` (`bufferingOldest(32)`, `fileCommandCapacity`) and `fileCommandTask`. `enqueueFile` reports a full queue and a closed desktop (a detach during shutdown stays silent: the file service shutdown releases it). `File > Open...` and `filePanelDetach` use it; `UICommand` lost both cases; shutdown finishes the stream and cancels the task. The queue is FIFO, so an open and a later detach keep their order. |
+| 4 | The owner-lost banner's Reload from Disk called `retry()`, an attach with the same host, which Rust refuses with `dirty` while the model is dirty (the `stale_view` case) | Yes: `files.rs` refuses an attach as the bound host while `model_dirty`; existing tests assert it | The button now means `reloadFromDisk()`. A kept token recovers with `reload(discard: true)` (Rust allows it); a lost token (epoch rotation, `stale_owner`, detach) re-attaches, which Rust accepts because no host is bound. New Rust test `a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach` pins both halves against the real service. |
+| 5 | The smoke omitted session quit/restore, error states with Retry and descriptor release, and the receipt did not say so | Yes | Added: step 12 (error state `not_found` then `retry()`), a banner-Reload discard confirmation step 11, and an `lsof` check that no descriptor under the fixture directory remains after all tabs close. NOT added: session quit/restore. Restore needs an empty desktop (`restore-session` refuses a populated one), so it would destroy the app state the rest of the smoke runs in, and a quit/relaunch needs a harness that does not exist here. This is recorded as a known limit and a deviation. The smoke source documents it, and a Linux test pins the structure of `epochChanged` (a clean panel re-attaches, a dirty one keeps its text and says so). Fixed in part. |
+
+Tests added (all Linux-runnable; none proves the Swift works):
+
+- `crates/desktop-runtime/tests/files.rs`: `a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach`
+  (real service: refused same-host attach while dirty, reload with discard still works, detach then
+  attach succeeds while dirty, detached owner is `stale_owner`).
+- `crates/native-bridge/tests/swift_file_contract.rs`, four new tests:
+  `every_manual_reload_asks_before_discarding_unsaved_text`,
+  `a_lost_binding_recovers_by_reattaching_and_a_kept_one_by_reloading`,
+  `file_service_waits_have_their_own_bounded_queue_off_the_terminal_input_path`,
+  `the_smoke_covers_error_state_retry_and_descriptor_release_and_names_the_restore_gap`.
+- Mutation evidence (fix reverted in a copy, test run, sources restored and checked with `cmp`):
+  a banner arm calling `startReload` again, `performReload` going back to `if staleOwner { retry() }`,
+  `loadFailed` reduced to owner loss only, a bridge `fileOpen` arm back in the terminal loop and the
+  smoke's `retry()` removed each made exactly the matching test FAIL (11 passed, 1 failed).
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test binaries,
+559 passed, 0 failed, 2 ignored, which is the previous 554 plus the 5 new tests; clippy
+`-D warnings`; license inventory; `scripts/check-native-bridge`). Determinism of the two changed
+binaries, each executed: `swift_file_contract` (12 tests) and `desktop-runtime` `files` (46 tests):
+for each, 20 serial runs, 0 failures; then 5 rounds of 8 concurrent copies (40 runs) beside 24
+busy-loop CPU hogs on a 24-core machine, 0 failures, every log carrying the full passed line. The
+new Rust test uses the existing deterministic fixture (no sleeps, timers or threads of its own); the
+four structure tests only read source files.
+
+Deviations and limits:
+
+- Session quit/restore is not in the smoke (finding 5, above). The native reaction to a `files.epoch`
+  change is verified only by reading and by the structure test.
+- The reload confirmation also guards `changedOnDisk`'s Reload, whose banner text already says edits
+  are discarded; the prompt is a second, consistent safeguard.
+- A reload that ends in a failed re-attach leaves a dirty panel stale on purpose; the person retries
+  from the banner or the menu. There is no automatic retry, to keep the text from being replaced.
+- Between a clean panel's automatic re-attach starting and its reply, typing is still replaced by the
+  reply (pre-existing, not changed here).
+- The `lsof` descriptor check and the new smoke steps are UNAVAILABLE here: no Swift toolchain, so
+  `scripts/check-macos-sources`, `scripts/build-macos-dev`, `scripts/check-macos-app`, the
+  `file_panel` stage and the hosted macOS workflows are not run and not recorded as passed. Swift
+  names used without a compiler that CI should confirm: `Process`/`Pipe` in a detached task,
+  `NSButton.performClick(nil)`, and the `@discardableResult` placement on `enqueueFile`.

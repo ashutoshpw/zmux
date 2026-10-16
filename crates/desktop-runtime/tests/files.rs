@@ -1109,6 +1109,39 @@ fn reload_is_refused_while_the_model_says_dirty_unless_discarding() {
     assert_eq!(reloaded.body, b"disk");
 }
 
+/// The two recoveries the native panel offers for a view holding unsaved text, and why it must
+/// choose by whether it still holds a binding: a kept binding recovers with `reload(discard)`
+/// because a re-attach as the same host is refused while the model is dirty; a lost binding
+/// (detached, so no host is bound) recovers with a plain attach even though the model is dirty.
+#[test]
+fn a_dirty_view_recovers_a_kept_binding_by_reload_and_a_lost_binding_by_attach() {
+    let fx = Fixture::new();
+    let surface = fx.open("recover.txt", b"disk");
+    let host = Uuid::new_v4();
+    let owner = fx.attach_as(surface, host).unwrap().owner;
+    fx.desktop.file_observe(&owner, true).unwrap();
+
+    // Kept binding: attach is refused, reload with discard is the way out and still works after
+    // the refusal.
+    assert_eq!(failure(fx.attach_as(surface, host)).code, "dirty");
+    let reloaded = fx.desktop.file_reload(&owner, true).unwrap();
+    assert_eq!(reloaded.body, b"disk");
+
+    // Lost binding: the host is released while the model still says dirty.
+    fx.desktop.file_observe(&owner, true).unwrap();
+    fx.desktop.file_detach(&owner).unwrap();
+    assert_eq!(
+        failure(fx.desktop.file_reload(&owner, true)).code,
+        "stale_owner",
+        "a detached owner can no longer reload"
+    );
+    let reattached = fx
+        .attach_as(surface, host)
+        .expect("a lost binding re-attaches even while the model is dirty");
+    assert_eq!(reattached.body, b"disk");
+    assert_ne!(reattached.owner.host_id, Uuid::nil());
+}
+
 #[test]
 fn attaching_again_as_the_bound_host_obeys_the_dirty_rule_and_never_loses_an_update() {
     let fx = Fixture::new();
