@@ -112,6 +112,10 @@ struct BrowserNativeKey {
     let code: CGKeyCode
     let characters: String
     var modifier: CGEventFlags = []
+    // Literal uppercase/symbol characters need Shift on native keyup as well as
+    // keydown; a physical KeyA/Digit1 token does not imply that modifier.
+    var implicitModifiers: CGEventFlags = []
+    var heldModifiers: CGEventFlags { modifier.union(implicitModifiers) }
     private static let shiftedSymbols = ["1":"!","2":"@","3":"#","4":"$","5":"%","6":"^","7":"&","8":"*","9":"(","0":")","-":"_","=":"+","[":"{","]":"}","\\":"|",";":":","'":"\"",",":"<",".":">","/":"?","`":"~"]
     static func shifted(_ characters: String) -> String {
         shiftedSymbols[characters] ?? characters.uppercased()
@@ -158,8 +162,12 @@ struct BrowserNativeKey {
         var value = token
         if token.hasPrefix("Key"), token.count == 4, let scalar = token.unicodeScalars.last, (65...90).contains(scalar.value) { value = String(token.suffix(1)).lowercased() }
         if token.hasPrefix("Digit"), token.count == 6, let scalar = token.unicodeScalars.last, (48...57).contains(scalar.value) { value = String(token.suffix(1)) }
-        if value.utf8.count == 1, let code = ascii[value.lowercased()] { return Self(code: code, characters: value) }
-        if let base = shiftedSymbols.first(where: { $0.value == token })?.key, let code = ascii[base] { return Self(code: code, characters: token) }
+        if value.utf8.count == 1, let code = ascii[value.lowercased()] {
+            return Self(code: code, characters: value, implicitModifiers: value.first?.isUppercase == true ? .maskShift : [])
+        }
+        if let base = shiftedSymbols.first(where: { $0.value == token })?.key, let code = ascii[base] {
+            return Self(code: code, characters: token, implicitModifiers: .maskShift)
+        }
         return nil
     }
 }
@@ -190,7 +198,7 @@ final class BrowserKeyboardDelivery {
 @MainActor
 final class BrowserKeyboardState {
     private var held: [CGKeyCode: BrowserNativeKey] = [:]
-    var flags: CGEventFlags { held.values.reduce(CGEventFlags()) { $0.union($1.modifier) } }
+    var flags: CGEventFlags { held.values.reduce(CGEventFlags()) { $0.union($1.heldModifiers) } }
     var modifiers: [String: Bool] { ["shift": flags.contains(.maskShift), "control": flags.contains(.maskControl), "alt": flags.contains(.maskAlternate), "meta": flags.contains(.maskCommand)] }
     func clear() { held.removeAll() }
     func prepare(_ operation: BrowserKeyboardOperation, key: BrowserNativeKey) throws -> BrowserKeyboardDelivery {
@@ -198,28 +206,39 @@ final class BrowserKeyboardState {
             throw BridgeFailure(message: "Native browser input containment is unavailable")
         }
         var next = held
+        var deliveredKey = key
         switch operation {
         case .down:
             guard next[key.code] != nil || next.count < 64 else { throw BridgeFailure(message: "Browser held-key capacity reached") }
+            if let prior = held[key.code] {
+                guard prior.characters == key.characters, prior.modifier == key.modifier,
+                      prior.implicitModifiers == key.implicitModifiers else {
+                    throw BridgeFailure(message: "Release this held physical key before changing its character mapping")
+                }
+            }
             next[key.code] = key
-        case .up: next.removeValue(forKey: key.code)
+        case .up:
+            // A physical alias releases the original held character and its
+            // implicit modifier contribution, rather than inventing another keyup.
+            deliveredKey = next.removeValue(forKey: key.code) ?? key
         case .press:
             guard held[key.code] == nil else { throw BridgeFailure(message: "Release this held key before pressing it") }
         }
-        let nextFlags = next.values.reduce(CGEventFlags()) { $0.union($1.modifier) }
+        let nextFlags = next.values.reduce(CGEventFlags()) { $0.union($1.heldModifiers) }
         var prepared: [NSEvent] = []
         var expected: [BrowserKeyboardDelivery.Expected] = []
         func append(down: Bool, flags: CGEventFlags, repeated: Bool = false) throws {
-            prepared.append(try events.event(key, down: down, flags: flags, repeated: repeated))
-            expected.append(.init(type: down ? "keydown" : "keyup", key: key.observedKey(flags: flags),
+            prepared.append(try events.event(deliveredKey, down: down, flags: flags, repeated: repeated))
+            expected.append(.init(type: down ? "keydown" : "keyup", key: deliveredKey.observedKey(flags: flags),
                                   shift: flags.contains(.maskShift), control: flags.contains(.maskControl),
                                   alt: flags.contains(.maskAlternate), meta: flags.contains(.maskCommand)))
         }
         if operation == .press {
-            try append(down: true, flags: flags.union(key.modifier))
-            try append(down: false, flags: flags)
+            try append(down: true, flags: flags.union(deliveredKey.heldModifiers))
+            try append(down: false, flags: flags.union(deliveredKey.implicitModifiers))
         } else {
-            try append(down: operation == .down, flags: nextFlags, repeated: operation == .down && held[key.code] != nil)
+            let deliveryFlags = operation == .up ? nextFlags.union(deliveredKey.implicitModifiers) : nextFlags
+            try append(down: operation == .down, flags: deliveryFlags, repeated: operation == .down && held[key.code] != nil)
         }
         return BrowserKeyboardDelivery(events: prepared, expected: expected) { self.held = next }
     }

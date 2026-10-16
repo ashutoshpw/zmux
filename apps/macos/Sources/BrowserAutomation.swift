@@ -252,7 +252,17 @@ enum BrowserAutomationScript {
       if (!expected || event.type !== expected.type || event.key !== expected.key ||
           event.shiftKey !== expected.shift || event.ctrlKey !== expected.control ||
           event.altKey !== expected.alt || event.metaKey !== expected.meta) {
-        finish(false, 'Trusted keyboard sequence did not match the prepared native events');
+        // Printable key content is user input. Keep production diagnostics to
+        // event phases/modifiers and equality; the controlled smoke owns its keys.
+        const named = new Set(['Shift','Control','Alt','Meta','Enter','Tab','Escape','Backspace','Delete',
+          'ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown']);
+        const key = value => named.has(value) ? value : '<redacted>';
+        const prepared = expected ? {type:expected.type,key:key(expected.key),shift:expected.shift,
+          control:expected.control,alt:expected.alt,meta:expected.meta} : null;
+        const actual = {type:event.type,key:key(event.key),shift:event.shiftKey,control:event.ctrlKey,
+          alt:event.altKey,meta:event.metaKey,trusted:event.isTrusted};
+        finish(false, 'Trusted keyboard sequence did not match the prepared native events: ' +
+          JSON.stringify({index,prepared,actual,key_matches:!!expected && event.key === expected.key}));
         return;
       }
       if (++index === request.expected.length) {
