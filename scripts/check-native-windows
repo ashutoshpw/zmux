@@ -13,7 +13,7 @@ import tempfile
 def validate_saved(profile, prepared, prepared_path):
     path = profile / "session.json"
     saved = json.loads(path.read_text())
-    assert saved["version"] == 6, saved
+    assert saved["version"] == 7, saved
     assert saved["identity_namespace"].lower() == prepared["namespace"].lower()
     layout = saved["window_layout"]
     assert layout["focused_window"] == prepared["window"]
