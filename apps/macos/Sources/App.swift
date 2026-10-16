@@ -2599,7 +2599,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         open.performClick(nil)
         try await waitUntil { value in
             guard let selected = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
-            return !beforeReopen.contains(selected.id) && selected.browserProfileId == profile.id
+            return !beforeReopen.contains(selected.id) && selected.browserProfileId == profile.id && browsers[selected.id] != nil
         }
         guard let reopened = focusedPane?.selectedSurface,
               browsers[reopened]?.webView.configuration.websiteDataStore.identifier == profile.id else {
