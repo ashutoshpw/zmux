@@ -1226,3 +1226,32 @@ The parent verified archive integrity, source metadata, all required smoke flags
 both captured images.15 resource/CLI samples cover18.50 seconds of this mixed smoke;
 these are instrumentation receipts, not controlled workload performance budgets.
 Full-window screencapture status1 remains explicit. No subset artifact was handed off.
+
+## Local tmux without a UTF-8 locale
+
+- Bug: with LANG/LC_ALL/LC_CTYPE unset, `local-tmux list/status/start` failed with
+  "tmux returned invalid session metadata". Reproduced on Linux tmux 3.2a: tmux rewrites
+  the tab separators (and also 0x1f/0x01, so a control-character delimiter would not help)
+  to `_`, e.g. `SESSION:$0_1792146830_dev`. The public CLI regression
+  (`headless_cli_reads_session_state_without_a_utf8_locale`) removes the three locale
+  variables, also pins `LC_ALL=C`/`POSIX`, and failed for exactly this reason before the fix.
+- Fix at the owner (`local_multiplexer.rs`): every captured tmux invocation passes `-u`
+  (attach specs for the user's terminal are unchanged). Query parsing is a pure
+  `parse_query`; invalid session/client metadata errors now carry a locale hint and a
+  control-escaped copy of the raw line bounded to about 200 characters (unit tests).
+- `start` rolls back when anything after creation fails before registration: it kills
+  only `=name`, guarded by the incarnation marker, and kills a server only if this
+  operation started it and no session remains. The original error is returned; a
+  rollback failure is appended. The registry-save-failure path is unchanged.
+  Failure injection wraps the real tmux (tab rewrite, refused kill-session) in
+  `crates/remote-runtime/tests/local_multiplexer.rs`; three tests cover new server,
+  existing server with foreign/managed sessions intact, and failed rollback. Disabling
+  the rollback or `-u` makes the corresponding tests fail.
+- Rollback ignores the cancellation flag (still bounded by `OPERATION_TIMEOUT`, registry
+  lock held), so a start cancelled after `new-session` still removes its session/server;
+  a cancelled or timed-out `new-session` invocation itself also triggers the guarded
+  rollback (a definite tmux rejection does not, so a racing foreign session is never
+  killed). `MultiplexerError::Cancelled` replaces the string-matched failure. Test
+  `cancellation_after_create_still_rolls_back_the_session_and_server` fails without it.
+- Gates: full `scripts/check` passed on Linux. macOS/native lanes were not run; this
+  changes no native code.
