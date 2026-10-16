@@ -187,11 +187,10 @@ jobs:
           name: native-completed-history-${{ github.sha }}
           path: |
             ${{ runner.temp }}/native-completed-history/receipt.json
-            ${{ runner.temp }}/native-completed-history/native-completed-history.json
-            ${{ runner.temp }}/native-completed-history/native-completed-history.json.expected.txt
-            ${{ runner.temp }}/native-completed-history/fixture-session-input.json
-            ${{ runner.temp }}/native-completed-history/owned-launch.json
-            ${{ runner.temp }}/native-completed-history/owned-app-launch.py
+            ${{ runner.temp }}/native-completed-history/scenarios/*/*.json
+            ${{ runner.temp }}/native-completed-history/scenarios/*/*.txt
+            ${{ runner.temp }}/native-completed-history/scenarios/*/*.log
+            ${{ runner.temp }}/native-completed-history/scenarios/*/*.py
             ${{ runner.temp }}/native-completed-history/*.log
             ${{ runner.temp }}/native-completed-history/*.zip
             ${{ runner.temp }}/native-completed-history/source/
