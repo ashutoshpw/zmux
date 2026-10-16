@@ -35,7 +35,7 @@ enum CompletedTerminalHistorySmoke {
         var evidence = Evidence(sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "",
                                 appPID: ProcessInfo.processInfo.processIdentifier)
         let clipboard = NSPasteboard.general
-        let original = clipboard.pasteboardItems?.map { item in
+        let original: [NSPasteboardItem] = clipboard.pasteboardItems?.map { item -> NSPasteboardItem in
             let saved = NSPasteboardItem()
             for type in item.types { if let data = item.data(forType: type) { saved.setData(data, forType: type) } }
             return saved
