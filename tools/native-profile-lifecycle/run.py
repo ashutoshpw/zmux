@@ -116,6 +116,9 @@ def main():
         assert report["profileA"].lower() == profile_a and report["profileB"].lower() == profile_b
         assert report["state"] == "complete" and report["stage"] == "public_cleanup_complete"
         assert all(report[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "reopenedAEmpty", "separateBRetained"))
+        assert report["aDataRemoval"]["scope"] == "profile_a_all_website_data"
+        assert report["aDataRemoval"]["callbackReceived"]
+        assert report["aDataRemoval"]["dataTypes"]
         assert [item["phase"] for item in report["removals"]] == ["mounted_a_remove", "released_a_remove", "cleanup_a", "cleanup_b"]
         assert all(item["callbackReceived"] for item in report["removals"])
         assert report["removals"][0].get("errorDomain")
