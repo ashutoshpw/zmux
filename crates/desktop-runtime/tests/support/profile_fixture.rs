@@ -17,7 +17,9 @@ pub struct Fixture {
 }
 impl Fixture {
     pub fn new() -> Self {
-        let root = std::env::temp_dir()
+        // This real control-socket fixture must fit Darwin's sockaddr_un even
+        // when the host TMPDIR is a long per-user /var/folders path.
+        let root = PathBuf::from("/tmp")
             .canonicalize()
             .unwrap()
             .join(format!("zmux-profile-leases-{}", Uuid::new_v4()));
