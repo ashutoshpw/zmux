@@ -210,7 +210,7 @@ class NativeResourceSampler:
             pid, parent, rss, cpu, birth = line.split(maxsplit=4)
             result[int(pid)] = {"pid": int(pid), "parent_pid": int(parent),
                                 "rss_kib": int(rss), "cpu_seconds": cpu_seconds(cpu),
-                                "started": birth}
+                                "started": birth.strip()}
         return result
 
     def _path(self, pid):
