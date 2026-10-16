@@ -394,3 +394,50 @@ existing UUID, origin and revision guards remain. Queued rows with latest option
 `delivery_unknown` retain Submission unconfirmed even when retry is authorized;
 authorization does not resolve previous exposure. Full same-command native green,
 continued journey, mounted PNG review and shutdown remain required.
+
+## Unicode repaired; uncertainty fixture assumption exposed
+
+Run [38860897860](https://github.com/ashutoshpw/zmux/actions/runs/38860897860), exact
+`0d2f2e3dc360296dab2aef770ce345227ed79125`, passes both Swift 6 slices
+(106.486 s), package (325.234 s), and the first ten actual journey checks.
+All four mounted/editor/saved UTF-8 proofs equal their independent expected bytes.
+The actual button/Command-Return creates exactly one queued reply, preserving the
+later draft edit and parent/thread/sender/recipient. Explicit read leaves later
+arrival queued; receiving Off rejects send with draft retention and On never
+resurrects failures. Owned app PID 10922 fails without process timeout (18.903 s)
+at `Timed out awaiting real journal wait becomes explicit Check Status`.
+All 273 retained hashes match the freeze; archive SHA256:
+`a28929ae04750406061654883073ddd179c0ed135cb180c98559e0f99e41fcdb`.
+
+The existing storage owner bounds lock acquisition at 2 s and reports precommit
+lock refusal authoritatively; the UI's pending observer polls for 4 s. Therefore a
+single held-lock job cannot reliably establish the expected uncertain state. Do
+not change production deadlines solely for the fixture or claim an uncertainty
+product regression. Parent requested preserving the authoritative refusal contract
+and reporting public-owner alternatives before acceptance-scope changes. Failure
+reports now retain actual mounted operation status, reply bytes and Send/Check
+Status control state to avoid another generic timeout with no presentation proof.
+
+Parent approved two separate native cases without production timing changes:
+(1) exact known lock refusal, Send enabled/Check Status disabled, exact draft kept
+and no extra reply; (2) independently queued public reads behind a second flock,
+with actual pending admission/status receipts before asserting native uncertainty.
+The helper queues exactly five List requests via the shipped public control wire,
+checks the socket peer PID against the exact owned app, and retains all envelopes.
+Five reads plus one native operation leave two of eight worker slots for bounded
+GUI reads. Once the actual UI exposes its original UUID, the independent helper
+requires that public Status reports it pending and at least two queued control
+requests remain pending. Actual status capacity refusal, original draft/UUID,
+lock release, one late Saved result and shared shutdown remain native gates.
+Mounted known/capacity refusal states and exact draft bytes are also retained.
+
+A real Linux C ABI/private-profile/control-server probe confirms this public
+backlog route without fake receipts or sleeps as proof. It waits for two observed
+preceding lock refusals, verifies the original pending via the independent helper,
+then waits for four observed preceding refusals and verifies the original remains
+pending. Releasing the actual flock yields its exact original Completed receipt.
+Five unique control admissions, actual socket peer PID 245051, control states
+`failed, failed, failed, failed, pending`, completed cleanup status 0. Probe script:
+`/tmp/zmux-inbox-real-queue-probe.py`; raw receipts:
+`/tmp/zmux-inbox-queue-oxd48pdk/`. This proves actual storage/public control setup
+only; AppKit execution, capacity refusal, PNG and native shutdown remain open.

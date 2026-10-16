@@ -18,6 +18,12 @@ enum AgentInboxSmoke {
         let expected: [UInt8]
         let observed: [UInt8]
     }
+    private struct MountedControls: Encodable, Sendable {
+        let operationStatus: String
+        let replyUTF8: [UInt8]
+        let sendEnabled: Bool
+        let checkStatusEnabled: Bool
+    }
     private struct HeldCapacity: Sendable { let core: UInt64; let buffers: [UInt64] }
     private struct Evidence: Encodable, Sendable {
         let scope = "native_agent_inbox_menu_and_durable_messages"
@@ -36,6 +42,9 @@ enum AgentInboxSmoke {
         var savedReplies: [UUID] = []
         var pendingRequestId: UUID?
         var unicodeBytes: [UTF8Evidence] = []
+        var mountedControls: MountedControls?
+        var knownLockRefusal: MountedControls?
+        var capacityRefusal: MountedControls?
     }
     private struct Message: Decodable {
         struct Address: Decodable { let surface_id: UUID }
@@ -64,6 +73,7 @@ enum AgentInboxSmoke {
         var children: [Child] = []
         var livePIDs: Set<UInt32> = []
         var heldCapacity: HeldCapacity?
+        var observedContent: NSView?
         do {
             try await wait(coordinator, "initial real terminal") { state in
                 state.persistence?.startupPending != true && state.persistence?.restoring != true &&
@@ -158,6 +168,7 @@ enum AgentInboxSmoke {
             }
             guard let inbox = NSApp.windows.first(where: { $0.parent === source.window && $0.isVisible && $0.title == "Agent Inbox" }),
                   let content = inbox.contentView else { throw failure("Inbox attached to another window") }
+            observedContent = content
             try await wait(coordinator, "all installation message rows") { _ in
                 let ids = Set(descendants(content).compactMap { $0.accessibilityIdentifier() })
                 return evidence.messageIDs.allSatisfy { ids.contains($0.uuidString.lowercased()) }
@@ -293,11 +304,34 @@ enum AgentInboxSmoke {
                   restored.messages.first(where: { $0.id == closed.id })?.failure == "recipient_closed" else { throw failure("Turning receiving on resurrected retained failures") }
             evidence.checks.append("native_receiving_settings_refuse_send_preserve_draft_and_never_resurrect")
             try await wait(coordinator, "receiving-on receipt settled before uncertainty") { _ in submit.isEnabled && operationStatus(content).contains("settings saved") }
-            // The independent runner process holds the actual journal lock. No fake
-            // receipt or injected timeout supplies the pending/unknown outcome.
+            // A single held lock must produce the storage owner's authoritative
+            // precommit refusal, not fabricated uncertainty or an automatic retry.
             try await signal(root.appendingPathComponent("lock-request"))
             try await file(root.appendingPathComponent("lock-held"))
             guard submit.isEnabled else { throw failure("Reply not available before real lock contention") }
+            submit.performClick(nil)
+            try submitKey(in: inbox)
+            try await wait(coordinator, "known journal lock refusal retains draft without pending status") { _ in
+                operationStatus(content) == "another instance is reserving session generations; retry" &&
+                submit.isEnabled && !status.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8)
+            }
+            evidence.knownLockRefusal = mountedControls(content)
+            try await signal(root.appendingPathComponent("lock-release"))
+            try await file(root.appendingPathComponent("lock-ended"))
+            let refused = try JSONDecoder().decode(Inbox.self, from: await cli(source, ["agent", "inbox"]))
+            guard refused.messages.count == 7, refused.messages.filter({ $0.reply_to == primary.id }).count == 1 else {
+                throw failure("Known lock refusal created an extra durable reply")
+            }
+            evidence.checks.append("real_journal_lock_known_refusal_preserves_exact_draft")
+            refresh.performClick(nil)
+            try await wait(coordinator, "receiving controls recovered after known lock refusal") { _ in receiving.isEnabled && submit.isEnabled }
+            // The independent owner queues five actual public reads behind another
+            // flock. Retained admission/status receipts prove the backlog; elapsed
+            // sleeps never establish that the original mutation was accepted.
+            try await signal(root.appendingPathComponent("pending-lock-request"))
+            try await file(root.appendingPathComponent("pending-lock-held.json"))
+            try await file(root.appendingPathComponent("pending-controls-admitted.json"))
+            guard submit.isEnabled else { throw failure("Reply not available before observed public backlog") }
             submit.performClick(nil)
             try submitKey(in: inbox)
             try await wait(coordinator, "real journal wait becomes explicit Check Status") { _ in
@@ -305,6 +339,11 @@ enum AgentInboxSmoke {
             }
             guard let operation = operationStatus(content).split(separator: " ").compactMap({ UUID(uuidString: String($0)) }).last else { throw failure("Uncertain operation did not expose its original UUID") }
             evidence.pendingRequestId = operation
+            let operationData = try JSONSerialization.data(withJSONObject: ["requestId": operation.uuidString.lowercased()])
+            let operationPath = root.appendingPathComponent("pending-operation.json")
+            try await Task.detached { try operationData.write(to: operationPath, options: .atomic) }.value
+            try await file(root.appendingPathComponent("pending-public-receipts.json"))
+            evidence.checks.append("public_owner_pending_original_and_queued_controls")
             status.performClick(nil)
             try await wait(coordinator, "pending Check Status retains exact UUID and draft") { _ in
                 status.isEnabled && operationStatus(content).contains(operation.uuidString.lowercased()) && reply.string.utf8.elementsEqual(laterEdit.utf8) && !submit.isEnabled
@@ -315,11 +354,12 @@ enum AgentInboxSmoke {
                 status.isEnabled && !submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8) &&
                 operationStatus(content).contains("(-5)") && operationStatus(content).contains(operation.uuidString.lowercased())
             }
+            evidence.capacityRefusal = mountedControls(content)
             if let heldCapacity { try await releaseCapacity(heldCapacity) }
             heldCapacity = nil
             evidence.checks.append("status_transport_capacity_refusal_preserves_original_uncertain_request")
-            try await signal(root.appendingPathComponent("lock-release"))
-            try await file(root.appendingPathComponent("lock-ended"))
+            try await signal(root.appendingPathComponent("pending-lock-release"))
+            try await file(root.appendingPathComponent("pending-lock-ended.json"))
             status.performClick(nil)
             try await wait(coordinator, "original UUID resolves saved and clears unchanged draft") { _ in
                 reply.string.isEmpty && operationStatus(content).hasPrefix("Saved") && !status.isEnabled
@@ -351,9 +391,13 @@ enum AgentInboxSmoke {
             }
             // Release only this fixture's independently owned lock holder before
             // shared shutdown drains any accepted write. Never cancel/replay it.
-            do { try await signal(root.appendingPathComponent("lock-release")) }
+            do {
+                try await signal(root.appendingPathComponent("lock-release"))
+                try await signal(root.appendingPathComponent("pending-lock-release"))
+            }
             catch { FileHandle.standardError.write(Data("Lock release signal failed: \(error)\n".utf8)) }
             evidence.state = "failed"; evidence.failure = error.localizedDescription
+            if let content = observedContent { evidence.mountedControls = mountedControls(content) }
             do { evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: livePIDs) }
             catch { evidence.failure = (evidence.failure ?? "") + "; counter verification: " + error.localizedDescription }
             try await save(evidence, to: report)
@@ -405,6 +449,12 @@ enum AgentInboxSmoke {
     }
     private static func button(_ title: String, in content: NSView) -> NSButton? {
         descendants(content).compactMap { $0 as? NSButton }.first { $0.title == title || $0.accessibilityLabel() == title }
+    }
+    private static func mountedControls(_ content: NSView) -> MountedControls {
+        let editor = descendants(content).compactMap { $0 as? NSTextView }.first { $0.isEditable && $0.accessibilityLabel() == "Reply" }
+        return MountedControls(operationStatus: operationStatus(content), replyUTF8: Array((editor?.string ?? "").utf8),
+            sendEnabled: button("Send Reply", in: content)?.isEnabled == true,
+            checkStatusEnabled: button("Check Status", in: content)?.isEnabled == true)
     }
     private static func operationStatus(_ content: NSView) -> String {
         descendants(content).compactMap { $0 as? NSTextField }.first { $0.accessibilityLabel() == "Message operation status" }?.stringValue ?? ""

@@ -44,22 +44,75 @@ while time.monotonic()<deadline:
   total+=len(data)
  sequence+=1;save()
 '''
-LOCK_HOLDER = '''import fcntl,json,os,pathlib,sys,time
+LOCK_HOLDER = '''import fcntl,json,os,pathlib,socket,struct,sys,time,uuid
 root=pathlib.Path(sys.argv[1]); profile=pathlib.Path(sys.argv[2]); deadline=time.monotonic()+100
 record={'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':os.environ['ZMUX_AGENT_INBOX_NONCE']}
 (root/'lock-holder.json').write_text(json.dumps(record))
-while not (root/'lock-request').exists():
- if time.monotonic()>=deadline:raise RuntimeError('Lock request deadline expired')
- time.sleep(.01)
-with (profile/'agent-messages.lock').open('r+') as lock:
- fcntl.flock(lock,fcntl.LOCK_EX)
- (root/'lock-held').write_text(json.dumps(record))
- while not (root/'lock-release').exists():
-  if time.monotonic()>=deadline:raise RuntimeError('Lock release deadline expired')
+def await_file(name):
+ while not (root/name).exists():
+  if time.monotonic()>=deadline:raise RuntimeError('Independent owner deadline: '+name)
   time.sleep(.01)
- fcntl.flock(lock,fcntl.LOCK_UN)
-(root/'lock-ended').write_text(json.dumps(record))
+def save(name,value):
+ path=root/name; temporary=path.with_suffix('.tmp'); temporary.write_text(json.dumps(value));temporary.replace(path)
+def exact(connection,count):
+ data=b''
+ while len(data)<count:
+  chunk=connection.recv(count-len(data))
+  if not chunk:raise RuntimeError('Public control response truncated')
+  data+=chunk
+ return data
+wire_id=0
+def rpc(command):
+ global wire_id
+ wire_id+=1
+ owned=json.loads((root/'owned-launch.json').read_text())
+ with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+  connection.settimeout(3);connection.connect(os.environ['ZMUX_SOCKET_PATH'])
+  if sys.platform=='darwin':peer=struct.unpack('i',connection.getsockopt(0,2,4))[0]
+  else:peer=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))[0]
+  if peer!=owned['pid']:raise RuntimeError('Public control peer is not the owned app')
+  request={'version':2,'request_id':wire_id,'command':command}
+  data=json.dumps(request).encode();connection.sendall(struct.pack('!I',len(data))+data)
+  count=struct.unpack('!I',exact(connection,4))[0]
+  if not 0<count<=1048576:raise RuntimeError('Public control response exceeds bound')
+  response=json.loads(exact(connection,count))
+ if response.get('version')!=2 or response.get('request_id')!=wire_id or response.get('ok') is not True:
+  raise RuntimeError('Public control admission refused: '+json.dumps(response))
+ return {'peerPID':peer,'request':request,'response':response}
+def status(identifier):return rpc({'method':'agent_messages_status','request_id':identifier})
+await_file('lock-request')
+with (profile/'agent-messages.lock').open('r+') as lock:
+ fcntl.flock(lock,fcntl.LOCK_EX);save('lock-held',record)
+ await_file('lock-release');fcntl.flock(lock,fcntl.LOCK_UN)
+save('lock-ended',record)
+await_file('pending-lock-request')
+with (profile/'agent-messages.lock').open('r+') as lock:
+ fcntl.flock(lock,fcntl.LOCK_EX);save('pending-lock-held.json',record)
+ controls=[]
+ # Five real read admissions plus the native reply leave two of eight slots
+ # for the controller's bounded list/settings queries. No mutation is replayed.
+ for index in range(5):
+  identifier=str(uuid.uuid4())
+  observed=rpc({'method':'agent_messages','request':{'request_id':identifier,
+   'caller':{},'action':{'action':'list','surface':None,'states':[],'limit':1,'cursor':None}}})
+  receipt=observed['response']['result']
+  if receipt.get('request_id')!=identifier or receipt.get('state')!='pending':
+   raise RuntimeError('Independent queued read was not admitted pending')
+  controls.append(observed)
+ save('pending-controls-admitted.json',dict(record,controls=controls,ownedRequests=6,workerCapacity=8))
+ await_file('pending-operation.json')
+ operation=json.loads((root/'pending-operation.json').read_text())['requestId']
+ original=status(operation)
+ statuses=[status(row['response']['result']['request_id']) for row in controls]
+ if original['response']['result'].get('request_id')!=operation or original['response']['result'].get('state')!='pending':
+  raise RuntimeError('Original native operation was not publicly pending')
+ if sum(row['response']['result'].get('state')=='pending' for row in statuses)<2:
+  raise RuntimeError('Independent public queue controls did not retain pending headroom')
+ save('pending-public-receipts.json',dict(record,requestId=operation,original=original,controls=statuses))
+ await_file('pending-lock-release');fcntl.flock(lock,fcntl.LOCK_UN)
+save('pending-lock-ended.json',record)
 '''
+
 PREREQUISITES = ['two_real_window_ptys_and_exact_cli_queued_global_closed_records',
                  'independent_pty_input_counters_zero',
                  'other_window_key_before_explicit_source_menu']
@@ -71,6 +124,8 @@ SUCCESS_CHECKS = PREREQUISITES + [
     'button_and_submit_key_save_one_exact_reply_and_keep_later_edit',
     'explicit_read_leaves_later_arrival_queued',
     'native_receiving_settings_refuse_send_preserve_draft_and_never_resurrect',
+    'real_journal_lock_known_refusal_preserves_exact_draft',
+    'public_owner_pending_original_and_queued_controls',
     'status_transport_capacity_refusal_preserves_original_uncertain_request',
     'real_journal_lock_uncertainty_retains_uuid_and_check_status_saves_once',
     'independent_pty_progress_after_all_ui_actions_zero_input']
@@ -225,11 +280,41 @@ def main():
                 or any(row['expected'] != row['observed'] for row in proofs)
                 or proofs[0]['expected'] == proofs[1]['expected']):
             raise RuntimeError('Native mounted/editor/saved Unicode bytes differ from independent literals')
+        known = result.get('knownLockRefusal', {})
+        capacity = result.get('capacityRefusal', {})
+        later_draft = proofs[2]['expected'] + list(b'edited while saving')
+        if (known.get('operationStatus') != 'another instance is reserving session generations; retry'
+                or known.get('sendEnabled') is not True or known.get('checkStatusEnabled') is not False
+                or known.get('replyUTF8') != later_draft
+                or capacity.get('sendEnabled') is not False or capacity.get('checkStatusEnabled') is not True
+                or capacity.get('replyUTF8') != later_draft
+                or '(-5)' not in capacity.get('operationStatus', '')
+                or result['pendingRequestId'].lower() not in capacity.get('operationStatus', '')):
+            raise RuntimeError('Mounted known refusal or uncertain capacity refusal contract differs')
         lock_record = native.document(root / 'lock-ended', maximum=2048)
         if (lock_record['pid'] != lock_group.process.pid or lock_record['parent_pid'] != os.getpid()
                 or lock_record['nonce'] != nonce):
             raise RuntimeError('Independent real journal lock holder identity differs')
+        pending_lock = native.document(root / 'pending-lock-ended.json', maximum=2048)
+        admissions = native.document(root / 'pending-controls-admitted.json')
+        public = native.document(root / 'pending-public-receipts.json')
+        if (pending_lock != lock_record
+                or any(public.get(key) != lock_record[key] or admissions.get(key) != lock_record[key] for key in lock_record)
+                or admissions['ownedRequests'] != 6 or admissions['workerCapacity'] != 8
+                or len(admissions['controls']) != 5 or len(public['controls']) != 5
+                or uuid.UUID(public['requestId']) != uuid.UUID(result['pendingRequestId'])):
+            raise RuntimeError('Independent pending owner/queue identity differs')
+        identifiers = [row['response']['result']['request_id'] for row in admissions['controls']]
+        if (len(set(identifiers)) != 5
+                or any(row['response']['result']['state'] != 'pending' for row in admissions['controls'])
+                or [row['response']['result']['request_id'] for row in public['controls']] != identifiers
+                or public['original']['response']['result']['request_id'] != public['requestId']
+                or public['original']['response']['result']['state'] != 'pending'
+                or sum(row['response']['result']['state'] == 'pending' for row in public['controls']) < 2
+                or any(row['peerPID'] != owned['pid'] for row in admissions['controls'] + public['controls'] + [public['original']])):
+            raise RuntimeError('Public native pending/admission receipts do not establish the actual queue')
         receipt['lock_holder']['completed'] = lock_record
+        receipt['lock_holder']['pending_completed'] = pending_lock
         receipt['state'] = 'complete'
     except Exception as error:
         receipt.update(state='failed', error=f'{type(error).__name__}: {error}')
