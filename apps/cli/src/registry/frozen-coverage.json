@@ -2975,22 +2975,22 @@
       "inventory_id": "CMD-424",
       "reference_command": "set-buffer",
       "review_owner": "audit-cloud-platform.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "set-buffer"
     },
     {
       "inventory_id": "CMD-425",
       "reference_command": "list-buffers",
       "review_owner": "audit-cloud-platform.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "list-buffers"
     },
     {
       "inventory_id": "CMD-426",
       "reference_command": "paste-buffer",
       "review_owner": "audit-cloud-platform.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "paste-buffer"
     },
     {
       "inventory_id": "CMD-427",

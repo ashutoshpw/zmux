@@ -40,6 +40,30 @@ pub(super) const GROUPS: &[(&str, &str)] = &[
 ];
 pub(super) const COMMANDS: &[CommandSpec] = &[
     command!(
+        "set-buffer",
+        "automation",
+        false,
+        false,
+        "set-buffer [--name NAME] [--] [TEXT | -]",
+        "Persist exact UTF-8 text in a private named buffer (default: default). Omitted text or - reads bounded stdin before any socket connection. Leading/trailing whitespace is preserved. Limits: 4096 bytes per buffer, 128 names, 512 KiB serialized store. Names contain 1–128 bytes without controls. Uses ~/.config/zmux/buffers; no running app required. Existing corrupt or unsafe state fails without replacement."
+    ),
+    command!(
+        "list-buffers",
+        "automation",
+        false,
+        false,
+        "list-buffers [--json]",
+        "List persistent named buffers alphabetically as JSON without exposing contents. Size is explicitly UTF-8 bytes; the reference's grapheme-count display remains a compatibility gap. No running app required."
+    ),
+    command!(
+        "paste-buffer",
+        "automation",
+        false,
+        true,
+        "paste-buffer [--name NAME] [--bracketed] [--window HANDLE] [--workspace HANDLE] [--pane HANDLE] [--surface HANDLE]",
+        "Send one saved buffer to a live terminal using shared target resolution without changing focus. --bracketed uses the same terminal paste owner as native Paste, honoring terminal bracketed-paste mode. Missing buffers, stale/cross-owner targets, browser targets and read-only sockets fail. A timeout never retries input. All results are JSON; full historical output and size-limit compatibility remain unverified."
+    ),
+    command!(
         "current",
         "inspect",
         false,

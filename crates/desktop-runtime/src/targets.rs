@@ -29,6 +29,9 @@ pub enum TargetOperation {
     PasteFiles {
         paths: Vec<std::path::PathBuf>,
     },
+    PasteText {
+        text: String,
+    },
     SendText {
         text: String,
     },
