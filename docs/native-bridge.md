@@ -195,8 +195,11 @@ Each pane owns ordered `surfaces` and `selected_surface`; a terminal surface own
 navigation generation. File surfaces (version 7) have `kind: file`, no session or URL, and a
 `file` object `{path, mode, dirty}`: an absolute canonical path, a presentation mode (`text`,
 `markdown`, `image`, `pdf`) and a dirty mirror that only the native document owner may set. File
-content never travels in the snapshot. Persisted sessions carrying a file surface are session
-format version 10; older readers refuse it and older documents restore unchanged. Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
+content never travels in the snapshot. Every session this build saves is session format
+version 10, whether or not it has a file surface. A build that predates version 10 refuses all of
+those documents, not only the ones with file tabs, so rolling back to such a build cannot restore
+any session this build saved. Documents written by earlier builds (versions 1 to 9) restore unchanged.
+Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
 Native UI and Rust are packaged together; older hosts must reject an unfamiliar model version.
 Legacy socket pane inspection still projects the selected session for existing CLI callers.
 
