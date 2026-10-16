@@ -172,7 +172,7 @@
     {
       "id": "T03",
       "title": "Multiple windows, groups and canvas layouts",
-      "status": "planned",
+      "status": "implementing",
       "owner": "workspace-core topology and native window host",
       "depends_on": [
         "T02"

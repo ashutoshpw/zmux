@@ -142,6 +142,25 @@ pub(crate) fn reconcile(
     validate(groups, windows)
 }
 impl crate::Snapshot {
+    /// Presentation/selector order comes from canonical window membership, not
+    /// the group's allocation order or its display name.
+    pub fn workspace_groups_in_window(&self, window_id: WindowId) -> Vec<&WorkspaceGroup> {
+        let Some(window) = self.windows.iter().find(|w| w.id == window_id) else {
+            return Vec::new();
+        };
+        let mut groups: Vec<_> = self
+            .workspace_groups
+            .iter()
+            .filter(|g| g.window_id == window_id)
+            .collect();
+        groups.sort_by_key(|g| {
+            window
+                .workspace_ids
+                .iter()
+                .position(|id| Some(id) == g.workspace_ids.first())
+        });
+        groups
+    }
     pub(crate) fn check_group_order(
         &self,
         window: WindowId,

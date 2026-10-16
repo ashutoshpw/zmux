@@ -23,6 +23,7 @@ pub mod targets;
 pub mod terminal_engine;
 pub mod transfers;
 pub mod windows;
+pub mod workspace_groups;
 pub mod workspace_order;
 pub mod zellij_coordinator;
 use attention::{
@@ -100,6 +101,9 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    WorkspaceGroup {
+        request: workspace_groups::GroupRequest,
+    },
     AgentMessages {
         request: agent_messages::MessageRequest,
     },
@@ -317,6 +321,7 @@ pub(crate) struct Execution {
     pub download_result: Option<serde_json::Value>,
     pub window_result: Option<serde_json::Value>,
     pub workspace_order_result: Option<serde_json::Value>,
+    pub workspace_group_result: Option<serde_json::Value>,
     pub surface_order_result: Option<serde_json::Value>,
 }
 
@@ -474,6 +479,7 @@ impl Desktop {
                     windows,
                     window_result: None,
                     workspace_order_result: None,
+                    workspace_group_result: None,
                     surface_order_result: None,
                     download_result: None,
                     profiles,
@@ -1029,6 +1035,7 @@ struct Worker {
     windows: windows::WindowRuntime,
     window_result: Option<serde_json::Value>,
     workspace_order_result: Option<serde_json::Value>,
+    workspace_group_result: Option<serde_json::Value>,
     surface_order_result: Option<serde_json::Value>,
     download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
@@ -1235,6 +1242,7 @@ impl Worker {
         self.download_result = None;
         self.window_result = None;
         self.workspace_order_result = None;
+        self.workspace_group_result = None;
         self.surface_order_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
@@ -1350,6 +1358,7 @@ impl Worker {
                 download_result: self.download_result.take(),
                 window_result: self.window_result.take(),
                 workspace_order_result: self.workspace_order_result.take(),
+                workspace_group_result: self.workspace_group_result.take(),
                 surface_order_result: self.surface_order_result.take(),
                 created_uploads: snapshot
                     .uploads
@@ -1412,6 +1421,7 @@ impl Worker {
             }
             Command::SurfaceOrder { request } => self.surface_order(request),
             Command::WorkspaceOrder { request } => self.workspace_order(request),
+            Command::WorkspaceGroup { request } => self.workspace_group(request),
             Command::LocalTmux { request } => self.local_tmux_command(request),
             Command::LocalZellij { request } => self.local_zellij_command(request),
             Command::Downloads { request } => {

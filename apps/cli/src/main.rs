@@ -36,6 +36,7 @@ mod ssh;
 mod surface_order;
 mod targets;
 mod windows;
+mod workspace_groups;
 mod workspace_move;
 mod workspace_order;
 
@@ -283,6 +284,31 @@ fn parse(
     let tail = &args[(index + 1).min(args.len())..];
     if let Some(command @ ("set-buffer" | "list-buffers" | "paste-buffer")) = command {
         return Ok((buffers::parse(command, tail)?, socket, timeout, password));
+    }
+    if command == Some("workspace") {
+        let group_tail = if tail.first().and_then(|v| v.to_str()) == Some("group") {
+            &tail[1..]
+        } else if help_requested(tail) {
+            tail
+        } else {
+            return Err(CliError(
+                "workspace currently supports only the group namespace".into(),
+            ));
+        };
+        return Ok((
+            workspace_groups::parse("workspace", group_tail)?,
+            socket,
+            timeout,
+            password,
+        ));
+    }
+    if command == Some("workspace-group") {
+        return Ok((
+            workspace_groups::parse("workspace-group", tail)?,
+            socket,
+            timeout,
+            password,
+        ));
     }
     if command == Some("hooks") {
         return Ok((hooks::parse(tail)?, socket, timeout, password));

@@ -866,3 +866,72 @@ retries, hard window/caller scope, stale revision refusal, read-only listing and
 non-destructive delete. No AppKit execution is claimed by its trusted boundary
 acknowledgements. Source discovery will advertise only implemented forms and
 keep unsupported destructive/generated-anchor/native behavior explicit.
+
+### Group CLI/socket continuation
+
+The shared `workspace_group` socket request resolves selectors and optional model
+revision against one immutable executor snapshot, then uses the same group action
+owner as native/core callers. The CLI exposes `workspace group` and the permanent
+`workspace-group` spelling alias. Supported verbs are list, create, rename,
+collapse, expand, add, remove, set-anchor, move, ungroup and non-destructive delete.
+Create requires `--name` and 1–32 explicit `--from` existing workspace handles.
+No selection is guessed and no shell is created. Group names are not identities.
+
+Groups have a stable `workspace_group:N` reference and UUID derived from the
+existing model namespace and group kind. `index:N` is a one-based group position
+within canonical window order. `--window` is a hard constraint. List/create use
+explicit or surviving caller window context; an invalid window-only claim cannot
+fall back to the focused window. Explicit stable group/workspace targets derive
+their actual owner and ignore unrelated ambient claims. All first-member and
+additional-member resolution is constrained to that same window.
+
+`--external-id` and `--idempotency-key` are equivalent, mutually exclusive create
+options. Repeating an existing key in its window returns the existing group
+without mutating revision or resolving now-stale initial member handles. Another
+window may use the same key independently. All mutation results report actual
+change, current canonical groups/order and model revision; list is read-only.
+Delete/ungroup report dissolved containers and zero closed workspaces. The
+`--close-workspaces` and generated-anchor cleanup forms refuse before connecting.
+Group move uses a signed zero-based workspace insertion slot after removing the
+whole block; values clamp and cannot split another group. Native group rendering,
+collapsed navigation, generated anchors and all earlier deferred forms stay open.
+
+The real CLI/socket/PTY regression now passes every implemented verb, canonical
+and alias spelling, stable UUID/index selectors, stale-member external-key retry,
+window-key isolation, wrong-window/member and stale-revision refusal, stale
+ambient context refusal, read-only list/write rejection, and non-destructive
+delete/ungroup. Session IDs/PIDs and focus remain unchanged through grouping and
+metadata/order mutations. Evidence `/tmp/zmux-t03-groups-cli-green.log`; intended
+red `/tmp/zmux-t03-groups-cli-red.log`. This test uses only the existing native
+window acknowledgement boundary and makes no AppKit execution claim.
+
+Machine command discovery uses live parser probes for all supported canonical
+verbs, with truthful required arguments and remaining limitations. The actual
+socket test supplies the behavioral proof; those probes alone do not establish
+parity. Strict all-target Clippy passes
+(`/tmp/zmux-t03-groups-cli-clippy-r2.log`). Full `scripts/check` passes
+401 tests in 74 groups, one existing ignored subprocess entrypoint, strict
+Clippy, notices and both C ABI gates. Final log:
+`/tmp/zmux-t03-groups-cli-check-r2.log`. The first full run exposed discovery's
+intentional invalid local-tmux environment leaking into list/create parser
+probes. Each group discovery probe now supplies an explicit window, keeping
+offline help/catalog generation independent of ambient caller claims without
+changing live command routing. The existing offline discovery regression passes
+(`/tmp/zmux-t03-groups-discovery-green.log`).
+
+Domain/persistence and CLI/socket are validated portable slices. Native group
+presentation/navigation, generated anchors, destructive close, pin/color/icon,
+group focus/new-workspace, grouped undo and full T03/V01 parity remain pending.
+This worktree does not change native sources and no AppKit or physical-input
+acceptance is claimed.
+
+
+Final handoff found the earlier focused `/tmp` logs no longer present. The
+historical paths above describe their original executions; the retained final
+full-check log contains the passing domain, filesystem/PTY and expanded CLI cases.
+Both committed initial regressions were replayed from isolated `git archive`
+exports, without modifying this worktree: `a1e829e` fails for the missing
+`workspace_group` action and `9be231c` fails for the missing `workspace` CLI route.
+Fresh evidence is `/tmp/zmux-t03-groups-domain-red-replay.log` and
+`/tmp/zmux-t03-groups-cli-red-replay.log`; both exit 101 for those intended causes.
+`/tmp/zmux-t03-groups-red-replay-sources.json` records exact commits and commands.

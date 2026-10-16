@@ -243,6 +243,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         ControlCommand::AgentMessagesStatus { .. } => true,
         ControlCommand::SurfaceOrder { .. } => false,
         ControlCommand::WorkspaceOrder { request } => request.dry_run,
+        ControlCommand::WorkspaceGroup { request } => request.action.is_read(),
         ControlCommand::WindowStatus { .. } => true,
         ControlCommand::Windows { request } => matches!(
             request.action,

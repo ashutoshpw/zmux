@@ -258,6 +258,7 @@ fn reply_execution(
         download_result: None,
         window_result: None,
         workspace_order_result: None,
+        workspace_group_result: None,
         surface_order_result: None,
         tmux_operation_id: None,
         session_operation_id: None,

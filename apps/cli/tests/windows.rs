@@ -1298,6 +1298,58 @@ fn workspace_group_cli_uses_real_owner_scope_idempotency_and_read_policy_without
     let listed = fixture.value(&["workspace", "group", "list"]);
     let alias = fixture.value(&["workspace-group", "list", "--json"]);
     assert_eq!(listed, alias);
+    assert_eq!(
+        fixture.value(&["workspace-group", "rename", &identity, "--name", "Renamed"])["group"]["name"],
+        "Renamed"
+    );
+    assert_eq!(
+        fixture.value(&["workspace", "group", "expand", &identity])["group"]["collapsed"],
+        false
+    );
+    assert_eq!(
+        fixture.value(&[
+            "workspace-group",
+            "set-anchor",
+            "--group",
+            &identity,
+            "--workspace",
+            &ids[2].0.to_string()
+        ])["group"]["anchor_workspace_id"],
+        ids[2].0
+    );
+    assert_eq!(
+        fixture.value(&[
+            "workspace-group",
+            "add",
+            "--group",
+            &identity,
+            "--workspace",
+            &ids[1].0.to_string()
+        ])["group"]["workspace_ids"],
+        serde_json::json!([ids[2], ids[0], ids[1]])
+    );
+    assert_eq!(
+        fixture.value(&[
+            "workspace-group",
+            "remove",
+            "--workspace",
+            &ids[1].0.to_string()
+        ])["group"]["workspace_ids"],
+        serde_json::json!([ids[2], ids[0]])
+    );
+    let moved = fixture.value(&["workspace-group", "move", &identity, "--index", "99"]);
+    assert_eq!(
+        moved["workspace_ids"],
+        serde_json::json!([ids[1], ids[2], ids[0]])
+    );
+    assert_eq!(
+        fixture.value(&["workspace-group", "collapse", "index:1"])["group"]["group_uuid"],
+        identity
+    );
+    assert_eq!(
+        children(&desktop_snapshot::read(&fixture.desktop)),
+        children(&before)
+    );
     let source_window = before.model.windows[0].id;
     let child = fixture.spawn(&["new-window", "--no-focus"]);
     let open = fixture.pending(WindowKind::Open);
@@ -1361,6 +1413,12 @@ fn workspace_group_cli_uses_real_owner_scope_idempotency_and_read_policy_without
         );
         assert_eq!(desktop_snapshot::read(&fixture.desktop).model, stable);
     }
+    let other_identity = other["group"]["group_uuid"].as_str().unwrap();
+    assert_eq!(
+        fixture.value(&["workspace-group", "ungroup", other_identity])["outcome"],
+        "dissolved"
+    );
+    let stable = desktop_snapshot::read(&fixture.desktop).model.clone();
     let mut stale = fixture.command(&["workspace-group", "list"]);
     stale.env("ZMUX_WINDOW_ID", "window:999999");
     assert!(!stale.output().unwrap().status.success());

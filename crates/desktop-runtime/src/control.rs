@@ -49,6 +49,9 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    WorkspaceGroup {
+        request: crate::workspace_groups::GroupRequest,
+    },
     AgentMessages {
         request: crate::agent_messages::MessageRequest,
     },
@@ -658,6 +661,16 @@ fn dispatch(
                 request: order_request,
             },
         ),
+        ControlCommand::WorkspaceGroup {
+            request: group_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::WorkspaceGroup {
+                request: group_request,
+            },
+        ),
         ControlCommand::WorkspaceOrder {
             request: order_request,
         } => mutate(
@@ -1091,6 +1104,9 @@ fn mutate(
     }
     if let Some(order) = execution.surface_order_result {
         return Ok(order);
+    }
+    if let Some(group) = execution.workspace_group_result {
+        return Ok(group);
     }
     if let Some(order) = execution.workspace_order_result {
         return Ok(order);
