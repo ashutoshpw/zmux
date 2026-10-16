@@ -2048,6 +2048,161 @@ fn pin_every_whole_file_load_goes_through_the_gate_and_the_panel_shows_waiting_a
     );
 }
 
+// The core allows `MAX_FILE_SURFACES` file tabs across the whole desktop and answers every further
+// new path of an `open` with `file_capacity`. The smoke's sixteen-file step therefore needs a desktop
+// with no other file tab: the image, the PDF and the reopened tab that earlier steps leave open take
+// three of the sixteen places and the command exits 1 with three `file_capacity` items.
+#[test]
+fn the_sixteen_file_open_needs_every_earlier_file_tab_closed_and_the_smoke_closes_them() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let capacity = zmux_desktop_runtime::MAX_FILE_SURFACES;
+    let operands = zmux_desktop_runtime::files::MAX_OPEN_ITEMS;
+    assert_eq!(
+        (capacity, operands),
+        (16, 16),
+        "the smoke's step 13 opens as many files as the desktop admits"
+    );
+    let dir = TempDir::new();
+    let desktop = zmux_desktop_create();
+    assert_eq!(desktop.status, 0);
+    let desktop = desktop.value;
+    snapshot(desktop, |v| {
+        !v["model"]["workspaces"].as_array().unwrap().is_empty()
+    });
+    let paths = |prefix: &str, count: usize| -> Vec<Value> {
+        (0..count)
+            .map(|i| {
+                let path = dir.0.join(format!("{prefix}-{i:02}.txt"));
+                std::fs::write(&path, format!("{prefix} {i}\n")).unwrap();
+                json!({"kind":"path","value":path})
+            })
+            .collect()
+    };
+    let open = |items: Vec<Value>| -> Value {
+        let (reply, _) = call(
+            desktop,
+            &json!({"op":"open","items":items,"focus":false}),
+            &[],
+        );
+        reply
+    };
+    let outcomes = |reply: &Value| -> Vec<(bool, Option<String>)> {
+        reply["result"]["items"]
+            .as_array()
+            .unwrap_or_else(|| panic!("an open reply carries its items: {reply}"))
+            .iter()
+            .map(|item| {
+                (
+                    item["ok"] == true,
+                    item["error"]["code"].as_str().map(str::to_owned),
+                )
+            })
+            .collect()
+    };
+
+    // The smoke at step 13 as it was: three file tabs still open, then sixteen new files.
+    let lingering = open(paths("lingering", 3));
+    assert_eq!(lingering["ok"], true, "{lingering}");
+    let held: Vec<u64> = lingering["result"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["surface"]["surface_id"].as_u64().expect("a surface"))
+        .collect();
+    let crowded = open(paths("many", operands));
+    let crowded = outcomes(&crowded);
+    let refused: Vec<usize> = crowded
+        .iter()
+        .enumerate()
+        .filter(|(_, (ok, _))| !ok)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        refused,
+        vec![13, 14, 15],
+        "three lingering tabs leave room for thirteen of sixteen: {crowded:?}"
+    );
+    assert!(
+        refused
+            .iter()
+            .all(|&i| crowded[i].1.as_deref() == Some("file_capacity")),
+        "the refusals are file_capacity: {crowded:?}"
+    );
+
+    // Closing every one of them (all clean, as the smoke's are) frees the places, so sixteen new
+    // files all open. Close the thirteen that did open as well, to start from an empty desktop.
+    let state = snapshot(desktop, |v| {
+        v["files"]["entries"]
+            .as_array()
+            .is_some_and(|e| e.len() == capacity)
+    });
+    let mut open_ids = Vec::new();
+    fn collect(value: &Value, out: &mut Vec<u64>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("kind") == Some(&json!("file")) && map.get("file").is_some() {
+                    out.push(map["id"].as_u64().expect("a surface id"));
+                }
+                map.values().for_each(|v| collect(v, out));
+            }
+            Value::Array(items) => items.iter().for_each(|v| collect(v, out)),
+            _ => {}
+        }
+    }
+    collect(&state["model"]["workspaces"], &mut open_ids);
+    assert_eq!(open_ids.len(), capacity, "{open_ids:?}");
+    assert!(held.iter().all(|id| open_ids.contains(id)));
+    for (request, id) in open_ids.iter().enumerate() {
+        let close = serde_json::to_vec(&json!({
+            "version":1,"request_id":request as u64 + 1000,
+            "payload":{"command":"action","action":{"action":"close_surface","surface_id":id}}
+        }))
+        .unwrap();
+        // SAFETY: the encoded request storage is readable for the whole call.
+        let closed = unsafe { zmux_desktop_dispatch(desktop, close.as_ptr(), close.len()) };
+        assert_eq!(closed.status, 0);
+        let reply: Value = serde_json::from_slice(&bytes_of(closed.value)).unwrap();
+        assert_eq!(reply["ok"], true, "closing a clean file tab: {reply}");
+    }
+    snapshot(desktop, |v| {
+        let mut remaining = Vec::new();
+        // `closed_items` keeps the closed tabs for reopening; only open workspaces count.
+        collect(&v["model"]["workspaces"], &mut remaining);
+        remaining.is_empty()
+    });
+    let fresh = outcomes(&open(paths("fresh", operands)));
+    assert!(
+        fresh.iter().all(|(ok, code)| *ok && code.is_none()),
+        "with no other file tab, sixteen new files all open: {fresh:?}"
+    );
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
+
+    // The smoke closes the three tabs it keeps (the image, the PDF and the reopened error tab) and
+    // waits until no file tab remains before it opens the sixteen files.
+    let smoke = swift("FilePanelSmoke.swift");
+    let journey = between(&smoke, "// 13. Sixteen file tabs", "let manyPaths");
+    for needed in [
+        "for keptID in [imageID, pdfID, brokenID] { host.closeTerminalTab(keptID) }",
+        "fileSurfaces($0).isEmpty",
+        "coordinator.files.isEmpty",
+    ] {
+        assert!(
+            journey.contains(needed),
+            "the smoke must clear the desktop of file tabs before step 13; missing `{needed}`: {journey}"
+        );
+    }
+    let before_step = &smoke[..at(&smoke, "// 13. Sixteen file tabs")];
+    for opened in ["imageID", "pdfID", "brokenID"] {
+        assert!(
+            before_step.contains(&format!("let {opened}"))
+                || before_step.contains(&format!("{opened} = ")),
+            "{opened} is a tab the smoke opened earlier"
+        );
+    }
+}
+
 // `ZMUX_BUSY` (the bridge registry was contended) and `ZMUX_CAPACITY` (all sixteen reply buffers
 // are reserved) are answered before a file request reaches the worker. Swift used to report every
 // status but -2 as a `transport` failure with an unknown outcome, which is never retried, so a
