@@ -323,15 +323,38 @@ fn close_before_open_ack_drains_both_requests_and_late_open_cannot_revive_the_ho
         Uuid::new_v4(),
     );
     // Repeated generations exercise bounded retention as well as the first race.
-    for generation in 0..40_u64 {
-        send(
-            &desktop,
-            generation * 3 + 1,
-            request(WindowAction::New { focus: false }, None),
-        );
-        let admitted = wait(&desktop, |s| {
-            s.last_request_id == generation * 3 + 1 && s.model.windows.len() == 2
-        });
+    let mut next_request_id = 1;
+    for _ in 0..40 {
+        // Native acknowledgement does not join the closed terminal's worker.
+        // Respect real admission backpressure while that independent owner drains;
+        // every accepted generation still exercises close-before-open-ack below.
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let admitted = loop {
+            let request_id = next_request_id;
+            next_request_id += 1;
+            send(
+                &desktop,
+                request_id,
+                request(WindowAction::New { focus: false }, None),
+            );
+            let outcome = wait(&desktop, |s| s.last_request_id == request_id);
+            if outcome.last_error.is_none() {
+                assert_eq!(outcome.model.windows.len(), 2);
+                break outcome;
+            }
+            assert_eq!(outcome.model.windows.len(), 1);
+            assert_eq!(
+                outcome.last_error.as_deref(),
+                Some(
+                    "development build supports at most 8 terminals; close a tab and wait for cleanup first"
+                )
+            );
+            assert!(
+                Instant::now() < deadline,
+                "closed terminal capacity did not drain"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
         let window = admitted.model.windows[1].id;
         let open = admitted
             .window_requests
@@ -339,13 +362,15 @@ fn close_before_open_ack_drains_both_requests_and_late_open_cannot_revive_the_ho
             .find(|r| r.window_id == window && r.kind == WindowKind::Open)
             .unwrap()
             .clone();
+        let close_request_id = next_request_id;
+        next_request_id += 1;
         send(
             &desktop,
-            generation * 3 + 2,
+            close_request_id,
             request(WindowAction::Close, Some(window)),
         );
         let closing = wait(&desktop, |s| {
-            s.last_request_id == generation * 3 + 2 && s.model.windows.len() == 1
+            s.last_request_id == close_request_id && s.model.windows.len() == 1
         });
         let host = Uuid::new_v4();
         acknowledge(&desktop, &closing, window, WindowKind::Close, host);
