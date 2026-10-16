@@ -25,15 +25,31 @@ struct TerminalRowCopy: Decodable, Sendable {
     let wrapsToNext: Bool
     let writtenEnd: Int
 }
+enum TerminalPointerTracking: String, Decodable, Sendable {
+    case none, press
+    case pressRelease = "press_release"
+    case buttonMotion = "button_motion"
+    case anyMotion = "any_motion"
+}
+struct TerminalPointerEvent: Sendable {
+    enum Action: String, Sendable { case press, release, motion }
+    enum Button: String, Sendable, Hashable { case left, middle, right, none }
+    let action: Action
+    let button: Button
+    let row: Int
+    let col: Int
+    let modifiers: Int
+}
 struct Viewport: Decodable, Sendable {
     let size: GridSize; let contents: String; let cursorRow: Int; let cursorCol: Int
     let lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
     let title: String?; let workingDirectory: String?
     let scrollbackOffset: Int; let scrollbackLines: Int; let alternateScreen: Bool
     let rowCopy: [TerminalRowCopy]?
+    let pointerTracking: TerminalPointerTracking?
     enum CodingKeys: String, CodingKey {
         case size, contents, cursorRow, cursorCol, lines, applicationCursor, bracketedPaste, hideCursor
-        case title, workingDirectory, scrollbackOffset, scrollbackLines, alternateScreen, rowCopy
+        case title, workingDirectory, scrollbackOffset, scrollbackLines, alternateScreen, rowCopy, pointerTracking
     }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -51,6 +67,7 @@ struct Viewport: Decodable, Sendable {
         scrollbackLines = try c.decode(Int.self, forKey: .scrollbackLines)
         alternateScreen = try c.decode(Bool.self, forKey: .alternateScreen)
         rowCopy = try c.decodeIfPresent([TerminalRowCopy].self, forKey: .rowCopy)
+        pointerTracking = try c.decodeIfPresent(TerminalPointerTracking.self, forKey: .pointerTracking)
         if let rowCopy {
             guard (1...120).contains(size.rows), (1...240).contains(size.cols),
                   lines.count == size.rows, rowCopy.count == size.rows, rowCopy.allSatisfy({ (0...size.cols).contains($0.writtenEnd) }) else {

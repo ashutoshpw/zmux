@@ -98,12 +98,24 @@ pub struct Viewport {
     pub cursor_col: u16,
     pub lines: Vec<Vec<Run>>,
     pub row_copy: Option<Vec<RowCopy>>,
+    pub pointer_tracking: Option<PointerTracking>,
     pub application_cursor: bool,
     pub bracketed_paste: bool,
     pub hide_cursor: bool,
     pub scrollback_offset: usize,
     pub scrollback_lines: usize,
     pub alternate_screen: bool,
+}
+
+/// A native routing hint; report encoding still uses the worker's current mode.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerTracking {
+    None,
+    Press,
+    PressRelease,
+    ButtonMotion,
+    AnyMotion,
 }
 
 #[derive(Default)]
@@ -407,6 +419,13 @@ impl Terminal {
             cursor_col,
             lines,
             row_copy: Some(row_copy),
+            pointer_tracking: Some(match self.parser.screen().mouse_protocol_mode() {
+                vt100::MouseProtocolMode::None => PointerTracking::None,
+                vt100::MouseProtocolMode::Press => PointerTracking::Press,
+                vt100::MouseProtocolMode::PressRelease => PointerTracking::PressRelease,
+                vt100::MouseProtocolMode::ButtonMotion => PointerTracking::ButtonMotion,
+                vt100::MouseProtocolMode::AnyMotion => PointerTracking::AnyMotion,
+            }),
             application_cursor: self.parser.screen().application_cursor(),
             bracketed_paste: self.parser.screen().bracketed_paste(),
             hide_cursor: self.parser.screen().hide_cursor(),
