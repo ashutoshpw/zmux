@@ -75,19 +75,39 @@ pub(crate) fn spawn(
     engine: Option<EngineOptions>,
     resource: impl Send + 'static,
 ) -> Result<zmux_session_runtime::Session, zmux_session_runtime::SessionError> {
+    spawn_with_policy(
+        launch,
+        environment,
+        removals,
+        engine,
+        zmux_session_runtime::ShutdownPolicy::Kill,
+        resource,
+    )
+}
+
+/// Explicit policy for retained foreground wrappers; ordinary callers keep Kill.
+pub(crate) fn spawn_with_policy(
+    launch: zmux_session_runtime::Launch,
+    environment: &[(String, String)],
+    removals: &[std::ffi::OsString],
+    engine: Option<EngineOptions>,
+    policy: zmux_session_runtime::ShutdownPolicy,
+    resource: impl Send + 'static,
+) -> Result<zmux_session_runtime::Session, zmux_session_runtime::SessionError> {
     match engine {
         Some(engine) => zmux_session_runtime::Session::spawn_with_engine(
             launch,
             environment,
             removals,
-            zmux_session_runtime::ShutdownPolicy::Kill,
+            policy,
             engine,
             resource,
         ),
-        None => zmux_session_runtime::Session::spawn_with_resource_and_removals(
+        None => zmux_session_runtime::Session::spawn_with_shutdown_policy(
             launch,
             environment,
             removals,
+            policy,
             resource,
         ),
     }

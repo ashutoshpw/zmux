@@ -3,6 +3,7 @@
 mod broker;
 mod files;
 mod observer;
+pub mod observer_protocol;
 mod process;
 mod supervisor;
 

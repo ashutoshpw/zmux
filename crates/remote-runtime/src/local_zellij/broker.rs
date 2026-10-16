@@ -1,3 +1,4 @@
+use super::observer_protocol::FrontendReceipt;
 use super::{
     LIMIT, fail,
     files::{self, LocalZellij, Record},
@@ -8,7 +9,7 @@ use nix::{
     sys::socket::{getsockopt, sockopt},
     unistd::geteuid,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
@@ -51,13 +52,14 @@ pub(super) fn peer(stream: &UnixStream) -> io::Result<ProcessIdentity> {
     Ok(identity)
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InputLoss {
     pub bytes: usize,
     pub sha256: String,
     pub errno: Option<i32>,
     pub requested_cancel_before_send: bool,
-    pub content: &'static str,
+    pub content: String,
 }
 fn loss(
     pending: &VecDeque<u8>,
@@ -73,10 +75,11 @@ fn loss(
         sha256: format!("{:x}", digest.finalize()),
         errno,
         requested_cancel_before_send,
-        content: "opaque_not_interpreted",
+        content: "opaque_not_interpreted".into(),
     }
 }
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TransportReport {
     pub authenticated_connections: usize,
     pub rejected_peers: usize,
@@ -92,14 +95,6 @@ pub struct TransportReport {
     pub peak_connections: usize,
     pub errors: Vec<String>,
     pub input_loss: Vec<InputLoss>,
-}
-#[derive(Serialize)]
-pub(super) struct FrontendReceipt<'a> {
-    owned_client_exit: ExitObservation,
-    requested_cancel: bool,
-    original_owner_preserved: bool,
-    workers_joined: bool,
-    transport: &'a TransportReport,
 }
 struct Connection {
     client: UnixStream,
@@ -482,7 +477,7 @@ pub(super) fn attach(
     startup_deadline: Instant,
 ) -> io::Result<i32> {
     terminal.startup_events()?;
-    record.verify()?;
+    record.verify_live()?;
     let mut attachment = Attachment {
         broker: Broker::start(&record)?,
         child: None,
@@ -558,7 +553,7 @@ pub(super) fn attach(
         .observe(false)?
         .ok_or_else(|| fail("missing owned child exit"))?;
     let report = broker.close()?;
-    let preservation = record.verify();
+    let preservation = record.verify_live();
     let reaped = child.reap()?;
     terminal.restore()?;
     if outcome != reaped {
@@ -572,14 +567,14 @@ pub(super) fn attach(
         requested_cancel,
         original_owner_preserved: preservation.is_ok(),
         workers_joined: true,
-        transport: &report,
+        transport: report.clone(),
     };
     eprintln!(
         "zmux local-zellij attachment receipt: {}",
         serde_json::to_string(&receipt).map_err(io::Error::other)?
     );
     if let Some(observer) = &mut observer {
-        observer.finished(record.id, &receipt)?;
+        observer.finished(record.id, receipt)?;
     }
     if !report.errors.is_empty() {
         return Err(fail(format!("relay failed: {:?}", report.errors)));

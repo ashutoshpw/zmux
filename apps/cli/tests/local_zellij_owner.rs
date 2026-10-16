@@ -18,6 +18,8 @@ use std::{
 };
 use zmux_session_runtime::child::{ExitObservation, observe_child, process_identity};
 
+#[path = "local_zellij_owner/native.rs"]
+mod native;
 #[path = "local_zellij_owner/observer.rs"]
 mod observer;
 

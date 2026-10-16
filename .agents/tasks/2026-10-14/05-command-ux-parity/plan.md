@@ -130,3 +130,6 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [Original roadmap](../01-build-zmux/references/delivery-roadmap.md) — retained M0–M7 scope.
 - [PR #1 parity](../01-build-zmux/references/pr-1-parity.md) — retained auth/product requirements.
 - [references/r03-package-policy-review.md](references/r03-package-policy-review.md) — exact four-package declarations, attribution evidence and independent standard-term supplementation decisions before opt-in package publication.
+
+- [R03 native consumer](references/r03-native-consumer.md) — retained runtime ownership and real checkpoint validation; finite completion and native readiness remain open.
+- [R03 S01 checkpoint](references/r03-s01-checkpoint.md) — durable save authorization, lineage and cancellation fences.

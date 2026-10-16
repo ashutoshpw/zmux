@@ -2,11 +2,12 @@
 //! a consumer assertion; only the future native persistence owner can establish
 //! that its declared revision was actually committed to durable storage.
 use super::{
-    broker::{self, FrontendReceipt},
-    check_deadline, fail, files,
+    broker, check_deadline, fail, files,
     files::Record,
+    observer_protocol::{
+        Acknowledgment, Descriptor, Event, FRAME_LIMIT, Frame, FrontendReceipt, MESSAGE_LIMIT,
+    },
 };
-use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Read, Write},
     os::unix::{
@@ -20,88 +21,8 @@ use std::{
 use uuid::Uuid;
 use zmux_session_runtime::child::{ProcessIdentity, process_identity};
 
-pub(super) const ENV: &str = "ZMUX_LOCAL_ZELLIJ_OBSERVER";
-const FRAME_LIMIT: usize = 32768;
-const MESSAGE_LIMIT: u64 = 8;
+pub(super) use super::observer_protocol::ENV;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Context {
-    installation_epoch: Uuid,
-    profile_id: Uuid,
-    operation_id: u64,
-    identity_namespace: Uuid,
-    session_id: Uuid,
-    surface_id: Uuid,
-    launch_generation: u64,
-}
-impl Context {
-    fn validate(&self) -> io::Result<()> {
-        if [
-            self.installation_epoch,
-            self.profile_id,
-            self.identity_namespace,
-            self.session_id,
-            self.surface_id,
-        ]
-        .iter()
-        .any(Uuid::is_nil)
-            || self.operation_id == 0
-            || self.launch_generation == 0
-        {
-            return Err(fail("invalid observer launch correlation"));
-        }
-        Ok(())
-    }
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Descriptor {
-    version: u8,
-    socket: PathBuf,
-    launcher: ProcessIdentity,
-    context: Context,
-    nonce: String,
-}
-#[derive(Serialize)]
-struct Frame<'a> {
-    version: u8,
-    context: &'a Context,
-    nonce: &'a str,
-    sequence: u64,
-    #[serde(flatten)]
-    event: Event<'a>,
-}
-#[derive(Serialize)]
-#[serde(tag = "event", rename_all = "snake_case")]
-enum Event<'a> {
-    OwnerReserved {
-        owner_uuid: Uuid,
-    },
-    OwnerBound {
-        record: &'a Record,
-    },
-    TransportConnected {
-        owner_uuid: Uuid,
-        frontend: &'a ProcessIdentity,
-    },
-    FrontendFinished {
-        owner_uuid: Uuid,
-        #[serde(flatten)]
-        receipt: &'a FrontendReceipt<'a>,
-    },
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Acknowledgment {
-    version: u8,
-    context: Context,
-    nonce: String,
-    sequence: u64,
-    event: String,
-    owner_uuid: Uuid,
-    document_revision: u64,
-}
 #[derive(PartialEq, Eq)]
 enum State {
     New,
@@ -193,7 +114,7 @@ impl Observer {
     }
     fn emit(
         &mut self,
-        event: Event<'_>,
+        event: Event,
         deadline: Option<Instant>,
         mut tick: impl FnMut() -> io::Result<()>,
     ) -> io::Result<()> {
@@ -203,8 +124,8 @@ impl Observer {
         let sequence = self.next()?;
         let bytes = serde_json::to_vec(&Frame {
             version: 1,
-            context: &self.descriptor.context,
-            nonce: &self.descriptor.nonce,
+            context: self.descriptor.context.clone(),
+            nonce: self.descriptor.nonce.clone(),
             sequence,
             event,
         })
@@ -287,7 +208,13 @@ impl Observer {
         if !matches!(self.state, State::New | State::Authorized) {
             return Err(fail("observer bound transition rejected"));
         }
-        self.emit(Event::OwnerBound { record }, Some(deadline), tick)?;
+        self.emit(
+            Event::OwnerBound {
+                record: record.clone(),
+            },
+            Some(deadline),
+            tick,
+        )?;
         self.state = State::Bound;
         Ok(())
     }
@@ -304,7 +231,7 @@ impl Observer {
         self.emit(
             Event::TransportConnected {
                 owner_uuid,
-                frontend,
+                frontend: frontend.clone(),
             },
             None,
             || Ok(()),
@@ -327,7 +254,7 @@ impl Observer {
     pub(super) fn finished(
         &mut self,
         owner_uuid: Uuid,
-        receipt: &FrontendReceipt<'_>,
+        receipt: FrontendReceipt,
     ) -> io::Result<()> {
         if !matches!(self.state, State::Bound | State::Connected) {
             return Err(fail("observer finished transition rejected"));
