@@ -1,0 +1,54 @@
+{
+  "status": "reviewed_failure",
+  "run_id": 38861027393,
+  "source_sha": "0fca8c888b603667e79d64d38dc44772cb172066",
+  "artifact_id": 12029716713,
+  "artifact_zip_sha256": "9996f9c67a499a6997415107bf4b7d67a564ae254e4d01dd8bee50072a5b124f",
+  "artifact_zip_bytes": 65405428,
+  "artifact_files": 346,
+  "receipt_sha256": "3543682547c1974a2a980fc7f5f666edda3363cce8bb0e750ce91295f05eb67b",
+  "source_inputs_verified": 324,
+  "all_phase_logs_verified": true,
+  "exact_dependency_download_verified": true,
+  "native_build_and_sign_passed": true,
+  "full_actual_public_owner_passed": 59,
+  "owner_ignored": 0,
+  "relocation_inventory_signature_and_capability_passed": true,
+  "actual_AppKit_start_attach_accepted": false,
+  "actual_appkit_phase": {
+    "label": "actual-appkit-readiness",
+    "command": [
+      "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+      "/Users/runner/work/_temp/native-zellij-package/appkit/owned-app-launch.py",
+      "/Users/runner/work/_temp/native-zellij-package/appkit/owned-launch.json",
+      "/Users/runner/work/_temp/native-zellij-package/relocated with spaces/zmux.app/Contents/MacOS/zmux-app",
+      "--local-zellij-readiness-profile",
+      "92264230-f3f4-47d6-8edf-f5c9c3fcd67c",
+      "/Users/runner/work/_temp/native-zellij-package/appkit/zellij-profile",
+      "--local-zellij-readiness-smoke",
+      "/Users/runner/work/_temp/native-zellij-package/appkit/native-readiness.json",
+      "/Users/runner/work/_temp/native-zellij-package/appkit/state"
+    ],
+    "exit_code": -9,
+    "timed_out": true,
+    "wall_seconds": 150.126,
+    "log": "actual-appkit-readiness.log",
+    "log_bytes_seen": 180,
+    "log_bytes_retained": 180,
+    "confirmed_zombie_group": [
+      {
+        "pid": 16508,
+        "state": "Z<"
+      }
+    ],
+    "sha256": "7f67c693397792cf830a99aec066af099a1d9b2e3bcd87ee7b5cbfdcdac23996"
+  },
+  "actual_appkit_log": "zmux local control startup failed: control socket directory is not private and owned by this user: /tmp\nzmux startup failed: BridgeFailure(message: \"Native operation failed (-6)\")\n",
+  "root_cause": "diagnostic fixture put control socket directly under shared /tmp, violating existing private parent-directory policy",
+  "native_readiness_report_produced": false,
+  "failed_journey_profile_cleanup": "passed_empty_no_local_zellij_owners",
+  "startup_error_cleanup_waited_until_outer_150s_bound": true,
+  "dependency_rebuilt": false,
+  "default_acquisition_changed": false,
+  "main_activation": false
+}
