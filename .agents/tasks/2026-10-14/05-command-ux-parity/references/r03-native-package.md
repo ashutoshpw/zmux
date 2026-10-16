@@ -154,3 +154,48 @@ unchanged Rust validation is retained from V2 rather than repeated. The final
 freeze, explicit before/after hashes and combined validation receipt are in
 `target/agent-validation/r03-native-package-check-v3-20261015/`. Independent source
 review and the actual final Darwin bundle/dependency execution remain required.
+
+## Darwin PENDIN investigation and test-only repair
+
+Native run [38827122318](https://github.com/ashutoshpw/zmux/actions/runs/38827122318)
+at `7b6540e8668b9a4d43feff6024be8fa0531b6289` built and signed the host-only app,
+preserved the complete admitted payload, verified the final dependency signature
+and version, and passed owner-0/owner-1. Owner-2 failed after the actual CLI stopped:
+the restored terminal differed only by local flag `0x20000000`, Darwin `PENDIN`.
+No final actual-owner receipt or accepted app ZIP followed that failed gate.
+
+Published Apple source explains this state without establishing the failed
+runner's exact kernel revision:
+
+- [XNU tty.c at 43a90889846e00bfb5cf1d255cdc0a701a1e05a4](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/kern/tty.c), tag `xnu-11417.140.69`: lines 1253–1258 copy termios for TIOCGETA; 1358–1379 set PENDIN when enabling ICANON without flushing; 1391 retains kernel PENDIN despite supplied saved flags; 2073–2088 clear it while reprocessing pending raw input. Input/read/readiness paths can consume that state.
+- [XNU termios.h at the same commit](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/sys/termios.h), line 259, identifies PENDIN as retype-pending-input state.
+- [Libc termios.c at d53736942feb8997a67d27003deb42e6883ccaf3](https://github.com/apple-oss-distributions/Libc/blob/d53736942feb8997a67d27003deb42e6883ccaf3/gen/FreeBSD/termios.c), tag `Libc-1698.140.3`, lines 55–77: tcgetattr uses TIOCGETA and TCSANOW uses TIOCSETA; TCSAFLUSH selects a different ioctl and can discard queued input.
+
+Research copies and hashes are retained under
+`target/agent-validation/r03-termios-pendin-20261016/`. The production foreground
+owner remains unchanged and still restores with TCSANOW before stop and exit.
+Only fresh test snapshots are normalized on Darwin, masking PENDIN in the local
+raw libc value and rebuilding the nix wrapper before equality. This handles the
+wrapper's private raw snapshot without overlooking any other raw flag, control
+character or speed; Linux comparison remains exact.
+
+The same actual-owner test file adds a bounded private-PTY platform probe. It
+saves canonical configuration, selects raw mode, queues a known incomplete line,
+restores with TCSANOW, and captures termios before any read/readiness query. Darwin
+must exhibit exactly the investigated PENDIN delta. The probe then supplies the
+newline, reads exactly the original line once, rejects further readable input,
+and checks that PENDIN has cleared with every configurable setting preserved.
+Its receipt records uname, the actual kernel version, pre/post termios and input
+bytes. No user terminal or adopted workload participates. The existing production
+CLI input, resize, stop/resume, detach/reattach and startup-once checks remain.
+
+Test-authoring gate: this probe protects queued-input preservation across the
+specific platform transition that caused the false terminal-equality failure.
+A flushing restore, wrong canonical mode, lost/duplicated bytes or any additional
+setting change fails it. The existing workload journey proves resumed forwarding,
+but did not isolate input already queued when restoring the outer terminal. No
+production seam or new dependency is needed. The hosted owner assertion already
+provides the pre-repair red result; Darwin green and exact kernel behavior remain
+pending the coordinated native rerun. Linux focused probe and scoped linting are
+mechanics/configuration evidence only, not Darwin acceptance. No unrelated broad
+Rust suite is repeated for this test-only repair.

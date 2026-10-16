@@ -18,6 +18,116 @@ use std::{
 };
 use zmux_session_runtime::child::{ExitObservation, observe_child, process_identity};
 
+// Compare fresh tcgetattr snapshots. Darwin keeps PENDIN as kernel input state
+// after noncanonical -> canonical TCSANOW, even when the saved flags omit it.
+// Mask only that state in local copies, including nix's private raw snapshot;
+// all configurable flags, control characters and speeds still compare exactly.
+fn terminal_configuration(settings: nix::sys::termios::Termios) -> nix::sys::termios::Termios {
+    #[cfg(target_os = "macos")]
+    {
+        let mut raw: nix::libc::termios = settings.into();
+        raw.c_lflag &= !nix::libc::PENDIN;
+        raw.into()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        settings
+    }
+}
+
+#[test]
+fn canonical_restore_preserves_queued_private_pty_input_exactly_once() {
+    use nix::{
+        fcntl::{FcntlArg, OFlag, fcntl},
+        poll::{PollFd, PollFlags, poll},
+        pty::openpty,
+        sys::termios::{LocalFlags, SetArg, cfmakeraw, tcgetattr, tcsetattr},
+        unistd::{read, write},
+    };
+    use std::os::fd::AsFd;
+
+    // No subprocess, user terminal or adopted session participates in this
+    // platform probe. Do not poll/read before recording the immediate snapshot:
+    // Darwin can process pending input during a readiness query.
+    let pair = openpty(None, None).unwrap();
+    let before = tcgetattr(&pair.slave).unwrap();
+    assert!(before.local_flags.contains(LocalFlags::ICANON));
+    #[cfg(target_os = "macos")]
+    assert!(!before.local_flags.contains(LocalFlags::PENDIN));
+    let mut raw = before.clone();
+    cfmakeraw(&mut raw);
+    tcsetattr(&pair.slave, SetArg::TCSANOW, &raw).unwrap();
+    let queued = b"queued-before-restore";
+    assert_eq!(write(&pair.master, queued).unwrap(), queued.len());
+    tcsetattr(&pair.slave, SetArg::TCSANOW, &before).unwrap();
+    let observed = tcgetattr(&pair.slave).unwrap();
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        observed.local_flags.bits() ^ before.local_flags.bits(),
+        nix::libc::PENDIN,
+        "Darwin canonical restore did not exhibit the investigated PENDIN state"
+    );
+    assert_eq!(
+        terminal_configuration(observed.clone()),
+        terminal_configuration(before.clone()),
+        "TCSANOW did not restore every configurable terminal setting"
+    );
+
+    let flags =
+        OFlag::from_bits_truncate(fcntl(pair.slave.as_raw_fd(), FcntlArg::F_GETFL).unwrap());
+    fcntl(
+        pair.slave.as_raw_fd(),
+        FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK),
+    )
+    .unwrap();
+    assert_eq!(write(&pair.master, b"\n").unwrap(), 1);
+    let mut pending = [PollFd::new(pair.slave.as_fd(), PollFlags::POLLIN)];
+    assert_eq!(poll(&mut pending, 2000_u16).unwrap(), 1);
+    assert_eq!(pending[0].revents(), Some(PollFlags::POLLIN));
+    let mut bytes = [0; 128];
+    let count = read(pair.slave.as_raw_fd(), &mut bytes).unwrap();
+    assert_eq!(&bytes[..count], b"queued-before-restore\n");
+    assert_eq!(
+        poll(&mut pending, 200_u16).unwrap(),
+        0,
+        "canonical input was replayed after its one complete delivery"
+    );
+    let after_read = tcgetattr(&pair.slave).unwrap();
+    assert_eq!(
+        terminal_configuration(after_read.clone()),
+        terminal_configuration(before.clone())
+    );
+    #[cfg(target_os = "macos")]
+    assert!(!after_read.local_flags.contains(LocalFlags::PENDIN));
+    let host = Command::new("uname").arg("-a").output().unwrap();
+    assert!(host.status.success());
+    #[cfg(target_os = "macos")]
+    let kernel = Command::new("/usr/sbin/sysctl")
+        .args(["-n", "kern.version"])
+        .output()
+        .unwrap();
+    #[cfg(not(target_os = "macos"))]
+    let kernel = Command::new("uname").arg("-v").output().unwrap();
+    assert!(kernel.status.success());
+    println!(
+        "R03 private PTY restore receipt: {}",
+        serde_json::json!({
+            "host": String::from_utf8(host.stdout).unwrap().trim(),
+            "kernel_version": String::from_utf8(kernel.stdout).unwrap().trim(),
+            "before": format!("{before:?}"),
+            "immediate_restore": format!("{observed:?}"),
+            "after_read": format!("{after_read:?}"),
+            "local_flags_delta": observed.local_flags.bits() ^ before.local_flags.bits(),
+            "restore": "TCSANOW",
+            "queued_input": "queued-before-restore",
+            "received_input": String::from_utf8(bytes[..count].to_vec()).unwrap(),
+            "received_bytes": count,
+            "no_additional_input_ms": 200,
+            "exactly_once": true
+        })
+    );
+}
+
 struct MasterFd<'a>(&'a dyn MasterPty);
 impl AsRawFd for MasterFd<'_> {
     fn as_raw_fd(&self) -> i32 {
@@ -181,8 +291,8 @@ impl Client {
             self.pump(false);
         }
         assert_eq!(
-            self.pair.master.get_termios().unwrap(),
-            self.before,
+            terminal_configuration(self.pair.master.get_termios().unwrap()),
+            terminal_configuration(self.before.clone()),
             "foreground CLI did not restore actual terminal settings"
         );
         self.child.wait().unwrap();
@@ -356,8 +466,8 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(
-        first.pair.master.get_termios().unwrap(),
-        first.before,
+        terminal_configuration(first.pair.master.get_termios().unwrap()),
+        terminal_configuration(first.before.clone()),
         "stopped CLI did not return restored terminal"
     );
     kill(Pid::from_raw(first.pid() as i32), Signal::SIGCONT).unwrap();
