@@ -174,6 +174,10 @@ pub enum Command {
         session_id: SessionId,
         text: String,
     },
+    Pointer {
+        session_id: SessionId,
+        event: zmux_terminal_adapter::Pointer,
+    },
     Wheel {
         session_id: SessionId,
         event: zmux_terminal_adapter::Wheel,
@@ -1513,6 +1517,12 @@ impl Worker {
                     self.acknowledge_focused();
                 }
                 result
+            }
+            Command::Pointer { session_id, event } => {
+                self.writable_session(session_id).and_then(|s| {
+                    s.pointer(event)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))
+                })
             }
             Command::Wheel { session_id, event } => {
                 self.writable_session(session_id).and_then(|s| {
