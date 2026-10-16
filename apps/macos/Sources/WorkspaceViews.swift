@@ -490,6 +490,7 @@ final class MainHeaderView: DraggableChromeView {
     func update(title: String, detail: String, error: Bool) {
         guard titleLabel.stringValue != title || detailLabel.stringValue != detail || displayedError != error else { return }
         displayedError = error
+        detailLabel.isHidden = !error
         titleLabel.stringValue = title
         detailLabel.stringValue = detail
         titleLabel.toolTip = detail

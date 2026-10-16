@@ -10,6 +10,19 @@ case "${zmux_shell##*/}" in
     *) printf 'zmux: automatic Claude notifications unavailable for this shell\n' >&2
        exec "$zmux_shell" "$@" ;;
 esac
+# Legacy Bash makes async child INT/QUIT dispositions irrevocably ignored.
+# Perl only resets those two dispositions and immediately execs the shell; no
+# interpreter remains resident. Modern Bash and POSIX dash need no helper.
+zmux_legacy_bash=0
+case "${BASH_VERSION-}" in
+    3.*|4.*)
+        zmux_legacy_bash=1
+        if [ ! -x /usr/bin/perl ]; then
+            printf 'zmux: shell integration unavailable: legacy Bash requires /usr/bin/perl\n' >&2
+            exec "$zmux_shell" "$@"
+        fi
+        ;;
+esac
 umask 077
 if [ -z "$zmux_private_root" ]; then
     # Keep shell lifecycle storage independent of remote transfer staging.
@@ -56,26 +69,53 @@ exec 7>/dev/tty || exit 70
     done <"$zmux_private_root/attention"
 ) &
 exec 8>"$zmux_private_root/attention"
+# A shell wait builtin handles owner-only HUP immediately; Darwin need not send
+# that HUP to the relay group or the foreground provider. Preserve the real stdin.
+exec 9<&0
+(
+trap - 0 HUP TERM INT QUIT
+zmux_exec_shell() {
+    if [ "$zmux_legacy_bash" = 1 ]; then
+        # The private helper must not load user Perl modules. Preserve their
+        # original set/unset values in environment data, never in command argv.
+        export ZMUX_PRIVATE_PERL5OPT_SET="${PERL5OPT+x}" ZMUX_PRIVATE_PERL5OPT="${PERL5OPT-}"
+        export ZMUX_PRIVATE_PERL5LIB_SET="${PERL5LIB+x}" ZMUX_PRIVATE_PERL5LIB="${PERL5LIB-}"
+        unset PERL5OPT PERL5LIB
+        exec /usr/bin/perl -f -e '
+for my $name ("PERL5OPT", "PERL5LIB") {
+    my $set = delete $ENV{"ZMUX_PRIVATE_".$name."_SET"};
+    my $value = delete $ENV{"ZMUX_PRIVATE_".$name};
+    $ENV{$name} = $value if $set eq "x";
+}
+$SIG{INT}="DEFAULT"; $SIG{QUIT}="DEFAULT";
+exec { $ARGV[0] } @ARGV;
+die "zmux: cannot exec interactive shell: $!\n";' -- "$@"
+    fi
+    exec "$@"
+}
 case "${zmux_shell##*/}" in
     bash)
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@" 7>&- 8>&-
+        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@"
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}
         ZMUX_USER_ZDOTDIR_SET=${ZDOTDIR+x}
         export ZMUX_USER_ZDOTDIR ZMUX_USER_ZDOTDIR_SET
-        ZDOTDIR=$zmux_private_root "$zmux_shell" "$@" 7>&- 8>&-
+        ZDOTDIR=$zmux_private_root zmux_exec_shell "$zmux_shell" "$@"
         ;;
     fish)
-        "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@" 7>&- 8>&-
+        zmux_exec_shell "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@"
         ;;
     sh|dash)
         ZMUX_USER_ENV=${ENV-}
         export ZMUX_USER_ENV
-        ENV=$zmux_private_root/env "$zmux_shell" "$@" 7>&- 8>&-
+        ENV=$zmux_private_root/env zmux_exec_shell "$zmux_shell" "$@"
         ;;
 esac
+) <&9 7>&- 8>&- 9>&- &
+zmux_shell_child=$!
+wait "$zmux_shell_child"
 exit $?

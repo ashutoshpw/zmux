@@ -27,6 +27,10 @@ Claude version with repeatable `--plugin-dir` is required. A private session FIF
 relays fixed attention events to the original terminal, including from nested tmux
 sessions. One blocked relay process lives with each integrated shell; no tmux
 configuration is changed. An inherited wrapper bypasses expired hook directories.
+On legacy Bash3/4 owners, the signal-reset stage uses `/usr/bin/perl` and immediately
+execs the interactive shell; it adds no resident interpreter. If that tool is
+missing, zmux starts the ordinary shell and reports that integration is unavailable.
+User Perl startup/module preferences are preserved for the launched shell.
 Configured OpenSSH `RemoteCommand` launches are preserved and bypass automatic
 integration. A bounded `ssh -G` probe runs on the launch worker before ordinary
 shell launches; OpenSSH may evaluate configured `Match exec` during this probe.
