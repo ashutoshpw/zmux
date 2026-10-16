@@ -154,3 +154,21 @@ scripts/check388 tests/72 groups/1 ignored, Clippy, notices and both C ABI check
 (`/tmp/zmux-pointer-middle-fixture-check.log`). No current-main integration build,
 physical-device run, optional-engine input or sustained native queue-saturation
 acceptance is claimed by this isolated branch cohort.
+
+## Integrated-main prerequisite diagnostic
+
+At ab79307, Foundation38860512798 passes Linux and Darwin. Focused native
+38860525425 builds the packaged app and passes strict metadata compilation/
+decoding, then stops after30 existing selection cases at the copy phase c
+prerequisite (child identity, kernel dimensions or actual native focus).
+The saved phase child11392/parent11336/nonce matches the original registration,
+but the combined guard did not retain the failed live dimensions/focus values.
+Neither pointer case ran; this is not an integrated pointer acceptance result.
+All271 retained source hashes and archive e7765eee2e43802f4854c5a88243915b43f0742e7b5ef461c9147b86f3813fa9
+were independently checked against Git/artifact bytes. Retained result:
+/tmp/zmux-main-pointer-38860525425 and
+/tmp/zmux-main-ab79307-pointer-native-failure.log.
+
+The follow-up changes only the diagnostic message to retain every observed
+predicate (phase, PID/parent, nonce match, dimensions, active/visible/key/responder).
+No guard, event, deadline, activation policy or product path is relaxed.
