@@ -309,6 +309,15 @@ enum TerminalSelectionSmoke {
                 try click(view, window: window, row: row, col: 2, count: 2, viewport: word)
             }
         }
+        let unicodeWord = try await beginCopyPhase(key: "c", code: 8, marker: "WORD_UNICODE_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        for (row, column) in [(0, unicodeWord.size.cols - 1), (1, 1)] {
+            try await check("wrapped_combining_word_\(row)",
+                            expected: String(repeating: "X", count: unicodeWord.size.cols - 1) + "e\u{301}tail",
+                            window: window, result: &result, report: report) {
+                try click(view, window: window, row: row, col: column, count: 2, viewport: unicodeWord)
+            }
+        }
         result.state = "completed_cases"
         try await save(result, to: report)
         try await coordinator.shutdown()

@@ -27,8 +27,12 @@ final class TerminalSelection {
         let utf16: NSRange
     }
     private struct Row {
-        let text: String
         let cells: [Cell]
+    }
+    private struct WordCell {
+        let lower: TerminalSelectionPoint
+        let upper: TerminalSelectionPoint
+        let utf16: NSRange
     }
     private lazy var wordSelector = NSTextView(frame: .zero)
     private var granularity = Granularity.character
@@ -76,8 +80,7 @@ final class TerminalSelection {
             // physical rows retain hard separators even if marked as wrapped.
             var joinsNext = false
             var copyUpper = upper
-            if row < range.upper.row, let metadata = viewport.rowCopy,
-               metadata[row].wrapsToNext, metadata[row].writtenEnd > 0, metadata[row + 1].writtenEnd > 0 {
+            if row < range.upper.row, joinsNextRow(row, viewport: viewport), let metadata = viewport.rowCopy {
                 joinsNext = true
                 copyUpper = min(upper, metadata[row].writtenEnd)
             }
@@ -103,20 +106,48 @@ final class TerminalSelection {
             return TerminalSelectionRange(lower: TerminalSelectionPoint(row: point.row, column: 0),
                 upper: TerminalSelectionPoint(row: point.row, column: viewport.size.cols))
         case .word:
-            let row = cells(point.row, viewport: viewport)
-            guard let clicked = row.cells.first(where: { $0.upper > min(point.column, viewport.size.cols - 1) }) else {
-                return TerminalSelectionRange(lower: point, upper: point)
-            }
-            wordSelector.string = row.text
-            let selected = wordSelector.selectionRange(forProposedRange: NSRange(location: clicked.utf16.location, length: 0), granularity: .selectByWord)
-            guard selected.location != NSNotFound, selected.length > 0,
-                  let lower = row.cells.first(where: { NSMaxRange($0.utf16) > selected.location }),
-                  let upper = row.cells.last(where: { $0.utf16.location < NSMaxRange(selected) }) else {
-                return TerminalSelectionRange(lower: point, upper: point)
-            }
-            return TerminalSelectionRange(lower: TerminalSelectionPoint(row: point.row, column: lower.lower),
-                upper: TerminalSelectionPoint(row: point.row, column: upper.upper))
+            return wordRange(at: point, viewport: viewport)
         }
+    }
+
+    private func joinsNextRow(_ row: Int, viewport: Viewport) -> Bool {
+        guard let metadata = viewport.rowCopy, row >= 0, row + 1 < metadata.count else { return false }
+        return metadata[row].wrapsToNext && metadata[row].writtenEnd > 0 && metadata[row + 1].writtenEnd > 0
+    }
+
+    private func wordRange(at point: TerminalSelectionPoint, viewport: Viewport) -> TerminalSelectionRange {
+        var first = point.row
+        var last = point.row
+        while first > 0 && joinsNextRow(first - 1, viewport: viewport) { first -= 1 }
+        while last + 1 < viewport.size.rows && joinsNextRow(last, viewport: viewport) { last += 1 }
+
+        // Build only the displayed logical line. Soft-boundary padding is absent
+        // from the word policy input, just as it is absent from copied text.
+        // Keep grid endpoints separately from UTF-16 offsets so wide/combining
+        // cells remain indivisible when AppKit returns a word range.
+        var text = ""
+        var mapped: [WordCell] = []
+        var offset = 0
+        for row in first...last {
+            let limit = row < last ? (viewport.rowCopy?[row].writtenEnd ?? viewport.size.cols) : viewport.size.cols
+            for cell in cells(row, viewport: viewport).cells where cell.lower < limit {
+                mapped.append(WordCell(lower: TerminalSelectionPoint(row: row, column: cell.lower),
+                    upper: TerminalSelectionPoint(row: row, column: cell.upper),
+                    utf16: NSRange(location: offset, length: cell.utf16.length)))
+                text += cell.text
+                offset += cell.utf16.length
+            }
+        }
+        let empty = TerminalSelectionRange(lower: point, upper: point)
+        guard let clicked = mapped.first(where: {
+            $0.lower.row == point.row && $0.upper.column > min(point.column, viewport.size.cols - 1)
+        }) else { return empty }
+        wordSelector.string = text
+        let selected = wordSelector.selectionRange(forProposedRange: NSRange(location: clicked.utf16.location, length: 0), granularity: .selectByWord)
+        guard selected.location != NSNotFound, selected.length > 0,
+              let lower = mapped.first(where: { NSMaxRange($0.utf16) > selected.location }),
+              let upper = mapped.last(where: { $0.utf16.location < NSMaxRange(selected) }) else { return empty }
+        return TerminalSelectionRange(lower: lower.lower, upper: upper.upper)
     }
 
     private func snapToCells(_ selected: TerminalSelectionRange, viewport: Viewport) -> TerminalSelectionRange {
@@ -138,8 +169,7 @@ final class TerminalSelection {
     }
 
     private func cells(_ row: Int, viewport: Viewport) -> Row {
-        guard viewport.lines.indices.contains(row) else { return Row(text: "", cells: []) }
-        var output = ""
+        guard viewport.lines.indices.contains(row) else { return Row(cells: []) }
         var result: [Cell] = []
         var column = 0
         var utf16 = 0
@@ -147,7 +177,7 @@ final class TerminalSelection {
             let length = (text as NSString).length
             result.append(Cell(lower: column, upper: column + width, text: text,
                                utf16: NSRange(location: utf16, length: length)))
-            output += text; column += width; utf16 += length
+            column += width; utf16 += length
         }
         for run in viewport.lines[row] {
             guard run.column >= column, run.width > 0, run.column < viewport.size.cols else { continue }
@@ -160,6 +190,6 @@ final class TerminalSelection {
             }
         }
         while column < viewport.size.cols { append(" ", width: 1) }
-        return Row(text: output, cells: result)
+        return Row(cells: result)
     }
 }
