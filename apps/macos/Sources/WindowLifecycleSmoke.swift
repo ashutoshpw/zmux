@@ -179,9 +179,24 @@ enum WindowLifecycleSmoke {
         _ = try await command(first, ["set-progress", "0.5"] + target)
         _ = try await command(first, ["log", "Do not restore this log"] + target)
         try await WorkspacePullRequestSmoke.set(workspace: owner, number: 17, url: "https://github.com/acme/project/pull/17")
-        try await wait(coordinator) { state in
-            guard let metadata = state.workspaceMetadata?.first(where: { $0.workspaceId == finalWorkspace }) else { return false }
-            return metadata.todos.map(\.id) == todoIDs && metadata.statuses.count == 1 && metadata.progress?.value == 0.5 && metadata.logs.count == 1 && metadata.pullRequest?.number == 17
+        var metadataDiagnostic = "metadata absent"
+        do {
+            try await wait(coordinator) { state in
+                guard let metadata = state.workspaceMetadata?.first(where: { $0.workspaceId == finalWorkspace }) else {
+                    metadataDiagnostic = "metadata absent"
+                    return false
+                }
+                let todosMatch = metadata.todos.map(\.id) == todoIDs
+                let moveMatches = metadata.statuses.contains { $0.key == "move" && $0.value == "retained" }
+                let temporaryMatches = metadata.statuses.contains { $0.key == "temporary" && $0.value == "Do not restore this status" }
+                let progressMatches = metadata.progress?.value == 0.5
+                let pullRequestMatches = metadata.pullRequest?.number == 17
+                metadataDiagnostic = "todosMatch=\(todosMatch) statusCount=\(metadata.statuses.count) moveMatches=\(moveMatches) temporaryMatches=\(temporaryMatches) progressMatches=\(progressMatches) logCount=\(metadata.logs.count) pullRequestMatches=\(pullRequestMatches)"
+                return todosMatch && metadata.statuses.count == 2 && moveMatches && temporaryMatches && progressMatches && metadata.logs.count == 1 && pullRequestMatches
+            }
+        } catch {
+            trace("close preparation metadata: " + metadataDiagnostic)
+            throw error
         }
         let prepared = Prepared(sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String ?? "local",
             namespace: initial.model.identityNamespace, window: firstID, workspace: finalWorkspace,
