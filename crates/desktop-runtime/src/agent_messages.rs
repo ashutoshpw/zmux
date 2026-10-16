@@ -57,6 +57,26 @@ pub enum MessageAction {
         surface: String,
         consumer: Uuid,
         token: String,
+        #[serde(default)]
+        max_messages: Option<usize>,
+        #[serde(default)]
+        exposure: Option<ProviderExposure>,
+    },
+    Retire {
+        surface: String,
+        consumer: Uuid,
+        token: String,
+    },
+    Retry {
+        surface: String,
+        ids: Vec<Uuid>,
+        accept_duplicate: bool,
+    },
+    ReportSubmission {
+        surface: String,
+        consumer: Uuid,
+        token: String,
+        attempt_id: Uuid,
     },
     Ack {
         surface: String,
@@ -88,11 +108,42 @@ impl MessageAction {
             Self::Register { .. }
                 | Self::Poll { .. }
                 | Self::Claim { .. }
+                | Self::Retire { .. }
+                | Self::Retry { .. }
+                | Self::ReportSubmission { .. }
                 | Self::Ack { .. }
                 | Self::ReadTurn { .. }
         )
     }
 }
+/// Provider correlation is supplied by the owned adapter, never inferred from output.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderExposure {
+    pub provider: String,
+    pub provider_version: String,
+    pub runtime_id: Uuid,
+    pub adapter_generation: Uuid,
+    pub session_id: String,
+    pub prompt_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryAttempt {
+    pub id: Uuid,
+    pub outcome: String,
+    pub provider: ProviderExposure,
+    pub namespace: Uuid,
+    pub surface_id: Uuid,
+    pub session: zmux_workspace_core::SessionId,
+    pub consumer: Uuid,
+    pub lease_id: Uuid,
+    pub payload_digest: String,
+    pub prepared_at: u64,
+    pub expires_monotonic_ms: u64,
+    pub submission_reported_at: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageState {

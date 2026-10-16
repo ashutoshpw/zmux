@@ -181,6 +181,8 @@ fn consumer_handoff_ack_and_exact_read_turn_leave_new_arrivals_queued() {
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     let ids = vec![id(&first["message"], "id")];
     assert_eq!(claimed["messages"][0]["id"], first["message"]["id"]);
@@ -228,6 +230,8 @@ fn off_before_handoff_fails_reservation_and_on_never_resurrects() {
         surface: surface.clone(),
         consumer,
         token,
+        max_messages: None,
+        exposure: None,
     });
     let claim_id = claim.request_id;
     inbox.runtime.admit(claim, None).unwrap();
@@ -268,6 +272,8 @@ fn handed_lease_can_ack_after_off_and_superseded_consumer_cannot_claim() {
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     let claim_id = claim_request.request_id;
     let claim = inbox.execute(claim_request).result.unwrap();
@@ -295,7 +301,9 @@ fn handed_lease_can_ack_after_off_and_superseded_consumer_cannot_claim() {
             .execute(request(MessageAction::Claim {
                 surface,
                 consumer,
-                token
+                token,
+                max_messages: None,
+                exposure: None,
             }))
             .state,
         "failed"
@@ -321,6 +329,8 @@ fn concurrent_writers_preserve_both_messages_and_cross_runtime_supersession() {
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     // Another live runtime reading the same journal must preserve this active foreign lease.
     assert_eq!(b.list()["messages"].as_array().unwrap().len(), 2);
@@ -328,6 +338,8 @@ fn concurrent_writers_preserve_both_messages_and_cross_runtime_supersession() {
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     assert_eq!(duplicate["messages"], json!([]));
     b.register();
@@ -521,6 +533,8 @@ fn expired_lease_cannot_ack_and_reclaim_uses_same_message_identity() {
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     thread::sleep(Duration::from_millis(10100));
     assert_eq!(
@@ -539,6 +553,8 @@ fn expired_lease_cannot_ack_and_reclaim_uses_same_message_identity() {
         surface,
         consumer,
         token,
+        max_messages: None,
+        exposure: None,
     });
     assert_ne!(claim["lease_id"], again["lease_id"]);
     assert_eq!(again["messages"][0]["id"], sent["message"]["id"]);
@@ -554,6 +570,8 @@ fn exact_close_and_session_change_invalidate_handoff_without_using_focus() {
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     let claim_id = claim.request_id;
     inbox.runtime.admit(claim, None).unwrap();
@@ -833,6 +851,8 @@ fn completed_cached_claim_rechecks_held_and_real_expiry_before_exposing_text() {
             surface: surface.clone(),
             consumer,
             token: token.clone(),
+            max_messages: None,
+            exposure: None,
         });
         let operation = claim.request_id;
         inbox.runtime.admit(claim, None).unwrap();
@@ -896,6 +916,8 @@ fn committed_handoff_allows_one_inflight_response_after_foreign_supersession_but
         surface: surface.clone(),
         consumer,
         token: token.clone(),
+        max_messages: None,
+        exposure: None,
     });
     let operation = claim.request_id;
     a.runtime.admit(claim, None).unwrap();
@@ -936,4 +958,276 @@ fn committed_handoff_allows_one_inflight_response_after_foreign_supersession_but
     assert_eq!(repeated.state, "failed");
     assert!(repeated.result.is_none());
     assert_eq!(a.list()["messages"][0]["state"], "queued");
+}
+
+// These requests use the public wire format, so the pre-extension owner fails
+// at the same contract boundary as a real adapter rather than a test-only seam.
+fn wire(value: Value) -> MessageAction {
+    serde_json::from_value(value).expect("provider owner extension wire contract")
+}
+fn bounded_claim(inbox: &Inbox, registration: &Value, exposure: bool) -> MessageAction {
+    let mut action = json!({"action":"claim","surface":inbox.surface(),
+        "consumer":registration["consumer"],"token":registration["token"],
+        "max_messages":1});
+    if exposure {
+        action["exposure"] = json!({"provider":"claude","provider_version":"2.1.301",
+            "runtime_id":Uuid::new_v4(),"adapter_generation":Uuid::new_v4(),
+            "session_id":"provider-root","prompt_id":Uuid::new_v4().to_string()});
+    }
+    wire(action)
+}
+#[test]
+fn bounded_claim_reserves_one_complete_message_and_rejects_invalid_limits() {
+    let dir = Directory::new();
+    let mut inbox = Inbox::new(&dir.0);
+    let first = inbox.send("first");
+    let second = inbox.send("second");
+    let registration = inbox.register();
+    let claim = inbox.call(bounded_claim(&inbox, &registration, false));
+    assert_eq!(claim["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(claim["messages"][0]["id"], first["message"]["id"]);
+    let next = inbox.call(bounded_claim(&inbox, &registration, false));
+    assert_eq!(next["messages"][0]["id"], second["message"]["id"]);
+    for limit in [0, 9] {
+        let rejected=inbox.execute(request(wire(json!({"action":"claim","surface":inbox.surface(),
+            "consumer":registration["consumer"],"token":registration["token"],"max_messages":limit}))));
+        assert_eq!(rejected.state, "failed");
+    }
+}
+#[test]
+fn exact_retirement_cannot_remove_a_newer_registration_or_lease() {
+    let dir = Directory::new();
+    let mut a = Inbox::new(&dir.0);
+    let old = a.register();
+    let mut b = Inbox {
+        runtime: Runtime::start(Some(dir.0.clone())).unwrap(),
+        model: a.model.clone(),
+    };
+    b.runtime.observe(b.model.snapshot(), vec![]);
+    let new = b.register();
+    let sent = b.send("new generation");
+    let claim = b.call(bounded_claim(&b, &new, false));
+    let retire = wire(json!({"action":"retire","surface":a.surface(),
+        "consumer":old["consumer"],"token":old["token"]}));
+    assert_eq!(a.call(retire)["retired"], false);
+    b.call(MessageAction::Ack {
+        surface: b.surface(),
+        consumer: id(&new, "consumer"),
+        token: new["token"].as_str().unwrap().into(),
+        lease_id: id(&claim, "lease_id"),
+        message_ids: vec![id(&sent["message"], "id")],
+    });
+    let retired = b.call(wire(json!({"action":"retire","surface":b.surface(),
+        "consumer":new["consumer"],"token":new["token"]})));
+    assert_eq!(retired["retired"], true);
+    assert_eq!(b.list()["messages"][0]["state"], "delivered");
+}
+#[test]
+fn prepared_exposure_survives_restart_suppresses_replay_and_retry_preserves_id() {
+    let dir = Directory::new();
+    let mut inbox = Inbox::new(&dir.0);
+    let original = inbox.send("keep the immutable identity");
+    let registration = inbox.register();
+    let exposed = inbox.call(bounded_claim(&inbox, &registration, true));
+    assert_eq!(exposed["messages"][0]["id"], original["message"]["id"]);
+    assert!(
+        exposed["additional_context"]
+            .as_str()
+            .unwrap()
+            .contains("keep the immutable identity")
+    );
+    let attempt = exposed["messages"][0]["delivery_attempts"][0].clone();
+    assert_eq!(attempt["outcome"], "delivery_unknown");
+    assert_eq!(attempt["payload_digest"].as_str().unwrap().len(), 64);
+    // No stdout/report/Ack happens: dropping the worker models interruption after
+    // durable preparation. Re-registering must not silently authorize replay.
+    inbox.stop();
+    inbox.runtime = Runtime::start(Some(dir.0.clone())).unwrap();
+    inbox.runtime.observe(inbox.model.snapshot(), vec![]);
+    let registration = inbox.register();
+    let unrelated = inbox.send("unrelated arrival");
+    let next = inbox.call(bounded_claim(&inbox, &registration, true));
+    assert_eq!(next["messages"][0]["id"], unrelated["message"]["id"]);
+    assert_eq!(
+        inbox.call(bounded_claim(&inbox, &registration, true))["messages"],
+        json!([])
+    );
+    let rows = inbox.list();
+    assert_eq!(rows["messages"][0]["state"], "queued");
+    assert_eq!(rows["messages"][0]["delivery_attempts"][0], attempt);
+    let retry = |accept| {
+        wire(json!({"action":"retry","surface":inbox.surface(),
+        "ids":[original["message"]["id"]],"accept_duplicate":accept}))
+    };
+    let denied = retry(false);
+    let allowed = retry(true);
+    assert_eq!(inbox.execute(request(denied)).state, "failed");
+    let retried = inbox.call(allowed);
+    assert_eq!(retried["message_ids"], json!([original["message"]["id"]]));
+    let next = inbox.call(bounded_claim(&inbox, &registration, true));
+    assert_eq!(next["messages"][0]["id"], original["message"]["id"]);
+    assert_eq!(
+        next["messages"][0]["delivery_attempts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_ne!(
+        next["messages"][0]["delivery_attempts"][1]["id"],
+        attempt["id"]
+    );
+    assert_eq!(inbox.list()["messages"][0]["state"], "queued");
+}
+
+#[test]
+fn exposure_replay_and_unconfirmed_ack_cannot_create_delivery_authority() {
+    let dir = Directory::new();
+    let mut inbox = Inbox::new(&dir.0);
+    let first = inbox.send("unknown first");
+    inbox.send("leave this for a different prompt");
+    let registration = inbox.register();
+    let action = bounded_claim(&inbox, &registration, true);
+    let exposed = inbox.call(action.clone());
+    let repeated = inbox.execute(request(action));
+    assert_eq!(
+        repeated.state, "failed",
+        "same prompt must not expose a second body"
+    );
+    let ack = inbox.execute(request(MessageAction::Ack {
+        surface: inbox.surface(),
+        consumer: id(&registration, "consumer"),
+        token: registration["token"].as_str().unwrap().into(),
+        lease_id: id(&exposed, "lease_id"),
+        message_ids: vec![id(&first["message"], "id")],
+    }));
+    assert_eq!(ack.state, "failed");
+    let attempt_id = id(&exposed["messages"][0]["delivery_attempts"][0], "id");
+    let reported = inbox.call(wire(
+        json!({"action":"report_submission","surface":inbox.surface(),
+        "consumer":registration["consumer"],"token":registration["token"],"attempt_id":attempt_id}),
+    ));
+    assert_eq!(reported["outcome"], "delivery_unknown");
+    let rows = inbox.list();
+    assert_eq!(rows["messages"][0]["state"], "queued");
+    assert_eq!(rows["messages"][1]["delivery_attempts"], json!([]));
+}
+
+#[test]
+fn exact_retirement_fences_cached_local_handoff_but_stale_retire_does_not() {
+    for current in [true, false] {
+        let dir = Directory::new();
+        let mut inbox = Inbox::new(&dir.0);
+        let old = inbox.register();
+        let registered = if current {
+            old.clone()
+        } else {
+            inbox.register()
+        };
+        inbox.send("cached body");
+        let claim = request(bounded_claim(&inbox, &registered, false));
+        let operation = claim.request_id;
+        inbox.runtime.admit(claim, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while inbox.runtime.pending.contains(&operation) {
+            inbox.runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            inbox.runtime.status(operation, None).unwrap().state,
+            "pending"
+        );
+        while inbox.runtime.pending.contains(&operation) {
+            inbox.runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(inbox.runtime.receipts[&operation].state, "completed");
+        assert_eq!(
+            inbox.call(wire(json!({"action":"retire","surface":inbox.surface(),
+            "consumer":old["consumer"],"token":old["token"]})))["retired"],
+            current
+        );
+        let receipt = inbox.runtime.status(operation, None).unwrap();
+        assert_eq!(receipt.state, if current { "failed" } else { "completed" });
+        if current {
+            assert!(receipt.result.is_none());
+        }
+    }
+}
+#[test]
+fn unread_admission_never_evicts_unknown_exposure_evidence_after_operator_read() {
+    let dir = Directory::new();
+    let mut inbox = Inbox::new(&dir.0);
+    let original = inbox.send("retain this exposure fence");
+    let registration = inbox.register();
+    inbox.call(bounded_claim(&inbox, &registration, true));
+    inbox.call(MessageAction::MarkRead {
+        ids: vec![id(&original["message"], "id")],
+    });
+    for _ in 1..128 {
+        inbox.send("fill bounded store");
+    }
+    let before = fs::read(dir.0.join(JOURNAL_NAME)).unwrap();
+    let target = inbox.surface();
+    let refused = inbox.execute(request(send(&target, "must not evict unknown evidence")));
+    assert_eq!(refused.state, "failed");
+    assert_eq!(before, fs::read(dir.0.join(JOURNAL_NAME)).unwrap());
+    let rows = inbox.list();
+    assert_eq!(rows["messages"][0]["id"], original["message"]["id"]);
+    assert_eq!(
+        rows["messages"][0]["delivery_attempts"][0]["outcome"],
+        "delivery_unknown"
+    );
+}
+
+#[test]
+fn retained_retire_and_retry_receipts_do_not_fence_a_newer_cached_handoff() {
+    let mut fenced = Vec::new();
+    for action in ["retire", "retry"] {
+        let dir = Directory::new();
+        let mut inbox = Inbox::new(&dir.0);
+        let old = inbox.register();
+        let mutation = if action == "retire" {
+            wire(json!({"action":"retire","surface":inbox.surface(),
+                "consumer":old["consumer"],"token":old["token"]}))
+        } else {
+            let sent = inbox.send("unknown previous attempt");
+            inbox.call(bounded_claim(&inbox, &old, true));
+            wire(json!({"action":"retry","surface":inbox.surface(),
+                "ids":[sent["message"]["id"]],"accept_duplicate":true}))
+        };
+        let original = request(mutation);
+        assert_eq!(inbox.execute(original.clone()).state, "completed");
+        let new = inbox.register();
+        inbox.send("new owner cached body");
+        let claim = request(bounded_claim(&inbox, &new, false));
+        let operation = claim.request_id;
+        inbox.runtime.admit(claim, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while inbox.runtime.pending.contains(&operation) {
+            inbox.runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            inbox.runtime.status(operation, None).unwrap().state,
+            "pending"
+        );
+        while inbox.runtime.pending.contains(&operation) {
+            inbox.runtime.poll();
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(inbox.runtime.receipts[&operation].state, "completed");
+        assert_eq!(inbox.execute(original).state, "completed");
+        if inbox.runtime.status(operation, None).unwrap().state != "completed" {
+            fenced.push(action);
+        }
+    }
+    assert!(
+        fenced.is_empty(),
+        "receipt replay fenced newer handoffs: {fenced:?}"
+    );
 }

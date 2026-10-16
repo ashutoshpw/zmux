@@ -82,6 +82,7 @@ pub(super) fn run(
             journal.reconcile(&closed, &deadlines, &cancelled);
             let mut next_deadlines = deadlines.clone();
             let mut next_ephemeral = ephemeral.clone();
+            let mut fresh_mutation = false;
             let (value, full) = match &job.kind {
                 JobKind::Request(request) => {
                     if !job.full && !request.action.is_read() {
@@ -94,6 +95,7 @@ pub(super) fn run(
                         &mut next_deadlines,
                         &mut next_ephemeral,
                     )?;
+                    fresh_mutation = !retained;
                     // A matching, hash-verified retained Send is receipt retrieval. Its
                     // immutable recipient may now be closed; no new admission is occurring.
                     if !retained || !matches!(request.action, MessageAction::Send { .. }) {
@@ -149,6 +151,18 @@ pub(super) fn run(
                 persistence::atomic_write(&directory, OsStr::new(JOURNAL_NAME), &bytes, true)
                     .map_err(|e| e.to_string())?;
                 committing = false;
+            }
+            // A successful local capability retirement or explicit retry revokes
+            // already cached, unpublished handoffs after the durable mutation.
+            // A stale retirement is inert: it must not fence the newer owner.
+            if fresh_mutation
+                && matches!(&job.kind, JobKind::Request(request) if
+                matches!(request.action, MessageAction::Retire { .. })
+                    && value.as_ref().is_some_and(|v| v["retired"] == true)
+                || matches!(request.action, MessageAction::Retry { .. }))
+            {
+                let mut view = live.lock().map_err(|_| "message live view unavailable")?;
+                view.generation = view.generation.wrapping_add(1);
             }
             journal.retain_runtime_maps(&mut next_deadlines, &mut next_ephemeral);
             deadlines = next_deadlines;
