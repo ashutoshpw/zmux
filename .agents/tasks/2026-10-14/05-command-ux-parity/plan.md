@@ -52,6 +52,14 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [Dependency readiness reporter](references/r03-input-readiness-dependency.md) — isolated authorized MIT dependency patch; schema/source-footprint review precedes build.
+
+- [Frontend input readiness](references/r03-input-readiness.md) — read-only two-condition client readiness and authenticated bounded channel proposal; independent of workload execution admission.
+
+- [Execution admission](references/r03-execution-admission.md) — reviewed pre-execution barrier design for fast-exiting workloads; isolated implementation underway.
+
+- [Completed history UI](references/r03-completed-history-ui.md) — retained read-only saved output and accepted macOS copy/scroll/move fixture.
+
 - [T01 wrapped selection](references/t01-wrapped-selection.md) — authoritative row wrap and written-cell metadata for visible/history copy; optional engine and persistent anchors remain open.
 
 - [T01 native selection](references/t01-native-selection.md) — shared word/row selection and native clipboard evidence; history and logical-wrap gates remain open.

@@ -3,6 +3,14 @@ name: Patched zellij production owner
 on:
   workflow_dispatch:
     inputs:
+      input_readiness:
+        description: Run only the reviewed Darwin dependency readiness experiment
+        type: boolean
+        default: false
+      reviewed_readiness_source_sha256:
+        description: Exact reviewed readiness source inventory SHA256 (required for readiness)
+        type: string
+        default: ''
       dependency_package:
         description: Build source plugins and retain an independently reviewed dependency package
         type: boolean
@@ -20,7 +28,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  input-readiness:
+    if: inputs.input_readiness
+    uses: ./.github/workflows/local-zellij-input-readiness.yml
+    with:
+      reviewed_readiness_source_sha256: ${{ inputs.reviewed_readiness_source_sha256 }}
+      dependency_package: ${{ inputs.dependency_package }}
+
   patched-production-owner:
+    if: inputs.input_readiness != true
     strategy:
       fail-fast: false
       matrix:

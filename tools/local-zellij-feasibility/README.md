@@ -273,3 +273,68 @@ default terminal selection, Intel/universal or older-macOS support claim.
 The GitHub input expires after seven days. Expired/missing exact retrieval fails
 visibly, with no latest/refetch/rebuild fallback. Later default distribution needs
 durable immutable owned storage and explicit promotion.
+
+## Explicit frontend input-readiness experiment
+
+`--input-readiness` selects an original MIT optional patch for the pinned source.
+The [wire contract](input-readiness-protocol.json) and
+[source inventory](input-readiness-source.json) pin the sole-argument capability,
+private descriptor, exact four-file upstream footprint and source hashes. Ordinary
+producer mode, acquisition pins, retained v6 artifacts and native defaults remain
+unchanged. This mode cannot be combined with dependency-package/plugin rebuilding.
+
+```sh
+python3 -B tools/local-zellij-feasibility/produce-patched.py --output /absolute/fresh/readiness-producer --input-readiness
+python3 -B tools/local-zellij-feasibility/input-readiness-owner.py --producer-receipt /absolute/fresh/readiness-producer/receipt.json --output /absolute/fresh/readiness-owner
+```
+
+Root `main` captures/removes `ZMUX_ZELLIJ_FRONTEND_READY` before logger, config,
+threads or subprocess paths, then passes its owned optional path explicitly.
+Readiness requires an explicit existing local Attach; creation, resurrection,
+detached/background, web and reconnect paths fail closed. The capability probe
+returns exact JSON before logger/config/cache initialization.
+
+The client main loop consumes `DoneParsingStdinQuery`, checks the actual shared
+parser under its mutex, then requires a typed server Render whose stdout writes
+and flush succeeded. It only tries a capacity-one notification. One owned reporter
+thread authenticates the live direct parent with kernel PID/UID, validates strict
+bounded frames and namespace identities, and shares the original absolute
+CLOCK_MONOTONIC deadline through challenge1 / input_ready2 / accepted3 / EOF.
+The integrating CLI must independently validate its exact retained frontend and
+observe reporter EOF, cancellation, namespace and deadline before forwarding
+observer4 InputReady. Transport connection is progress only.
+
+The source controls re-execute actual owned children and use real Unix sockets;
+they cover both readiness conditions, fragmented frames, peer PID, correlation,
+strict fields, descriptor inode/permissions, ACK/EOF, deadline and cancellation.
+The separate actual-frontend fixture uses a silent workload and records real stdin
+privately. It sends each unique line once after authenticated readiness/EOF, then
+reattaches and checks startup count one. Terminal bytes never establish readiness.
+Fixtures signal only exact owned children; backend cleanup uses explicit isolated
+session control and checks the retained backend/workload identities disappear.
+
+There is no fabricated failing compilation or missing-symbol red. The immutable
+previous binary lacks this capability; new reporter controls and the real silent
+frontend exercise the new contract. Deterministic TransportConnected-before-Ready
+admission is separately owned by native/CLI integration. A reporter/test build,
+actual frontend acceptance, Darwin public peer controls, native integration,
+package redistribution and default activation are separate evidence gates.
+
+The actual-frontend acceptance fixture has an independent executed-source hash.
+A fixture repair can consume a prior passed producer only when the embedded
+producer inventory authenticates, the four compiled source hashes agree, and all
+build inputs still match. The receipt preserves both fixture hashes and inventory
+identities; it never rewrites the producing receipt or equates a fixture repair
+with a dependency rebuild.
+
+The proposed `local-zellij-input-readiness.yml` lane scopes hosted validation to
+Darwin ARM64 dependency controls and actual silent first-line delivery. Its manual
+input must match the exact reviewed source-inventory SHA-256. It retains source
+and host evidence only; it does not upload a dependency executable/package, build
+an application, or prove macOS 14 runtime or native observer4 admission.
+
+For a feature-branch diagnostic, the existing registered
+`local-zellij-patched-owner.yml` dispatcher can select `input_readiness=true` and
+pass `reviewed_readiness_source_sha256`; it calls the same Darwin workflow.
+`input_readiness=false` preserves the existing Linux/Darwin owner and package
+paths. Combining readiness with `dependency_package=true` fails preflight.
