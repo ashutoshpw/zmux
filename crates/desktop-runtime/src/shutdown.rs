@@ -302,6 +302,13 @@ impl Worker {
                     eprintln!("zmux shared session cancellation: {error}");
                 }
             }
+            let messages_done = match self.agent_messages.poll_shutdown() {
+                Ok(done) => done,
+                Err(error) => {
+                    self.shutdown_issue(error);
+                    true
+                }
+            };
             let profiles_done = match self.profiles.poll_shutdown() {
                 Ok(done) => done,
                 Err(error) => {
@@ -364,7 +371,7 @@ impl Worker {
                 tmux: self.local_tmux.worker_count(),
                 transfers: usize::from(!self.transfers_finished()),
                 profiles: usize::from(!profiles_done),
-                persistence: usize::from(!persistence_done),
+                persistence: usize::from(!persistence_done) + usize::from(!messages_done),
                 downloads: usize::from(!downloads_done),
                 connections: usize::from(!connections_done),
                 native_downloads,

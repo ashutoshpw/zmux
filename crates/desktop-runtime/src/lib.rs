@@ -1,4 +1,5 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
+pub mod agent_messages;
 pub mod attention;
 pub mod browser;
 pub mod control;
@@ -98,6 +99,12 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    AgentMessages {
+        request: agent_messages::MessageRequest,
+    },
+    AgentMessagesStatus {
+        request_id: uuid::Uuid,
+    },
     SurfaceOrder {
         request: surface_order::OrderRequest,
     },
@@ -283,6 +290,7 @@ struct Envelope {
 }
 
 pub(crate) struct Execution {
+    pub agent_message_result: Option<agent_messages::OperationReceipt>,
     pub result: Result<(), DesktopError>,
     pub snapshot: Arc<Snapshot>,
     pub created_workspaces: Vec<zmux_workspace_core::WorkspaceId>,
@@ -387,6 +395,7 @@ impl Desktop {
         let browser = BrowserRuntime::default();
         let downloads = downloads::DownloadRuntime::default();
         let windows = windows::WindowRuntime::default();
+        let agent_messages = agent_messages::Runtime::start(profile_directory.clone())?;
         let profiles = profiles::ProfileRuntime::start(profile_directory)?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let local_zellij = zellij_coordinator::Runtime::new(zellij_configuration);
@@ -441,6 +450,8 @@ impl Desktop {
             .name("zmux-workspaces".into())
             .spawn(move || {
                 let mut worker = Worker {
+                    agent_messages,
+                    agent_message_result: None,
                     local_tmux,
                     local_zellij,
                     launch_certificates: HashMap::new(),
@@ -955,6 +966,8 @@ fn notification_filter(
 }
 
 struct Worker {
+    agent_messages: agent_messages::Runtime,
+    agent_message_result: Option<agent_messages::OperationReceipt>,
     local_zellij: zellij_coordinator::Runtime,
     launch_certificates: HashMap<(SessionId, u64), zellij_coordinator::LaunchCertificate>,
     local_tmux: local_tmux::Runtime,
@@ -1100,6 +1113,12 @@ impl Worker {
                 Err(error) => self.last_error = Some(error.to_string()),
             }
             dirty |= self.profiles.poll();
+            self.agent_messages
+                .observe(self.model.snapshot(), Vec::new());
+            dirty |= self.agent_messages.poll();
+            if let Some(error) = self.agent_messages.take_error() {
+                self.last_error = Some(error);
+            }
             dirty |= self.poll_local_tmux();
             dirty |= self.poll_zellij();
             if !self.profiles.snapshot.loading {
@@ -1148,6 +1167,10 @@ impl Worker {
     }
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
+        self.agent_message_result = None;
+        let message_previous = self.model.snapshot();
+        self.agent_messages
+            .observe(message_previous.clone(), Vec::new());
         let mut acknowledgement = envelope.acknowledgement;
         self.last_request_id = request.request_id;
         let previous_upload_id = self.next_transfer_id;
@@ -1178,7 +1201,7 @@ impl Worker {
         let authorization = envelope.authorization;
         let guard = authorization
             .as_ref()
-            .map(|admission| admission.check())
+            .map(|admission| admission.try_check())
             .transpose();
         let result = match guard {
             _ if self.shared.stop.load(Ordering::Acquire)
@@ -1191,9 +1214,31 @@ impl Worker {
                 Command::NativeAttention {
                     action: NativeAttentionAction::Reply { target, text },
                 } => self.admit_reply(target, text, envelope.reply_deadline, &mut acknowledgement),
+                Command::AgentMessages { .. }
+                    if self.windows.terminating() || self.session_transition_pending() =>
+                {
+                    Err(DesktopError::Failure(
+                        "agent messages unavailable during session or application transition"
+                            .into(),
+                    ))
+                }
+                Command::AgentMessages { request } => self
+                    .agent_messages
+                    .admit(request, authorization.clone())
+                    .map(|receipt| {
+                        self.agent_message_result = Some(receipt);
+                    }),
+                Command::AgentMessagesStatus { request_id } => self
+                    .agent_messages
+                    .status(request_id, authorization.clone())
+                    .map(|receipt| {
+                        self.agent_message_result = Some(receipt);
+                    }),
                 command => self.execute_command(command),
             },
         };
+        self.agent_messages
+            .observe(self.model.snapshot(), Vec::new());
         self.last_error = result.as_ref().err().map(ToString::to_string);
         let snapshot = self.publish(false);
         let (created_workspaces, created_panes, created_surfaces) = previous_model
@@ -1242,6 +1287,7 @@ impl Worker {
             .unwrap_or_default();
         if let Some(sender) = acknowledgement {
             let _ = sender.try_send(Execution {
+                agent_message_result: self.agent_message_result.take(),
                 result,
                 profile_operation_id: self.profile_operation_id,
                 tmux_operation_id: self.tmux_operation_id,
@@ -1309,6 +1355,9 @@ impl Worker {
             ));
         }
         match command {
+            Command::AgentMessages { .. } | Command::AgentMessagesStatus { .. } => Err(
+                DesktopError::Failure("message commands require their admission envelope".into()),
+            ),
             command @ (Command::Windows { .. } | Command::NativeWindow { .. }) => {
                 self.execute_window_command(command)
             }
@@ -2128,6 +2177,8 @@ impl Worker {
         } else {
             None
         };
+        self.agent_messages
+            .commit_model(&self.model.snapshot(), &candidate.snapshot())?;
         self.model = candidate;
         if let Some(windows) = move_windows {
             self.windows = windows;

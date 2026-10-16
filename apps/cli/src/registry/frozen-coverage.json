@@ -182,36 +182,36 @@
       "inventory_id": "CMD-025",
       "reference_command": "agent message",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "agent message"
     },
     {
       "inventory_id": "CMD-026",
       "reference_command": "agent inbox",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "agent inbox"
     },
     {
       "inventory_id": "CMD-027",
       "reference_command": "agent messages on",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "agent messages on"
     },
     {
       "inventory_id": "CMD-028",
       "reference_command": "agent messages off",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "agent messages off"
     },
     {
       "inventory_id": "CMD-029",
       "reference_command": "agent messages status",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "agent messages status"
     },
     {
       "inventory_id": "CMD-030",

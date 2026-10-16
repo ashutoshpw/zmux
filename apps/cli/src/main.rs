@@ -20,6 +20,7 @@ use zmux_desktop_runtime::control::{
 use zmux_desktop_runtime::control_policy::SocketPassword;
 use zmux_session_runtime::{Launch, Session, SessionError, State};
 use zmux_workspace_core::{Action, Axis, FocusHistoryDirection};
+mod agent_messages;
 mod bounded_command;
 mod browser;
 mod browser_download;
@@ -66,6 +67,7 @@ struct ClientOptions {
 }
 
 enum Parsed {
+    AgentMessages(agent_messages::Invocation),
     Buffers(buffers::Invocation),
     PullRequest(pull_request::Invocation),
     Offline(Offline),
@@ -104,6 +106,14 @@ fn main() -> ExitCode {
 fn run() -> Result<u8, Box<dyn Error>> {
     let (parsed, socket_override, timeout, password) = parse(env::args_os().skip(1).collect())?;
     match parsed {
+        Parsed::AgentMessages(invocation) => {
+            let options = client_options(socket_override, timeout, password)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&agent_messages::run(&options, invocation)?)?
+            );
+            Ok(0)
+        }
         Parsed::Buffers(invocation) => {
             println!(
                 "{}",
@@ -270,6 +280,9 @@ fn parse(
     let tail = &args[(index + 1).min(args.len())..];
     if let Some(command @ ("set-buffer" | "list-buffers" | "paste-buffer")) = command {
         return Ok((buffers::parse(command, tail)?, socket, timeout, password));
+    }
+    if command == Some("agent") {
+        return Ok((agent_messages::parse(tail)?, socket, timeout, password));
     }
     if command == Some("local-zellij") {
         return Ok((local_zellij::parse(tail)?, socket, timeout, password));

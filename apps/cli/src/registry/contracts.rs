@@ -133,6 +133,44 @@ fn focus_arguments() -> Vec<Argument> {
 }
 fn definitions() -> Vec<Contract> {
     let mut result = Vec::new();
+    for (name, operands, action) in [
+        ("agent message", vec!["surface:1", "example"], "send"),
+        ("agent msg", vec!["surface:1", "example"], "send"),
+        ("agent inbox", vec!["--surface", "surface:1"], "list"),
+        ("agent messages on", vec!["--global"], "settings"),
+        ("agent messages off", vec!["--global"], "settings"),
+        ("agent messages status", vec!["--global"], "settings"),
+    ] {
+        let arguments = match action {
+            "send" => vec![
+                positional("target", ValueKind::Text, false),
+                positional("text_or_stdin", ValueKind::Text, true),
+                option("reply_to", &["--reply-to"], ValueKind::Uuid),
+                option("sender_name", &["--from"], ValueKind::Text),
+                option("thread", &["--thread"], ValueKind::Uuid),
+                option("request_id", &["--request-id"], ValueKind::Uuid),
+            ],
+            "list" => vec![
+                option("surface", &["--surface"], ValueKind::Target),
+                option("states", &["--state"], ValueKind::Text),
+                option("limit", &["--limit"], ValueKind::Integer(1, 32)),
+                option("cursor", &["--cursor"], ValueKind::Integer(0, u64::MAX)),
+                option("mark_read", &["--mark-read"], ValueKind::Flag),
+            ],
+            _ => vec![
+                positional("target", ValueKind::Text, false),
+                option("workspace", &["--workspace"], ValueKind::Flag),
+                option("global", &["--global"], ValueKind::Flag),
+            ],
+        };
+        let mut c = contract(name, &operands, arguments, "agent_messages");
+        c.route = "agent_messages";
+        c.expected.push(("/request/action/action", action));
+        c.defaults = json!({"body_utf8_bytes":4096,"inbox_page":32,"provider_delivery":false,"terminal_injection":false});
+        c.limitations = "Durable local queue and exact-ID inbox/settings only. Caller sender resolves independently of recipient. At-least-once provider claim/ack cannot guarantee exactly-once external consumption; no provider hooks, wake or native Agent Inbox. Body cap, workspace tie-breaker and output compatibility remain gaps. Stdin reads only during execution; timeout polls original operation and never replays mutation.";
+        result.push(c);
+    }
+
     for (name, operands, method) in [
         ("set-buffer", vec!["example"], "set_buffer"),
         ("list-buffers", vec![], "list_buffers"),
@@ -1021,6 +1059,7 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
         .map_err(|error| failure(format!("{}: {}", c.name, error)))?;
     let value = |command| serde_json::to_value(command).map_err(|e| failure(e.to_string()));
     let (route, request) = match parsed {
+        Parsed::AgentMessages(invocation) => ("agent_messages", invocation.discovery()),
         Parsed::Buffers(invocation) => ("buffers", invocation.discovery()),
         Parsed::PullRequest(invocation) => ("pull_request", invocation.discovery()),
         Parsed::App(command) => ("app", value(command)?),
