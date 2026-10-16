@@ -338,3 +338,11 @@ For a feature-branch diagnostic, the existing registered
 pass `reviewed_readiness_source_sha256`; it calls the same Darwin workflow.
 `input_readiness=false` preserves the existing Linux/Darwin owner and package
 paths. Combining readiness with `dependency_package=true` fails preflight.
+
+The dependency-only Darwin lane passed at source `d36bc91` in
+[run 38849682804](https://github.com/ashutoshpw/zmux/actions/runs/38849682804): seven
+real reporter controls and two exact first-line deliveries to one silent workload
+on macOS 15.7.9 ARM64. Sources, receipt/log hashes and the artifact ZIP digest were
+verified. The [dependency receipt](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/r03-input-readiness-dependency.md)
+records the exact evidence and remaining native/package/macOS 14 runtime gates.
+The artifact contains source/evidence only; no executable bytes were uploaded.
