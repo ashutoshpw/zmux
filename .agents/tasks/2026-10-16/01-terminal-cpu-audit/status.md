@@ -4,6 +4,20 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Native Actions38931295149 at e9badee passes both-architecture Swift type checks,
+  local completion and Bash/sh/zsh startup tests. Prior-renderer proof fails on
+  cursor repaint rather than the intended metadata assertion, with physical app
+  cleanup confirmed. Fixture now forces layout/initial display, validates visible
+  geometry and observes both NSView and backing CALayer invalidation. A view-only
+  flag is insufficient on layer-backed AppKit views. Native revalidation pending.
+- Controlled idle Actions38931300155 at e9badee passes both120s windows with100/100
+  available observations each: idle1 app CPU0.4322%, idle8 CPU0.4581%, app RSS about
+ 47.4/54.9MiB. Source/archive/stack hashes verified in downloaded receipts at
+  `/tmp/zmux-native-idle-e9badee-38931300155/`. Workload is finite controlled PTY
+  children, not actual Claude/SSH or a reproduction of the user's mostly-idle31.5%.
+- Rendering71f3cf2 and nested-SSH relay e9badee pushed and remote SHA verified.
+  Foundation Actions38931288016 passes on Linux and macOS. Broad native runtime
+  validation and focused product artifact gates are still required.
 - Added a macOS text collection command for the user: 12 process-only top samples
   followed by a 10s/1ms sample of the exact zmux-app PID, with private output.
   Physical-Mac mostly-idle attribution is still pending; hosted idle did not reproduce it.

@@ -43,9 +43,11 @@ is disabled to achieve this reduction.
 - Real C ABI consumer test: two PTYs, exact Unicode output, only changed row0,
   unchanged second pane without grid, scalar-aligned text merge, unknown-baseline
   reset and compatibility of the full snapshot reader.
-- Public NSView contract in existing native sidebar journey: byte-progress-only
+- Public NSView/CALayer contract in existing native sidebar journey: byte-progress-only
   metadata requests no repaint; a visible cursor update requests repaint; repeated
-  frame requests no repaint. The fixture restores its original presentation.
+  frame requests no repaint. The fixture restores its original presentation. Layout
+  and initial drawing settle first; both view and backing-layer dirty flags count
+  as repaint requests. The hosted view-only check was insufficient on AppKit.
 - The macOS workflow deliberately substitutes the older MIT TerminalView from
  53a98b5, requires the intended repaint failure and physical app cleanup, restores
   current source, then rebuilds/tests the product. This diagnostic variant is not
