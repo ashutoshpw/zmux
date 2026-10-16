@@ -227,6 +227,9 @@ jobs:
             ${{ runner.temp }}/native-agent-inbox/*.json
             ${{ runner.temp }}/native-agent-inbox/*.py
             ${{ runner.temp }}/native-agent-inbox/*.log
+            ${{ runner.temp }}/native-agent-inbox/*.png
+            ${{ runner.temp }}/native-agent-inbox/lock-held
+            ${{ runner.temp }}/native-agent-inbox/lock-ended
             ${{ runner.temp }}/native-agent-inbox/*.zip
             ${{ runner.temp }}/native-agent-inbox/source/
           include-hidden-files: true

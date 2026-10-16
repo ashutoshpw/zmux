@@ -99,6 +99,10 @@ impl Default for Shell {
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    #[serde(skip)]
+    NativeAgentMessages {
+        request: agent_messages::NativeRequest,
+    },
     AgentMessages {
         request: agent_messages::MessageRequest,
     },
@@ -629,6 +633,35 @@ impl Desktop {
         execution
             .download_result
             .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
+    }
+
+    /// Trusted inbox presentation channel. Admission is acknowledged separately from
+    /// durable worker completion; preserve the original request UUID and query Status.
+    pub fn native_agent_messages(
+        &self,
+        request: agent_messages::NativeRequest,
+    ) -> Result<agent_messages::OperationReceipt, agent_messages::NativeAdmissionError> {
+        let execution = self
+            .execute_native(
+                Command::NativeAgentMessages { request },
+                NATIVE_COMMAND_TIMEOUT,
+            )
+            .map_err(|error| agent_messages::NativeAdmissionError {
+                outcome_unknown: matches!(error, DesktopError::Timeout | DesktopError::Closed),
+                error,
+            })?;
+        execution
+            .result
+            .map_err(|error| agent_messages::NativeAdmissionError {
+                error,
+                outcome_unknown: false,
+            })?;
+        execution
+            .agent_message_result
+            .ok_or_else(|| agent_messages::NativeAdmissionError {
+                error: DesktopError::Failure("native message acknowledgement missing".into()),
+                outcome_unknown: true,
+            })
     }
 
     /// Admit one durable profile creation and return that exact executor receipt.
@@ -1214,7 +1247,7 @@ impl Worker {
                 Command::NativeAttention {
                     action: NativeAttentionAction::Reply { target, text },
                 } => self.admit_reply(target, text, envelope.reply_deadline, &mut acknowledgement),
-                Command::AgentMessages { .. }
+                Command::AgentMessages { .. } | Command::NativeAgentMessages { .. }
                     if self.windows.terminating() || self.session_transition_pending() =>
                 {
                     Err(DesktopError::Failure(
@@ -1222,6 +1255,12 @@ impl Worker {
                             .into(),
                     ))
                 }
+                Command::NativeAgentMessages { request } => self
+                    .agent_messages
+                    .native(request, &message_previous)
+                    .map(|receipt| {
+                        self.agent_message_result = Some(receipt);
+                    }),
                 Command::AgentMessages { request } => self
                     .agent_messages
                     .admit(request, authorization.clone())
@@ -1355,9 +1394,11 @@ impl Worker {
             ));
         }
         match command {
-            Command::AgentMessages { .. } | Command::AgentMessagesStatus { .. } => Err(
-                DesktopError::Failure("message commands require their admission envelope".into()),
-            ),
+            Command::NativeAgentMessages { .. }
+            | Command::AgentMessages { .. }
+            | Command::AgentMessagesStatus { .. } => Err(DesktopError::Failure(
+                "message commands require their admission envelope".into(),
+            )),
             command @ (Command::Windows { .. } | Command::NativeWindow { .. }) => {
                 self.execute_window_command(command)
             }

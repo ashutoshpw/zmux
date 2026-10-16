@@ -137,12 +137,12 @@ impl Default for Journal {
     }
 }
 #[derive(Clone)]
-struct LiveSurface {
-    address: Address,
+pub(super) struct LiveSurface {
+    pub(super) address: Address,
     session: SessionId,
     focused: bool,
 }
-fn surfaces(model: &Snapshot) -> Vec<LiveSurface> {
+pub(super) fn surfaces(model: &Snapshot) -> Vec<LiveSurface> {
     model
         .workspaces
         .iter()

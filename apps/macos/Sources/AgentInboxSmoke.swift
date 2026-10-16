@@ -13,6 +13,7 @@ enum AgentInboxSmoke {
         let inputBytes: UInt64
         let sequence: UInt64
     }
+    private struct HeldCapacity: Sendable { let core: UInt64; let buffers: [UInt64] }
     private struct Evidence: Encodable, Sendable {
         let scope = "native_agent_inbox_menu_and_durable_messages"
         let sourceSHA: String
@@ -27,11 +28,16 @@ enum AgentInboxSmoke {
         var checks: [String] = []
         var children: [Child] = []
         var failure: String?
+        var savedReplies: [UUID] = []
+        var pendingRequestId: UUID?
     }
     private struct Message: Decodable {
         struct Address: Decodable { let surface_id: UUID }
         struct Sender: Decodable { let surface_id: UUID? }
         let id: UUID
+        let request_id: UUID
+        let reply_to: UUID?
+        let thread_id: UUID
         let body: String
         let state: String
         let failure: String?
@@ -51,6 +57,7 @@ enum AgentInboxSmoke {
                                 appPID: ProcessInfo.processInfo.processIdentifier, nonce: nonce)
         var children: [Child] = []
         var livePIDs: Set<UInt32> = []
+        var heldCapacity: HeldCapacity?
         do {
             try await wait(coordinator, "initial real terminal") { state in
                 state.persistence?.startupPending != true && state.persistence?.restoring != true &&
@@ -163,11 +170,144 @@ enum AgentInboxSmoke {
                   let reply = rendered.compactMap({ $0 as? NSTextView }).first(where: { $0.isEditable && $0.accessibilityLabel() == "Reply" }),
                   inbox.firstResponder === reply else { throw failure("Inbox body or actual reply first responder differs") }
             evidence.checks.append("actual_source_owned_inbox_exact_body_and_reply_responder")
+            evidence.stage = "journey"
+            let draft = "  Native reply α界 e\u{301}🙂\t\nkept whitespace  \n"
+            reply.insertText(draft, replacementRange: NSRange(location: 0, length: (reply.string as NSString).length))
+            guard reply.string == draft else { throw failure("Actual reply editing did not retain exact text") }
+            let arrival = try await send(source, from: otherChild, to: sourceChild.surface, body: "Later arrival stays queued")
+            guard let refresh = button("Refresh", in: content), let submit = button("Send Reply", in: content),
+                  let markRead = button("Mark Read", in: content), let status = button("Check Status", in: content),
+                  let receiving = button("Allow receiving", in: content),
+                  let scopes = descendants(content).compactMap({ $0 as? NSPopUpButton }).first(where: { $0.accessibilityLabel() == "Receiving settings scope" }) else {
+                throw failure("Mounted inbox production controls unavailable")
+            }
+            refresh.performClick(nil)
+            try await wait(coordinator, "real new arrival rendered without losing draft") { _ in
+                descendants(content).contains { $0.accessibilityIdentifier() == arrival.id.uuidString.lowercased() } && reply.string == draft
+            }
+            inbox.orderOut(nil)
+            other.window.makeKeyAndOrderFront(nil)
+            try await wait(coordinator, "foreign focus after hidden draft") { state in
+                NSApp.keyWindow === other.window && state.model.focusedWindow == otherID && state.observedKeyWindow == otherID
+            }
+            menu.performActionForItem(at: index)
+            try await wait(coordinator, "same reopened inbox draft and responder") { _ in
+                inbox.isVisible && inbox.parent === source.window && inbox.firstResponder === reply && reply.string == draft
+            }
+            evidence.checks.append("draft_survives_real_arrival_refresh_hide_and_foreign_focus")
             evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: livePIDs)
+            guard submit.isEnabled else { throw failure("Reply submit disabled despite a live original sender and draft") }
+            submit.performClick(nil)
+            try submitKey(in: inbox)
+            let laterEdit = draft + "edited while saving"
+            reply.insertText("edited while saving", replacementRange: NSRange(location: (reply.string as NSString).length, length: 0))
+            other.window.makeKeyAndOrderFront(nil)
+            let replies = try await inboxUntil(source, "single durable native reply") { rows in
+                rows.messages.filter { $0.reply_to == primary.id && $0.body == draft }.count == 1
+            }
+            guard let saved = replies.messages.first(where: { $0.reply_to == primary.id && $0.body == draft }),
+                  saved.sender.surface_id == sourceChild.surface, saved.recipient.surface_id == otherChild.surface,
+                  saved.thread_id == primary.thread_id, saved.state == "queued",
+                  replies.messages.filter({ $0.reply_to == primary.id }).count == 1 else { throw failure("Reply lost original parent/thread/sender/recipient or duplicated") }
+            try await wait(coordinator, "saved receipt preserves newer draft revision") { _ in
+                !status.isEnabled && submit.isEnabled && reply.string == laterEdit && operationStatus(content).hasPrefix("Saved")
+            }
+            evidence.savedReplies.append(saved.id)
+            evidence.checks.append("button_and_submit_key_save_one_exact_reply_and_keep_later_edit")
+            let beforeRead = try JSONDecoder().decode(Inbox.self, from: await cli(source, ["agent", "inbox"]))
+            guard beforeRead.messages.first(where: { $0.id == primary.id })?.state == "queued",
+                  beforeRead.messages.first(where: { $0.id == arrival.id })?.state == "queued" else { throw failure("Focus or selection implicitly marked messages read") }
+            markRead.performClick(nil)
+            _ = try await inboxUntil(source, "exact selected message read only") { rows in
+                rows.messages.first(where: { $0.id == primary.id })?.state == "read" &&
+                rows.messages.first(where: { $0.id == arrival.id })?.state == "queued"
+            }
+            evidence.checks.append("explicit_read_leaves_later_arrival_queued")
+            try await wait(coordinator, "read receipt settled") { _ in operationStatus(content).hasPrefix("Saved") && submit.isEnabled }
+            scopes.selectItem(at: 2)
+            guard let scopeAction = scopes.action, NSApp.sendAction(scopeAction, to: scopes.target, from: scopes) else { throw failure("Actual receiving scope action unavailable") }
+            try await wait(coordinator, "global configured receiving on") { _ in receiving.isEnabled && receiving.state == .on }
+            receiving.performClick(nil)
+            try await settingsUntil(source, enabled: false)
+            try await wait(coordinator, "native receiving off receipt") { _ in receiving.isEnabled && receiving.state == .off && operationStatus(content).contains("settings saved") }
+            submit.performClick(nil)
+            try await wait(coordinator, "native opt-out refusal keeps draft") { _ in
+                operationStatus(content).contains("messaging disabled") && submit.isEnabled && reply.string == laterEdit
+            }
+            let failed = try await inboxUntil(source, "queued messages failed by explicit receiving off") { rows in
+                rows.messages.first(where: { $0.id == arrival.id })?.state == "failed" &&
+                rows.messages.first(where: { $0.id == saved.id })?.state == "failed"
+            }
+            guard failed.messages.count == 5, failed.messages.first(where: { $0.id == saved.id })?.failure == "messaging_disabled" else { throw failure("Refused native send mutated inbox or failed messages lost their reason") }
+            try await wait(coordinator, "configured off after refused reply") { _ in receiving.isEnabled && receiving.state == .off }
+            receiving.performClick(nil)
+            try await settingsUntil(source, enabled: true)
+            let restored = try JSONDecoder().decode(Inbox.self, from: await cli(source, ["agent", "inbox"]))
+            guard restored.messages.first(where: { $0.id == arrival.id })?.state == "failed",
+                  restored.messages.first(where: { $0.id == saved.id })?.state == "failed",
+                  restored.messages.first(where: { $0.id == closed.id })?.failure == "recipient_closed" else { throw failure("Turning receiving on resurrected retained failures") }
+            evidence.checks.append("native_receiving_settings_refuse_send_preserve_draft_and_never_resurrect")
+            try await wait(coordinator, "receiving-on receipt settled before uncertainty") { _ in submit.isEnabled && operationStatus(content).contains("settings saved") }
+            // The independent runner process holds the actual journal lock. No fake
+            // receipt or injected timeout supplies the pending/unknown outcome.
+            try await signal(root.appendingPathComponent("lock-request"))
+            try await file(root.appendingPathComponent("lock-held"))
+            guard submit.isEnabled else { throw failure("Reply not available before real lock contention") }
+            submit.performClick(nil)
+            try submitKey(in: inbox)
+            try await wait(coordinator, "real journal wait becomes explicit Check Status") { _ in
+                status.isEnabled && !submit.isEnabled && operationStatus(content).contains("Submission unconfirmed") && reply.string == laterEdit
+            }
+            guard let operation = operationStatus(content).split(separator: " ").compactMap({ UUID(uuidString: String($0)) }).last else { throw failure("Uncertain operation did not expose its original UUID") }
+            evidence.pendingRequestId = operation
+            status.performClick(nil)
+            try await wait(coordinator, "pending Check Status retains exact UUID and draft") { _ in
+                status.isEnabled && operationStatus(content).contains(operation.uuidString.lowercased()) && reply.string == laterEdit && !submit.isEnabled
+            }
+            heldCapacity = try await reserveCapacity()
+            status.performClick(nil)
+            try await wait(coordinator, "rejected status transport cannot unlock original uncertain send") { _ in
+                status.isEnabled && !submit.isEnabled && reply.string == laterEdit &&
+                operationStatus(content).contains("(-5)") && operationStatus(content).contains(operation.uuidString.lowercased())
+            }
+            if let heldCapacity { try await releaseCapacity(heldCapacity) }
+            heldCapacity = nil
+            evidence.checks.append("status_transport_capacity_refusal_preserves_original_uncertain_request")
+            try await signal(root.appendingPathComponent("lock-release"))
+            try await file(root.appendingPathComponent("lock-ended"))
+            status.performClick(nil)
+            try await wait(coordinator, "original UUID resolves saved and clears unchanged draft") { _ in
+                reply.string.isEmpty && operationStatus(content).hasPrefix("Saved") && !status.isEnabled
+            }
+            let recovered = try await inboxUntil(source, "one original durable reply after real lock release") { rows in
+                rows.messages.contains { $0.request_id == operation && $0.reply_to == primary.id && $0.body == laterEdit }
+            }
+            guard recovered.messages.count == 6,
+                  recovered.messages.filter({ $0.request_id == operation }).count == 1,
+                  let recoveredReply = recovered.messages.first(where: { $0.request_id == operation }),
+                  recoveredReply.sender.surface_id == sourceChild.surface,
+                  recoveredReply.recipient.surface_id == otherChild.surface,
+                  recoveredReply.thread_id == primary.thread_id, recoveredReply.state == "queued" else {
+                throw failure("Uncertain native request was replayed, retargeted or falsely delivered")
+            }
+            evidence.savedReplies.append(recoveredReply.id)
+            evidence.checks.append("real_journal_lock_uncertainty_retains_uuid_and_check_status_saves_once")
+            evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: livePIDs)
+            evidence.checks.append("independent_pty_progress_after_all_ui_actions_zero_input")
+            inbox.makeKeyAndOrderFront(nil)
+            try await capture(inbox, to: report.deletingLastPathComponent().appendingPathComponent("native-agent-inbox.png"))
             try await coordinator.shutdown()
             evidence.stage = "complete"; evidence.state = "complete"
             try await save(evidence, to: report)
         } catch {
+            if let heldCapacity {
+                do { try await releaseCapacity(heldCapacity) }
+                catch { FileHandle.standardError.write(Data("Capacity cleanup failed: \(error)\n".utf8)) }
+            }
+            // Release only this fixture's independently owned lock holder before
+            // shared shutdown drains any accepted write. Never cancel/replay it.
+            do { try await signal(root.appendingPathComponent("lock-release")) }
+            catch { FileHandle.standardError.write(Data("Lock release signal failed: \(error)\n".utf8)) }
             evidence.state = "failed"; evidence.failure = error.localizedDescription
             do { evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: livePIDs) }
             catch { evidence.failure = (evidence.failure ?? "") + "; counter verification: " + error.localizedDescription }
@@ -176,6 +316,96 @@ enum AgentInboxSmoke {
         }
     }
 
+    private static func reserveCapacity() async throws -> HeldCapacity {
+        try await Task.detached {
+            var core = zmux_core_create()
+            let creationDeadline = ContinuousClock.now + .seconds(3)
+            while core.status == -4 && ContinuousClock.now < creationDeadline {
+                try await Task.sleep(for: .milliseconds(5)); core = zmux_core_create()
+            }
+            guard core.status == 0 else { throw failure("Fixture could not create its independent public ABI core") }
+            let snapshot = Data("{\"version\":1,\"command\":{\"method\":\"snapshot\"}}".utf8)
+            var buffers: [UInt64] = []
+            do {
+                let deadline = ContinuousClock.now + .seconds(3)
+                while buffers.count < 16, ContinuousClock.now < deadline {
+                    let result = snapshot.withUnsafeBytes { bytes in
+                        zmux_core_dispatch(core.value, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                    }
+                    if result.status == 0 { buffers.append(result.value) }
+                    else if result.status != -4 && result.status != -5 { throw failure("Independent ABI reservation failed") }
+                    if buffers.count < 16 { try await Task.sleep(for: .milliseconds(5)) }
+                }
+                guard buffers.count == 16 else { throw failure("Fixture did not own all response capacity") }
+                return HeldCapacity(core: core.value, buffers: buffers)
+            } catch {
+                try await releaseCapacity(HeldCapacity(core: core.value, buffers: buffers))
+                throw error
+            }
+        }.value
+    }
+    nonisolated private static func releaseCapacity(_ held: HeldCapacity) async throws {
+        for (isCore, token) in held.buffers.map({ (false, $0) }) + [(true, held.core)] {
+            let deadline = ContinuousClock.now + .seconds(3)
+            var status: Int32
+            repeat {
+                status = isCore ? zmux_core_destroy(token) : zmux_buffer_release(token)
+                if status == -4 { try await Task.sleep(for: .milliseconds(5)) }
+            } while status == -4 && ContinuousClock.now < deadline
+            guard status == 0 else { throw failure("Fixture response/core ownership cleanup failed: \(status)") }
+        }
+    }
+    private static func button(_ title: String, in content: NSView) -> NSButton? {
+        descendants(content).compactMap { $0 as? NSButton }.first { $0.title == title || $0.accessibilityLabel() == title }
+    }
+    private static func operationStatus(_ content: NSView) -> String {
+        descendants(content).compactMap { $0 as? NSTextField }.first { $0.accessibilityLabel() == "Message operation status" }?.stringValue ?? ""
+    }
+    private static func submitKey(in window: NSWindow) throws {
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) else { throw failure("Submit key event unavailable") }
+        // A disabled button may reject this duplicate key equivalent. It must
+        // never create a second mutation through a separate keyboard path.
+        _ = window.performKeyEquivalent(with: event)
+    }
+    private static func inboxUntil(_ host: MainWindowHost, _ description: String, predicate: (Inbox) -> Bool) async throws -> Inbox {
+        let deadline = ContinuousClock.now + .seconds(8)
+        while ContinuousClock.now < deadline {
+            let rows = try JSONDecoder().decode(Inbox.self, from: await cli(host, ["agent", "inbox"]))
+            if predicate(rows) { return rows }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw failure("Timed out awaiting " + description)
+    }
+    private static func settingsUntil(_ host: MainWindowHost, enabled: Bool) async throws {
+        struct Settings: Decodable { let enabled: Bool; let effective_enabled: Bool }
+        let deadline = ContinuousClock.now + .seconds(8)
+        while ContinuousClock.now < deadline {
+            let result = try JSONDecoder().decode(Settings.self, from: await cli(host, ["agent", "messages", "status", "--global"]))
+            if result.enabled == enabled && result.effective_enabled == enabled { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw failure("Durable receiving settings differ from the native action")
+    }
+    private static func signal(_ path: URL) async throws {
+        try await Task.detached { try Data("fixture".utf8).write(to: path, options: .atomic) }.value
+    }
+    private static func file(_ path: URL) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < deadline {
+            if await Task.detached(operation: { FileManager.default.fileExists(atPath: path.path) }).value { return }
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        throw failure("Independent lock holder did not reach " + path.lastPathComponent)
+    }
+    private static func capture(_ window: NSWindow, to path: URL) async throws {
+        guard let view = window.contentView, view.bounds.width >= 560, view.bounds.height >= 640,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw failure("Mounted inbox capture unavailable") }
+        view.layoutSubtreeIfNeeded(); view.cacheDisplay(in: view.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]), data.count <= 8_388_608 else { throw failure("Inbox capture exceeds bound") }
+        try await Task.detached { try data.write(to: path, options: .atomic) }.value
+    }
     private static func terminalPID(_ coordinator: ApplicationCoordinator, window: UInt64) -> UInt32? {
         guard let state = coordinator.snapshot, let owner = state.model.windows.first(where: { $0.id == window }),
               let workspace = state.model.workspaces.first(where: { $0.id == owner.selectedWorkspace }),

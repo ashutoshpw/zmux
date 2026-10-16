@@ -228,7 +228,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
         let newWorkspaceButton = makeIconButton(symbol: "plus", label: "New workspace", action: #selector(newWorkspace))
         let cloudButton = makeIconButton(symbol: "icloud", label: "Cloud account", action: #selector(showCloudSettings))
-        let sidebarActions = NSStackView(views: [newWorkspaceButton, jumpToUnreadButton, clearNotificationsButton, cloudButton])
+        let agentInboxButton = makeIconButton(symbol: "tray.full", label: "Agent Inbox (⌘⇧I)", action: #selector(showAgentInbox))
+        let sidebarActions = NSStackView(views: [newWorkspaceButton, jumpToUnreadButton, clearNotificationsButton, agentInboxButton, cloudButton])
         sidebarActions.orientation = .horizontal
         sidebarActions.spacing = 3
 
@@ -394,6 +395,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         return button
     }
 
+    @objc func showAgentInbox() { coordinator.showAgentInbox(from: self) }
+
     private func makeMenus() -> NSMenu {
         let menu = NSMenu()
         let appItem = NSMenuItem()
@@ -417,6 +420,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
             ("Toggle Sidebar", #selector(toggleSidebar), "b"),
             ("Notifications", #selector(showNotifications), ""),
+            ("Agent Inbox", #selector(showAgentInbox), "I"),
             ("Jump to Latest Unread", #selector(jumpToUnread), "U"),
             ("Enable Desktop Notifications…", #selector(enableDesktopNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),

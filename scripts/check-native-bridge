@@ -55,3 +55,24 @@ with tempfile.TemporaryDirectory(prefix="zmux-native-lease-", dir=libdir) as lea
     assert phases[-1]["log_bytes_seen"] == phases[-1]["log_bytes_retained"]
     assert lease_output.strip() == "native_profile_lease_passed"
 print("Native profile lease C ABI passed: capacity before acquisition, independent-process contention, original-owner status and lease retention after Desktop shutdown.")
+
+message_executable = libdir / "zmux-native-agent-message-check"
+subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
+                "-I", str(root / "crates/native-bridge/include"), str(root / "crates/native-bridge/tests/agent_messages.c"),
+                "-L", str(libdir), "-lzmux_native_bridge", f"-Wl,-rpath,{libdir}", "-o", str(message_executable)], check=True)
+with tempfile.TemporaryDirectory(prefix="zmux-native-message-", dir=libdir) as message_fixture:
+    message_output = runner.run([str(message_executable), str(Path(message_fixture).resolve(strict=True))],
+                                "agent-message-abi", libdir, [], timeout=30, cwd=root, env=environment)
+    receipts = [json.loads(line) for line in message_output.splitlines()]
+    assert len(receipts) == 4
+    for index, request_id in ((0, 1), (1, 3)):
+        reply = receipts[index]
+        expected = f"00000000-0000-4000-8000-{request_id:012d}"
+        assert reply["ok"] and reply["request_id"] == expected
+        assert reply["receipt"]["request_id"] == expected and reply["receipt"]["state"] == "completed"
+        assert reply["receipt"]["result"]["enabled"] is False
+        assert reply["receipt"]["result"]["effective_enabled"] is False
+    assert receipts[2]["ok"] and receipts[2]["receipt"]["state"] == "unknown_or_expired"
+    assert receipts[2]["request_id"] == "00000000-0000-4000-8000-000000000002"
+    assert not receipts[3]["ok"] and receipts[3]["outcome_unknown"] is False
+print("Native inbox C ABI passed: exact UUID receipts, strict host capability, stale origin and capacity refusal without settings mutation.")

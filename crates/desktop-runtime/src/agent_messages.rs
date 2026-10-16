@@ -129,6 +129,8 @@ pub struct OperationReceipt {
 }
 
 mod domain;
+mod native;
+pub use native::{NativeAction, NativeAdmissionError, NativeOrigin, NativeRequest};
 mod storage;
 use crate::{
     DesktopError,

@@ -14,7 +14,7 @@ import uuid
 
 REPO = Path(__file__).resolve().parents[2]
 OWN_INPUTS = ('tools/native-agent-inbox/run.py', '.github/workflows/macos-development.yml',
-              'scripts/check-macos-sources')
+              'scripts/check-macos-sources', 'scripts/check-native-bridge')
 LAUNCHER = '''import json,os,sys
 with open(sys.argv[1], 'x') as record:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'executable':sys.argv[2]},record)
@@ -44,9 +44,34 @@ while time.monotonic()<deadline:
   total+=len(data)
  sequence+=1;save()
 '''
+LOCK_HOLDER = '''import fcntl,json,os,pathlib,sys,time
+root=pathlib.Path(sys.argv[1]); profile=pathlib.Path(sys.argv[2]); deadline=time.monotonic()+100
+record={'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':os.environ['ZMUX_AGENT_INBOX_NONCE']}
+(root/'lock-holder.json').write_text(json.dumps(record))
+while not (root/'lock-request').exists():
+ if time.monotonic()>=deadline:raise RuntimeError('Lock request deadline expired')
+ time.sleep(.01)
+with (profile/'agent-messages.lock').open('r+') as lock:
+ fcntl.flock(lock,fcntl.LOCK_EX)
+ (root/'lock-held').write_text(json.dumps(record))
+ while not (root/'lock-release').exists():
+  if time.monotonic()>=deadline:raise RuntimeError('Lock release deadline expired')
+  time.sleep(.01)
+ fcntl.flock(lock,fcntl.LOCK_UN)
+(root/'lock-ended').write_text(json.dumps(record))
+'''
 PREREQUISITES = ['two_real_window_ptys_and_exact_cli_queued_global_closed_records',
                  'independent_pty_input_counters_zero',
                  'other_window_key_before_explicit_source_menu']
+SUCCESS_CHECKS = PREREQUISITES + [
+    'actual_source_owned_inbox_exact_body_and_reply_responder',
+    'draft_survives_real_arrival_refresh_hide_and_foreign_focus',
+    'button_and_submit_key_save_one_exact_reply_and_keep_later_edit',
+    'explicit_read_leaves_later_arrival_queued',
+    'native_receiving_settings_refuse_send_preserve_draft_and_never_resurrect',
+    'status_transport_capacity_refusal_preserves_original_uncertain_request',
+    'real_journal_lock_uncertainty_retains_uuid_and_check_status_saves_once',
+    'independent_pty_progress_after_all_ui_actions_zero_input']
 
 
 def load(name, path):
@@ -98,7 +123,7 @@ def main():
         return frozen
 
     frozen = sources()
-    ast.parse(CHILD); ast.parse(LAUNCHER)
+    ast.parse(CHILD); ast.parse(LAUNCHER); ast.parse(LOCK_HOLDER)
     if args.check_inputs:
         print(json.dumps({'sources': len(frozen), 'actual_native_execution': False,
                           'app_seconds': 75, 'independent_child_seconds': 100,
@@ -144,6 +169,11 @@ def main():
         launcher = root / 'owned-app-launch.py'; launcher.write_text(LAUNCHER)
         report = root / 'native-agent-inbox.json'
         executable = str(REPO / 'dist/zmux.app/Contents/MacOS/zmux-app')
+        lock_script = root / 'lock-holder.py'; lock_script.write_text(LOCK_HOLDER)
+        lock_log = (root / 'lock-holder.log').open('wb')
+        lock_group = runner.ProcessGroup([sys.executable, str(lock_script), str(root), str(profile)],
+                                         cwd=REPO, env=environment, stdin=subprocess.DEVNULL,
+                                         stdout=lock_log, stderr=subprocess.STDOUT)
         app_failure = None
         try:
             runner.run([sys.executable, str(launcher), str(root / 'owned-launch.json'), executable,
@@ -151,6 +181,13 @@ def main():
                        receipt['phases'], timeout=75, cwd=REPO, env=environment)
         except RuntimeError as error:
             app_failure = str(error)
+        finally:
+            try:
+                lock_code = lock_group.close(timeout=5, retry=True)
+                receipt['lock_holder'] = {'pid': lock_group.process.pid, 'exit_code': lock_code,
+                                          'requested': (root / 'lock-request').exists()}
+            finally:
+                lock_log.close()
         if report.exists():
             result = native.document(report)
             owned = native.document(root / 'owned-launch.json')
@@ -163,8 +200,14 @@ def main():
                                          and not receipt['phases'][-1]['timed_out'])
         if app_failure is not None:
             raise RuntimeError(app_failure)
-        if not report.exists() or result['state'] != 'complete' or result['stage'] != 'complete':
+        if (not report.exists() or result['state'] != 'complete' or result['stage'] != 'complete'
+                or result['checks'] != SUCCESS_CHECKS or not (root / 'lock-ended').exists()):
             raise RuntimeError('Native inbox did not complete its actual UI case and shared shutdown')
+        lock_record = native.document(root / 'lock-ended', maximum=2048)
+        if (lock_record['pid'] != lock_group.process.pid or lock_record['parent_pid'] != os.getpid()
+                or lock_record['nonce'] != nonce):
+            raise RuntimeError('Independent real journal lock holder identity differs')
+        receipt['lock_holder']['completed'] = lock_record
         receipt['state'] = 'complete'
     except Exception as error:
         receipt.update(state='failed', error=f'{type(error).__name__}: {error}')
