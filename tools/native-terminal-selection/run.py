@@ -15,14 +15,25 @@ import uuid
 REPO = Path(__file__).resolve().parents[2]
 OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos-development.yml')
 CHILD = '''#!/usr/bin/env python3
-import json,os,pathlib,time
+import fcntl,json,os,pathlib,select,struct,termios,time,tty
 root=pathlib.Path(os.environ['ZMUX_SELECTION_ROOT'])
 nonce=os.environ['ZMUX_SELECTION_NONCE']
+deadline=time.monotonic()+120
+tty.setraw(0)
 with (root/'child.json').open('x') as out:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce},out)
 rows=['alpha beta','alpha.beta  value_name /tmp/file','A界 e\\u0301🙂 Z','ab\\x1b[31mcd\\x1b[0mef','NATIVE_SELECTION_READY_'+nonce]
 os.write(1,('\\x1b[2J\\x1b[H'+'\\r\\n'.join(rows)+'\\r\\n').encode())
-time.sleep(120)
+ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
+if ready:
+ assert os.read(0,1)==b'w'
+ rows_count,columns=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,bytes(8)))[:2]
+ assert 8<=rows_count<=120 and 64<=columns<=240
+ with (root/'wrap-child.json').open('x') as out:
+  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce,'rows':rows_count,'columns':columns},out)
+ payload='X'*(columns-1)+' EDGE'
+ os.write(1,('\\x1b[2J\\x1b[H'+payload+'\\r\\nWRAP_READY_'+nonce+'\\r\\n').encode())
+time.sleep(max(0,deadline-time.monotonic()))
 '''
 
 

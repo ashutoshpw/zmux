@@ -51,6 +51,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+
+- [T01 wrapped selection](references/t01-wrapped-selection.md) — authoritative row wrap and written-cell metadata for visible/history copy; optional engine and persistent anchors remain open.
 - [Shutdown fixture collision](references/s01-shutdown-fixture-collision.md) — deterministic parallel temporary-directory collision repair without runtime changes.
 - [F04 controlled idle workloads](references/f04-native-idle-workloads.md) — opt-in one/eight-terminal phase ownership and bounded named-host measurements.
 - [R03 native dependency packaging](references/r03-native-package.md) — opt-in ARM64 retained-package admission, unchanged executable provenance and native owner gates.
