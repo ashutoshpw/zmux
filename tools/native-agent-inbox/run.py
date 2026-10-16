@@ -283,7 +283,10 @@ def main():
         known = result.get('knownLockRefusal', {})
         capacity = result.get('capacityRefusal', {})
         later_draft = proofs[2]['expected'] + list(b'edited while saving')
-        if (known.get('operationStatus') != 'another instance is reserving session generations; retry'
+        if (not 0 <= result.get('knownStatusChecks', -1) <= 128
+                or not 1 <= result.get('capacityStatusChecks', -1) <= 128
+                or not 1 <= result.get('recoveryStatusChecks', -1) <= 128
+                or known.get('operationStatus') != 'another instance is reserving session generations; retry'
                 or known.get('sendEnabled') is not True or known.get('checkStatusEnabled') is not False
                 or known.get('replyUTF8') != later_draft
                 or capacity.get('sendEnabled') is not False or capacity.get('checkStatusEnabled') is not True
