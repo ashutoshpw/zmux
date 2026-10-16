@@ -10,6 +10,9 @@ repository.workspace = true
 zmux-session-runtime.workspace = true
 zmux-desktop-runtime.workspace = true
 zmux-workspace-core.workspace = true
+serde.workspace = true
+sha2.workspace = true
+rustix = { workspace = true, features = ["fs", "time"] }
 serde_json.workspace = true
 socket2.workspace = true
 nix = { workspace = true, features = ["poll", "fs"] }
@@ -21,8 +24,6 @@ uuid.workspace = true
 local-zellij-conformance = []
 
 [dev-dependencies]
-serde.workspace = true
-sha2.workspace = true
 portable-pty.workspace = true
 filedescriptor.workspace = true
 

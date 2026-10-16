@@ -742,6 +742,7 @@ dependencies = [
  "filedescriptor",
  "nix",
  "portable-pty",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

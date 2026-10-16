@@ -40,14 +40,17 @@ struct App {
 }
 impl App {
     fn open(root: &Path) -> Self {
+        Self::with_script(
+            root,
+            "printf 'AGENT_MESSAGE_PTY_READY\\n'; while IFS= read -r line; do printf '%s\\n' \"$line\" >> terminal-input-counter; done",
+        )
+    }
+    fn with_script(root: &Path, script: &str) -> Self {
         let desktop = Arc::new(
             Desktop::with_persistence(
                 Shell {
                     program: "/bin/sh".into(),
-                    args: vec![
-                        "-c".into(),
-                        "printf 'AGENT_MESSAGE_PTY_READY\\n'; while IFS= read -r line; do printf '%s\\n' \"$line\" >> terminal-input-counter; done".into(),
-                    ],
+                    args: vec!["-c".into(), script.into()],
                     cwd: Some(root.into()),
                 },
                 root.join("state"),
@@ -472,4 +475,311 @@ fn explicit_cli_retry_preserves_unknown_message_identity_without_terminal_input(
     let inbox = app.call(&["agent", "inbox", "--surface", &surface]);
     assert_eq!(inbox["messages"][0]["state"], "queued");
     assert!(!root.0.join("terminal-input-counter").exists());
+}
+
+#[test]
+fn session_local_hook_adapter_uses_actual_terminal_owner_and_never_writes_message_input() {
+    for scenario in [
+        "permission",
+        "question",
+        "plan-entry",
+        "plan-launch",
+        "retirement-retry",
+    ] {
+        eprintln!("synthetic hook scenario: {scenario}");
+        let root = Directory::new();
+        let adapter = root.0.join("adapter");
+        // Publish the executable in a separate child so concurrent test-thread
+        // forks cannot inherit an open writable descriptor for the copied image.
+        assert!(
+            Command::new("/bin/cp")
+                .arg(env!("CARGO_BIN_EXE_zmux"))
+                .arg(&adapter)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
+        let provider = root.0.join("synthetic-provider");
+        let source = root.0.join("provider.c");
+        fs::write(&source,r#"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <time.h>
+static void hook(const char *event,const char *session,const char *prompt,const char *extra) {
+    int input[2],output[2]; if(pipe(input)||pipe(output))exit(20);
+    pid_t child=fork(); if(child<0)exit(21);
+    if(!child){dup2(input[0],0);dup2(output[1],1);close(input[0]);close(input[1]);close(output[0]);close(output[1]);
+        execl(getenv("FIXTURE_CLI"),"zmux","hooks","claude","event",event,(char*)NULL);_exit(22);}
+    close(input[0]);close(output[1]);
+    dprintf(input[1],"{\"hook_event_name\":\"%s\",\"session_id\":\"%s\",\"permission_mode\":\"default\",\"source\":\"startup\",\"prompt_id\":\"%s\"%s}",event,session,prompt,extra);
+    close(input[1]);
+    FILE *capture=fopen(getenv("FIXTURE_CAPTURE"),"a");if(!capture)exit(23);
+    char bytes[4096];ssize_t n;while((n=read(output[0],bytes,sizeof(bytes)))>0)fwrite(bytes,1,(size_t)n,capture);
+    fputc('\n',capture);fclose(capture);close(output[0]);
+    int status;if(waitpid(child,&status,0)<0||!WIFEXITED(status)||WEXITSTATUS(status))exit(24);
+}
+static void barrier(const char *stage){
+    char marker[1024],release[1024];snprintf(marker,sizeof(marker),"%s-%s",getenv("FIXTURE_BARRIER"),stage);snprintf(release,sizeof(release),"%s.release",marker);
+    FILE *file=fopen(marker,"w");if(!file)exit(26);fprintf(file,"%d %d",(int)getpid(),(int)getppid());fclose(file);
+    while(access(release,F_OK)){struct timespec t={0,10000000};nanosleep(&t,NULL);}
+}
+int main(int argc,char **argv){
+    if(argc==2&&!strcmp(argv[1],"--version")){puts("2.1.301 (Claude Code)");return 0;}
+    alarm(15);
+    const char *session=NULL;for(int i=1;i+1<argc;i++)if(!strcmp(argv[i],"--session-id"))session=argv[i+1];
+    if(!session||getenv("ZMUX_SOCKET_PASSWORD")||getenv("ZMUX_SURFACE_ID"))return 25;
+    hook("SessionStart",session,"","");hook("SessionStart",session,"","");
+    hook("UserPromptSubmit","wrong-session","00000000-0000-4000-8000-000000000000","");
+    hook("UserPromptSubmit",session,"","");
+    hook("UserPromptSubmit",session,"00000000-0000-4000-8000-000000000004",",\"agent_id\":\"nested\"");
+    barrier("unheld");
+    hook("UserPromptSubmit",session,"00000000-0000-4000-8000-000000000001","");hook("UserPromptSubmit",session,"00000000-0000-4000-8000-000000000001","");
+    hook("Stop",session,"00000000-0000-4000-8000-000000000001","");if(!strcmp(getenv("FIXTURE_HOLD"),"question"))hook("PreToolUse",session,"00000000-0000-4000-8000-000000000001",",\"tool_name\":\"AskUserQuestion\"");
+    else if(!strcmp(getenv("FIXTURE_HOLD"),"plan-entry"))hook("PreToolUse",session,"00000000-0000-4000-8000-000000000001",",\"tool_name\":\"EnterPlanMode\"");
+    else hook("PermissionRequest",session,"00000000-0000-4000-8000-000000000001","");
+    hook("UserPromptSubmit",session,"00000000-0000-4000-8000-000000000002","");hook("SessionStart",session,"","");
+    hook("UserPromptSubmit",session,"00000000-0000-4000-8000-000000000003","");barrier("held");hook("SessionEnd",session,"","");
+    return 0;
+}
+"#).unwrap();
+        let compiled = Command::new("cc")
+            .args(["-std=c11", "-D_POSIX_C_SOURCE=200809L", "-O0", "-o"])
+            .arg(&provider)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+        let plugin = root.0.join("owned-plugin");
+        let installed = Command::new(&adapter)
+            .args(["hooks", "claude", "install", "--directory"])
+            .arg(&plugin)
+            .arg("--provider")
+            .arg(&provider)
+            .output()
+            .unwrap();
+        decoded(installed, &["synthetic plugin install"]);
+        // The lifecycle trigger runs the wrapper inside the real Desktop shell, with
+        // no SendText/PTY writes. The native fake provider drives hook contracts only.
+        let app = App::with_script(
+            &root.0,
+            "printf 'AGENT_MESSAGE_PTY_READY\\n'; while [ ! -f launch-provider ]; do sleep 0.01; done; . ./launch-provider; while IFS= read -r line; do printf '%s\\n' \"$line\" >> terminal-input-counter; done",
+        );
+        let snapshot = desktop_snapshot::read(&app.desktop);
+        let surface = snapshot
+            .model
+            .object_uuid(
+                TargetKind::Surface,
+                snapshot.model.workspaces[0].root.panes()[0].surfaces[0]
+                    .id
+                    .0,
+            )
+            .to_string();
+        let first = app.call(&[
+            "agent",
+            "message",
+            &surface,
+            "exact data: \"quotes\" $(literal)\nnext line",
+        ]);
+        let second = app.call(&["agent", "message", &surface, "must stay queued while held"]);
+        let cli = adapter.to_str().unwrap();
+        // Every interpolated path comes from this UUID-named fixture or Cargo's
+        // executable path; proper single-quote escaping also covers spaces/apostrophes.
+        let quote = |path: &Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"));
+        let script = format!(
+            "export FIXTURE_CLI={}\nexport FIXTURE_CAPTURE={}\nexport FIXTURE_BARRIER={}\nexport FIXTURE_HOLD={}\nexport ZMUX_SOCKET_PASSWORD=fixture-only\nexport ZMUX_SURFACE_ID=fixture-wrong-ambient\n{} --socket {} hooks claude run --directory {} --surface {}{}\nprintf '%s' $? > wrapper-status\n",
+            quote(Path::new(cli)),
+            quote(&root.0.join("hook-output")),
+            quote(&root.0.join("phase")),
+            scenario,
+            quote(Path::new(cli)),
+            quote(&app.socket),
+            quote(&plugin),
+            surface,
+            if scenario == "plan-launch" {
+                " -- --permission-mode plan"
+            } else {
+                ""
+            }
+        );
+        let pending = root.0.join("launch-provider.pending");
+        fs::write(&pending, script).unwrap();
+        fs::rename(pending, root.0.join("launch-provider")).unwrap();
+        let wait_file = |name: &str| {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while !root.0.join(name).exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "synthetic provider barrier missing: {name}"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait_file("phase-unheld");
+        let queued = app.call(&["agent", "inbox", "--surface", &surface]);
+        assert!(
+            queued["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|m| m["delivery_attempts"] == serde_json::json!([]))
+        );
+        #[cfg(target_os = "linux")]
+        let sample = {
+            let marker = fs::read_to_string(root.0.join("phase-unheld")).unwrap();
+            let wrapper = marker.split_whitespace().nth(1).unwrap();
+            let ticks = |pid: &str| {
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+                let fields: Vec<_> = stat[stat.rfind(')').unwrap() + 1..]
+                    .split_whitespace()
+                    .collect();
+                fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+            };
+            (wrapper.to_owned(), ticks(wrapper))
+        };
+        thread::sleep(Duration::from_millis(750));
+        #[cfg(target_os = "linux")]
+        {
+            let stat = fs::read_to_string(format!("/proc/{}/stat", sample.0)).unwrap();
+            let fields: Vec<_> = stat[stat.rfind(')').unwrap() + 1..]
+                .split_whitespace()
+                .collect();
+            let ticks = fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap();
+            eprintln!(
+                "synthetic idle wrapper: {} CPU ticks during750ms, capped4 publication checks/second",
+                ticks - sample.1
+            );
+        }
+        let still_queued = app.call(&["agent", "inbox", "--surface", &surface]);
+        assert_eq!(
+            queued, still_queued,
+            "idle wrapper must not claim queued messages"
+        );
+        fs::write(root.0.join("phase-unheld.release"), b"release").unwrap();
+        wait_file("phase-held");
+        if scenario == "retirement-retry" {
+            let lock = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(root.0.join("state/agent-messages.lock"))
+                .unwrap();
+            rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+            fs::write(root.0.join("phase-held.release"), b"release").unwrap();
+            thread::sleep(Duration::from_millis(2500));
+            drop(lock);
+        } else {
+            let removed = Command::new(&adapter)
+                .args(["hooks", "claude", "uninstall", "--directory"])
+                .arg(&plugin)
+                .output()
+                .unwrap();
+            let removed = decoded(removed, &["active synthetic plugin uninstall"]);
+            assert_eq!(removed["disabled"], true);
+            assert_eq!(removed["cleanup_pending"], true);
+            assert!(
+                !root.0.join("wrapper-status").exists(),
+                "uninstall must retain the user's running provider"
+            );
+            let deadline = Instant::now() + Duration::from_secs(4);
+            loop {
+                let journal: Value = serde_json::from_slice(
+                    &fs::read(root.0.join("state/agent-messages.json")).unwrap(),
+                )
+                .unwrap();
+                if journal["consumers"].as_array().unwrap().is_empty() {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "disabled wrapper did not retire exact capability"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            let after = app.call(&[
+                "agent",
+                "message",
+                &surface,
+                "queued after adapter retirement",
+            ]);
+            assert_eq!(after["recipient_has_agent"], false);
+            fs::write(root.0.join("phase-held.release"), b"release").unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !root.0.join("wrapper-status").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "synthetic provider wrapper did not finish"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            fs::read_to_string(root.0.join("wrapper-status")).unwrap(),
+            "0"
+        );
+        let journal: Value =
+            serde_json::from_slice(&fs::read(root.0.join("state/agent-messages.json")).unwrap())
+                .unwrap();
+        assert!(
+            journal["consumers"].as_array().unwrap().is_empty(),
+            "failed event retirement must retain exact capability for bounded shutdown retry"
+        );
+        let captured = fs::read_to_string(root.0.join("hook-output")).unwrap();
+        let outputs: Vec<Value> = captured
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(outputs.len(), 13);
+        let contexts: Vec<_> = outputs
+            .iter()
+            .filter_map(|v| v["hookSpecificOutput"]["additionalContext"].as_str())
+            .collect();
+        assert_eq!(
+            contexts.len(),
+            if scenario == "plan-launch" { 0 } else { 1 },
+            "duplicate/wrong/held/Stop events cannot expose another body"
+        );
+        if scenario != "plan-launch" {
+            assert!(contexts[0].contains("$(literal)"));
+        }
+        let rows = app.call(&["agent", "inbox", "--surface", &surface]);
+        assert_eq!(rows["messages"][0]["id"], first["message"]["id"]);
+        assert_eq!(rows["messages"][0]["state"], "queued");
+        assert_eq!(
+            rows["messages"][0]["delivery_attempts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            if scenario == "plan-launch" { 0 } else { 1 }
+        );
+        if scenario != "plan-launch" {
+            assert_eq!(
+                rows["messages"][0]["delivery_attempts"][0]["outcome"],
+                "delivery_unknown"
+            );
+        }
+        assert_eq!(rows["messages"][1]["id"], second["message"]["id"]);
+        assert_eq!(
+            rows["messages"][1]["delivery_attempts"],
+            serde_json::json!([])
+        );
+        assert_eq!(rows["messages"][1]["state"], "queued");
+        assert!(!root.0.join("terminal-input-counter").exists());
+        let removed = Command::new(&adapter)
+            .args(["hooks", "claude", "uninstall", "--directory"])
+            .arg(&plugin)
+            .output()
+            .unwrap();
+        assert_eq!(
+            decoded(removed, &["finished synthetic plugin uninstall"])["cleanup_pending"],
+            false
+        );
+    }
 }
