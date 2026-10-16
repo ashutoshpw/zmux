@@ -261,6 +261,35 @@ enum FilePanelSmoke {
         try await wait("both panels still guarded in the model") {
             modelDirty(coordinator, markdownID) == true && modelDirty(coordinator, reopenedID) == true
         }
+        // Two Don't Save answers settled together: a snapshot poll that lands between the first
+        // file's settle and the end of the close must not mark the first file dirty in the model
+        // again, or the core would refuse the close of a panel that already reads as clean.
+        let both = CloseScript([.discard, .discard])
+        coordinator.fileCloseChoiceOverride = { _ in both.next() }
+        let applied = await coordinator.resolveFilesBeforeClose([markdownID, reopenedID], window: window)
+        coordinator.fileCloseChoiceOverride = nil
+        guard applied, both.count == 2 else { throw failure("a two-file Don't Save close was refused") }
+        guard !markdownPanel.isDirty, !reopened.isDirty else { throw failure("Don't Save left a panel dirty") }
+        for _ in 0..<4 {
+            _ = try await cli(["status"], false)
+            guard modelDirty(coordinator, markdownID) == false, modelDirty(coordinator, reopenedID) == false,
+                  !markdownPanel.isDirty, !reopened.isDirty else {
+                throw failure("a snapshot poll re-marked a discarded panel dirty in the model")
+            }
+        }
+        try await wait("both models stay clean after Don't Save") {
+            modelDirty(coordinator, markdownID) == false && modelDirty(coordinator, reopenedID) == false
+        }
+        // The hold is lifted once the discard is applied: new edits are mirrored again.
+        host.selectTab(reopenedID)
+        try await wait("reopened text editor focused after Don't Save") { window.isKeyWindow && window.firstResponder === reopened.editorTextView }
+        typeText("S", into: reopened.editorTextView)
+        host.selectTab(markdownID)
+        try await wait("Markdown source editor focused after Don't Save") { window.isKeyWindow && window.firstResponder === sourceEditor }
+        typeText("T", into: sourceEditor)
+        try await wait("edits after Don't Save are guarded again") {
+            markdownPanel.isDirty && reopened.isDirty && modelDirty(coordinator, markdownID) == true && modelDirty(coordinator, reopenedID) == true
+        }
         // Closing several tabs in a row answers every request, in order; none is dropped.
         let burst = CloseScript([.discard, .discard])
         coordinator.fileCloseChoiceOverride = { _ in burst.next() }

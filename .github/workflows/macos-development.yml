@@ -60,6 +60,8 @@ jobs:
         run: scripts/check-swift-fixture-cleanup
       - name: Verify native browser download file ownership
         run: scripts/check-browser-download-files
+      - name: Verify file tab close decision and Don't Save settling
+        run: scripts/check-file-close-resolution
       - name: Install pinned Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Install isolated tmux fixture dependency

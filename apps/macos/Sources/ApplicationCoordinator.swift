@@ -642,44 +642,23 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     /// (Save / Don't Save / Cancel) and makes the model's dirty bit match each panel. False means
     /// the close must not proceed.
     func resolveFilesBeforeClose(_ surfaces: [UInt64], window: NSWindow?) async -> Bool {
-        let panels = filePanels(for: surfaces)
-        // Don't Save is only recorded here and applied once nothing can abort the close any more:
-        // a later Cancel or failed Save must leave every earlier file exactly as it was, still
-        // edited and still guarded.
-        var discards: [FilePanelView] = []
-        for view in panels where view.hasUnsavedChanges {
-            let choice: FileCloseChoice
-            if let override = fileCloseChoiceOverride { choice = await override(view) }
-            else {
-                let alert = NSAlert()
-                alert.messageText = "Do you want to save the changes to “" + view.displayName + "”?"
-                alert.informativeText = "Your changes will be lost if you don’t save them."
-                alert.addButton(withTitle: "Save")
-                alert.addButton(withTitle: "Don’t Save")
-                alert.addButton(withTitle: "Cancel")
-                let response = await presentSheet(alert, in: window)
-                switch response {
-                case .alertFirstButtonReturn: choice = .save
-                case .alertSecondButtonReturn: choice = .discard
-                default: choice = .cancel
-                }
-            }
-            switch choice {
-            case .cancel: return false
-            case .save: guard await view.performSave(force: false) else { return false }
-            case .discard: discards.append(view)
+        // The decision (Cancel and a failed Save abort with nothing discarded; Don't Save is
+        // applied only once the whole close is settled) lives in FileCloseResolution, which the
+        // macOS fixture exercises; this only supplies the question.
+        await FileCloseResolution.resolve(filePanels(for: surfaces)) { [self] view in
+            if let override = fileCloseChoiceOverride { return await override(view) }
+            let alert = NSAlert()
+            alert.messageText = "Do you want to save the changes to “" + view.displayName + "”?"
+            alert.informativeText = "Your changes will be lost if you don’t save them."
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don’t Save")
+            alert.addButton(withTitle: "Cancel")
+            switch await presentSheet(alert, in: window) {
+            case .alertFirstButtonReturn: return .save
+            case .alertSecondButtonReturn: return .discard
+            default: return .cancel
             }
         }
-        for view in panels {
-            let discarded = discards.contains { $0 === view }
-            guard await view.settleDirtyMirror(assumingDiscarded: discarded) else {
-                // Panels already settled may have told the model they are clean; put it right.
-                panels.forEach { $0.resumeDirtyMirror() }
-                return false
-            }
-        }
-        discards.forEach { $0.discardLocalChanges() }
-        return true
     }
 
     /// Quit: resolves every dirty panel, and refuses to quit while an orphan still holds text.
