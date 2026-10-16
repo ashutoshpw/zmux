@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- A02 Rust/CLI durable inbox integrated locally as `d429636` (behavioral red) and
+  `8c54b39` (reviewed fix). Original owner checks passed 368 tests plus strict
+  Clippy/notices/ABI. Review repairs cover retained-send replay, cached lease expiry/
+  held state, and policy-writer executor stalls. Authorization linearizes at the
+  fsynced handoff; in-flight foreign-superseded responses are explicitly bounded
+  by the original TTL. No provider hook, wake or native inbox claim. Integrated
+  main verification passes 379 tests, 1 existing ignored, strict Clippy, notices
+  and both foreign ABI checks.
+
 - Main `22550c1` Darwin Foundation checks pass in run `38851088457`, including
   the five real execution-admission tests. Linux Rust/Clippy/notices/ABI passed,
   then the DOM prerequisite failed because Chrome `--version` timed out with zero

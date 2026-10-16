@@ -1,6 +1,8 @@
 # A02a — Durable agent message and inbox contract
 
-Read-only scope/design, 2026-10-16. Implementation is not authorized by this note.
+Original scope/design, 2026-10-16. The authorized Rust/CLI slice is now integrated;
+see [implementation evidence](a02-agent-messages-implementation.md) for exact scope
+and remaining provider/native gates.
 Current source inspected at zmux `1bb05b179427a49477851dee0be7c2c92bad4dfc`.
 The existing A02 work package remains open. Parent owns the plan link and status;
 this task adds only this reference, preserving concurrent main work.
@@ -235,7 +237,11 @@ and capability discovery, including unsupported provider/wake state. Lease TTL i
 bounded 10 seconds initially; use monotonic time for a live owning runtime, invalidate
 old runtime/session capabilities on restart, and never infer renewed authority from
 a persisted wall-clock deadline. Multi-Desktop supersession must be serialized under
-the journal lock, with old ownership rejected before any further handoff.
+the journal lock, with old ownership rejected before any further handoff authorization.
+Authorization linearizes at the locked, fsynced `handed=true` commit. An already
+authorized in-flight response may arrive after foreign supersession, within its
+original lease deadline; fresh handoff/status/ack must reject the old generation.
+This is not instantaneous revocation or exactly-once provider consumption.
 
 | Owner | Files / responsibility | First deliverable |
 | --- | --- | --- |

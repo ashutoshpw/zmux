@@ -153,3 +153,13 @@ The license inventory retains its existing three upstream-text review notices.
 Native macOS/AppKit execution and actual provider context delivery/wake were not
 run and remain separate gates. Local Rust/C ABI checks do not establish those
 behaviors or frozen-reference parity.
+
+## Main integration
+
+Integrated as `d429636` and `8c54b39`. Seventeen of twenty cohort files match
+reviewed `983d2c2` byte for byte; the three merged files retain main's previously
+accepted V2 workload dispatch, dependencies and history tests. Integrated
+`scripts/check` passes 379 tests, one existing ignored, strict Clippy, notices
+and both foreign ABI checks. Log:
+`/tmp/zmux-main-a02-integration-check-20261016.log`.
+Darwin/native/provider acceptance remains separate.
