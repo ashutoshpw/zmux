@@ -304,3 +304,31 @@ Log `/tmp/zmux-native-agent-inbox-implementation-check-20261016.log` SHA256
 Runner `--check-inputs` and `git diff --check` pass. These are not native compile or
 UI-green evidence. Parent review findings on settings target/generation, early
 Status, first-page routing, stable rows and accessible icon actions are addressed.
+
+## Implementation source-check budget and Unicode regression gate
+
+Run [38857507008](https://github.com/ashutoshpw/zmux/actions/runs/38857507008), exact
+`34becf7f336af275d0c10f334b7d59576a643c1c`, did not compile or execute the native
+feature: dual-slice Swift source checking hit the old 120 s fixture deadline with
+zero diagnostic bytes (120.094 s, timed out, exit -9). No package or app phase ran.
+All 273 retained source hashes match the freeze and retained bytes. This is a
+compile-budget failure, not a behavioral result. The next fixture-only revision
+raises the bounded source-check budget to 300 s and prints architecture progress.
+
+Self-review and parent review identified Swift String equality's Unicode canonical
+equivalence. `renderSelection` may retain the previous record's text bytes when a
+new selected record has visually equivalent but differently encoded text. The
+send/draft-clear receipt guards must also compare UTF-8 bytes. Parent approved a
+fixture-first actual red before repairing those production comparisons.
+
+The four authoring questions for this extension: (1) preserve exact bytes in the
+actual selected body document/editor/saved reply; (2) selecting decomposed then
+precomposed independent CLI records fails current `body.string != message.body`;
+(3) CLI/domain tests cannot inspect the mounted AppKit document or editor; (4) real
+CLI and UUID row actions need no private exports, fake draft owner or injected
+receipt. The fixture seeds independent literals, verifies distinct CLI bytes,
+selects both real rows, and labels only the exact selected-body byte failure at
+`unicode_body` as Unicode behavioral red. Compile/setup/other journey failures do
+not qualify. Production String equality remains unchanged in this fixture revision.
+The continued journey also replaces an actual decomposed editor draft with an
+independent precomposed literal using NSTextView.insertText and verifies saved bytes.

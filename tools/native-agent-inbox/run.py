@@ -65,6 +65,8 @@ PREREQUISITES = ['two_real_window_ptys_and_exact_cli_queued_global_closed_record
                  'other_window_key_before_explicit_source_menu']
 SUCCESS_CHECKS = PREREQUISITES + [
     'actual_source_owned_inbox_exact_body_and_reply_responder',
+    'independent_cli_canonical_equivalent_bodies_have_distinct_utf8',
+    'native_row_selection_preserves_distinct_canonical_equivalent_utf8_bodies',
     'draft_survives_real_arrival_refresh_hide_and_foreign_focus',
     'button_and_submit_key_save_one_exact_reply_and_keep_later_edit',
     'explicit_read_leaves_later_arrival_queued',
@@ -136,7 +138,7 @@ def main():
     source = subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip()
     nonce = str(uuid.uuid4())
     receipt = {'schema_version': 1, 'state': 'starting', 'source_sha': source,
-               'source_sha256': frozen, 'phases': [], 'behavioral_red': False,
+               'source_sha256': frozen, 'phases': [], 'behavioral_red': False, 'unicode_behavioral_red': False,
                'external_accessibility_input_verified': False}
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(('ZMUX_', 'DYLD_')) and key not in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS')}
@@ -152,7 +154,7 @@ def main():
             if native.digest(target) != wanted:
                 raise RuntimeError('Native inbox retained source differs')
         runner.run(['scripts/check-macos-sources'], 'swift-source-check', root, receipt['phases'],
-                   timeout=120, cwd=REPO, env=environment)
+                   timeout=300, cwd=REPO, env=environment)
         runner.run([sys.executable, 'scripts/build-macos-dev', '--architecture', 'host'],
                    'build', root, receipt['phases'], timeout=600, cwd=REPO, env=environment)
         info = native.document(REPO / 'dist/build-info.json')
@@ -198,11 +200,31 @@ def main():
                                          and result['checks'] == PREREQUISITES
                                          and receipt['phases'][-1]['exit_code'] == 1
                                          and not receipt['phases'][-1]['timed_out'])
+            receipt['unicode_behavioral_red'] = (
+                result['state'] == 'failed' and result['stage'] == 'unicode_body'
+                and result.get('failure') == 'Native agent inbox: Selected canonical-equivalent message did not preserve exact UTF-8 body'
+                and result['checks'] == PREREQUISITES + [
+                    'actual_source_owned_inbox_exact_body_and_reply_responder',
+                    'independent_cli_canonical_equivalent_bodies_have_distinct_utf8']
+                and receipt['phases'][-1]['exit_code'] == 1 and not receipt['phases'][-1]['timed_out'])
+            if receipt['unicode_behavioral_red']:
+                proofs = result.get('unicodeBytes', [])
+                receipt['unicode_behavioral_red'] = (
+                    [row['name'] for row in proofs] == ['body_decomposed', 'body_precomposed']
+                    and proofs[0]['expected'] == proofs[0]['observed']
+                    and proofs[1]['expected'] != proofs[1]['observed']
+                    and proofs[1]['observed'] == proofs[0]['observed']
+                    and proofs[0]['expected'] != proofs[1]['expected'])
         if app_failure is not None:
             raise RuntimeError(app_failure)
         if (not report.exists() or result['state'] != 'complete' or result['stage'] != 'complete'
                 or result['checks'] != SUCCESS_CHECKS or not (root / 'lock-ended').exists()):
             raise RuntimeError('Native inbox did not complete its actual UI case and shared shutdown')
+        proofs = result.get('unicodeBytes', [])
+        if ([row['name'] for row in proofs] != ['body_decomposed', 'body_precomposed', 'editor_precomposed', 'saved_precomposed']
+                or any(row['expected'] != row['observed'] for row in proofs)
+                or proofs[0]['expected'] == proofs[1]['expected']):
+            raise RuntimeError('Native mounted/editor/saved Unicode bytes differ from independent literals')
         lock_record = native.document(root / 'lock-ended', maximum=2048)
         if (lock_record['pid'] != lock_group.process.pid or lock_record['parent_pid'] != os.getpid()
                 or lock_record['nonce'] != nonce):
@@ -213,11 +235,11 @@ def main():
         receipt.update(state='failed', error=f'{type(error).__name__}: {error}')
     finally:
         if sources() != frozen:
-            receipt.update(state='failed', behavioral_red=False, error='Native inbox source changed during run')
+            receipt.update(state='failed', behavioral_red=False, unicode_behavioral_red=False, error='Native inbox source changed during run')
         if any(phase['log_bytes_seen'] != phase['log_bytes_retained'] for phase in receipt['phases']):
-            receipt.update(state='failed', behavioral_red=False, error='Native inbox logs exceeded retained byte bound')
+            receipt.update(state='failed', behavioral_red=False, unicode_behavioral_red=False, error='Native inbox logs exceeded retained byte bound')
         native.save(root / 'receipt.json', receipt)
-    print(json.dumps({'state': receipt['state'], 'behavioral_red': receipt['behavioral_red'], 'receipt': str(root / 'receipt.json')}))
+    print(json.dumps({'state': receipt['state'], 'behavioral_red': receipt['behavioral_red'], 'unicode_behavioral_red': receipt['unicode_behavioral_red'], 'receipt': str(root / 'receipt.json')}))
     return 0 if receipt['state'] == 'complete' else 1
 
 
