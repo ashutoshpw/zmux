@@ -2586,19 +2586,28 @@ fn an_acknowledged_close_reports_the_cores_refusal_where_plain_dispatch_reports_
     present(true);
 
     // Once the model is clean the same close runs, and the reply carries the executor's revision
-    // of the snapshot that already shows the tab gone: no polling is needed.
+    // of the snapshot that already shows the tab gone: no polling is needed. The revision counts
+    // every executor publish, including unrelated asynchronous ones (the default terminal's output
+    // frames), so a later snapshot may be newer than the reply; the deterministic claims are that
+    // the reply is newer than the snapshot taken before the close and no newer than the one taken
+    // after it, and that the later snapshot, which cannot predate the reply, shows the tab gone.
     let (observed, _) = call(
         desktop,
         &json!({"op":"observe","owner":attached["owner"],"dirty":false}),
         &[],
     );
     assert_eq!(observed["ok"], true, "{observed}");
+    let before = present(true)["revision"].as_u64().expect("a revision");
     let (status, closed) = dispatch_json(desktop, &close, true);
     assert_eq!((status, &closed["ok"]), (0, &json!(true)), "{closed}");
-    let after = present(false);
-    assert_eq!(
-        closed["revision"], after["revision"],
-        "the reply names the revision that shows the close"
+    let after = present(false)["revision"].as_u64().expect("a revision");
+    let replied = closed["revision"]
+        .as_u64()
+        .expect("the reply names a revision");
+    assert!(
+        before < replied && replied <= after,
+        "the reply names the revision that shows the close: before {before}, reply {replied}, \
+         after {after}"
     );
 
     // Only action and windows commands are acknowledged this way; anything else is refused before
@@ -2631,4 +2640,95 @@ fn an_acknowledged_close_reports_the_cores_refusal_where_plain_dispatch_reports_
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("include/zmux.h"))
             .unwrap();
     assert!(header.contains("zmux_desktop_dispatch_acknowledged("));
+}
+
+/// Reads a task-evidence file that sits next to the tracker the closure work maintains.
+fn task_reference(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.agents/tasks/2026-10-14/05-command-ux-parity/references")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// Contract test between the Swift panel and the closure tracker: the tracker copied the design's
+/// "word wrap deferred" line after S4 delivered the toggle, so a later agent would have rebuilt a
+/// finished feature. While the Swift defines the toggle, the CV-06 gates must say it is delivered
+/// (with its real scope) and must not list it among the undelivered editor settings, and the
+/// receipt's closing limitations paragraph must not list it either.
+#[test]
+fn the_tracker_and_receipt_say_the_word_wrap_toggle_is_delivered_while_the_swift_defines_it() {
+    let panel = swift("FilePanelView.swift");
+    let app = swift("App.swift");
+    assert!(
+        panel.contains("private static let wrapKey = \"filePanel.wordWrap\"")
+            && panel.contains("func toggleWordWrap()")
+            && app.contains("(\"Toggle Word Wrap\", #selector(toggleFileWordWrap(_:))"),
+        "the Swift no longer defines the word wrap toggle (key, toggle and File menu item); \
+         if it was removed on purpose, restore the CV-06 gate in closure-tracker.json to list \
+         word wrap as not delivered and update this test"
+    );
+
+    let tracker: Value = serde_json::from_str(&task_reference("closure-tracker.json"))
+        .expect("closure-tracker.json is valid JSON");
+    let cv06 = tracker["features"]
+        .as_array()
+        .expect("features array")
+        .iter()
+        .find(|feature| feature["feature_id"] == "CV-06")
+        .expect("CV-06 is in the tracker");
+    let gates: Vec<&str> = cv06["remaining_gates"]
+        .as_array()
+        .expect("CV-06 remaining_gates")
+        .iter()
+        .map(|gate| gate.as_str().expect("gate is a string"))
+        .collect();
+    let mentioning: Vec<&str> = gates
+        .iter()
+        .copied()
+        .filter(|gate| {
+            let lower = gate.to_lowercase();
+            lower.contains("word-wrap") || lower.contains("word wrap")
+        })
+        .collect();
+    assert_eq!(
+        mentioning.len(),
+        1,
+        "exactly one CV-06 gate should describe word wrap, found {mentioning:?}"
+    );
+    let gate = mentioning[0];
+    assert!(
+        gate.starts_with("Delivered in S4:") && gate.contains("filePanel.wordWrap"),
+        "the CV-06 word wrap gate must say it was delivered and name its global default: {gate}"
+    );
+    let undelivered = gate
+        .split_once("Not delivered:")
+        .expect("the gate separates what was delivered from what was not")
+        .1
+        .to_lowercase();
+    assert!(
+        !undelivered.contains("word-wrap") && !undelivered.contains("word wrap"),
+        "word wrap is listed as not delivered although the Swift defines it: {gate}"
+    );
+
+    let receipt = task_reference("cu14-file-panel.md");
+    let section = receipt
+        .split("### Remaining gates and limitations (not hidden)")
+        .nth(1)
+        .expect("the S5 receipt keeps its remaining gates section")
+        .split("\n### ")
+        .next()
+        .unwrap()
+        .replace('\n', " ");
+    let not_delivered = section
+        .split_once("editor settings")
+        .expect("the receipt names the editor settings that remain")
+        .1
+        .split_once(')')
+        .expect("the editor settings list is parenthesised")
+        .0
+        .to_lowercase();
+    assert!(
+        !not_delivered.contains("word wrap") && !not_delivered.contains("word-wrap"),
+        "the receipt lists word wrap as undelivered although the Swift defines it: {not_delivered}"
+    );
 }
