@@ -296,3 +296,30 @@ requires that receipt plus the original owned exit/reap barrier before a reader
 launch. Failure still exits 1, with no direct-exit fallback, delay or retry. All
 baseline A/B retention assertions and store observations remain unchanged. The
 comparison's outcome, not the API name, must establish its effect on persistence.
+
+Run [38840974347](https://github.com/ashutoshpw/zmux/actions/runs/38840974347)
+at `7447906867b30f28ed3ae5a067564b7e70f9da8e` observed the exact normal
+`applicationWillTerminate` event for preparer PID 13599 and reaped exit 0. Fresh
+reader PID 13622 still retained localStorage A/B but neither cookie, in both JavaScript
+and public cookie-store observations. No removal or all-data clear ran. This does
+not establish cookie durability even with normal termination. V5/V6/V7 require
+reassessment, not a delay or another assumed flush path.
+
+The shared owned process runner always signals its reserved process group before
+reaping, even after the leader exits. Existing artifacts show an entirely zombie
+group only when a signal returns EPERM; they contain no pre-signal process lineage.
+They cannot establish whether live WebKit helpers were terminated during cleanup
+or were unrelated launchd/XPC processes. The next diagnostic preserves the original
+signaling/reaping policy and adds bounded public `ps` observations before native
+spawn, immediately before owned cleanup signaling and after cleanup. Records contain
+PID/PPID/PGID/state/comm only, without process arguments or environment. Owned-group
+and observed descendant relationships are recorded; other WebKit candidates are
+explicitly unproven. No observed PID becomes signal authority.
+
+Snapshots have a two-second deadline, byte/row/count bounds and an independently
+owned/reaped `ps` child; observation failure is retained as incomplete evidence.
+Only the standalone probe wraps its existing process owner; shared cleanup code is
+unchanged. Instrumentation itself changes elapsed time, so a different cookie result
+alone will not establish cause. Actual lineage/group evidence must precede any
+cleanup-policy change. Portable real-child observation/exit/reap checks pass; actual
+Darwin relationships remain a hosted diagnostic gate.
