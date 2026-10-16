@@ -1116,7 +1116,7 @@ fn open_items(
     }
     let plans = desktop
         .probe_open_items(&items, force_mode)
-        .map_err(|failure| ("invalid_request", failure.message))?;
+        .map_err(|failure| (whole_request_code(&failure.code), failure.message))?;
     mutate(
         desktop,
         admission,
@@ -1131,6 +1131,17 @@ fn open_items(
             },
         },
     )
+}
+
+/// Control-socket code for a whole-request `open` failure: a malformed request stays
+/// `invalid_request`, a closed desktop or file service is `desktop_closed` like every other
+/// route, and an unexpected failure keeps a distinct code instead of being mislabelled.
+fn whole_request_code(code: &str) -> &'static str {
+    match code {
+        "invalid_request" => "invalid_request",
+        "closed" => "desktop_closed",
+        _ => "file_error",
+    }
 }
 
 fn mutate(

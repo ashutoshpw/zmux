@@ -26,6 +26,9 @@ pub const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_PREVIEW_BYTES: usize = 7_340_032;
 /// Fast pre-check window; the complete file is still validated before a tab exists.
 pub const SNIFF_BYTES: usize = 8192;
+/// Header window read to check an image or PDF signature (the PDF marker may sit up to 1024
+/// bytes in).
+pub const SIGNATURE_BYTES: usize = 1024;
 pub const MAX_PATH_BYTES: usize = 4096;
 /// Permission bits for a file that did not exist when it was saved with `force`.
 pub const NEW_FILE_MODE: u32 = 0o644;
@@ -165,6 +168,45 @@ const LEAF_OPEN_FLAGS: OFlags = OFlags::RDONLY
     .union(OFlags::NOCTTY)
     .union(OFlags::CLOEXEC);
 
+/// Flags that open a directory for traversal only, requiring search (`x`) permission on the
+/// directory and no read (`r`) permission. Rationale: home and shared directories are commonly
+/// mode `0711` or `0311`; a file inside is still readable and writable by its owner, `realpath`
+/// and plain `open(2)` reach it, so refusing the walk with `EACCES` would reject files the user
+/// can use. `O_NOFOLLOW | O_DIRECTORY` keep the no-symlink guarantee of the ordinary walk.
+/// Linux: `O_PATH` (the descriptor can be used as an `openat`/`renameat`/`unlinkat` base but not
+/// read or fsynced). macOS: `O_SEARCH` (`O_EXEC | O_DIRECTORY`, constant from `<sys/fcntl.h>`;
+/// this branch could not be compiled or run on the Linux development machine).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn search_only_flags() -> Option<OFlags> {
+    Some(OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC)
+}
+#[cfg(target_os = "macos")]
+fn search_only_flags() -> Option<OFlags> {
+    const O_EXEC: u32 = 0x4000_0000;
+    Some(OFlags::from_bits_retain(O_EXEC) | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC)
+}
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+fn search_only_flags() -> Option<OFlags> {
+    None
+}
+
+/// Open one directory component relative to `parent` without following symlinks. A directory
+/// that cannot be read but can be searched is opened traversal-only (see [`search_only_flags`]).
+fn open_directory_at(parent: &File, name: &OsStr) -> Result<File, FileError> {
+    let readable = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    match fs::openat(parent, name, readable, Mode::empty()) {
+        Ok(fd) => Ok(File::from(fd)),
+        Err(Errno::ACCESS) => match search_only_flags() {
+            // The traversal-only open reports the real obstacle (no search permission).
+            Some(flags) => fs::openat(parent, name, flags, Mode::empty())
+                .map(File::from)
+                .map_err(|errno| from_errno("open directory", errno)),
+            None => Err(from_errno("open directory", Errno::ACCESS)),
+        },
+        Err(errno) => Err(from_errno("open directory", errno)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RealFs;
 impl FileBackend for RealFs {
@@ -183,17 +225,7 @@ impl FileBackend for RealFs {
         for component in path.components() {
             match component {
                 Component::RootDir => {}
-                Component::Normal(name) => {
-                    directory = File::from(
-                        fs::openat(
-                            &directory,
-                            name,
-                            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                            Mode::empty(),
-                        )
-                        .map_err(|errno| from_errno("open directory", errno))?,
-                    );
-                }
+                Component::Normal(name) => directory = open_directory_at(&directory, name)?,
                 _ => {
                     return Err(FileError::new(
                         "invalid_operand",
@@ -275,8 +307,28 @@ impl FileBackend for RealFs {
             .map_err(|errno| from_errno("remove temporary file", errno))
     }
     fn sync_dir(&self, dir: &File) -> Result<(), FileError> {
-        dir.sync_all()
-            .map_err(|error| from_io("sync directory", &error))
+        match dir.sync_all() {
+            Ok(()) => Ok(()),
+            // A traversal-only descriptor (search-only directory, see `search_only_flags`)
+            // cannot be fsynced. Try a readable reopen; if the directory really cannot be read
+            // the entry cannot be flushed by any POSIX call, so the (already atomic) rename
+            // stands without a directory fsync. This is the only case treated as success.
+            Err(error) if error.raw_os_error() == Some(Errno::BADF.raw_os_error()) => {
+                match fs::openat(
+                    dir,
+                    ".",
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                    Mode::empty(),
+                ) {
+                    Ok(fd) => File::from(fd)
+                        .sync_all()
+                        .map_err(|error| from_io("sync directory", &error)),
+                    Err(Errno::ACCESS) => Ok(()),
+                    Err(errno) => Err(from_errno("reopen directory to sync it", errno)),
+                }
+            }
+            Err(error) => Err(from_io("sync directory", &error)),
+        }
     }
 }
 
@@ -443,15 +495,16 @@ fn too_large(limit: usize) -> FileError {
     )
 }
 
-/// Open, size-check, read completely and validate `path` (an absolute, canonical path).
-pub fn load(
+/// Open `path` (absolute, canonical) and require a regular file within the size limit of
+/// `mode`, judged by `fstat` of the opened descriptor. Nothing is read.
+fn open_regular<'a>(
     backend: &dyn FileBackend,
-    path: &Path,
+    path: &'a Path,
     mode: FileMode,
-) -> Result<LoadedFile, FileError> {
+) -> Result<(File, &'a OsStr, File, Meta), FileError> {
     let (parent, name) = split(path)?;
     let directory = backend.open_dir(parent)?;
-    let mut file = backend.open_leaf(&directory, name)?;
+    let file = backend.open_leaf(&directory, name)?;
     let meta = meta_of(&file)?;
     if meta.directory {
         return Err(FileError::new("is_directory", directory_message()));
@@ -466,6 +519,17 @@ pub fn load(
     if meta.fingerprint.size > limit as u64 {
         return Err(too_large(limit));
     }
+    Ok((directory, name, file, meta))
+}
+
+/// Size-check, read completely and validate `path` (an absolute, canonical path).
+pub fn load(
+    backend: &dyn FileBackend,
+    path: &Path,
+    mode: FileMode,
+) -> Result<LoadedFile, FileError> {
+    let (directory, name, mut file, meta) = open_regular(backend, path, mode)?;
+    let limit = limit_for(mode);
     let mut bytes = backend.read(&mut file, SNIFF_BYTES)?;
     if mode.is_editable() {
         sniff_text(&bytes)?;
@@ -499,9 +563,12 @@ pub struct Probe {
     pub path: String,
     pub mode: FileMode,
     pub size: u64,
-    pub sha256: String,
+    /// Content hash of a fully validated text or Markdown file. `None` for images and PDFs,
+    /// which are judged by `fstat` size and signature alone and never read in full (design D4).
+    pub sha256: Option<String>,
 }
-/// Lexical operand validation plus canonicalisation and complete content validation.
+/// Lexical operand validation plus canonicalisation and content validation: the whole file for
+/// text and Markdown, `fstat` size plus signature window for images and PDFs.
 pub fn probe(
     backend: &dyn FileBackend,
     operand: &str,
@@ -529,12 +596,26 @@ pub fn probe(
         ));
     }
     let mode = classify(&canonical, force)?;
-    let loaded = load(backend, &canonical, mode)?;
+    if mode.is_editable() {
+        let loaded = load(backend, &canonical, mode)?;
+        return Ok(Probe {
+            path: text,
+            mode,
+            size: loaded.meta.fingerprint.size,
+            sha256: Some(loaded.sha256),
+        });
+    }
+    // Images and PDFs can be 7 MiB: the probe runs under a 1 s budget and the attach reads the
+    // file anyway, so only the size (already checked against the cap from `fstat`) and the
+    // signature window are examined here.
+    let (_directory, _name, mut file, meta) = open_regular(backend, &canonical, mode)?;
+    let head = backend.read(&mut file, SIGNATURE_BYTES)?;
+    signature_check(&canonical, mode, &head)?;
     Ok(Probe {
         path: text,
         mode,
-        size: loaded.meta.fingerprint.size,
-        sha256: loaded.sha256,
+        size: meta.fingerprint.size,
+        sha256: None,
     })
 }
 
@@ -720,8 +801,11 @@ pub fn save(
         drop(file);
         return Err(cleanup(error));
     }
-    drop(file);
+    // `file` stays open: after the rename it is the committed file, and its descriptor is the
+    // only race-free source of the committed fingerprint (a path lookup could already see an
+    // external replacement).
     if !fence() {
+        drop(file);
         return Err(cleanup(FileError::new(
             "stale_owner",
             "the view that requested this save was closed or replaced; nothing was written",
@@ -765,13 +849,15 @@ pub fn save(
     }
     // Past this point the new content may be visible: never report a plain failure.
     let sha256 = sha256_hex(&content);
-    let committed = backend
-        .open_leaf(&directory, name)
-        .and_then(|file| meta_of(&file))
-        .map(|meta| SaveSuccess {
-            meta,
-            sha256: sha256.clone(),
-        });
+    // The fingerprint comes from the descriptor that was written, never from the path: an
+    // external overwrite after `renameat` then shows up as a change at the next poll instead
+    // of being adopted as our own baseline. (`fstat` after the rename also carries the
+    // rename's ctime update.)
+    let committed = meta_of(&file).map(|meta| SaveSuccess {
+        meta,
+        sha256: sha256.clone(),
+    });
+    drop(file);
     if let Err(error) = backend.sync_dir(&directory) {
         return Err(Box::new(SaveFailure {
             error: FileError::new(

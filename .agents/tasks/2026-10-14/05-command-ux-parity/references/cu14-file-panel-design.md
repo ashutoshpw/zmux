@@ -177,7 +177,7 @@ invalid UTF-8 anywhere is `invalid_utf8`, size over the cap is `too_large`. The 
 window is only the fast pre-check that rejects obviously binary files without reading the rest.
 A failure therefore always becomes an explicit per-item error and never a tab with a
 success-shaped `{ok: true}`. If the full read does not finish by the deadline the item is
-`probe_timeout` (explicit, no tab). The probe's sha256 and size are handed to the attach as a
+`probe_timeout` (explicit, no tab). The probe's sha256 (text and Markdown only) and size are handed to the attach as a
 hint only; attach still reads and validates again (the file can change in between: that case is
 the attach error view, not a probe result). Image and PDF modes are validated only by size
 (`fstat` against `MAX_PREVIEW_BYTES`) and the signature check above; a file with a valid header
@@ -457,7 +457,12 @@ possible to keep the window minimal; this limitation is also recorded in the rec
 
 `file_io::save(dir, name, bytes, expect, force)`, all anchored to the parent directory fd:
 
-1. Walk to the parent directory (NOFOLLOW). Fresh `fstatat(name, NOFOLLOW)` => `D` (missing or
+1. Walk to the parent directory (NOFOLLOW; every component is opened `O_RDONLY|O_DIRECTORY`, and
+   a component that is searchable but not readable, mode `--x` such as `0711`/`0311`, falls back
+   to a traversal-only open: `O_PATH` on Linux, `O_SEARCH` (`O_EXEC|O_DIRECTORY`) on macOS. Both
+   keep `O_NOFOLLOW`. A traversal-only descriptor cannot be fsynced, so the final directory
+   `fsync` of step 6 is skipped, and only then, when a readable reopen is also `EACCES`; the
+   rename itself stays atomic). Fresh `fstatat(name, NOFOLLOW)` => `D` (missing or
    metadata). If `D` exists and `nlink > 1`: `hard_linked` (an atomic replace would silently
    detach the other names); not written. If `D` is not a regular file: `not_regular_file`.
 2. Unless `force`: missing => `conflict(deleted)`; present => read at most `MAX_TEXT_BYTES + 1`
@@ -476,7 +481,9 @@ possible to keep the window minimal; this limitation is also recorded in the rec
    reports `sync_failed` with `outcome_unknown: true`; the baseline is already updated to the
    visible content, so a retry is a safe no-op-equivalent save.
 7. Success updates the baseline (`generation + 1`, new sha/size/mtime/dev/ino) under the service
-   mutex and returns them.
+   mutex and returns them. The fingerprint is read with `fstat` from the temp file's descriptor,
+   which stays open across the rename, never by looking the path up again, so an external
+   overwrite right after `renameat` is a different inode at the next poll and is reported.
 
 If the directory is not writable or the temp cannot be created the error is
 `directory_not_writable` / `permission_denied`; there is NO in-place fallback write (it would
@@ -520,7 +527,8 @@ One new trusted native-only export, additive to ABI v1 (`crates/native-bridge/in
 
 ```c
 /* Trusted native file channel. Framed request/response, see below. Off the UI thread; waits at
-   most 2 s (reads/attach/reload/open/observe) or 5 s (save). A nonzero status, a timeout, or
+   most 2 s (attach/reload/observe/detach), 5 s (save) or about 3 s worst case for open (1 s
+   probe of all operands + 2 s native command). A nonzero status, a timeout, or
    outcome_unknown=true must NOT be replayed automatically, EXCEPT `observe`, which is an
    idempotent absolute-state write and is retried until the model agrees (D7a). */
 ZmuxResult zmux_desktop_file(uint64_t desktop, const uint8_t *request, size_t length);

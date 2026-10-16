@@ -807,3 +807,281 @@ fn opening_a_terminal_never_acquires_a_controlling_terminal() {
     );
     drop(master);
 }
+
+/// Restores permissive bits on drop so a failing test still lets the temporary tree be removed.
+struct Restore(PathBuf);
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+#[test]
+fn search_only_ancestors_do_not_block_probe_load_observe_save_or_the_walk() {
+    if rustix::process::geteuid().is_root() {
+        // Root bypasses permission bits, so the scenario cannot be created. Recorded, not hidden.
+        eprintln!("SKIPPED search_only_ancestors_*: running as root");
+        return;
+    }
+    let dir = Dir::new();
+    // `search` is mode 0311 (owner -wx): the user can traverse it and create entries but cannot
+    // list it, so an `O_RDONLY` open of the directory is `EACCES` while `open(2)` of a file below
+    // it succeeds. `inner` shows a search-only grandparent above an ordinary directory.
+    let search = dir.0.join("search");
+    std::fs::create_dir(&search).unwrap();
+    std::fs::create_dir(search.join("inner")).unwrap();
+    let direct = dir.file("search/a.txt", b"direct");
+    let nested = dir.file("search/inner/b.md", b"nested");
+    std::fs::set_permissions(&search, std::fs::Permissions::from_mode(0o311)).unwrap();
+    let _restore = Restore(search.clone());
+    // The premise: an ordinary directory open is refused, a plain file open is not.
+    assert!(std::fs::read_dir(&search).is_err());
+    assert_eq!(std::fs::read(&direct).unwrap(), b"direct");
+
+    // probe (canonicalize + whole-file validation), through the file as a direct child and
+    // through the search-only directory as an ancestor.
+    let probed = text(&direct).unwrap();
+    assert_eq!((probed.mode, probed.size), (FileMode::Text, 6));
+    assert_eq!(text(&nested).unwrap().mode, FileMode::Markdown);
+    // load and observe.
+    let loaded = load(&RealFs, &direct, FileMode::Text).unwrap();
+    assert_eq!(loaded.body(), b"direct");
+    assert!(loaded.writable, "owner has w and x on the directory");
+    assert!(matches!(
+        observe(&RealFs, &nested),
+        Observation::Present(meta) if meta.regular
+    ));
+    // The leaf below a search-only directory that does not exist is still `not_found`.
+    assert_eq!(
+        observe(&RealFs, &search.join("missing.txt")),
+        Observation::Missing
+    );
+    // Symlink refusal still holds inside a search-only directory.
+    symlink(&nested, search.join("link.txt")).unwrap();
+    assert_eq!(
+        code(load(&RealFs, &search.join("link.txt"), FileMode::Text)),
+        "path_changed"
+    );
+
+    // save: the directory is the search-only one (temp create, fchmod, fsync, renameat, and a
+    // directory fsync that cannot happen on a traversal-only descriptor but is not an error).
+    let saved = save_with(&RealFs, &direct, "direct v2", b"direct", false).unwrap();
+    assert_eq!(saved.sha256, sha256_hex(b"direct v2"));
+    assert_eq!(std::fs::read(&direct).unwrap(), b"direct v2");
+    // save below the search-only ancestor, in an ordinary directory.
+    save_with(&RealFs, &nested, "nested v2", b"nested", false).unwrap();
+    assert_eq!(std::fs::read(&nested).unwrap(), b"nested v2");
+    // A conflict is still found through the search-only walk.
+    std::fs::write(&direct, b"external").unwrap();
+    let failure = save_with(&RealFs, &direct, "mine", b"direct v2", false).unwrap_err();
+    assert_eq!(failure.conflict.unwrap().kind, "modified");
+    std::fs::set_permissions(&search, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let leftovers: Vec<_> = std::fs::read_dir(&search)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".zmux-save-"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn a_directory_with_no_search_permission_is_still_permission_denied() {
+    if rustix::process::geteuid().is_root() {
+        eprintln!("SKIPPED a_directory_with_no_search_*: running as root");
+        return;
+    }
+    let dir = Dir::new();
+    let sealed = dir.0.join("sealed");
+    std::fs::create_dir(&sealed).unwrap();
+    let path = dir.file("sealed/a.txt", b"x");
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = Restore(sealed);
+    // The fallback is traversal-only: it cannot widen access past a missing `x` bit.
+    assert_eq!(
+        code(load(&RealFs, &path, FileMode::Text)),
+        "permission_denied"
+    );
+}
+
+/// Counts the bytes handed back by `read`, to prove how much of a file an operation consumed.
+struct ReadSpy {
+    bytes: AtomicUsize,
+    calls: AtomicUsize,
+}
+impl ReadSpy {
+    fn new() -> Self {
+        Self {
+            bytes: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+        }
+    }
+}
+impl FileBackend for ReadSpy {
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileError> {
+        RealFs.canonicalize(path)
+    }
+    fn open_dir(&self, path: &Path) -> Result<File, FileError> {
+        RealFs.open_dir(path)
+    }
+    fn open_leaf(&self, dir: &File, name: &OsStr) -> Result<File, FileError> {
+        RealFs.open_leaf(dir, name)
+    }
+    fn writable(&self, dir: &File, name: &OsStr) -> bool {
+        RealFs.writable(dir, name)
+    }
+    fn read(&self, file: &mut File, max_bytes: usize) -> Result<Vec<u8>, FileError> {
+        let bytes = RealFs.read(file, max_bytes)?;
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.bytes.fetch_add(bytes.len(), Ordering::SeqCst);
+        Ok(bytes)
+    }
+    fn create_temp(&self, dir: &File, name: &str) -> Result<File, FileError> {
+        RealFs.create_temp(dir, name)
+    }
+    fn write_all(&self, file: &mut File, bytes: &[u8]) -> Result<(), FileError> {
+        RealFs.write_all(file, bytes)
+    }
+    fn set_mode(&self, file: &File, mode: u32) -> Result<(), FileError> {
+        RealFs.set_mode(file, mode)
+    }
+    fn sync_file(&self, file: &File) -> Result<(), FileError> {
+        RealFs.sync_file(file)
+    }
+    fn rename(&self, dir: &File, from: &str, to: &OsStr) -> Result<(), FileError> {
+        RealFs.rename(dir, from, to)
+    }
+    fn unlink(&self, dir: &File, name: &str) -> Result<(), FileError> {
+        RealFs.unlink(dir, name)
+    }
+    fn sync_dir(&self, dir: &File) -> Result<(), FileError> {
+        RealFs.sync_dir(dir)
+    }
+}
+
+#[test]
+fn image_and_pdf_probes_use_fstat_size_and_signature_without_reading_or_hashing_the_file() {
+    let dir = Dir::new();
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.resize(MAX_PREVIEW_BYTES, 7);
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    pdf.resize(MAX_PREVIEW_BYTES, b' ');
+    for (name, bytes, mode) in [
+        ("big.png", png, FileMode::Image),
+        ("big.pdf", pdf, FileMode::Pdf),
+    ] {
+        let path = dir.file(name, &bytes);
+        let spy = ReadSpy::new();
+        let probed = probe(&spy, path.to_str().unwrap(), None).unwrap();
+        assert_eq!(probed.mode, mode);
+        assert_eq!(probed.size as usize, MAX_PREVIEW_BYTES);
+        assert_eq!(probed.sha256, None, "{name}: a preview probe never hashes");
+        let read = spy.bytes.load(Ordering::SeqCst);
+        assert!(
+            read <= SIGNATURE_BYTES && spy.calls.load(Ordering::SeqCst) == 1,
+            "{name}: probe read {read} bytes in {} reads",
+            spy.calls.load(Ordering::SeqCst)
+        );
+    }
+    // Size is still judged from fstat, before anything is read.
+    let mut over = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    over.resize(MAX_PREVIEW_BYTES + 1, 0);
+    let spy = ReadSpy::new();
+    let path = dir.file("over.png", &over);
+    assert_eq!(code(probe(&spy, path.to_str().unwrap(), None)), "too_large");
+    assert_eq!(spy.calls.load(Ordering::SeqCst), 0);
+    // Text and Markdown still read and hash the whole file.
+    let path = dir.file("t.txt", &vec![b'a'; 100_000]);
+    let spy = ReadSpy::new();
+    let probed = probe(&spy, path.to_str().unwrap(), None).unwrap();
+    assert_eq!(probed.sha256, Some(sha256_hex(&vec![b'a'; 100_000])));
+    assert_eq!(spy.bytes.load(Ordering::SeqCst), 100_000);
+}
+
+/// Replaces the saved path with a different file right after the real `renameat`, the window
+/// in which an external writer can overwrite what the save just committed. Records the inode
+/// of the temporary file, which becomes the committed file.
+struct OverwriteAfterRename {
+    target: PathBuf,
+    temp_inode: std::sync::Mutex<Option<u64>>,
+}
+impl FileBackend for OverwriteAfterRename {
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileError> {
+        RealFs.canonicalize(path)
+    }
+    fn open_dir(&self, path: &Path) -> Result<File, FileError> {
+        RealFs.open_dir(path)
+    }
+    fn open_leaf(&self, dir: &File, name: &OsStr) -> Result<File, FileError> {
+        RealFs.open_leaf(dir, name)
+    }
+    fn writable(&self, dir: &File, name: &OsStr) -> bool {
+        RealFs.writable(dir, name)
+    }
+    fn read(&self, file: &mut File, max_bytes: usize) -> Result<Vec<u8>, FileError> {
+        RealFs.read(file, max_bytes)
+    }
+    fn create_temp(&self, dir: &File, name: &str) -> Result<File, FileError> {
+        let file = RealFs.create_temp(dir, name)?;
+        *self.temp_inode.lock().unwrap() = Some(meta_of(&file)?.fingerprint.ino);
+        Ok(file)
+    }
+    fn write_all(&self, file: &mut File, bytes: &[u8]) -> Result<(), FileError> {
+        RealFs.write_all(file, bytes)
+    }
+    fn set_mode(&self, file: &File, mode: u32) -> Result<(), FileError> {
+        RealFs.set_mode(file, mode)
+    }
+    fn sync_file(&self, file: &File) -> Result<(), FileError> {
+        RealFs.sync_file(file)
+    }
+    fn rename(&self, dir: &File, from: &str, to: &OsStr) -> Result<(), FileError> {
+        RealFs.rename(dir, from, to)?;
+        // An external editor atomically replaces the file we just committed.
+        let elsewhere = self.target.with_file_name("external-writer.tmp");
+        std::fs::write(&elsewhere, b"external overwrite").unwrap();
+        std::fs::rename(&elsewhere, &self.target).unwrap();
+        Ok(())
+    }
+    fn unlink(&self, dir: &File, name: &str) -> Result<(), FileError> {
+        RealFs.unlink(dir, name)
+    }
+    fn sync_dir(&self, dir: &File) -> Result<(), FileError> {
+        RealFs.sync_dir(dir)
+    }
+}
+
+#[test]
+fn the_committed_fingerprint_is_taken_from_the_written_descriptor_not_the_path() {
+    let dir = Dir::new();
+    let path = dir.file("window.txt", b"base");
+    let backend = OverwriteAfterRename {
+        target: path.clone(),
+        temp_inode: std::sync::Mutex::new(None),
+    };
+    let saved = save_with(&backend, &path, "mine", b"base", false).unwrap();
+    let temp_inode = backend.temp_inode.lock().unwrap().expect("temp created");
+    // The baseline describes the inode that was written and fsynced, not the replacement.
+    assert_eq!(saved.meta.fingerprint.ino, temp_inode);
+    assert_eq!(saved.sha256, sha256_hex(b"mine"));
+    assert_eq!(saved.meta.fingerprint.size, 4);
+    // So the next observation of the path is a different file and is reported as a change.
+    match observe(&RealFs, &path) {
+        Observation::Present(now) => {
+            assert_ne!(now.fingerprint, saved.meta.fingerprint);
+            assert_ne!(now.fingerprint.ino, temp_inode);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), b"external overwrite");
+}
+
+#[test]
+fn an_undisturbed_save_reports_the_fingerprint_the_next_poll_sees() {
+    let dir = Dir::new();
+    let path = dir.file("steady.txt", b"base");
+    let saved = save_with(&RealFs, &path, "mine", b"base", false).unwrap();
+    match observe(&RealFs, &path) {
+        Observation::Present(now) => assert_eq!(now.fingerprint, saved.meta.fingerprint),
+        other => panic!("{other:?}"),
+    }
+}

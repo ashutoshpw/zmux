@@ -906,11 +906,17 @@ fn the_request_queue_is_bounded_and_overload_is_explicit() {
     }
     fx.control.arm("read");
     thread::scope(|scope| {
-        // One job runs (and blocks) and eight more fill the queue.
-        let handles: Vec<_> = owners[..9]
-            .iter()
-            .map(|owner| scope.spawn(|| fx.desktop.file_reload(owner, false)))
-            .collect();
+        // The first reload must be dequeued and blocked in the gate before anything else is
+        // submitted; otherwise it still occupies a queue slot and the ninth submission can be
+        // refused as `busy`. After that one job runs (and blocks) and eight more fill the queue.
+        let first = scope.spawn(|| fx.desktop.file_reload(&owners[0], false));
+        fx.control.wait_blocked(1);
+        let mut handles = vec![first];
+        handles.extend(
+            owners[1..9]
+                .iter()
+                .map(|owner| scope.spawn(|| fx.desktop.file_reload(owner, false))),
+        );
         for owner in &owners[..9] {
             fx.wait_entry(owner.surface_id, |e| e["last_op"]["state"] == "pending");
         }
@@ -2226,5 +2232,24 @@ fn capabilities_advertise_the_file_panel_limits_actually_in_force() {
             "max_preview_bytes": 7_340_032, "poll_interval_ms": 750,
             "open_probe_timeout_ms": 5000,
         })
+    );
+}
+
+#[test]
+fn a_closed_desktop_is_reported_as_closed_not_as_an_invalid_open_request() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let path = fx.write("closing.txt", b"x");
+    let operand = path.to_str().unwrap();
+    // A malformed request is still `invalid_request`: the code reflects the real cause.
+    assert_eq!(error_code(&socket.open(&[], json!({}))), "invalid_request");
+    let calls = fx.probe_calls();
+    fx.desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let response = socket.open(&[("path", operand)], json!({}));
+    assert_eq!(error_code(&response), "desktop_closed", "{response}");
+    assert_eq!(
+        fx.probe_calls(),
+        calls,
+        "no file was touched after shutdown"
     );
 }

@@ -152,7 +152,8 @@ Base: `e66b1675e079db4c566f2a7d881ebb833ffd6d84`.
 - `native-bridge`: trusted export `zmux_desktop_file` (`src/file_channel.rs`): framed
   `u32 BE header_len | header JSON | raw body`, `Reservation::new()` before any queueing, header
   at most 16384 bytes, non-save frames at most 16384, `save` frame at most 16384 + 2097152
-  (`MAX_FILE_SAVE_FRAME_BYTES`), 2 s waits (5 s save). Ops: attach, reload, save, observe,
+  (`MAX_FILE_SAVE_FRAME_BYTES`), 2 s waits (5 s save; `open` is about 3 s worst case, a 1 s probe
+  of all operands plus the 2 s native command). Ops: attach, reload, save, observe,
   detach, open (path items). `zmux.h`, `docs/native-bridge.md`, `tests/abi.c` and
   `scripts/check-native-bridge` updated. `ABI_VERSION` stays 1 (one additive export).
 - No new dependency: `sha2`, `rustix`, `uuid`, `serde_json` were already direct dependencies;
@@ -160,7 +161,7 @@ Base: `e66b1675e079db4c566f2a7d881ebb833ffd6d84`.
 
 ### Red then green
 
-Red: `crates/desktop-runtime/tests/files.rs` (25 behavioural tests) was written before
+Red: `crates/desktop-runtime/tests/files.rs` (the original 25 behavioural tests; 44 after the fix rounds) was written before
 `files.rs`. Run against a clean export of the base commit (`git archive e66b167`, separate target
 directory, so no branch, worktree or stash was involved) it fails to build:
 `error[E0432]: unresolved imports zmux_desktop_runtime::file_io, zmux_desktop_runtime::files`
@@ -177,9 +178,11 @@ restored (diff against a backup is empty):
 - conflict hash comparison disabled: `conflict_modified_and_deleted_require_explicit_force` fails.
 - delete reported after one miss: `one_miss_is_not_a_delete_but_two_are` fails.
 
-Green: `scripts/check` exit 0 (490 tests passed, 0 failed across the workspace). New tests:
+Green at the original slice commit: `scripts/check` exit 0 (490 tests passed at that time). The
+current total is in the third fix round below. Tests as of the third fix round (counts are the
+`#[test]` functions in each file):
 
-- `file_io_tests.rs` (21): extension table incl. case, dotfile, no extension, `svg`/`html` as
+- `file_io_tests.rs` (31, of which 5 are third-round additions listed below): extension table incl. case, dotfile, no extension, `svg`/`html` as
   text; sniff window versus whole-file validation (NUL at offset 8193 and at the last byte of a
   2 MiB file => `binary_file`, stray invalid byte at offset 20000 => `invalid_utf8`, exactly
   2 MiB ok, one over `too_large`); PNG/JPEG/GIF/PDF signature mismatch; 7 MiB boundary; media
@@ -193,7 +196,7 @@ Green: `scripts/check` exit 0 (490 tests passed, 0 failed across the workspace).
   conflict, change between check and rename is a conflict; BOM round trip; save body validation.
 - `files.rs` unit tests (5): fingerprint-stable-for-two-polls rule, miss counting, epoch reset
   fences owners, idle shutdown join without waiting a full tick.
-- `tests/files.rs` desktop-runtime (25, real `Desktop`, gated and counting backend):
+- `tests/files.rs` desktop-runtime (44; the original 25 are described here, later rounds below; real `Desktop`, gated and counting backend):
   attach/reload/save generations and hash of the disk bytes (CRLF kept); binary/late-NUL/late
   invalid UTF-8/oversize/missing/directory/relative never create a tab; mixed batch in order,
   symlink opens its target, focus only the first success, dedupe re-focuses, `focus=false` keeps
@@ -214,7 +217,7 @@ Green: `scripts/check` exit 0 (490 tests passed, 0 failed across the workspace).
   per item; shutdown keeps the ticket pending while a worker is blocked and joins it after
   release; idle shutdown within the deadline; a unique sentinel never appears in the serialized
   snapshot or open result.
-- `native-bridge/tests/files.rs` (5): frame validation (null, short, header over cap, header
+- `native-bridge/tests/files.rs` (7; 5 original, 2 added in the third round): frame validation (null, short, header over cap, header
   past the frame, not JSON, unknown op, unknown field, missing field, body on a non-save op,
   non-save over 16384, URL item, save body one byte over 2 MiB, wrong handle) all before any
   work; open -> attach -> 1.5 MiB save -> conflict -> reload -> observe -> detach round trip
@@ -224,10 +227,14 @@ Green: `scripts/check` exit 0 (490 tests passed, 0 failed across the workspace).
   framed save, stale-view refusal, detach and malformed-frame rejection through the shared library;
   `scripts/check-native-bridge` asserts its completion line.
 
-Flake check: the desktop-runtime `files` binary passed 20 serial runs and 18 runs executed 6 at a
-time under CPU contention. Two races found and fixed while writing the queue-full tests: the
-executor must be proven parked in the hook before flooding, and C-registry `BUSY` under parallel
-bridge tests is handled by serialising those tests (the registry intentionally uses `try_lock`).
+Flake check (corrected in the third fix round): the original claim of 18 runs executed 6 at a
+time was wrong in effect. A review reproduced intermittent failures of
+`the_request_queue_is_bounded_and_overload_is_explicit` with eight concurrent copies (2 of 8 and
+1 of 24 failed), because the test never proved the first job had left the queue before it
+submitted the ninth. That is fixed and re-measured in the third fix round below. Two other races
+found while writing the queue-full tests were fixed earlier: the executor must be proven parked
+in the hook before flooding, and C-registry `BUSY` under parallel bridge tests is handled by
+serialising those tests (the registry intentionally uses `try_lock`).
 
 ### Checks run
 
@@ -378,3 +385,93 @@ the code before changing it; none was rejected.
 
 Swift, macOS and hosted gates remain UNAVAILABLE as above. Full `scripts/check` result is recorded
 in the fix commit messages.
+
+### S2 third fix round (review findings, verified one by one)
+
+Two blocking findings and five minor items. Each was reproduced or confirmed before changing it;
+none was rejected. The earlier red-test-commit protocol deviation (tests and implementation land
+together because the first red does not compile) is unchanged and not repeated here.
+
+1. Flaky `the_request_queue_is_bounded_and_overload_is_explicit` (blocking, `tests/files.rs`).
+   Confirmed by reading the test: it submitted nine reloads without `wait_blocked(1)`, so the ninth
+   `try_send` could run before the worker dequeued the first job, fill the 8-slot queue and be
+   refused `busy`. Fixed exactly as prescribed: arm the gate, submit one reload, `wait_blocked(1)`,
+   then submit the other eight (nine pending entries, then the tenth is `busy`). Determinism, all
+   executed on this machine (24 CPUs, Linux), against the final test binaries:
+   - desktop-runtime `files` binary (44 tests): 20 serial runs, all passed; 3 rounds of 8
+     concurrent copies (24 runs), all passed; additionally 5 rounds of 8 concurrent copies (40
+     runs) with 48 busy-loop CPU hogs running, all passed.
+   - desktop-runtime unit-test binary (`file_io`, `files`, ... 85 tests): 20 serial, 24 concurrent
+     (3 x 8), all passed.
+   - native-bridge `files` binary (7 tests): 20 serial, 24 concurrent (3 x 8), all passed.
+   I did not re-run the pre-fix binary under the same harness, so the 2-of-8 reproduction above is
+   the reviewer's, not mine.
+2. Search-only ancestors (blocking, `file_io.rs`). Confirmed: `RealFs::open_dir` opened every
+   ancestor `O_RDONLY|O_DIRECTORY|O_NOFOLLOW`, which needs read permission. Now each component is
+   tried that way first; on `EACCES` it is reopened traversal-only, keeping `O_NOFOLLOW|O_DIRECTORY`:
+   `O_PATH` on Linux, `O_SEARCH` (`O_EXEC|O_DIRECTORY`, `0x4000_0000` from `<sys/fcntl.h>`) on
+   macOS, nothing elsewhere (the original `EACCES` stands). Rationale is documented at
+   `search_only_flags` and in design D13. A traversal-only directory descriptor cannot be fsynced,
+   so `sync_dir` retries with a readable reopen and, only when that is also `EACCES`, treats the
+   directory fsync as unavailable (the rename stays atomic; durability of that single directory
+   entry across power loss is not guaranteed in a `--x`/`-wx` directory). Deviation from "never
+   swallow errors", documented: every other `sync_dir` error still fails the save as
+   `outcome_unknown`. The macOS branch is UNAVAILABLE (not compiled or run here).
+   Tests: `search_only_ancestors_do_not_block_probe_load_observe_save_or_the_walk` (a `0311`
+   directory as the file's parent and as a grandparent: probe, load, observe, missing leaf,
+   symlink refusal inside it, save, save below it, conflict detection, no temporary left) and
+   `a_directory_with_no_search_permission_is_still_permission_denied` (`0000` is still refused).
+   Both skip with an `eprintln!` when running as root; this run was uid 1000, so they ran.
+   Mutation: disabling the fallback fails the first.
+3. Bridge `open` wait bound (minor). Confirmed: probe 1 s plus the 2 s native command. The
+   documented bound is corrected to "about 3 s worst case" in `zmux.h`, `docs/native-bridge.md`,
+   design D15 and this receipt.
+4. `open_items` code (minor, `control.rs`). Confirmed: every `probe_open_items` failure was labelled
+   `invalid_request`. Now `whole_request_code` keeps `invalid_request` for a malformed request,
+   maps the file service's `closed` to the socket's existing `desktop_closed` (the code
+   `desktop_error` already uses for the same condition) and any other whole-request failure to
+   `file_error`. Deviation: the code is mapped rather than copied verbatim because the error type
+   is `&'static str` and `desktop_closed` is the socket vocabulary. Test:
+   `a_closed_desktop_is_reported_as_closed_not_as_an_invalid_open_request` (real socket; mutation
+   restoring `invalid_request` fails it).
+5. Committed fingerprint (minor, `file_io.rs`). Confirmed: `save` re-opened the path after
+   `renameat`, so an external replacement in that window became the baseline. The temp file's
+   descriptor now stays open across the rename and `fstat` on it supplies the fingerprint (it also
+   carries the rename's ctime update, so an undisturbed save still matches the next poll). Tests:
+   `the_committed_fingerprint_is_taken_from_the_written_descriptor_not_the_path` (a backend that
+   atomically replaces the path right after the real rename; the reported inode is the written
+   one, and `observe` sees a different fingerprint) and
+   `an_undisturbed_save_reports_the_fingerprint_the_next_poll_sees`. Mutation: path lookup fails
+   the first.
+6. Preview probe (minor, `file_io.rs`). Confirmed: `probe` called `load`, reading and hashing up to
+   7 MiB inside the 1 s budget. Image and PDF probes now use `fstat` size (via the new shared
+   `open_regular`) plus one read of at most 1024 bytes for the signature, as D4 states.
+   `Probe.sha256` is now `Option<String>` (`None` for previews; it was never consumed). Test:
+   `image_and_pdf_probes_use_fstat_size_and_signature_without_reading_or_hashing_the_file` (a read
+   spy: 7 MiB PNG and PDF read at most 1024 bytes in one read; one byte over reads nothing and is
+   `too_large`; text still reads and hashes everything). Mutation: reading 8 MB fails it.
+7. End-to-end maximum payloads (minor, `native-bridge/tests/files.rs`), both with 60 s file waits
+   so they depend on the caps and not on machine speed:
+   `the_largest_legal_preview_attaches_through_the_bridge_and_one_more_byte_does_not_open`
+   (open -> attach of a 7 340 032-byte PNG, raw body compared byte for byte, preview save refused
+   `invalid_request`, file unchanged, one byte more is a per-item `too_large` with no tab) and
+   `a_two_mib_save_in_a_frame_exactly_at_the_cap_is_written_and_one_byte_more_is_refused` (the
+   header is padded with JSON whitespace to 16380 bytes so the frame is exactly
+   `MAX_FILE_SAVE_FRAME_BYTES`; header 16381 is `INVALID_ARGUMENT` with the file untouched; the
+   exact frame writes 2 097 152 bytes, generation 2, and reload returns them).
+
+Receipt corrections: the original "Green" count of 490 tests, the "(21)", "(25)" and "(5)" test
+counts and the 18-run flake claim above were stale and are corrected in place.
+
+### Checks run (third fix round)
+
+- `scripts/check` (fmt, `cargo test --workspace --locked`, clippy `-D warnings`,
+  `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 521 tests
+  passed, 0 failed, 2 ignored (the `lease_child` and `mutation_child` subprocess fixtures, unrelated) across 77 test binaries. No dependency change.
+- The native bridge C ABI check passed, including the framed file channel and profile lease checks.
+
+### UNAVAILABLE gates (unchanged)
+
+Swift, macOS and hosted gates remain UNAVAILABLE: `scripts/check-macos-sources`,
+`scripts/build-macos-dev`, `scripts/check-macos-app`, the in-app smokes and
+`.github/workflows/macos-development.yml`. The macOS `O_SEARCH` fallback is compiled only there.

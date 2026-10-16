@@ -451,3 +451,121 @@ fn observe_returns_busy_not_ok_when_the_command_queue_is_full() {
     assert_eq!(clean["ok"], true);
     assert_eq!(zmux_desktop_destroy(desktop), 0);
 }
+
+/// A desktop whose file waits are far longer than any plausible scheduling delay, so a test of
+/// maximum-size payloads depends on the data and the caps, never on how fast this machine is.
+fn patient_desktop() -> u64 {
+    let desktop = create_desktop_with_options(DesktopOptions {
+        files: Some(FilesConfig {
+            probe_timeout: Duration::from_secs(60),
+            read_timeout: Duration::from_secs(60),
+            save_timeout: Duration::from_secs(60),
+            stall_after: Duration::from_secs(120),
+            ..FilesConfig::default()
+        }),
+        ..Default::default()
+    });
+    assert_eq!(desktop.status, 0);
+    snapshot(desktop.value, |v| {
+        !v["model"]["workspaces"].as_array().unwrap().is_empty()
+    });
+    desktop.value
+}
+
+#[test]
+fn the_largest_legal_preview_attaches_through_the_bridge_and_one_more_byte_does_not_open() {
+    let _serial = serial();
+    const MAX_PREVIEW: usize = 7_340_032;
+    let dir = TempDir::new();
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    // A recognisable, non-repeating body so a truncated or reordered reply cannot compare equal.
+    png.extend((0..MAX_PREVIEW - 8).map(|index| (index % 251) as u8));
+    assert_eq!(png.len(), MAX_PREVIEW);
+    let path = dir.0.join("largest.png");
+    std::fs::write(&path, &png).unwrap();
+
+    let desktop = patient_desktop();
+    let (attached, body, owner) = open_and_attach(desktop, &path);
+    assert_eq!(attached["mode"], "image");
+    assert_eq!(attached["size"], MAX_PREVIEW);
+    assert_eq!(attached["writable"], false);
+    assert_eq!(
+        body.len(),
+        MAX_PREVIEW,
+        "the whole 7 MiB preview is the raw reply body"
+    );
+    assert!(body == png, "the preview bytes arrive unchanged");
+    // The reply (4 + header + 7 MiB) fit the shared buffer cap; a preview is never saved.
+    let (refused, _) = call(
+        desktop,
+        &json!({"op":"save","owner":owner,"base_generation":1,"force":true}),
+        b"text",
+    );
+    assert_eq!(refused["ok"], false);
+    assert_eq!(refused["error"]["code"], "invalid_request");
+    assert_eq!(std::fs::read(&path).unwrap(), png);
+
+    // One byte over the cap is refused when it is opened: no tab, a per-item too_large.
+    png.push(0);
+    let over = dir.0.join("over.png");
+    std::fs::write(&over, &png).unwrap();
+    let (opened, _) = call(
+        desktop,
+        &json!({"op":"open","items":[{"kind":"path","value":over}],"focus":true}),
+        &[],
+    );
+    assert_eq!(opened["result"]["items"][0]["ok"], false, "{opened}");
+    assert_eq!(opened["result"]["items"][0]["error"]["code"], "too_large");
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
+}
+
+#[test]
+fn a_two_mib_save_in_a_frame_exactly_at_the_cap_is_written_and_one_byte_more_is_refused() {
+    let _serial = serial();
+    const BODY: usize = 2_097_152;
+    let dir = TempDir::new();
+    let path = dir.0.join("cap.txt");
+    std::fs::write(&path, "before").unwrap();
+    let desktop = patient_desktop();
+    let (_, _, owner) = open_and_attach(desktop, &path);
+
+    // Pad the header with JSON whitespace so 4 + header + body is exactly the frame cap.
+    let header = json!({"op":"save","owner":owner,"base_generation":1,"force":false});
+    let build = |extra: usize| {
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.resize(MAX_FILE_SAVE_FRAME - BODY - 4 + extra, b' ');
+        let mut out = (bytes.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(&bytes);
+        out
+    };
+    let body: Vec<u8> = (0..BODY).map(|i| b'a' + (i % 26) as u8).collect();
+
+    // One byte past the cap (header 16381): refused as a malformed frame, nothing written.
+    let mut oversize = build(1);
+    oversize.extend_from_slice(&body);
+    assert_eq!(oversize.len(), MAX_FILE_SAVE_FRAME + 1);
+    assert_eq!(call_raw(desktop, &oversize).status, INVALID_ARGUMENT);
+    assert_eq!(std::fs::read(&path).unwrap(), b"before");
+
+    // Exactly at the cap (header 16380, body exactly 2 MiB): accepted and written whole.
+    let mut exact = build(0);
+    exact.extend_from_slice(&body);
+    assert_eq!(exact.len(), MAX_FILE_SAVE_FRAME);
+    let result = call_raw(desktop, &exact);
+    assert_eq!(result.status, 0);
+    let (saved, _) = split(&bytes_of(result.value));
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(saved["size"], BODY);
+    assert_eq!(saved["generation"], 2);
+    assert!(std::fs::read(&path).unwrap() == body);
+
+    // The file just written is the largest one that can be read back, and it can be saved again.
+    let (reloaded, again) = call(
+        desktop,
+        &json!({"op":"reload","owner":owner,"discard":false}),
+        &[],
+    );
+    assert_eq!(reloaded["ok"], true, "{reloaded}");
+    assert!(again == body);
+    assert_eq!(zmux_desktop_destroy(desktop), 0);
+}
