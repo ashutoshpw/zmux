@@ -460,3 +460,20 @@ Only the existing3-line `apps/cli/tests/execution_admission.rs` repair from
 stream blocking before its existing bounded3-second frame timeouts. Its concurrent R03
 and status documentation is not imported. No production retry or assertion was changed.
 The focused5-case command passes locally; macOS verification remains the next run's gate.
+
+Second attempt38858200891 on c6c1da0 passed both native slices, the repaired5 admission
+cases and all6 lease cases. It exposed this slice's socket fixture path under the long
+Darwin TMPDIR: `profile_operations` could not bind its generated control.sock because
+the path exceeded SUN_LEN, before package/native launch. The subsequent mutex-poison
+failure was caused by that first fixture panic. Logs
+`/tmp/zmux-b01-native-38858200891-complete.log` and
+`/tmp/zmux-b01-native-38858200891-failed.log`; artifact12027918724.
+
+The generated Unix-only profile test fixture now uses canonical `/tmp` and the same
+random UUID/private directory instead of appending a socket path to arbitrary TMPDIR.
+No production path/timeout/retry changed. The existing3-case focused command was run
+against c6c1da0 with a deliberately long generated TMPDIR and failed its actual bind
+for the intended reason; the same command/environment passes after this fixture repair.
+Red/green logs are `/tmp/zmux-b01-profile-socket-longtmp-red-20261016.log` and
+`/tmp/zmux-b01-profile-socket-longtmp-green-20261016.log`. The failing behavioral tests
+were already committed before the repair; no source-grep assertions were introduced.
