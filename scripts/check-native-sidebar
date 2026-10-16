@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Exercise compact toolbar and grouping through an isolated packaged native app."""
+from pathlib import Path
+import argparse
+import hashlib
+import json
+import os
+import platform
+import signal
+import subprocess
+import tempfile
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--skip-build", action="store_true", help="Use the existing universal development bundle")
+    args = parser.parse_args()
+    if platform.system() != "Darwin":
+        raise SystemExit("Native sidebar acceptance requires macOS")
+    root = Path(__file__).resolve().parent.parent
+    if not args.skip_build:
+        subprocess.run([str(root / "scripts/build-macos-dev")], cwd=root, check=True)
+    dist = root / "dist"
+    executable = dist / "zmux.app/Contents/MacOS/zmux-app"
+    metadata = json.loads((dist / "build-info.json").read_text())
+    source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    if metadata["source_sha"] != source_sha:
+        raise RuntimeError("Packaged app does not match the current source commit")
+    if set(metadata["architectures"]) != {"arm64", "x86_64"}:
+        raise RuntimeError("Sidebar acceptance requires the universal development package")
+    directory = Path(tempfile.mkdtemp(prefix="zms-", dir="/tmp")).resolve()
+    directory.chmod(0o700)
+    socket = directory / "c"
+    report = dist / "native-sidebar.json"
+    receipt = dist / "native-sidebar-process.json"
+    screenshots = [dist / "zmux-sidebar.png", dist / "zmux-sidebar-collapsed.png"]
+    for path in [report, receipt, *screenshots]:
+        path.unlink(missing_ok=True)
+    # Keep the actual HOME for macOS services. Profile/session storage and the
+    # socket are explicit generated fixture paths, never the user's app state.
+    environment = {key: os.environ[key] for key in
+                   ("HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG", "LC_ALL", "__CF_USER_TEXT_ENCODING")
+                   if key in os.environ}
+    environment.update(ZMUX_SOCKET=str(socket), ZMUX_SOCKET_PATH=str(socket))
+    process = None
+    evidence = {"success": False, "source_sha": metadata["source_sha"],
+                "fixture_directory": str(directory), "socket_path": str(socket),
+                "packaged_executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                "environment": "Allowlisted OS environment; explicit isolated profile and control socket"}
+    try:
+        with (dist / "native-sidebar.stdout.log").open("wb") as output, \
+                (dist / "native-sidebar.stderr.log").open("wb") as errors:
+            process = subprocess.Popen([str(executable), "--sidebar-grouping-smoke", str(report),
+                                        str(directory / "profile")], cwd=root, env=environment,
+                                       stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
+                                       start_new_session=True)
+            evidence["original_pid"] = process.pid
+            try:
+                status = process.wait(timeout=150)
+            except subprocess.TimeoutExpired as error:
+                evidence["timed_out"] = True
+                # Only this runner's own process group is stopped. Never match
+                # application names or target the installed/running user app.
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+                raise RuntimeError("Sidebar fixture exceeded its 150 second deadline") from error
+        evidence.update(normal_exit_status=status, original_pid_waited_and_reaped=True,
+                        owned_socket_absent=not socket.exists())
+        if status != 0:
+            raise RuntimeError(f"Sidebar fixture exited with status {status}")
+        if socket.exists():
+            raise RuntimeError("Sidebar fixture exited without removing its owned control socket")
+        result = json.loads(report.read_text())
+        required = ("compact_toolbar", "visible_toggle", "groups", "group_menus",
+                    "collapse_preserves_terminal", "focus_preserved", "sidebar_restored",
+                    "notification_toggle", "window_scoping")
+        failed = [key for key in required if result.get(key) is not True]
+        if failed:
+            raise RuntimeError("Sidebar acceptance failed: " + ", ".join(failed))
+        for path in screenshots:
+            if not path.is_file() or path.stat().st_size == 0:
+                raise RuntimeError(f"Missing native screenshot: {path.name}")
+        evidence.update(success=True, native=result)
+        print("Native sidebar/grouping checks and original-process shutdown passed")
+    except Exception as error:
+        evidence["error"] = str(error)
+        raise
+    finally:
+        receipt.write_text(json.dumps(evidence, indent=2) + "\n")
+
+
+if __name__ == "__main__":
+    main()
