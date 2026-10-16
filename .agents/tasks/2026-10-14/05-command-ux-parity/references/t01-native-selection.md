@@ -91,3 +91,26 @@ receipt and successful menu dispatch are required before accepting that red.
 Cargo caches remain under repo `target/agent-validation/selection-<nonce>/cargo`.
 The initial system reference list samples dot, repeated space, underscore, slash,
 equals and CJK; hyphen, combining and emoji reference positions remain later cases.
+
+## First native fixture admission
+
+Run38830756527 at501cdca compiles the actual ARM host app, then stops at the
+focus prerequisite: actual keyWindow=false and TerminalView firstResponder=true,
+zero selection cases and no public word observations. All224 retained source
+copies match that exact Git commit, and the native PID/PPID/nonce registration
+matches its real PTY child. This is not the intended ignored-click-count red.
+Artifact12016869221 ZIP SHA256
+`99a2c867c5e8822ea0c188a359f7b8d4371310f7c91293895ac7b11363f1ea12`;
+independent review `target/agent-validation/t01-selection-native-38830756527/independent-review.json`,
+SHA256 `41bdc8cdb5c43acdee2b9e35f8c966c3902447923e27bb56f15ca8a13c94cde3`.
+
+The first report did not retain app-active/window-visible state, so do not infer
+their old values from a non-key window. Use the existing WindowLifecycleSmoke
+native admission pattern: request makeKeyAndOrderFront and NSApp.activate for this
+test-owned app, then yield MainActor for at most5s until actual active/visible/key
+window and the mounted terminal responder are all observed. Record active,
+visible and key state before/after that request. Preserve the real event/menu
+route and literalalpha case. Public system word observations can be recorded
+independently before a failed focus guard; clicks and Copy still require actual
+focus. No forced activation, fake focus, changed production view or relaxed oracle
+is part of this fixture repair.
