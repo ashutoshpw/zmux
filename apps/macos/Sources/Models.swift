@@ -1,7 +1,7 @@
 import Foundation
 
-struct GridSize: Decodable, Sendable { let rows: Int; let cols: Int }
-struct TerminalColor: Decodable, Sendable {
+struct GridSize: Decodable, Sendable, Equatable { let rows: Int; let cols: Int }
+struct TerminalColor: Decodable, Sendable, Hashable {
     let kind: String
     let index: Int?
     let rgb: [Int]?
@@ -14,11 +14,11 @@ struct TerminalColor: Decodable, Sendable {
         else { index = nil; rgb = nil }
     }
 }
-struct TerminalStyle: Decodable, Sendable {
+struct TerminalStyle: Decodable, Sendable, Hashable {
     let foreground: TerminalColor; let background: TerminalColor
     let bold: Bool; let italic: Bool; let underline: Bool; let inverse: Bool
 }
-struct TerminalRun: Decodable, Sendable {
+struct TerminalRun: Decodable, Sendable, Equatable {
     let column: Int; let width: Int; let text: String; let style: TerminalStyle
 }
 struct TerminalRowCopy: Decodable, Sendable {
@@ -41,8 +41,8 @@ struct TerminalPointerEvent: Sendable {
     let modifiers: Int
 }
 struct Viewport: Decodable, Sendable {
-    let size: GridSize; let contents: String; let cursorRow: Int; let cursorCol: Int
-    let lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
+    let size: GridSize; var contents: String; let cursorRow: Int; var cursorCol: Int
+    var lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
     let title: String?; let workingDirectory: String?
     let scrollbackOffset: Int; let scrollbackLines: Int; let alternateScreen: Bool
     let rowCopy: [TerminalRowCopy]?
@@ -389,7 +389,7 @@ struct DesktopSnapshot: Decodable, Sendable {
     let uploads: [UploadProgress]
     let workspaceMetadata: [WorkspaceMetadata]?
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
-    let revision: UInt64; var model: Model; let frames: [Frame]
+    let revision: UInt64; var model: Model; var frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool
     var workspace: Workspace? { model.workspaces.first { $0.id == model.focusedWorkspace } }
 }

@@ -16,6 +16,7 @@ enum UICommand: Sendable {
     case surface(String, UInt64?, UInt64?, Int?, UInt64?)
     case navigation(String, String, UInt64?, UInt64?, UInt64?, Bool?)
     case attention(String, UInt64?, UInt64?, Bool?)
+    case notificationMutation(NotificationMenuSelection)
     case browser(String, UInt64?, UInt64?, String, String?, UUID?)
     case browserAutomation(UInt64, BrowserAction)
     case downloadCancel(BrowserDownloadRecord)
@@ -69,6 +70,12 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     let splitLayouts = WorkspaceSplitPreferences()
     lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
     lazy var notificationDelivery = makeNotificationDelivery()
+    private(set) var statusMenu: StatusMenuController?
+    private var pendingStatusNotifications: Bool?
+    private var minimizedWindowHistory: [MainWindowIdentity] = []
+    private let applicationActivation = NativeApplicationActivation()
+    private var activationTask: Task<Void, Never>?
+    private var pendingActivationWindow: WindowHostToken?
     private func makeNotificationDelivery() -> NotificationDelivery {
         NotificationDelivery(
             sendEvent: { [weak self] event in
@@ -84,8 +91,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
                       let target = receipt.navigation?.target,
                       target.identityNamespace == snapshot.model.identityNamespace,
                       let host = self.mainWindowHosts[MainWindowIdentity(namespace: target.identityNamespace, windowId: id)] else { return }
-                host.installMenus(); host.window.makeKeyAndOrderFront(nil)
-                NSApp.activate()
+                self.revealNativeWindow(host)
             },
             reportError: { [weak self] message in self?.reportError(message) }
         )
@@ -170,6 +176,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
                 }
                 do { try await self.perform(command) } catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
+                    if case .window("new", _, _) = command { self.pendingStatusNotifications = nil }
                     self.reportError(error.localizedDescription)
                 }
             }
@@ -231,6 +238,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             }
         }
         WindowLifecycleSmoke.trace("coordinator loops scheduled; before initial window activation")
+        statusMenu = StatusMenuController(coordinator: self)
+        statusMenu?.update(snapshot)
         mainWindowHost.installMenus()
         WindowLifecycleSmoke.trace("initial menus installed; before makeKeyAndOrderFront")
         mainWindowHost.window.makeKeyAndOrderFront(nil)
@@ -242,6 +251,12 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     }
 
     private func performShutdown() async throws {
+        statusMenu?.remove()
+        statusMenu = nil
+        pendingStatusNotifications = nil
+        minimizedWindowHistory.removeAll()
+        activationTask?.cancel(); activationTask = nil
+        pendingActivationWindow = nil
         continuation.finish()
         fileContinuation.finish()
         commandTask?.cancel()
@@ -389,6 +404,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             try await bridge.browserAction(surface: surface, action: action)
         case .attention(let operation, let id, let through, let active):
             try await bridge.attention(operation, id: id, through: through, active: active)
+        case .notificationMutation(let selection):
+            _ = try await bridge.notificationAction(.mutate(selection))
         case .pasteFiles(let surface, let paths):
             try await bridge.pasteFiles(surface: surface, paths: paths)
         case .cancelUpload(let id):
@@ -476,6 +493,73 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         if active { notificationDelivery.refreshPermission() }
     }
 
+    func showFromStatusMenu(notifications: Bool = false) {
+        guard shutdownTask == nil else { return }
+        // Minimizing changes the key window. Preserve the user's window choice
+        // instead of allowing that automatic focus transfer to select a sibling.
+        let minimized = minimizedWindowHistory.reversed().compactMap { mainWindowHosts[$0] }
+            .first(where: { $0.nativeReady && $0.window.isMiniaturized })
+            ?? mainWindowHosts.values.first(where: { $0.nativeReady && $0.window.isMiniaturized })
+        guard let host = minimized
+                ?? mainWindowHosts.values.first(where: { $0 === mainWindowHost && $0.nativeReady })
+                ?? mainWindowHosts.values.first(where: { $0.nativeReady }) else {
+            if pendingStatusNotifications == nil {
+                pendingStatusNotifications = notifications
+                // An existing window may still be completing native startup.
+                // Wait for its ready receipt rather than creating a duplicate.
+                if snapshot?.model.windows.isEmpty == true,
+                   !enqueue(.window("new", nil, true)) { pendingStatusNotifications = nil }
+            } else if notifications { pendingStatusNotifications = true }
+            return
+        }
+        revealNativeWindow(host)
+        if notifications { host.showNotifications() }
+    }
+
+    private func revealNativeWindow(_ host: MainWindowHost) {
+        guard shutdownTask == nil, let token = host.nativeToken else { return }
+        pendingActivationWindow = token
+        // Hiding can still be completing when the menu action arrives. Capture
+        // that state before unhide changes it; a transient isActive value does
+        // not confirm that the window will retain foreground ownership.
+        let needsActivation = NSApp.isHidden || !NSApp.isActive
+        host.installMenus()
+        NSApp.unhide(nil)
+        if host.window.isMiniaturized { host.window.deminiaturize(nil) }
+        host.window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        guard (needsActivation || !NSApp.isActive), activationTask == nil else { return }
+        activationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.activationTask = nil; self.pendingActivationWindow = nil }
+            do {
+                try await self.applicationActivation.activateCurrent()
+                guard !Task.isCancelled, self.shutdownTask == nil,
+                      let desired = self.pendingActivationWindow,
+                      desired.epoch == self.snapshot?.windowEpoch,
+                      desired.identityNamespace == self.snapshot?.model.identityNamespace,
+                      let current = self.mainWindowHosts[MainWindowIdentity(namespace: desired.identityNamespace, windowId: desired.windowId)],
+                      current.nativeReady, current.nativeToken?.hostId == desired.hostId else { return }
+                current.installMenus()
+                NSApp.unhide(nil)
+                if current.window.isMiniaturized { current.window.deminiaturize(nil) }
+                // Launch Services confirms process identity before its activation
+                // necessarily finishes. Renew cooperative activation afterwards.
+                NSApp.activate()
+                current.window.makeKeyAndOrderFront(nil)
+            } catch {
+                guard !Task.isCancelled, self.shutdownTask == nil else { return }
+                self.reportError(error.localizedDescription)
+            }
+        }
+    }
+
+    func windowMiniaturizationChanged(_ host: MainWindowHost, minimized: Bool) {
+        guard shutdownTask == nil, let identity = host.identity, mainWindowHosts[identity] === host else { return }
+        minimizedWindowHistory.removeAll { $0 == identity }
+        if minimized { minimizedWindowHistory.append(identity) }
+    }
+
     private func reconcile(_ snapshot: DesktopSnapshot) throws {
         guard shutdownTask == nil else { return }
         // Validate canonical ownership before touching native registries. The
@@ -483,6 +567,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         if self.snapshot == nil { WindowLifecycleSmoke.trace("first snapshot windows=\(snapshot.model.windows.count) requests=\(snapshot.windowRequests.count)") }
         let projections = try MainWindowProjection.all(snapshot)
         if windowEpoch != snapshot.windowEpoch {
+            minimizedWindowHistory.removeAll()
             for task in windowTasks.values { task.cancel() }
             windowTasks.removeAll()
             for host in mainWindowHosts.values { host.closeAuthorized() }
@@ -495,6 +580,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             windowEpoch = snapshot.windowEpoch
         }
         self.snapshot = snapshot
+        let liveWindows = Set(snapshot.model.windows.map { MainWindowIdentity(namespace: snapshot.model.identityNamespace, windowId: $0.id) })
+        minimizedWindowHistory.removeAll { !liveWindows.contains($0) }
+        statusMenu?.update(snapshot)
         try splitLayouts.reconcile(snapshot)
         let retainedHistories = Set(snapshot.model.workspaces.flatMap { $0.root.panes }
             .flatMap { $0.surfaces }.filter { $0.sessionId == nil && $0.localZellijCompletion != nil }.map(\.id))
@@ -585,6 +673,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         for frame in snapshot.frames { terminals[frame.sessionId]?.update(frame) }
         for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" { browsers[surface.id]?.update(surface) }
         for (host, selection, layout) in changes { host.completePresentation(selectionChanged: selection, layoutChanged: layout) }
+        if let notifications = pendingStatusNotifications, mainWindowHosts.values.contains(where: { $0.nativeReady }) {
+            pendingStatusNotifications = nil
+            showFromStatusMenu(notifications: notifications)
+        }
         let pending = Set(snapshot.windowRequests.map(\.operationId))
         windowTasks = windowTasks.filter { pending.contains($0.key) }
         for request in snapshot.windowRequests where windowTasks[request.operationId] == nil {

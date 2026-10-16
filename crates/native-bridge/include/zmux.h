@@ -115,6 +115,15 @@ int32_t zmux_desktop_browser_event(uint64_t desktop, const uint8_t *request, siz
 int32_t zmux_desktop_notification_event(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_notification_action(uint64_t desktop, const uint8_t *request, size_t length);
 ZmuxResult zmux_desktop_snapshot(uint64_t desktop, uint64_t revision);
+/* Native presentation protocol1. Same unchanged/owned-buffer rules as snapshot.
+   Envelope: schema_version, base_revision, snapshot (metadata; frames empty),
+   frame_packets. Each packet carries frame, unchanged, optional changed_rows,
+   contents_start/end. With a baseline, unchanged reuses the previous terminal
+   snapshot. changed_rows patches exact row indices; viewport.contents replaces
+   UTF-8 bytes [contents_start,contents_end) in the previous contents. Otherwise
+   the frame is a full reset. Validate/merge all packets before advancing revision.
+   Unknown/expired baselines reset to full; no command is replayed. */
+ZmuxResult zmux_desktop_poll_frames(uint64_t desktop, uint64_t revision);
 /* One process-local shutdown ticket per desktop. begin installs its deadline once;
    repeated calls never renew it or add barriers. budget_ms/wait_ms <=30000.
    Native cleanup is opt-in only when a real native owner must acknowledge completion.

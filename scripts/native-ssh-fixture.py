@@ -65,7 +65,7 @@ def stop_fixture_processes(daemon):
 
 
 @contextmanager
-def native_ssh_fixture(configuration, diagnostic):
+def native_ssh_fixture(configuration, diagnostic, *, session_environment=None):
     root = Path(tempfile.mkdtemp(prefix="zns-", dir="/tmp"))
     root.chmod(0o700)
     daemon = None
@@ -81,10 +81,16 @@ def native_ssh_fixture(configuration, diagnostic):
             reservation.bind(("127.0.0.1", 0))
             port = reservation.getsockname()[1]
         quoted = shlex.quote(str(root))
+        session_environment = session_environment or {}
+        if set(session_environment) - {'HOME', 'SHELL', 'PATH'}:
+            raise ValueError('Unsupported private SSH fixture environment')
+        exports = ''.join('export ' + key + '=' + shlex.quote(str(value)) + '\n'
+                          for key, value in session_environment.items())
         shell = root / "shell"
         shell.write_text(f'''#!/bin/sh
 cd {quoted} || exit 79
 export TMPDIR={shlex.quote(str(uploads))}
+{exports}
 case "$SSH_ORIGINAL_COMMAND" in
   *zmux-upload*)
     /bin/sh -c "$SSH_ORIGINAL_COMMAND" > {quoted}/ack
