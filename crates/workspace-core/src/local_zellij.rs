@@ -47,7 +47,7 @@ impl LocalZellijViewport {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalZellijCompletion {
-    pub receipt: zmux_remote_runtime::local_zellij::completion::TerminalReceiptV1,
+    pub receipt: zmux_remote_runtime::local_zellij::completion::TerminalReceipt,
     pub viewport: Option<LocalZellijViewport>,
 }
 impl LocalZellijCompletion {
@@ -56,7 +56,7 @@ impl LocalZellijCompletion {
         self.receipt
             .validate()
             .map_err(|error| ActionError::InvalidOperation(error.to_string()))?;
-        if self.receipt.binding.owner_uuid != identity.owner_uuid
+        if self.receipt.owner_uuid() != identity.owner_uuid
             || self
                 .viewport
                 .as_ref()

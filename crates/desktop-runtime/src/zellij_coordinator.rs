@@ -20,7 +20,9 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
-use zmux_remote_runtime::local_zellij::completion::{TerminalReceiptV1, WorkloadExit};
+use zmux_remote_runtime::local_zellij::completion::{
+    ExecutionObservation, TerminalReceipt, WorkloadExit,
+};
 use zmux_workspace_core::{
     LocalZellijIdentity, LocalZellijReservation, PaneId, SurfaceId, targets::TargetKind,
 };
@@ -71,8 +73,22 @@ pub struct Receipt {
     pub session_joined: bool,
     pub frontend_exit_code: Option<u32>,
     pub workload_exit: Option<WorkloadExit>,
+    pub execution_contract_version: Option<u8>,
+    pub execution_observation: Option<ExecutionObservation>,
     pub completion_saved_revision: Option<u64>,
     pub receipt_digest: Option<String>,
+}
+impl Receipt {
+    fn completion_state(&self) -> &'static str {
+        if matches!(
+            self.execution_observation.as_ref(),
+            Some(ExecutionObservation::ExecFailed { .. })
+        ) {
+            "execution_failed"
+        } else {
+            "workload_completed"
+        }
+    }
 }
 pub(crate) enum LaunchKind {
     Ordinary,
@@ -122,7 +138,7 @@ pub(crate) struct CompletionSeal {
 }
 pub(crate) struct PendingCompletion {
     pub correlation: Correlation,
-    pub receipt: TerminalReceiptV1,
+    pub receipt: TerminalReceipt,
     pub deadline: Instant,
     pub viewport: Option<zmux_workspace_core::LocalZellijViewport>,
 }
@@ -137,6 +153,7 @@ pub(crate) struct ZellijCompletion {
     pub observer: Option<local_zellij::ObserverHandle>,
     pub owner_uuid: Option<Uuid>,
     pub frontend_pid: Option<u32>,
+    pub execution_contract_version: Option<u8>,
 }
 pub(crate) struct Runtime {
     pub configuration: Option<local_zellij::Configuration>,
@@ -515,6 +532,7 @@ impl Worker {
                                 observer: Some(ready.observer),
                                 owner_uuid: Some(ready.record.id),
                                 frontend_pid: ready.frontend.map(|frontend| frontend.pid),
+                                execution_contract_version: Some(ready.execution_contract_version),
                             },
                         ),
                         Err(failure) => (
@@ -525,6 +543,7 @@ impl Worker {
                                 observer: failure.observer,
                                 owner_uuid: None,
                                 frontend_pid: None,
+                                execution_contract_version: None,
                             },
                         ),
                     };
@@ -606,6 +625,8 @@ impl Worker {
             session_joined: false,
             frontend_exit_code: None,
             workload_exit: None,
+            execution_contract_version: None,
+            execution_observation: None,
             completion_saved_revision: None,
             receipt_digest: None,
         });
@@ -718,7 +739,7 @@ impl Worker {
     pub(crate) fn observe_zellij_completion(
         &mut self,
         correlation: Correlation,
-        receipt: TerminalReceiptV1,
+        receipt: TerminalReceipt,
         deadline: Instant,
     ) -> Result<(), DesktopError> {
         let id = correlation.operation_id;
@@ -756,7 +777,9 @@ impl Worker {
                 zmux_workspace_core::LocalZellijViewport::capture(&snapshot.viewport.contents)
             });
         if let Some(operation) = self.local_zellij.receipt_mut(id) {
-            operation.workload_exit = Some(receipt.workload_exit);
+            operation.workload_exit = Some(receipt.workload_exit());
+            operation.execution_contract_version = Some(receipt.contract_version());
+            operation.execution_observation = receipt.execution_observation().cloned();
             operation.receipt_digest = Some(digest);
             operation.state = "completion_pending".into();
         }
@@ -956,8 +979,13 @@ impl Worker {
             let completed = match &final_receipt.owner_outcome {
                 Some(zmux_remote_runtime::local_zellij::observer_protocol::OwnerOutcome::WorkloadCompleted(terminal)) => {
                     terminal.digest().is_ok_and(|digest| receipt.receipt_digest.as_ref() == Some(&digest))
-                        && receipt.workload_exit == Some(terminal.workload_exit) && receipt.completion_saved_revision.is_some()
-                        && terminal.workload_exit.mapped().is_ok_and(|mapped| exit_code == Some(mapped as u32))
+                        && receipt.workload_exit == Some(terminal.workload_exit()) && receipt.completion_saved_revision.is_some()
+                        && receipt.execution_contract_version == Some(terminal.contract_version())
+                        && receipt.execution_observation.as_ref() == terminal.execution_observation()
+                        && match terminal.execution_observation() {
+                            Some(ExecutionObservation::ExecFailed { .. }) => exit_code == Some(1),
+                            _ => terminal.command_result().is_ok_and(|mapped| exit_code == Some(mapped as u32)),
+                        }
                 }
                 _ => false,
             };
@@ -971,7 +999,7 @@ impl Worker {
                 && (completed || preserved);
             receipt.state = if complete {
                 if completed {
-                    "workload_completed"
+                    receipt.completion_state()
                 } else {
                     "frontend_joined"
                 }
@@ -1135,6 +1163,9 @@ impl Worker {
             }
             receipt.error = error.clone();
             receipt.frontend_pid = metadata.frontend_pid;
+            receipt.execution_contract_version = metadata
+                .execution_contract_version
+                .or(receipt.execution_contract_version);
             receipt.owner_uuid = metadata.owner_uuid.or(receipt.owner_uuid);
             if completion.result.is_err() && completion.cleanup.is_none() {
                 receipt.session_joined = true;
@@ -1173,7 +1204,7 @@ impl Worker {
                 .find(|surface| surface.id == seal.target.surface)
                 .and_then(|surface| surface.local_zellij_completion.as_ref())
                 .is_some_and(|history| {
-                    history.receipt.binding.owner_generation == seal.generation
+                    history.receipt.owner_generation() == seal.generation
                         && history
                             .receipt
                             .digest()
@@ -1200,7 +1231,7 @@ impl Worker {
         match result {
             Ok(()) => {
                 if let Some(receipt) = self.local_zellij.receipt_mut(id) {
-                    receipt.state = "workload_completed".into();
+                    receipt.state = receipt.completion_state().into();
                     receipt.completion_saved_revision = Some(seal.target.revision);
                 }
             }

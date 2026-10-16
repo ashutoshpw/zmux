@@ -67,6 +67,13 @@ impl Record {
     }
     /// Pure original binding reconstruction; this is not live authentication.
     pub fn committed_binding(&self) -> io::Result<super::completion::CommittedBinding> {
+        if self
+            .completion
+            .as_ref()
+            .is_some_and(|c| c.execution_contract.is_some() || c.admission.is_some())
+        {
+            return Err(fail("V2 admission cannot be interpreted as legacy V1"));
+        }
         let capability = self
             .completion
             .as_ref()
@@ -98,6 +105,33 @@ impl Record {
         }
         Ok(binding)
     }
+    pub fn execution_binding(&self) -> io::Result<super::completion::ExecutionBinding> {
+        let capability = self
+            .completion
+            .as_ref()
+            .ok_or_else(|| fail("missing completion capability"))?;
+        match (&capability.execution_contract, &capability.admission) {
+            (None, None) => Ok(super::completion::ExecutionBinding::V1(
+                self.committed_binding()?,
+            )),
+            (Some(super::admission::ExecutionContract::AdmittedLifetimeV2), Some(binding)) => {
+                binding.validate()?;
+                if binding.owner_uuid != self.id
+                    || binding.owner_generation != capability.owner_generation
+                    || binding.completion_socket != capability.completion_socket
+                    || binding.digest()? != capability.binding_digest
+                    || self.namespace.as_ref() != Some(&binding.namespace)
+                    || self.server.as_ref() != Some(&binding.server)
+                    || self.supervisor.as_ref() != Some(&binding.supervisor)
+                    || self.workload.as_ref() != Some(&binding.workload_birth)
+                {
+                    return Err(fail("admitted capability/record projection mismatch"));
+                }
+                Ok(super::completion::ExecutionBinding::V2((**binding).clone()))
+            }
+            _ => Err(fail("mixed legacy/admitted execution capability")),
+        }
+    }
     /// Revalidate the original owner without adopting or signalling its processes.
     pub fn verify_live(&self) -> io::Result<()> {
         if self.state != "bound" {
@@ -126,12 +160,28 @@ impl Record {
             return Err(fail("owner process lineage changed"));
         }
         files_runtime(self)?;
-        for identity in [&self.server, &self.supervisor, &self.workload] {
+        for identity in [&self.server, &self.supervisor] {
             super::same(
                 identity
                     .as_ref()
                     .ok_or_else(|| fail("owner process binding is incomplete"))?,
             )?;
+        }
+        if self
+            .completion
+            .as_ref()
+            .is_some_and(|c| c.execution_contract.is_some() || c.admission.is_some())
+        {
+            let super::completion::ExecutionBinding::V2(binding) = self.execution_binding()? else {
+                return Err(fail("mixed execution contract"));
+            };
+            if zmux_session_runtime::child::process_lifetime(binding.lifetime.pid)?
+                != binding.lifetime
+            {
+                return Err(fail("admitted Child lifetime changed"));
+            }
+        } else {
+            super::same(workload)?;
         }
         Ok(())
     }
@@ -337,7 +387,10 @@ impl LocalZellij {
                 cwd,
                 command,
                 terminal,
-                observer.as_ref().map(|_| deadline),
+                supervisor::CreationAdmission {
+                    deadline: observer.as_ref().map(|_| deadline),
+                    admitted: observer.as_ref().is_none_or(|o| o.version() >= 3),
+                },
                 |record| {
                     *records
                         .last_mut()
@@ -384,7 +437,7 @@ impl LocalZellij {
     pub(super) fn consume_terminal(
         &self,
         record: &Record,
-        receipt: &super::completion::TerminalReceiptV1,
+        receipt: &super::completion::TerminalReceipt,
     ) -> io::Result<()> {
         receipt.matches(record)?;
         let _lock = self.lock()?;

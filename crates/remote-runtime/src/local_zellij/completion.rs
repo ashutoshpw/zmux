@@ -1,6 +1,6 @@
 //! A finite result belongs to one originally bound owner lifetime. Durable bytes
 //! alone are storage consistency; authority requires the same live supervisor.
-use super::{Record, files::NamespaceIdentity};
+use super::{Record, fail, files::NamespaceIdentity};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io;
@@ -26,6 +26,10 @@ pub struct CommittedBinding {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_contract: Option<super::admission::ExecutionContract>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<Box<super::admission::ExecutionBindingV2>>,
     pub owner_generation: Uuid,
     pub completion_socket: (u64, u64),
     pub binding_digest: String,
@@ -155,6 +159,203 @@ impl TerminalReceiptV1 {
 pub fn authenticate(
     record: &Record,
     deadline: std::time::Instant,
-) -> io::Result<Option<TerminalReceiptV1>> {
+) -> io::Result<Option<TerminalReceipt>> {
     super::completion_control::authenticate(record, deadline)
+}
+
+pub use super::admission::{ExecutionBindingV2, ExecutionObservation, TerminalReceiptV2};
+
+/// Legacy serialization remains raw V1; V2 has one explicit, exclusive envelope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TerminalReceipt {
+    V1(TerminalReceiptV1),
+    V2(#[serde(with = "admitted_wire")] TerminalReceiptV2),
+}
+mod admitted_wire {
+    use super::*;
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Wire<T> {
+        execution_contract: super::super::admission::ExecutionContract,
+        receipt: T,
+    }
+    pub fn serialize<S: serde::Serializer>(
+        value: &TerminalReceiptV2,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Wire {
+            execution_contract: super::super::admission::ExecutionContract::AdmittedLifetimeV2,
+            receipt: value,
+        }
+        .serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        decoder: D,
+    ) -> Result<TerminalReceiptV2, D::Error> {
+        Ok(Wire::<TerminalReceiptV2>::deserialize(decoder)?.receipt)
+    }
+}
+impl From<TerminalReceiptV1> for TerminalReceipt {
+    fn from(value: TerminalReceiptV1) -> Self {
+        Self::V1(value)
+    }
+}
+impl From<TerminalReceiptV2> for TerminalReceipt {
+    fn from(value: TerminalReceiptV2) -> Self {
+        Self::V2(value)
+    }
+}
+impl TerminalReceipt {
+    pub fn validate(&self) -> io::Result<()> {
+        match self {
+            Self::V1(v) => v.validate(),
+            Self::V2(v) => v.validate(),
+        }
+    }
+    pub fn digest(&self) -> io::Result<String> {
+        match self {
+            Self::V1(v) => v.digest(),
+            Self::V2(v) => v.digest(),
+        }
+    }
+    pub fn execution_binding(&self) -> ExecutionBinding {
+        match self {
+            Self::V1(v) => ExecutionBinding::V1(v.binding.clone()),
+            Self::V2(v) => ExecutionBinding::V2(v.binding.clone()),
+        }
+    }
+    pub fn contract_version(&self) -> u8 {
+        match self {
+            Self::V1(_) => 1,
+            Self::V2(_) => 2,
+        }
+    }
+    pub fn owner_uuid(&self) -> Uuid {
+        match self {
+            Self::V1(v) => v.binding.owner_uuid,
+            Self::V2(v) => v.binding.owner_uuid,
+        }
+    }
+    pub fn owner_generation(&self) -> Uuid {
+        match self {
+            Self::V1(v) => v.binding.owner_generation,
+            Self::V2(v) => v.binding.owner_generation,
+        }
+    }
+    pub fn binding_digest(&self) -> &str {
+        match self {
+            Self::V1(v) => &v.binding_digest,
+            Self::V2(v) => &v.binding_digest,
+        }
+    }
+    pub fn workload_exit(&self) -> WorkloadExit {
+        match self {
+            Self::V1(v) => v.workload_exit,
+            Self::V2(v) => v.workload_exit,
+        }
+    }
+    pub fn child_reaped(&self) -> bool {
+        match self {
+            Self::V1(v) => v.child_reaped,
+            Self::V2(v) => v.child_reaped,
+        }
+    }
+    pub fn execution_observation(&self) -> Option<&ExecutionObservation> {
+        match self {
+            Self::V1(_) => None,
+            Self::V2(v) => Some(&v.execution_observation),
+        }
+    }
+    pub fn command_result(&self) -> io::Result<i32> {
+        self.validate()?;
+        if let Some(ExecutionObservation::ExecFailed { errno, .. }) = self.execution_observation() {
+            return Err(fail(format!(
+                "configured shell exec failed (errno{errno}); retained Child status {:?}",
+                self.workload_exit()
+            )));
+        }
+        self.workload_exit().mapped()
+    }
+    pub fn matches(&self, record: &Record) -> io::Result<()> {
+        self.validate()?;
+        match self {
+            Self::V1(v) => v.matches(record),
+            Self::V2(v) => {
+                if record.execution_binding()? == ExecutionBinding::V2(v.binding.clone()) {
+                    Ok(())
+                } else {
+                    Err(fail("admitted receipt differs from original binding"))
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutionBinding {
+    V1(CommittedBinding),
+    V2(ExecutionBindingV2),
+}
+impl ExecutionBinding {
+    pub fn validate(&self) -> io::Result<()> {
+        match self {
+            Self::V1(v) => v.validate(),
+            Self::V2(v) => v.validate(),
+        }
+    }
+    pub fn digest(&self) -> io::Result<String> {
+        match self {
+            Self::V1(v) => v.digest(),
+            Self::V2(v) => v.digest(),
+        }
+    }
+    pub fn contract_version(&self) -> u8 {
+        match self {
+            Self::V1(_) => 1,
+            Self::V2(_) => 2,
+        }
+    }
+    pub fn owner_uuid(&self) -> Uuid {
+        match self {
+            Self::V1(v) => v.owner_uuid,
+            Self::V2(v) => v.owner_uuid,
+        }
+    }
+    pub fn owner_generation(&self) -> Uuid {
+        match self {
+            Self::V1(v) => v.owner_generation,
+            Self::V2(v) => v.owner_generation,
+        }
+    }
+    pub fn namespace(&self) -> &NamespaceIdentity {
+        match self {
+            Self::V1(v) => &v.namespace,
+            Self::V2(v) => &v.namespace,
+        }
+    }
+    pub fn completion_socket(&self) -> (u64, u64) {
+        match self {
+            Self::V1(v) => v.completion_socket,
+            Self::V2(v) => v.completion_socket,
+        }
+    }
+    pub fn server(&self) -> &ProcessIdentity {
+        match self {
+            Self::V1(v) => &v.server,
+            Self::V2(v) => &v.server,
+        }
+    }
+    pub fn supervisor(&self) -> &ProcessIdentity {
+        match self {
+            Self::V1(v) => &v.supervisor,
+            Self::V2(v) => &v.supervisor,
+        }
+    }
+    pub fn workload_birth(&self) -> &ProcessIdentity {
+        match self {
+            Self::V1(v) => &v.workload,
+            Self::V2(v) => &v.workload_birth,
+        }
+    }
 }

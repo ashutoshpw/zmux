@@ -18,6 +18,8 @@ use std::{
 };
 use zmux_session_runtime::child::{ExitObservation, observe_child, process_identity};
 
+#[path = "local_zellij_owner/admitted.rs"]
+mod admitted;
 #[path = "local_zellij_owner/native.rs"]
 mod native;
 #[path = "local_zellij_owner/observer.rs"]
@@ -431,16 +433,26 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     first.until(|| f.records().is_some_and(|r| r[0]["state"] == "bound"));
     let record = f.records().unwrap()[0].clone();
     assert_eq!(
+        record["completion"]["execution_contract"],
+        "admitted_lifetime_v2"
+    );
+    assert_eq!(
         record["workload"]["executable"],
-        serde_json::json!(fs::canonicalize("/bin/bash").unwrap()),
-        "bound workload must have independently executed the explicitly selected shell"
+        record["supervisor"]["executable"]
     );
     let id = record["id"].as_str().unwrap().to_owned();
     for (field, parent) in [("supervisor", "server"), ("workload", "supervisor")] {
         assert_eq!(record[field]["parent_pid"], record[parent]["pid"]);
         let identity: zmux_session_runtime::child::ProcessIdentity =
             serde_json::from_value(record[field].clone()).unwrap();
-        assert_eq!(process_identity(identity.pid).unwrap(), identity);
+        if field == "workload" {
+            assert_eq!(
+                zmux_session_runtime::child::process_lifetime(identity.pid).unwrap(),
+                (&identity).into()
+            );
+        } else {
+            assert_eq!(process_identity(identity.pid).unwrap(), identity);
+        }
     }
     first.until(|| count.exists());
     // Actual terminal input must reach the real original workload. This marker
@@ -542,7 +554,10 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
         );
         let identity: zmux_session_runtime::child::ProcessIdentity =
             serde_json::from_value(record["workload"].clone()).unwrap();
-        assert_eq!(process_identity(identity.pid).unwrap(), identity);
+        assert_eq!(
+            zmux_session_runtime::child::process_lifetime(identity.pid).unwrap(),
+            (&identity).into()
+        );
     };
     let config = runtime.join("config/config.kdl");
     let original = fs::read(&config).unwrap();
@@ -763,7 +778,7 @@ fn two_actual_frontends_consume_one_retained_completion_and_cleanup_only_its_gen
     .unwrap()
     .unwrap();
     assert_eq!(
-        terminal.workload_exit,
+        terminal.workload_exit(),
         zmux_remote_runtime::local_zellij::completion::WorkloadExit::Exited(7)
     );
     assert_eq!(
@@ -789,10 +804,10 @@ fn two_actual_frontends_consume_one_retained_completion_and_cleanup_only_its_gen
     assert_eq!(status["state"], "completed_retained");
     assert_eq!(status["completion_authenticated"], true);
     assert_eq!(
-        status["terminal_receipt"]["workload_exit"],
+        status["terminal_receipt"]["receipt"]["workload_exit"],
         serde_json::json!({"kind":"exited","value":7})
     );
-    let generation = terminal.binding.owner_generation.to_string();
+    let generation = terminal.owner_generation().to_string();
     let cleaned = fixture.output(&[
         "local-zellij",
         "cleanup",
