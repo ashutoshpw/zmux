@@ -104,3 +104,8 @@ Raw hosted failure is retained at `/tmp/zmux-main-foundation-38850609492.log`.
 Local full verification is recorded at
 `/tmp/zmux-admission-accepted-socket-check.log`; Darwin acceptance requires the
 subsequent Foundation run and is not inferred from Linux.
+
+Darwin Foundation verification for the socket-mode repair passed at `22550c1`
+in run `38851088457`. The separate Linux DOM step failed before executing DOM
+assertions because its browser version probe timed out with no output; that job
+was rerun unchanged. This does not alter the accepted Darwin admission result.

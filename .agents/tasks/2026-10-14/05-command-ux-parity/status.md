@@ -5,6 +5,22 @@
 
 ## Active implementation
 
+- Main `22550c1` Darwin Foundation checks pass in run `38851088457`, including
+  the five real execution-admission tests. Linux Rust/Clippy/notices/ABI passed,
+  then the DOM prerequisite failed because Chrome `--version` timed out with zero
+  output. Failed Linux job rerun once unchanged; retained raw log
+  `/tmp/zmux-foundation-22550c1-linux.log`. Full native build remains separate.
+- Observer4 consumer passes its isolated Linux suite but stays off main until
+  a matching readiness-capable dependency is admitted and bundled. Source review
+  identified a finite-completion race at transport-progress validation; repair
+  and a deterministic Monitor regression are underway. Existing v6 cannot satisfy
+  the new capability, so integrating the consumer alone would break native launch.
+- A02 review repairs cover offline discovery, immutable target resolution,
+  sender attribution after moves, and retained send receipts after target close.
+  Final claim exposure still needs expiry/held-state fencing and nonblocking policy
+  admission before integration. B01 production clear/delete foundation is authorized
+  in isolation after accepted physical lifecycle evidence and a real control red.
+
 - Foundation run `38850609492` at `b5557cb` exposed a Darwin-only test socket
   mode error before all five execution-admission handshakes. Accepted fixture
   sockets now explicitly use bounded blocking reads, matching production owners.
