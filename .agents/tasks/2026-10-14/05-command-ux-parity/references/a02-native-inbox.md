@@ -339,7 +339,7 @@ Run [38858063145](https://github.com/ashutoshpw/zmux/actions/runs/38858063145), 
 `41be7acd4ec26d4be064a56977db712cc4ff42e5`, passed both Swift 6 slices (87.353 s)
 and the arm64 package (259.030 s). Owned app PID 7158 exited 1 without timeout
 (5.080 s), after all three prerequisites and actual inbox/body/reply responder.
-The first new Unicode CLI send failed the generic exact attribution/body/durability
+A new Unicode CLI send failed the generic exact attribution/body/durability
 assertion before the independent Unicode oracle; stage remains `entrypoint`,
 `unicodeBytes` is empty, and `unicode_behavioral_red` is false. This is not the
 intended product regression and authorizes no Unicode production repair.
@@ -368,3 +368,29 @@ The fixture now uses supported `agent message TARGET -- -` and writes exact
 before reading the bounded response. This avoids Darwin argv string bridging.
 The exact seed assertions and selected-body oracle are unchanged. Each receipt
 records `inputTransport: stdin_utf8`; production Unicode comparisons remain unfixed.
+
+## Qualified native Unicode red and byte-preserving repair
+
+Run [38860066126](https://github.com/ashutoshpw/zmux/actions/runs/38860066126), exact
+`f0ac7a070ab05110ac4999823bca8f0e09ab7fe0`, establishes intended Unicode red.
+Both Swift 6 source slices passed (101.035 s), arm64 package built (263.564 s),
+and owned app PID 10176 exited 1 without timeout (5.986 s). All five preceding
+checks passed. Stage is `unicode_body`; failure is exactly
+`Native agent inbox: Selected canonical-equivalent message did not preserve exact UTF-8 body`.
+Runner independently qualifies `unicode_behavioral_red: true`.
+
+Both retained stdin CLI receipts preserve their independent exact literals:
+decomposed `101,204,129` and precomposed `195,169`. Selecting the actual decomposed
+row renders its exact bytes. Selecting the actual precomposed row commits selection
+but the mounted body still has the preceding decomposed bytes. Three real PTY
+children retain zero input; owned activation PID equals app PID; windows are 5/6.
+All 273 retained source hashes match frozen manifest and retained bytes. Artifacts:
+`/tmp/zmux-agent-inbox-stdin-red-38860066126/`. Archive actual SHA256:
+`6271906a6c8f3e9cf74c0b0558306fcf036815316f9ceed81dd8b5652325f80a`.
+
+The narrow production repair changes body replacement, draft capture, saved receipt
+body validation and unchanged editor clearing to exact UTF-8 comparison. The
+existing UUID, origin and revision guards remain. Queued rows with latest optional
+`delivery_unknown` retain Submission unconfirmed even when retry is authorized;
+authorization does not resolve previous exposure. Full same-command native green,
+continued journey, mounted PNG review and shutdown remain required.
