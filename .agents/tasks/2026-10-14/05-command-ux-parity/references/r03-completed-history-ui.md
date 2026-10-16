@@ -42,3 +42,7 @@ and no-launch restore have their separate Rust acceptance. V2 execution-admissio
 history decoding/presentation is a subsequent phase. No diagnostic archive is a
 full-parity release.
 This fixture does not establish full terminal selection or cmux parity.
+
+Exact-main `8d7e6e8` repeat run `38846275441` also passed all five actual native
+stages. Parent verified all 254 retained source hashes and archive integrity;
+receipt SHA256 `b6d4d70a125dfd2193fe12ebd486c5874490507ed45fd609f492e7881d8c9b4b`.

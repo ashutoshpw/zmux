@@ -5,6 +5,30 @@
 
 ## Active implementation
 
+- Corrected selection `38847301845` at `e9484ab` passes actual decoder and 24 native
+  UTF-8 clipboard cases. All 255 retained source hashes and archive integrity verified;
+  receipt `564de5478f093c81fe129858d8e640c774105c13408c1b0f131ae0d40aea74bf`.
+- Browser disposition source accepted after never-dispatched guard repair; integrated
+  as `a5f87a8` / `3c5c8c3` / `7cc53ba` / `1bb05b1`. Main Rust/CLI/Cargo sources exactly
+  equal the branch that passed full checks; coordinator merge preserves accepted
+  history ownership. New native execution remains required; not yet pushed.
+
+- `a7f06dd` Foundation run `38846559334` passes on both platforms; its full native
+  build is still running. `8d7e6e8` exact-main history run `38846275441` passes all
+  five AppKit stages with 254 retained source hashes verified. Main `e9484ab` fixes
+  the selection decoder's missing real BrowserProfileLeases source; failed selection
+  `38846273113` stopped at compilation before any cases. Corrected selection
+  `38847301845` is running with unchanged assertions.
+- V2 runtime/metadata committed on diagnostic branch as `39bb666`, native projection
+  as `89ffb94`, decoder closure correction `a2ac7a5`. Exact-source review and full
+  local checks pass; actual helper five, channel guards four, public/native Rust
+  seventeen and legacy observer two one all pass within recorded revision scopes.
+  Native history `38847303782` and retained-package runtime `38847140793` are running.
+  These commits have not been integrated into main or accepted for native behavior.
+- Browser obsolete-event disposition is under independent review; a missing
+  never-dispatched terminal-receipt guard is being repaired before integration.
+  Frontend InputReady producer and observer4 consumer work remain isolated.
+
 - Published `8d7e6e8` includes accepted V1 native history. Exact-main Foundation
   `38846237751` stopped at rustfmt on one diagnostic assertion; formatting repaired.
   Fresh full local `scripts/check` passes 343 tests/one ignored, strict workspace
