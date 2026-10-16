@@ -357,3 +357,126 @@ accepts profile deletion or unlocks production lifetime ownership.
 
 Portable Python syntax, validator positive and mutation controls, and diff whitespace
 checks pass. Swift compilation and actual macOS/WebKit execution remain pending.
+
+### V9 actual creation-path outcome
+
+Diagnostic `137255d88b31cf095a65f9bc28c2afd4cb32e670`, run `38843434898`,
+compiled with Swift 6 strict concurrency and warnings-as-errors (21.096 seconds).
+Preparer PID 7941 exposed both original `probe` and `native_created` cookies in
+both A/B public stores and JavaScript. Both native-set callbacks arrived; all four
+cookies had expiry 1792123378, domain `127.0.0.1`, root path, and false
+session-only/secure/HttpOnly flags. Both localStorage values were correct.
+Normal AppKit termination was logged, and the owned preparer was reaped with
+return code 0 before reader PID 7970 was launched from the same executable path.
+
+The fresh reader retained localStorage A/B but its two public cookie arrays and
+both JavaScript cookie strings were empty. Both native-cookie flags were false.
+The unchanged original no-removal baseline guard failed before any removal or
+cleanup; reader `nativeCookieSets` and `removals` were empty. Its owned child
+returned 1 after 2.107 seconds. There were no timeouts, log truncation or unknown
+callbacks. Acknowledged public-native creation was not a sufficient resolution
+for cookie persistence in this fixture. This identifies neither a root cause nor
+removal-specific cross-profile damage; no production lifetime decision follows.
+
+Artifact `12022810426` ZIP SHA256 is
+`f2c9592d130ff29bd9c27d7547eb67e7246344b88ee8ffa4da3f63951040d7be`.
+Its archived executable and plist bind the exact source SHA/bundle ID; five retained
+source inputs match published Git byte-for-byte and all six claimed source hashes
+match Git. The retained workflow source copy is absent because `upload-artifact`
+excludes hidden paths by default and this diagnostic workflow lacks
+`include-hidden-files: true`; its hash and exact committed source remain available.
+Independent phase/source/archive/matrix receipt is
+`/tmp/zmux-b01-native-cookie-creation-result-review-20261016.json`, SHA256
+`c4e176059d68feec87227b953ec3f4900321fc891274bb96fee451d400838bd3`.
+
+No repeat is authorized. Next cookie work is read-only investigation of fixture
+assumptions and public persistence scope: same bundle URL/ID and executable across
+both phases, identifier namespace, loopback-origin policy, and guarantees actually
+made by public APIs. Do not add delays, invent a flush contract, weaken cleanup,
+or replay/backup cookies. Current main's actual native smoke takes priority.
+
+### Read-only persistence-scope audit after V9
+
+Both recorded phases execute the identical absolute bundle executable path; the
+runner verifies unchanged executable/archive bytes before reopening. Their report
+and archived plist bind the same bundle ID/source SHA. Both phases use the same
+identifier UUID A/B, loopback URL (including its port) and nonce, and the reader
+recovers both exact localStorage values. These observations support consistent
+profile/origin access but do not independently prove the cookie backend identity.
+
+The tested origin is first-party plain HTTP on `127.0.0.1`; this is not evidence
+for HTTPS user-origin persistence. All four original/native cookies were observed
+with host `127.0.0.1`, root path, a future expiry and non-session flags. The examined
+identifier-store/profile/isPersistent docs specify persistence and restoration but
+no loopback exception or callback-based fsync guarantee. The public cookie-store
+header documents default policy Allow; the actual policy was not observed in each
+phase. Do not infer an installed-OS bug or invent a policy fix from these results.
+Further cookie experiments remain paused; native-smoke failure triage is active.
+
+### Caller-store lifetime discriminator (source prepared, no native run)
+
+The next bounded comparison changes only the preparer's direct caller lifetime:
+release both views as before, but strongly retain both exact persistent UUID store
+instances through normal `NSApplication` termination. The existing JS and native
+cookie creation, origin/bundle/identifiers, reader no-reseed assertions, 45-second
+phase limits, public cleanup after successful retention checks, and owned-process
+signal/reap behavior remain unchanged. No extra delay, policy change, private API,
+cookie replay or production mutation is added.
+
+This is motivated by public WebKit source at
+[`30281d59519dd0df7cf7b0326d31b726ddb04289`](https://github.com/WebKit/WebKit/commit/30281d59519dd0df7cf7b0326d31b726ddb04289)
+(2026-10-16). `WebsiteDataStore::~WebsiteDataStore` removes its network session;
+`NetworkProcessProxy::removeSession` sends `DestroySession`; and
+`NetworkProcess::destroySession` removes the network and cookie storage sessions.
+The separate `NetworkProcess::didClose` path iterates still-present network
+sessions and asks `platformFlushCookies` to save their cookie stores. Native
+`WebCookieManager::setCookie` acknowledges its set path separately from that save
+path. This supports a concrete hypothesis that dropping the stores before parent
+closure changes which sessions can participate in close-time persistence. It does
+not prove that this happened on the runner or that retaining a caller reference
+preserves a particular internal session.
+
+Pinned source references:
+
+- [Data-store destruction, lines195-220](https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/UIProcess/WebsiteData/WebsiteDataStore.cpp#L195).
+- [Network session removal, lines1531-1547](https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/UIProcess/Network/NetworkProcessProxy.cpp#L1531).
+- [Session destruction, lines772-792](https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/NetworkProcess/NetworkProcess.cpp#L772).
+- [Parent connection close, lines265-279](https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/NetworkProcess/NetworkProcess.cpp#L265).
+- [Cocoa cookie save path, lines256-280](https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/NetworkProcess/cocoa/NetworkProcessCocoa.mm#L256).
+- [Native cookie set acknowledgment, lines129-137](https://github.com/WebKit/WebKit/blob/30281d59519dd0df7cf7b0326d31b726ddb04289/Source/WebKit/NetworkProcess/Cookies/WebCookieManager.cpp#L129).
+
+The retained macOS15.7.9 logs do not identify the installed WebKit/CFNetwork build.
+The examined source revision is not matched to that installed implementation, and
+CFNetwork persistence remains opaque. The close-time source path is a testable
+hypothesis, not an API contract or fsync guarantee. Existing process observations
+also do not prove whether the unowned WebKit candidate belongs to these stores.
+
+The preparer now checks both original store object identities, UUIDs and persistence
+flags after view release. It records released views and retained exact caller
+stores. The synchronous `applicationWillTerminate` event repeats those actual
+reference checks, and the runner requires the exact phase/PID plus both true
+retention flags and released views before launching the reader. Neither receipt
+claims visibility into NetworkProcess state. Reader termination still requires
+released views and no direct store references, and all strict cookie/localStorage
+and public cleanup gates remain in place.
+
+Python syntax and validator controls pass: positive preparer/reader receipts;
+rejection of each missing retention/view-release fact, wrong phase/PID, duplicate
+or missing termination receipt, and the original V9 cookie-loss reader. Historical
+cookie attributes are checked at their retained observation time only. This is
+portable validation, not new native evidence. Swift compilation and one frozen
+native comparison await parent source review and separate authorization.
+
+If both cookie paths survive, the result supports caller lifetime affecting this
+fixture, but does not prove a specific internal save path or general durability.
+If either original cookie is lost, the strict baseline still fails; caller
+retention is not sufficient under the observed conditions. Neither outcome accepts
+profile deletion or changes production lifetime ownership without design review.
+
+Repository `CARGO_TARGET_DIR=target/agent-validation/profile-caller-retention/cargo
+scripts/check` passed exit 0 before freezing this comparison: formatting, workspace
+Rust tests, strict all-target Clippy, notice inventory, foreign C ABI and profile
+lease checks. Log: `/tmp/zmux-b01-caller-retention-repository-check-20261016.log`.
+No Swift compiler is available on this host; these checks do not compile or execute
+the WebKit diagnostic. The previously dirty V9 outcome/scope notes are preserved
+alongside this appendix. No push or diagnostic/native rerun has occurred.

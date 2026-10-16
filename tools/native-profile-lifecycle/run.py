@@ -48,6 +48,23 @@ def validate_creation_path(report, profile_a, profile_b, prepared=None):
                 assert abs(row['expiresAt'] - previous[row['name']]['expiresAt']) < 1
 
 
+def validate_caller_retention(report):
+    # Direct Swift caller lifetime only, not proof of internal WebKit sessions.
+    assert report['aViewReleased'] is True and report['bViewReleased'] is True
+    assert report['aStoreReleased'] is False
+    assert report['callerRetainsExactAStore'] is True and report['callerRetainsExactBStore'] is True
+
+
+def validate_termination(log, pid, phase, retain_stores=False):
+    prefix = "ZMUX_APPKIT_TERMINATION "
+    records = [json.loads(line[len(prefix):]) for line in log.splitlines() if line.startswith(prefix)]
+    expected = {"event": "application_will_terminate", "appPID": pid, "phase": phase,
+                "callerRetainsExactAStore": retain_stores, "callerRetainsExactBStore": retain_stores,
+                "viewsReleased": True}
+    assert records == [expected]
+    return records[0]
+
+
 def main():
     if sys.platform != "darwin":
         raise SystemExit("Public WebKit lifecycle feasibility requires macOS")
@@ -67,6 +84,8 @@ def main():
                "termination": "nsapplication_terminate",
                "cookie_creation_discriminator": "js_probe_and_acknowledged_native_created",
                "set_cookie_callback_is_flush_receipt": False,
+               "caller_store_lifetime_discriminator": "retain_actual_uuid_stores_through_normal_termination",
+               "caller_retention_is_network_session_receipt": False,
                "source_sha256": frozen, "nonce": nonce, "bundle_id": bundle_id,
                "profile_a": profile_a, "profile_b": profile_b,
                "platform": platform.platform(), "architecture": platform.machine(), "phases": [],
@@ -240,18 +259,12 @@ def main():
             assert report["scenario"] == SCENARIO
             assert report["termination"] == receipt["termination"]
 
-        def validate_termination(log, pid, phase):
-            prefix = "ZMUX_APPKIT_TERMINATION "
-            records = [json.loads(line[len(prefix):]) for line in log.splitlines() if line.startswith(prefix)]
-            expected = {"event": "application_will_terminate", "appPID": pid, "phase": phase}
-            assert records == [expected]
-            return records[0]
-
         validate_identity(prepared, owned_groups[-1]["pid"])
-        receipt["preparation_termination"] = validate_termination(preparation_log, prepared["appPID"], "prepare")
+        receipt["preparation_termination"] = validate_termination(preparation_log, prepared["appPID"], "prepare", retain_stores=SCENARIO == "baseline")
         assert prepared["phase"] == "prepare" and prepared["state"] == "prepared" and prepared["stage"] == "prepared_for_fresh_process"
         assert all(prepared[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "separateBRetained"))
         if SCENARIO == "baseline":
+            validate_caller_retention(prepared)
             assert prepared["removals"] == [] and not prepared.get("aDataRemoval")
             assert prepared["aCookieStoreObservation"] and prepared["bCookieStoreObservation"]
             validate_creation_path(prepared, profile_a, profile_b)

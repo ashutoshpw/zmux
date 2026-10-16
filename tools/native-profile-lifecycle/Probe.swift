@@ -47,6 +47,9 @@ private struct Report: Codable, Sendable {
     var mountedA = false
     var aViewReleased: Bool?
     var aStoreReleased: Bool?
+    var bViewReleased: Bool?
+    var callerRetainsExactAStore: Bool?
+    var callerRetainsExactBStore: Bool?
     var heldDataRetained = false
     var heldAObservation: String?
     var reopenedAEmpty = false
@@ -81,6 +84,7 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
     private weak var retiredAView: WKWebView?
     private weak var retiredAStore: WKWebsiteDataStore?
     private weak var retiredBView: WKWebView?
+    private weak var retiredBStore: WKWebsiteDataStore?
     private var navigation: [ObjectIdentifier: CheckedContinuation<Void, any Error>] = [:]
 
     init(output: URL, fixture: URL, nonce: String, a: UUID, b: UUID, phase: String, preparation: URL, scenario: String) {
@@ -95,8 +99,17 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { await run() }
     }
+    private func callerRetainsExactStore(_ store: WKWebsiteDataStore?, retired: WKWebsiteDataStore?, profile: UUID) -> Bool {
+        guard let store, let retired else { return false }
+        return store === retired && store.identifier == profile && store.isPersistent
+    }
     func applicationWillTerminate(_ notification: Notification) {
-        let line = "ZMUX_APPKIT_TERMINATION {\"event\":\"application_will_terminate\",\"appPID\":\(getpid()),\"phase\":\"\(report.phase)\"}\n"
+        // Public caller references only: this does not observe NetworkProcess
+        // sessions, cookie writes or a durability/flush completion.
+        let aRetained = callerRetainsExactStore(aStore, retired: retiredAStore, profile: report.profileA)
+        let bRetained = callerRetainsExactStore(bStore, retired: retiredBStore, profile: report.profileB)
+        let viewsReleased = aView == nil && bView == nil && retiredAView == nil && retiredBView == nil
+        let line = "ZMUX_APPKIT_TERMINATION {\"event\":\"application_will_terminate\",\"appPID\":\(getpid()),\"phase\":\"\(report.phase)\",\"callerRetainsExactAStore\":\(aRetained ? "true" : "false"),\"callerRetainsExactBStore\":\(bRetained ? "true" : "false"),\"viewsReleased\":\(viewsReleased ? "true" : "false")}\n"
         FileHandle.standardError.write(Data(line.utf8))
     }
     private func save() async throws {
@@ -314,17 +327,19 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         report.stage = "cookie_store_observation_received"
         try await save()
     }
-    private func dropB() async throws {
+    private func dropB(retainStore: Bool = false) async throws {
         retiredBView = bView
+        retiredBStore = bStore
         bView?.stopLoading()
         bView?.navigationDelegate = nil
         bView?.removeFromSuperview()
         bView = nil
-        bStore = nil
+        if !retainStore { bStore = nil }
         let deadline = ContinuousClock.now + .seconds(5)
         while retiredBView != nil, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(32))
         }
+        report.bViewReleased = retiredBView == nil
         guard retiredBView == nil else { throw ProbeFailure(description: "Released B WKWebView still exists; cleanup prerequisite is unproven") }
     }
     private func runFreshProcess() async throws {
@@ -419,9 +434,19 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
                       report.nativeCookieSets.count == 2, report.nativeCookieSets.allSatisfy(\.callbackReceived) else {
                     throw ProbeFailure(description: "Native creation path did not seed exact A/B cookies")
                 }
-                dropA()
+                // This comparison changes caller-store lifetime only. Release
+                // both views as before, keeping the same UUID store instances
+                // strongly held until normal AppKit termination.
+                dropA(retainStore: true)
                 try await observeARelease()
-                try await dropB()
+                try await dropB(retainStore: true)
+                report.callerRetainsExactAStore = callerRetainsExactStore(aStore, retired: retiredAStore, profile: report.profileA)
+                report.callerRetainsExactBStore = callerRetainsExactStore(bStore, retired: retiredBStore, profile: report.profileB)
+                guard report.aViewReleased == true, report.bViewReleased == true,
+                      report.aStoreReleased == false,
+                      report.callerRetainsExactAStore == true, report.callerRetainsExactBStore == true else {
+                    throw ProbeFailure(description: "Preparer requires released views and both exact caller-retained stores")
+                }
                 report.state = "prepared"
                 report.stage = "prepared_for_fresh_process"
                 try await save()
