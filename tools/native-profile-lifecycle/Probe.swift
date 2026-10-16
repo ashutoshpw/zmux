@@ -16,7 +16,7 @@ private struct DataRemoval: Codable, Sendable {
     let dataTypes: [String]
     var callbackReceived = false
 }
-private struct CookieObservation: Codable, Sendable {
+private struct CookieObservation: Codable, Sendable, Equatable {
     let name: String
     let value: String
     let domain: String
@@ -64,6 +64,9 @@ private struct Report: Codable, Sendable {
     var aNativeCookieRetained = false
     var bNativeCookieRetained = false
     var aDataRemoval: DataRemoval?
+    var inactiveAClearVerified = false
+    var inactiveAClearObservation: String?
+    var inactiveAClearUsesExactStore = false
     var removals: [Removal] = []
     var failure: String?
 }
@@ -123,12 +126,15 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
     }
     private func makeView(profile: UUID, x: CGFloat) -> (WKWebsiteDataStore, WKWebView) {
         let store = WKWebsiteDataStore(forIdentifier: profile)
+        return (store, makeView(store: store, x: x))
+    }
+    private func makeView(store: WKWebsiteDataStore, x: CGFloat) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = store
         let view = WKWebView(frame: NSRect(x: x, y: 0, width: 630, height: 470), configuration: configuration)
         view.navigationDelegate = self
         window.contentView?.addSubview(view)
-        return (store, view)
+        return view
     }
     private func load(_ view: WKWebView) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -231,6 +237,30 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         report.stage = "inactive_a_data_remove_callback_received"
         try await save()
     }
+    private func verifyInactiveAClear() async throws {
+        guard let store = aStore, store.identifier == report.profileA, store.isPersistent,
+              aView == nil, retiredAView == nil, report.aDataRemoval?.callbackReceived == true else {
+            throw ProbeFailure(description: "Clear verification requires the exact retained inactive A store")
+        }
+        // Reuse the existing store; do not create/retrieve a UUID store before
+        // independently observing clear's result and then removing its namespace.
+        aView = makeView(store: store, x: 0)
+        guard let view = aView, view.configuration.websiteDataStore === store else {
+            throw ProbeFailure(description: "Clear verification did not use the retained A store")
+        }
+        report.inactiveAClearUsesExactStore = true
+        try await load(view)
+        let observation = try await evaluate(aView,
+            "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:document.cookie===''})")
+        report.inactiveAClearObservation = String(observation.prefix(4096))
+        report.aCookieStoreObservation = try await readCookies(store)
+        report.inactiveAClearVerified = observation == "{\"empty\":true,\"cookie\":true}" && report.aCookieStoreObservation?.isEmpty == true
+        guard report.inactiveAClearVerified else {
+            throw ProbeFailure(description: "All-data clear did not empty exact A cookies and localStorage before namespace removal")
+        }
+        report.stage = "inactive_a_clear_independently_verified"
+        try await save()
+    }
     private func loadA() async throws {
         (aStore, aView) = makeView(profile: report.profileA, x: 0)
         guard let view = aView else { throw ProbeFailure(description: "A reopen is absent") }
@@ -243,7 +273,7 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
     }
     private func reopenA() async throws {
         try await loadA()
-        let observation = try await evaluate(aView, "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:!document.cookie.includes('probe=')})")
+        let observation = try await evaluate(aView, "JSON.stringify({empty:localStorage.getItem('probe')===null,cookie:document.cookie===''})")
         report.reopenedAObservation = String(observation.prefix(4096))
         report.reopenedAEmpty = observation == "{\"empty\":true,\"cookie\":true}"
         report.reopenedAStorageObservation = String(try await evaluate(aView,
@@ -361,7 +391,8 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
               prepared.profileA == report.profileA, prepared.profileB == report.profileB, prepared.appPID != getpid(),
               prepared.separateBRetained,
               (report.scenario == "baseline" ? prepared.heldDataRetained && prepared.removals.isEmpty && prepared.aDataRemoval == nil
-                : prepared.reopenedAEmpty && prepared.aDataRemoval?.callbackReceived == true) else {
+                : prepared.inactiveAClearVerified && prepared.inactiveAClearUsesExactStore &&
+                    prepared.aCookieStoreObservation?.isEmpty == true && prepared.aDataRemoval?.callbackReceived == true) else {
             throw ProbeFailure(description: "Fresh process does not match the completed exact preparation")
         }
         report.preparerPID = prepared.appPID
@@ -386,6 +417,11 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             try requireComparableCookieStores()
             guard report.aNativeCookieRetained, report.bNativeCookieRetained, report.nativeCookieSets.isEmpty else {
                 throw ProbeFailure(description: "Fresh-process baseline did not preserve native-created A/B cookies")
+            }
+        } else {
+            guard report.aCookieStoreObservation?.isEmpty == true, report.nativeCookieSets.isEmpty,
+                  report.bCookieStoreObservation == prepared.bCookieStoreObservation else {
+                throw ProbeFailure(description: "Fresh-process removal changed A emptiness or B cookie attributes")
             }
         }
         report.stage = "fresh_process_data_verified"
@@ -465,17 +501,28 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             dropA(retainStore: true)
             try await observeARelease()
             try await clearInactiveAData()
+            try await verifyInactiveAClear()
+            dropA(retainStore: true)
+            try await observeARelease()
             dropA()
             try await observeARelease()
             let released = try await remove(report.profileA, phase: "released_a_remove")
             guard released.errorDomain == nil else { throw ProbeFailure(description: "Public removal after releasing A failed; see exact callback error") }
-            try await reopenA()
+            // A remains absent after its removal callback; only the fresh reader
+            // may recreate it. Keep B's original store through normal termination.
             try await observeBData()
-            guard report.reopenedAEmpty, report.separateBRetained else { throw ProbeFailure(description: "Removal/recreation did not preserve profile isolation") }
-            dropA()
-            try await observeARelease()
-            try await dropB()
-            // Preserve B for the separate reader. Preparation is not fresh-process proof.
+            report.bCookieStoreObservation = try await readCookies(bStore)
+            guard report.separateBRetained, report.bCookieStoreObservation?.count == 1 else {
+                throw ProbeFailure(description: "A clear/removal did not preserve B's original cookie and localStorage")
+            }
+            try await dropB(retainStore: true)
+            report.callerRetainsExactAStore = callerRetainsExactStore(aStore, retired: retiredAStore, profile: report.profileA)
+            report.callerRetainsExactBStore = callerRetainsExactStore(bStore, retired: retiredBStore, profile: report.profileB)
+            guard report.aViewReleased == true, report.bViewReleased == true, aStore == nil,
+                  report.callerRetainsExactAStore == false, report.callerRetainsExactBStore == true else {
+                throw ProbeFailure(description: "Removal preparation requires absent A and exact retained B with released views")
+            }
+            // Preparation is not fresh-process proof.
             report.state = "prepared"
             report.stage = "prepared_for_fresh_process"
             try await save()

@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 INPUTS = ("tools/native-profile-lifecycle/Probe.swift", "tools/native-profile-lifecycle/run.py",
           ".github/workflows/profile-lifecycle-probe.yml", "tools/terminal-feasibility/run.py",
           "scripts/process_group.py", "LICENSE")
-SCENARIO = "baseline"
+SCENARIO = "clear"
 
 
 def digest(path):
@@ -55,11 +55,48 @@ def validate_caller_retention(report):
     assert report['callerRetainsExactAStore'] is True and report['callerRetainsExactBStore'] is True
 
 
-def validate_termination(log, pid, phase, retain_stores=False):
+def validate_removal_preparation(report, profile_a, profile_b):
+    assert report['profileA'].lower() == profile_a.lower() and report['profileB'].lower() == profile_b.lower()
+    assert report['aViewReleased'] is True and report['bViewReleased'] is True
+    assert report['callerRetainsExactAStore'] is False and report['callerRetainsExactBStore'] is True
+    assert report['inactiveAClearUsesExactStore'] is True and report['inactiveAClearVerified'] is True
+    assert json.loads(report['inactiveAClearObservation']) == {'empty': True, 'cookie': True}
+    assert report['aCookieStoreObservation'] == [] and report['nativeCookieSets'] == []
+    assert report['aDataRemoval']['scope'] == 'profile_a_all_website_data'
+    assert report['aDataRemoval']['callbackReceived'] is True and report['aDataRemoval']['dataTypes']
+    assert [row['phase'] for row in report['removals']] == ['mounted_a_remove', 'released_a_remove']
+    mounted, released = report['removals']
+    assert mounted['callbackReceived'] is True and mounted.get('errorDomain')
+    assert released['callbackReceived'] is True and not released.get('errorDomain')
+    assert report['heldDataRetained'] is True and report['separateBRetained'] is True
+    validate_unchanged_b_cookie(report)
+
+
+def validate_unchanged_b_cookie(report, prepared=None):
+    cookies = report['bCookieStoreObservation']
+    assert len(cookies) == 1
+    cookie = cookies[0]
+    assert cookie['name'] == 'probe' and cookie['value'] == 'B'
+    assert cookie['domain'] == '127.0.0.1' and cookie['path'] == '/'
+    assert not cookie['sessionOnly'] and not cookie['secure'] and not cookie['httpOnly']
+    assert isinstance(cookie['expiresAt'], (int, float)) and cookie['expiresAt'] > time.time()
+    if prepared is not None:
+        assert cookies == prepared['bCookieStoreObservation']
+
+
+def validate_removed_reader(report, prepared):
+    assert report['reopenedAEmpty'] is True and report['separateBRetained'] is True
+    assert report['aCookieStoreObservation'] == [] and report['nativeCookieSets'] == []
+    assert json.loads(report['reopenedAStorageObservation']) == {'localValue': None, 'cookieValue': ''}
+    assert json.loads(report['separateBStorageObservation']) == {'localValue': 'B', 'cookieValue': 'probe=B'}
+    validate_unchanged_b_cookie(report, prepared)
+
+
+def validate_termination(log, pid, phase, retain_a=False, retain_b=False):
     prefix = "ZMUX_APPKIT_TERMINATION "
     records = [json.loads(line[len(prefix):]) for line in log.splitlines() if line.startswith(prefix)]
     expected = {"event": "application_will_terminate", "appPID": pid, "phase": phase,
-                "callerRetainsExactAStore": retain_stores, "callerRetainsExactBStore": retain_stores,
+                "callerRetainsExactAStore": retain_a, "callerRetainsExactBStore": retain_b,
                 "viewsReleased": True}
     assert records == [expected]
     return records[0]
@@ -82,9 +119,9 @@ def main():
     receipt = {"schema_version": 1, "state": "starting", "source_sha": source,
                "scenario": SCENARIO,
                "termination": "nsapplication_terminate",
-               "cookie_creation_discriminator": "js_probe_and_acknowledged_native_created",
+               "cookie_creation_discriminator": ("js_probe_and_acknowledged_native_created" if SCENARIO == "baseline" else "original_js_probe_only"),
                "set_cookie_callback_is_flush_receipt": False,
-               "caller_store_lifetime_discriminator": "retain_actual_uuid_stores_through_normal_termination",
+               "caller_store_lifetime_discriminator": ("retain_actual_a_b_stores" if SCENARIO == "baseline" else "a_removed_retain_actual_b_store"),
                "caller_retention_is_network_session_receipt": False,
                "source_sha256": frozen, "nonce": nonce, "bundle_id": bundle_id,
                "profile_a": profile_a, "profile_b": profile_b,
@@ -260,7 +297,7 @@ def main():
             assert report["termination"] == receipt["termination"]
 
         validate_identity(prepared, owned_groups[-1]["pid"])
-        receipt["preparation_termination"] = validate_termination(preparation_log, prepared["appPID"], "prepare", retain_stores=SCENARIO == "baseline")
+        receipt["preparation_termination"] = validate_termination(preparation_log, prepared["appPID"], "prepare", retain_a=SCENARIO == "baseline", retain_b=True)
         assert prepared["phase"] == "prepare" and prepared["state"] == "prepared" and prepared["stage"] == "prepared_for_fresh_process"
         assert all(prepared[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "separateBRetained"))
         if SCENARIO == "baseline":
@@ -269,12 +306,7 @@ def main():
             assert prepared["aCookieStoreObservation"] and prepared["bCookieStoreObservation"]
             validate_creation_path(prepared, profile_a, profile_b)
         else:
-            assert prepared["reopenedAEmpty"]
-            assert prepared["aDataRemoval"]["scope"] == "profile_a_all_website_data"
-            assert prepared["aDataRemoval"]["callbackReceived"] and prepared["aDataRemoval"]["dataTypes"]
-            assert [item["phase"] for item in prepared["removals"]] == ["mounted_a_remove", "released_a_remove"]
-            assert all(item["callbackReceived"] for item in prepared["removals"])
-            assert prepared["removals"][0].get("errorDomain") and not prepared["removals"][1].get("errorDomain")
+            validate_removal_preparation(prepared, profile_a, profile_b)
         # The unchanged owned runner closes/reaps each phase before returning.
         # Inspect the retained child handle, never infer exit from a reused PID.
         assert owned_processes[-1].returncode == 0 and owned_processes[-1].poll() == 0
@@ -293,12 +325,12 @@ def main():
         receipt["reopen_termination"] = validate_termination(reopen_log, report["appPID"], "reopen")
         assert report["appPID"] != prepared["appPID"] and report["preparerPID"] == prepared["appPID"]
         assert report["phase"] == "reopen" and report["state"] == "complete" and report["stage"] == "public_cleanup_complete"
-        assert report["separateBRetained"] and report["aViewReleased"]
+        assert report["separateBRetained"] and report["aViewReleased"] and report["bViewReleased"]
         if SCENARIO == "baseline":
             assert report["heldDataRetained"]
             validate_creation_path(report, profile_a, profile_b, prepared)
         else:
-            assert report["reopenedAEmpty"]
+            validate_removed_reader(report, prepared)
         assert [item["phase"] for item in report["removals"]] == ["cleanup_a", "cleanup_b"]
         assert all(item["callbackReceived"] and not item.get("errorDomain") for item in report["removals"])
         assert owned_processes[-1].returncode == 0 and owned_processes[-1].poll() == 0
