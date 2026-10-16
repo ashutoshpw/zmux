@@ -59,3 +59,18 @@ Combined Rust owner checks at preceding97965e3 pass387 tests plus strict Clippy,
 notices and both ABI checks; terminal changes alter no Rust/C input. Exact combined
 main native acceptance remains separate. Physical mouse/VoiceOver, optional engine
 wrap metadata, persistent anchors, autoscroll and full terminal parity remain open.
+
+## Exact-main acceptance
+
+Run `38854903069` at `46422efc6e34ab26f4475f06bd7db8837204f8aa`
+passes all32 native clipboard cases, production decoder and shared shutdown.
+Independent review verifies all266 retained source hashes against Git, all phase
+exit codes and complete logs, child9529/app9454 and per-phase nonce/parent identity,
+archive integrity/source plist and the decoder-linked archived bridge. Native phase
+completed in9.415s without timeout.
+
+Archive SHA256: `03cfb4407dda0f1a27c9ee16f0e80dd9873fbe87d7e71a8ab2d5f07d62a3a5c3`.
+Bridge SHA256: `41729db15a5945eb99fc7b28790223ee31c45d8158e62f81b74e6ed94a2688eb`.
+Review: `/tmp/zmux-main-selection-independent-review.json`.
+Foundation run `38854903306` also passes at this SHA. This focused ARM64
+acceptance leaves the listed terminal gates and full-product acceptance open.

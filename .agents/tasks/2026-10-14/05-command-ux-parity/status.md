@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Exact-main46422ef terminal-selection run38854903069 passes32 native clipboard
+  cases, decoder and shared shutdown. Independently verified266 source hashes,
+  archive/source plist/linked bridge and actual app/child identity. Foundation
+  run38854903306 passes. Full-product/native acceptance remains separate.
+- Native inbox baseline63e6ab9 run38854940772 reaches the intended missing
+  Agent Inbox entrypoint failure after real window focus, global/closed-recipient
+  message records and zero terminal-input prerequisites pass. Production inbox
+  implementation continues in its isolated worktree.
+
 - T01 wrapped-word selection integrated as `a6c8e3b`/`a14d94d` after actual native
   red `38853562903` and green `38854246653`. All32 clipboard cases and shared
   shutdown pass;266 source hashes/archive/bridge verified. Production terminal
