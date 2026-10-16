@@ -476,7 +476,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
 
     func windowKeyChanged(_ host: MainWindowHost, key: Bool) {
         if key { host.installMenus() }
-        guard host.nativeReady, let token = host.nativeToken else { return }
+        guard shutdownTask == nil, host.nativeReady, let token = host.nativeToken else { return }
         enqueue(.windowEvent(NativeWindowEvent(event: "key", token: token, key: key)))
     }
 

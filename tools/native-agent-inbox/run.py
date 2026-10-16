@@ -280,6 +280,9 @@ def main():
                 or any(row['expected'] != row['observed'] for row in proofs)
                 or proofs[0]['expected'] == proofs[1]['expected']):
             raise RuntimeError('Native mounted/editor/saved Unicode bytes differ from independent literals')
+        png = (root / 'native-agent-inbox.png').read_bytes()
+        if len(png) > 8_388_608 or png[:8] != b'\x89PNG\r\n\x1a\n' or len(png) < 33 or png[25] != 2:
+            raise RuntimeError('Native inbox capture must retain opaque native RGB pixels')
         known = result.get('knownLockRefusal', {})
         capacity = result.get('capacityRefusal', {})
         later_draft = proofs[2]['expected'] + list(b'edited while saving')

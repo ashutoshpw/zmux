@@ -490,3 +490,44 @@ read for known refusal, actual capacity -5 proof and final original Saved recove
 Each action requires the same UUID/draft and Send disabled; exact -5 and late Saved
 remain mandatory. No Send is replayed, no automatic native retry or production
 timing changes are added. Explicit status action counts are retained and bounded.
+
+## All native behavior passes; shared shutdown callback remains
+
+Run [38866008965](https://github.com/ashutoshpw/zmux/actions/runs/38866008965), exact
+`fc432b7d7a036d8d7776d95d4863dd0cd834771b`, passes both Swift 6 slices
+(107.071 s), arm64 package (308.903 s), and all 15 actual behavioral checks.
+The independent public socket owner proves original request
+`92c93cc6-a822-43c2-8156-1cdec62b2a35` pending and four queued controls still pending.
+Actual capacity -5 preserves that UUID and exact 66-byte draft, Send disabled and
+Check Status enabled. One explicit capacity read and one recovery read yield
+exactly one late Saved reply; the unchanged editor clears. Known status needs
+zero explicit reads in this run and retains the authoritative refusal/draft.
+Two saved reply IDs are retained, all original parent/thread/sender/recipient and
+queued state checks pass, and fresh independent PTY progress proves zero input.
+Owned app PID 9283, independent helper PID 9282 exits 0. All 273 retained hashes
+match the freeze; archive SHA256:
+`7c91c9ac2c99afffd9d789e89a2048b2346224c87bb9470a678737ea439b99b3`.
+
+The app then exits 1 without timeout (24.204 s) during shared shutdown with
+`The application desktop is closed; the command was not accepted`. Source shows
+continuation.finish precedes closing the key inbox; synchronous main-window key
+callbacks can enqueue after closure and become fatal shutdownNativeIssues. Parent
+owns coordination of the shared repair; do not claim full native green yet.
+
+The mounted content PNG is retained, but NSView cacheDisplay leaves the NSWindow
+background transparent. The fixture now composites those actual native pixels
+over that actual window's background color in its effective drawing appearance
+and writes opaque RGB PNG, so text/icons remain readable in default viewers.
+Runner verifies opaque PNG encoding. Shutdown-failure diagnostics retain zero
+input without demanding heartbeat progress after the shared owner stopped PTYs;
+the mandatory fresh pre-shutdown progress check remains unchanged.
+
+Current main `76e8114` was inspected read-only and has the same missing key-event
+shutdown admission guard (alongside newer pointer cancellation on resign). The
+feature branch adds only `shutdownTask == nil` to the existing nativeReady/token
+guard in `windowKeyChanged`, after presentation/gesture cleanup. This prevents
+system key callbacks from enqueueing into the deliberately finished command
+stream. It preserves user-command refusal reporting, startup/bridge ownership,
+native cleanup tickets and current main's pointer path. Other owners were informed;
+no other worktree or main edit occurred. The committed actual full-behavior/failed-
+shutdown receipt precedes this narrow production repair.
