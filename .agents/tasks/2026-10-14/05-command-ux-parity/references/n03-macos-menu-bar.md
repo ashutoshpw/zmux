@@ -116,10 +116,18 @@ The existing packaged sidebar suite now additionally exercises the actual system
 status button/menu, context attention/UUID actions on an inactive workspace,
 notifications in another real window, arrivals after menu opening, exact preview
 activation, minimized-window restoration and keep-awake release. It retains the
-actual icon PNG and `native-status-menu.json`; all nine additional flags and
+actual icon PNG and `native-status-menu.json`; all ten additional flags and
 post-shutdown item/assertion removal are required. No Save-dialog/Accessibility
 test is added or re-enabled. Hosted execution remains pending.
 
 Full search, task manager, Sleepy Mode, profiling, preferences, verified updating,
 cloud VM creation/machine menus and menu-bar-only preferences remain open. There
 are no inert menu entries claiming those owners are implemented.
+
+Native run `38903386218` at `96e13ea` passes both Swift slices and host packaging,
+then fails on the actual preview lookup after captured mutations: the closed
+status menu still held its old items. Physical app/socket cleanup and PID absence
+pass; no app artifact is published. `menuDidClose` now applies coalesced snapshot
+changes immediately, including when the Desktop becomes quiet after clearing.
+The same fixture remains unchanged. Early Show actions also wait for a pending
+window's native-ready receipt; they must not create a duplicate startup window.

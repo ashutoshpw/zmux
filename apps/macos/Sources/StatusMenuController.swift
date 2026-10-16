@@ -65,6 +65,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         tracking = false
+        // A quiet Desktop may publish no further snapshot after dismissal.
+        // Apply changes coalesced during tracking now, rather than waiting for
+        // another terminal event to refresh the closed menu's entries.
+        if renderedState != menuState { rebuild() }
     }
 
     private func rebuild() {
@@ -242,9 +246,11 @@ extension StatusMenuController {
         }
         func entry(_ menu: NSMenu, _ id: String) throws -> NSMenuItem {
             menu.update()
-            guard let item = menu.items.first(where: { $0.identifier?.rawValue == id }), item.isEnabled else {
-                throw BridgeFailure(message: "Native menu action unavailable: " + id)
+            guard let item = menu.items.first(where: { $0.identifier?.rawValue == id }) else {
+                let entries = menu.items.compactMap { $0.identifier?.rawValue }.joined(separator: ", ")
+                throw BridgeFailure(message: "Native menu action missing: \(id); entries: \(entries)")
             }
+            guard item.isEnabled else { throw BridgeFailure(message: "Native menu action disabled: " + id) }
             return item
         }
         func invoke(_ menu: NSMenu, _ item: NSMenuItem) throws {

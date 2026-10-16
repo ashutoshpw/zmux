@@ -114,6 +114,8 @@ def main():
             time.sleep(0.05)
         if socket.exists():
             raise RuntimeError("Sidebar fixture exited without removing its owned control socket")
+        if not report.is_file():
+            raise RuntimeError("Native sidebar/status assertions did not publish a success receipt; inspect native-sidebar.stderr.log")
         result = json.loads(report.read_text())
         required = ("compact_toolbar", "visible_toggle", "groups", "group_menus",
                     "collapse_preserves_terminal", "focus_preserved", "sidebar_restored",

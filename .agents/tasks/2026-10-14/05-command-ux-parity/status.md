@@ -5,6 +5,17 @@
 
 ## Active implementation
 
+- Status/native run `38903386218` at `96e13ea` passes both Swift slices and package
+  build, then catches a closed-menu refresh gap after captured clear/read actions.
+  `menuDidClose` now applies the retained snapshot without requiring a new event;
+  assertions are retained. Actual app/socket cleanup and PID absence pass on the
+  failed run; no downloadable app artifact is published. Native revalidation is
+  required after this repair. Early Show waits for a pending window-ready receipt
+  rather than creating a duplicate startup window.
+  Full `scripts/check` passes after repair; log
+  `/tmp/zmux-status-menu-refresh-check-2.log`. The preceding run terminated with
+  signal143 and is not counted as passing; the unchanged verification rerun passes.
+
 - Status-menu implementation now creates the actual NSStatusItem, original
   attention icon and shared notification previews/read/clear/open actions, restores
   windows, exposes Cloud Account and owns an IOKit keep-awake assertion. Context
