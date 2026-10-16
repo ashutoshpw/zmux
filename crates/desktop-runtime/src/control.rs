@@ -1041,7 +1041,7 @@ fn list_surfaces(snapshot: &Snapshot, pane_id: PaneId) -> Result<Value, (&'stati
     let surfaces: Vec<_> = pane.surfaces.iter().map(|surface| {
                 let frame = surface.session_id.and_then(|id| frame_for(snapshot, id));
                 json!({"window_id":window, "window_uuid":snapshot.model.object_uuid(TargetKind::Window, window.0), "workspace_id":workspace.id, "pane_id":pane_id, "surface_id": surface.id, "surface_uuid": snapshot.model.object_uuid(TargetKind::Surface, surface.id.0), "surface_ref": format!("surface:{}", surface.id.0), "session_id": surface.session_id, "title": surface.title,
-                    "cwd": surface.cwd, "remote": surface.remote, "kind": surface.kind, "url": surface.url, "browser_profile_id": surface.browser_profile_id, "selected": pane.selected_surface == surface.id,
+                    "cwd": surface.cwd, "remote": surface.remote, "kind": surface.kind, "url": surface.url, "browser_profile_id": surface.browser_profile_id, "file": surface.file, "selected": pane.selected_surface == surface.id,
                     "process_id": frame.and_then(|f| f.process_id), "starting": surface.session_id.is_some() && frame.is_none_or(|f| f.starting),
                     "state": frame.and_then(|f| f.snapshot.as_ref()).map(|s| state_name(s.state)),
                     "failure": frame.and_then(|f| f.failure.clone())})

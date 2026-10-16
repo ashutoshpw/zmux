@@ -26,7 +26,9 @@ pub mod targets;
 pub mod todo;
 pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Navigation};
 use surfaces::PendingRestore;
-pub use surfaces::{ClosedContent, ClosedItem, Surface, SurfaceKind};
+pub use surfaces::{
+    ClosedContent, ClosedItem, FileMode, FileSurface, MAX_FILE_PATH_BYTES, Surface, SurfaceKind,
+};
 
 pub const MAX_WORKSPACES: usize = 32;
 pub const MAX_PANES_PER_WORKSPACE: usize = 64;
@@ -47,7 +49,7 @@ identifier!(SurfaceId);
 identifier!(WindowId);
 identifier!(WorkspaceGroupId);
 
-pub const MODEL_VERSION: u32 = 6;
+pub const MODEL_VERSION: u32 = 7;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
 pub const MAX_CLOSED_ITEMS: usize = 32;
 
@@ -269,6 +271,20 @@ pub enum Action {
         url: String,
         #[serde(default = "default_focus")]
         focus: bool,
+    },
+    /// Trusted opener only: the path must come from a canonicalising probe, so the
+    /// desktop rejects this on every public action path.
+    CreateFile {
+        pane_id: PaneId,
+        path: String,
+        mode: FileMode,
+        #[serde(default = "default_focus")]
+        focus: bool,
+    },
+    /// Trusted native host only (like `ObserveBrowser`): sets the dirty mirror.
+    ObserveFile {
+        surface_id: SurfaceId,
+        dirty: bool,
     },
     NavigateBrowser {
         surface_id: SurfaceId,
@@ -538,6 +554,15 @@ impl WorkspaceStore {
             } => {
                 self.focus_window(window_id)?;
                 self.surface_action(Action::ReopenClosed { closed_id }, &mut effects)?;
+            }
+            Action::ObserveFile { surface_id, dirty } => {
+                if !self.observe_file(surface_id, dirty)? {
+                    // Idempotent absolute-state write: no change, no new revision.
+                    return Ok(Transition {
+                        revision: self.state.revision,
+                        effects,
+                    });
+                }
             }
             Action::CreateWorkspace { name } => {
                 self.create_workspace(name, None, true, &mut effects)?

@@ -634,13 +634,21 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     private var mouseOrigin: NSPoint?
     private let titleLabel = NSTextField(labelWithString: "")
 
+    private static func symbolName(for kind: String) -> String {
+        switch kind {
+        case "browser": return "globe"
+        case "file": return "doc.text"
+        default: return "terminal"
+        }
+    }
+
     init(surface: Surface, paneID: UInt64, namespace: UUID, selected: Bool, owner: MainWindowHost) {
         self.surface = surface
         self.paneID = paneID
         self.namespace = namespace
         self.owner = owner
         super.init(color: selected ? ZmuxPalette.terminal : ZmuxPalette.chrome)
-        let icon = NSImageView(image: NSImage(systemSymbolName: surface.kind == "browser" ? "globe" : "terminal", accessibilityDescription: nil) ?? NSImage())
+        let icon = NSImageView(image: NSImage(systemSymbolName: Self.symbolName(for: surface.kind), accessibilityDescription: nil) ?? NSImage())
         icon.contentTintColor = selected ? .labelColor : ZmuxPalette.subdued
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         let title = titleLabel

@@ -28,6 +28,7 @@ fn validate(value: Value) -> Result<ValidatedSessionDocument, String> {
         .validate(RestoreLimits {
             terminals: 8,
             browsers: 8,
+            files: 16,
         })
         .map_err(|e| e.to_string())
 }
@@ -102,7 +103,8 @@ fn descriptor_admission_rejects_old_versions_and_malformed_or_executable_payload
         parsed
             .validate(RestoreLimits {
                 terminals: 0,
-                browsers: 8
+                browsers: 8,
+                files: 16,
             })
             .is_err()
     );
@@ -189,6 +191,7 @@ fn provisional_reservations_burn_ids_without_publishing_or_relaunching_and_prepa
             .validate(RestoreLimits {
                 terminals: 8,
                 browsers: 8,
+                files: 16,
             })
             .unwrap(),
         &[SessionId(1000), SessionId(1001), SessionId(1002)],

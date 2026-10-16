@@ -63,7 +63,51 @@ use zmux_workspace_core::{
 
 pub const MAX_TERMINALS: usize = 8;
 pub const MAX_BROWSERS: usize = 4;
+/// Desktop-wide cap on file tabs, beside the terminal and browser caps.
+pub const MAX_FILE_SURFACES: usize = 16;
 const MAX_COMMANDS: usize = 32;
+
+/// File tabs name local paths that only a canonicalising opener may choose, and their
+/// dirty bit may only come from the native view that holds the unsaved text.
+fn is_trusted_file_action(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::CreateFile { .. } | Action::ObserveFile { .. }
+    )
+}
+fn trusted_file_action_error() -> DesktopError {
+    DesktopError::Failure(
+        "file surfaces require the trusted file opener and native document owner".into(),
+    )
+}
+/// Browser and file tabs hold no process, so each has its own desktop-wide cap.
+fn ensure_surface_caps(model: &Model) -> Result<(), DesktopError> {
+    use zmux_workspace_core::SurfaceKind;
+    let (mut browsers, mut files) = (0, 0);
+    for surface in model
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .flat_map(|p| &p.surfaces)
+    {
+        match surface.kind {
+            SurfaceKind::Browser => browsers += 1,
+            SurfaceKind::File => files += 1,
+            SurfaceKind::Terminal => {}
+        }
+    }
+    if browsers > MAX_BROWSERS {
+        return Err(DesktopError::Failure(format!(
+            "development build supports at most {MAX_BROWSERS} browser tabs"
+        )));
+    }
+    if files > MAX_FILE_SURFACES {
+        return Err(DesktopError::Failure(format!(
+            "development build supports at most {MAX_FILE_SURFACES} file tabs; close one first"
+        )));
+    }
+    Ok(())
+}
 const UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 const TRANSFER_RECEIPT_TIMEOUT: Duration = Duration::from_secs(2);
 const NATIVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -1577,6 +1621,9 @@ impl Worker {
                 "browser observations require a trusted native document owner",
             )
             .into()),
+            Command::Action { action } if is_trusted_file_action(&action) => {
+                Err(trusted_file_action_error())
+            }
             Command::Action { action } => {
                 if Self::window_action_is_private(&action) {
                     return Err(DesktopError::Failure(
@@ -1701,6 +1748,9 @@ impl Worker {
                     *selector = self.profiles.resolve(selector)?.to_string();
                 }
                 let action = action.resolve(&model, &request.scope, &request.caller)?;
+                if is_trusted_file_action(&action) {
+                    return Err(trusted_file_action_error());
+                }
                 self.action(action)?;
                 self.acknowledge_focused();
                 Ok(())
@@ -2233,19 +2283,7 @@ impl Worker {
                 "development build supports at most {MAX_TERMINALS} terminals; close a tab and wait for cleanup first"
             )));
         }
-        let browsers = candidate
-            .snapshot()
-            .workspaces
-            .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| &p.surfaces)
-            .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser)
-            .count();
-        if browsers > MAX_BROWSERS {
-            return Err(DesktopError::Failure(format!(
-                "development build supports at most {MAX_BROWSERS} browser tabs"
-            )));
-        }
+        ensure_surface_caps(&candidate.snapshot())?;
         self.profiles
             .validate_transition(&self.model.snapshot(), &candidate.snapshot())?;
         self.validate_todo_candidate(&candidate)?;
@@ -2670,5 +2708,50 @@ impl Worker {
             Err(error) => eprintln!("zmux desktop publication failed: {error}"),
         }
         published
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zmux_workspace_core::FileMode;
+
+    fn model_with_files(count: usize) -> Model {
+        let mut store = WorkspaceStore::default();
+        store
+            .apply(Action::CreateWorkspace { name: "w".into() })
+            .unwrap();
+        let mut pane = store.snapshot().workspaces[0].focused_pane;
+        for index in 0..count {
+            if index % 8 == 7 {
+                // Tab capacity is per pane; spread files over panes.
+                store
+                    .apply(Action::SplitPane {
+                        pane_id: pane,
+                        axis: zmux_workspace_core::Axis::Vertical,
+                    })
+                    .unwrap();
+                pane = store.snapshot().workspaces[0].focused_pane;
+            }
+            store
+                .apply(Action::CreateFile {
+                    pane_id: pane,
+                    path: format!("/tmp/zmux-cap-{index}.txt"),
+                    mode: FileMode::Text,
+                    focus: true,
+                })
+                .unwrap();
+        }
+        store.snapshot()
+    }
+
+    #[test]
+    fn file_surface_cap_is_enforced_independently_of_the_browser_cap() {
+        ensure_surface_caps(&model_with_files(MAX_FILE_SURFACES)).expect("at the cap is allowed");
+        let error = ensure_surface_caps(&model_with_files(MAX_FILE_SURFACES + 1)).unwrap_err();
+        assert!(
+            error.to_string().contains("at most 16 file tabs"),
+            "{error}"
+        );
     }
 }

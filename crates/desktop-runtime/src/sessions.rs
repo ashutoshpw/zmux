@@ -92,6 +92,7 @@ impl SessionPersistence {
             RestoreLimits {
                 terminals: crate::MAX_TERMINALS,
                 browsers: crate::MAX_BROWSERS,
+                files: crate::MAX_FILE_SURFACES,
             },
         )
         .map_err(failure)?;

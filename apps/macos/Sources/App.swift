@@ -971,6 +971,17 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                     self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil))
                 }
                 view = coordinator.completedHistory(surface: pane.selectedSurface, history: completion, onFocus: focus)
+            } else if pane.selected.kind == "file" {
+                // The file panel arrives with the native slice; never mistake it for a browser.
+                let unavailable = NSTextField(wrappingLabelWithString: "File panel is not available in this build")
+                unavailable.textColor = .secondaryLabelColor
+                unavailable.alignment = .center
+                view = unavailable
+            } else if pane.selected.kind != "browser" {
+                let unknown = NSTextField(wrappingLabelWithString: "This tab type is not supported by this version of Zmux.")
+                unknown.textColor = .secondaryLabelColor
+                unknown.alignment = .center
+                view = unknown
             } else {
                 // Reconciliation owns profile validation, datastore selection and
                 // automation binding. Presentation must never bypass that owner.

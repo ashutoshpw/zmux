@@ -95,12 +95,15 @@ Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup of
 There are at most four desktop contexts and eight terminals per desktop, including pending or
 retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
 
-## Workspace model version 3
+## Workspace model version 7
 
-The JSON model carries `model_version: 3`; the function ABI/request envelope remains version 1.
+The JSON model carries `model_version: 7`; the function ABI/request envelope remains version 1.
 Each pane owns ordered `surfaces` and `selected_surface`; a terminal surface owns `session_id`,
 `title` and optional `cwd`. Browser surfaces have `kind: browser`, no session, a URL and a
-navigation generation. Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
+navigation generation. File surfaces (version 7) have `kind: file`, no session or URL, and a
+`file` object `{path, mode, dirty}`: an absolute canonical path, a presentation mode (`text`,
+`markdown`, `image`, `pdf`) and a dirty mirror that only the native document owner may set. File
+content never travels in the snapshot. Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
 Native UI and Rust are packaged together; older hosts must reject an unfamiliar model version.
 Legacy socket pane inspection still projects the selected session for existing CLI callers.
 

@@ -297,10 +297,18 @@ impl WorkspaceStore {
         Ok(PreparedLocalZellijSurface { store: candidate })
     }
     pub(crate) fn validate_terminal_descriptors(&self) -> Result<(), ActionError> {
+        let mut file_paths = std::collections::HashSet::new();
         for workspace in &self.state.workspaces {
             for pane in workspace.root.panes() {
                 for surface in &pane.surfaces {
                     surface.validate_terminal_descriptor()?;
+                    if let Some(file) = &surface.file
+                        && !file_paths.insert(file.path.as_str())
+                    {
+                        return Err(ActionError::InvalidOperation(
+                            "file is already open in another tab".into(),
+                        ));
+                    }
                 }
             }
         }
@@ -308,7 +316,38 @@ impl WorkspaceStore {
     }
 }
 impl Surface {
+    /// `kind == File` if and only if `file` is present, and a file tab carries no other identity.
+    fn validate_file_descriptor(&self) -> Result<(), ActionError> {
+        let invalid = |message: &str| Err(ActionError::InvalidOperation(message.into()));
+        match (&self.kind, &self.file) {
+            (SurfaceKind::File, Some(file)) => {
+                crate::surfaces::validate_file_path(&file.path)?;
+                if file.dirty && !file.mode.is_editable() {
+                    return invalid("only text and markdown files can have unsaved changes");
+                }
+                if self.session_id.is_some()
+                    || self.url.is_some()
+                    || self.navigation != 0
+                    || self.browser_profile_id.is_some()
+                    || self.cwd.is_some()
+                    || self.remote.is_some()
+                    || self.local_tmux.is_some()
+                    || self.local_zellij.is_some()
+                    || self.local_zellij_completion.is_some()
+                {
+                    return invalid(
+                        "file surfaces cannot carry terminal, browser or navigation identity",
+                    );
+                }
+                Ok(())
+            }
+            (SurfaceKind::File, None) => invalid("file surface requires a file descriptor"),
+            (_, Some(_)) => invalid("only file surfaces may carry a file descriptor"),
+            (_, None) => Ok(()),
+        }
+    }
     pub(crate) fn validate_terminal_descriptor(&self) -> Result<(), ActionError> {
+        self.validate_file_descriptor()?;
         let count = usize::from(self.remote.is_some())
             + usize::from(self.local_tmux.is_some())
             + usize::from(self.local_zellij.is_some());
@@ -367,5 +406,127 @@ mod tests {
                 "mixed identities must never be silently discarded during capture"
             );
         }
+    }
+
+    #[test]
+    fn descriptor_validation_rejects_mixed_kinds() {
+        // Each mutation breaks the "kind == File iff file present, no other identity" rule.
+        type Corruption = fn(&mut Surface);
+        let mutations: [(&str, Corruption); 9] = [
+            ("file kind without descriptor", |s| s.file = None),
+            ("terminal with file descriptor", |s| {
+                s.kind = SurfaceKind::Terminal
+            }),
+            ("browser with file descriptor", |s| {
+                s.kind = SurfaceKind::Browser
+            }),
+            ("file with session", |s| s.session_id = Some(SessionId(5))),
+            ("file with url", |s| {
+                s.url = Some("https://example.com/".into())
+            }),
+            ("file with navigation", |s| s.navigation = 1),
+            ("file with browser profile", |s| {
+                s.browser_profile_id = Some(Uuid::from_u128(3))
+            }),
+            ("file with cwd", |s| s.cwd = Some("/tmp".into())),
+            ("file with zellij identity", |s| {
+                s.local_zellij = Some(LocalZellijIdentity {
+                    profile_id: Uuid::from_u128(1),
+                    owner_uuid: Uuid::from_u128(2),
+                })
+            }),
+        ];
+        for (name, mutate) in mutations {
+            let mut store = WorkspaceStore::with_identity_namespace(Uuid::from_u128(99));
+            store
+                .apply(Action::CreateWorkspace { name: "w".into() })
+                .unwrap();
+            let pane = store.state.workspaces[0].focused_pane;
+            store
+                .apply(Action::CreateFile {
+                    pane_id: pane,
+                    path: "/tmp/a.txt".into(),
+                    mode: FileMode::Text,
+                    focus: true,
+                })
+                .unwrap();
+            let surface = store.state.workspaces[0]
+                .root
+                .pane_mut(pane)
+                .unwrap()
+                .surfaces
+                .last_mut()
+                .unwrap();
+            mutate(surface);
+            assert!(
+                store.validate_terminal_descriptors().is_err(),
+                "{name} must be rejected"
+            );
+            assert!(
+                store.session_document().is_err(),
+                "{name} must not be saved"
+            );
+        }
+        // Dirty image/pdf and a bad stored path are likewise impossible states.
+        for corrupt in [0, 1] {
+            let mut store = WorkspaceStore::with_identity_namespace(Uuid::from_u128(99));
+            store
+                .apply(Action::CreateWorkspace { name: "w".into() })
+                .unwrap();
+            let pane = store.state.workspaces[0].focused_pane;
+            store
+                .apply(Action::CreateFile {
+                    pane_id: pane,
+                    path: "/tmp/a.png".into(),
+                    mode: FileMode::Image,
+                    focus: true,
+                })
+                .unwrap();
+            let file = store.state.workspaces[0]
+                .root
+                .pane_mut(pane)
+                .unwrap()
+                .surfaces
+                .last_mut()
+                .unwrap()
+                .file
+                .as_mut()
+                .unwrap();
+            if corrupt == 0 {
+                file.dirty = true;
+            } else {
+                file.path = "relative".into();
+            }
+            assert!(store.validate_terminal_descriptors().is_err());
+        }
+        // Two surfaces may never claim one canonical path.
+        let mut store = WorkspaceStore::with_identity_namespace(Uuid::from_u128(99));
+        store
+            .apply(Action::CreateWorkspace { name: "w".into() })
+            .unwrap();
+        let pane = store.state.workspaces[0].focused_pane;
+        for path in ["/tmp/a", "/tmp/b"] {
+            store
+                .apply(Action::CreateFile {
+                    pane_id: pane,
+                    path: path.into(),
+                    mode: FileMode::Text,
+                    focus: true,
+                })
+                .unwrap();
+        }
+        let surfaces = &mut store.state.workspaces[0]
+            .root
+            .pane_mut(pane)
+            .unwrap()
+            .surfaces;
+        surfaces[2].file.as_mut().unwrap().path = "/tmp/a".into();
+        assert!(
+            store
+                .validate_terminal_descriptors()
+                .unwrap_err()
+                .to_string()
+                .contains("already open")
+        );
     }
 }
