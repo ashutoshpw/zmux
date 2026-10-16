@@ -210,7 +210,7 @@ fn remove_directory(
         if current.st_uid != nix::unistd::geteuid().as_raw() {
             return Err(fail("completed cleanup encountered unowned entry"));
         }
-        let expected = (current.st_dev, current.st_ino);
+        let expected = stat_identity(&current);
         let kind = at::FileType::from_raw_mode(current.st_mode);
         if kind == at::FileType::Directory {
             remove_directory(
@@ -227,16 +227,26 @@ fn remove_directory(
                 ));
             }
             let again = at::statat(&directory, entry_name, AtFlags::SYMLINK_NOFOLLOW)?;
-            if (again.st_dev, again.st_ino) != expected {
+            if stat_identity(&again) != expected {
                 return Err(fail("completed cleanup entry replaced"));
             }
             at::unlinkat(&directory, entry_name, AtFlags::empty())?;
         }
     }
     let again = at::statat(parent, &name, AtFlags::SYMLINK_NOFOLLOW)?;
-    if (again.st_dev, again.st_ino) != expected {
+    if stat_identity(&again) != expected {
         return Err(fail("completed cleanup root replaced"));
     }
     at::unlinkat(parent, &name, AtFlags::REMOVEDIR)?;
     Ok(())
+}
+
+// Match MetadataExt::dev() when comparing descriptor metadata with statat.
+// Darwin exposes a signed dev_t; Linux already exposes the normalized u64.
+fn stat_identity(stat: &rustix::fs::Stat) -> (u64, u64) {
+    #[cfg(target_vendor = "apple")]
+    let device = stat.st_dev as u64;
+    #[cfg(not(target_vendor = "apple"))]
+    let device = stat.st_dev;
+    (device, stat.st_ino)
 }
