@@ -8,6 +8,8 @@ extern "C" {
 
 enum {
     ZMUX_OK = 0,
+    /* Browser event only: rejected obsolete receipt; payload and downstream effects not applied. */
+    ZMUX_BROWSER_EVENT_OBSOLETE = 1,
     ZMUX_INVALID_HANDLE = -1,
     ZMUX_INVALID_ARGUMENT = -2,
     ZMUX_BUFFER_TOO_SMALL = -3,
@@ -76,6 +78,8 @@ ZmuxResult zmux_desktop_window_event(uint64_t desktop, const uint8_t *request, s
    Events are bounded JSON (<=300000 bytes); BUSY means
    the event was not enqueued and may be retried preserving order. */
 ZmuxResult zmux_desktop_browser_drain(uint64_t desktop);
+/* ZMUX_BROWSER_EVENT_OBSOLETE is an unapplied rejection, not owner
+   authentication or permission to retry. All other nonzero statuses are errors. */
 int32_t zmux_desktop_browser_event(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted notification callbacks: events <=16384 bytes, actions <=32768 bytes
    (bounded reply text can expand when JSON escapes it). Both calls wait for

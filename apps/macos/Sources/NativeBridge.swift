@@ -53,6 +53,8 @@ enum NativeDesktopStorage: Sendable {
     case persistentDirectory(URL)
 }
 
+enum BrowserEventDisposition: Sendable { case applied, rejectedObsolete }
+
 /// Actor isolation keeps Rust operations, JSON decoding and shutdown off AppKit's main actor.
 actor NativeBridge {
     private var handle: UInt64 = 0
@@ -388,7 +390,7 @@ actor NativeBridge {
             return try decoder.decode(BrowserDispatchBatch.self, from: data)
         }.value
     }
-    func browserEvent(_ event: BrowserHostEvent) async throws {
+    func browserEvent(_ event: BrowserHostEvent) async throws -> BrowserEventDisposition {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
@@ -406,9 +408,11 @@ actor NativeBridge {
                 try await Task.sleep(for: .milliseconds(10))
                 continue
             }
+            if status == ZMUX_BROWSER_EVENT_OBSOLETE { return .rejectedObsolete }
             guard status == 0 else { throw Self.failure(status) }
-            return
+            return .applied
         }
+        throw BridgeFailure(message: "Browser event queue remained busy")
     }
     func notificationEvent(_ event: NativeNotificationEvent) async throws {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }

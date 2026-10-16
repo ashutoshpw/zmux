@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -30,6 +30,8 @@ pub const MAX_OPERATION_TIMEOUT_MS: u64 = 30_000;
 pub const DEFAULT_OPERATION_TIMEOUT_MS: u64 = 2500;
 pub const MAX_PENDING_BROWSER_OPERATIONS: usize = 8;
 pub const MAX_BROWSER_RECEIPTS: usize = 16;
+/// Exact retired native owners only; oldest eviction deliberately fails closed.
+pub const MAX_RETIRED_BROWSER_HOSTS: usize = 256;
 pub const MAX_BROWSER_RESULT_BYTES: usize = 64 * 1024;
 pub const MAX_BROWSER_RETAINED_RESULT_BYTES: usize = 256 * 1024;
 pub const MAX_OBSERVED_TITLE_BYTES: usize = 4096;
@@ -494,8 +496,10 @@ pub enum BrowserError {
     StaleOwner,
     #[error("native browser host is already attached; detach it before replacement")]
     HostConflict,
-    #[error("native browser operation was not dispatched or already finished")]
+    #[error("native browser operation was not dispatched")]
     NotDispatched,
+    #[error("native browser event payload was rejected as obsolete without application")]
+    ObsoleteEvent,
     #[error("native browser result exceeds its size/depth budget")]
     ResultTooLarge,
 }
@@ -512,6 +516,7 @@ impl BrowserError {
             Self::StaleOwner => "stale_browser_owner",
             Self::HostConflict => "browser_host_conflict",
             Self::NotDispatched => "browser_not_dispatched",
+            Self::ObsoleteEvent => "obsolete_browser_event",
             Self::ResultTooLarge => "browser_result_too_large",
         }
     }
@@ -609,6 +614,7 @@ struct Operation {
 pub struct BrowserRuntime {
     epoch: Uuid,
     hosts: HashMap<SurfaceId, BrowserOwner>,
+    retired_hosts: VecDeque<BrowserOwner>,
     operations: Vec<Operation>,
     next_id: u64,
 }
@@ -617,6 +623,7 @@ impl Default for BrowserRuntime {
         Self {
             epoch: Uuid::new_v4(),
             hosts: HashMap::new(),
+            retired_hosts: VecDeque::new(),
             operations: Vec::new(),
             next_id: 1,
         }
@@ -767,7 +774,19 @@ impl BrowserRuntime {
     pub fn reconcile(&mut self, model: &Snapshot, now: Instant) -> bool {
         let mut dirty = false;
         self.hosts.retain(|id, owner| {
-            owner.identity_namespace == model.identity_namespace && surface(model, *id).is_some()
+            let live = owner.identity_namespace == model.identity_namespace
+                && surface(model, *id).is_some();
+            if !live && owner.identity_namespace == model.identity_namespace {
+                // Publication can retire a host before its native view observes
+                // removal. Retain exact prune-time generations, never authority
+                // to attach or mutate. Duplicate receipts are idempotent until
+                // bounded oldest eviction or reset, then fail closed.
+                if self.retired_hosts.len() == MAX_RETIRED_BROWSER_HOSTS {
+                    self.retired_hosts.pop_front();
+                }
+                self.retired_hosts.push_back(owner.clone());
+            }
+            live
         });
         for op in &mut self.operations {
             if op.receipt.state != BrowserOperationState::Pending {
@@ -800,6 +819,7 @@ impl BrowserRuntime {
             }
         }
         self.hosts.clear();
+        self.retired_hosts.clear();
         self.epoch = Uuid::new_v4();
     }
     pub fn host_event(
@@ -872,6 +892,15 @@ impl BrowserRuntime {
                 );
             }
             BrowserHostEvent::Detach { owner } => {
+                if owner.epoch == self.epoch
+                    && owner.identity_namespace == model.identity_namespace
+                    && surface(model, owner.surface_id).is_none()
+                    && !self.hosts.contains_key(&owner.surface_id)
+                    && self.retired_hosts.contains(&owner)
+                {
+                    // Reject before State's downstream download detach effects.
+                    return Err(BrowserError::ObsoleteEvent);
+                }
                 self.check_owner(&owner)?;
                 self.hosts.remove(&owner.surface_id);
             }
@@ -915,7 +944,15 @@ impl BrowserRuntime {
                 self.check_owner(&owner)?;
                 let size = result_size(&result).ok_or(BrowserError::ResultTooLarge);
                 if size.is_err() {
-                    let op = self.pending_dispatched(operation_id, &owner)?;
+                    let op = match self.pending_dispatched(operation_id, &owner) {
+                        Ok(op) => op,
+                        // Obsolete receipts cannot turn invalid payloads into a
+                        // benign disposition or replace their original outcome.
+                        Err(BrowserError::ObsoleteEvent) => {
+                            return Err(BrowserError::ResultTooLarge);
+                        }
+                        Err(error) => return Err(error),
+                    };
                     fail_operation(
                         op,
                         "browser_result_too_large",
@@ -974,7 +1011,12 @@ impl BrowserRuntime {
         if op.receipt.owner != *owner {
             return Err(BrowserError::StaleOwner);
         }
-        if op.receipt.state != BrowserOperationState::Pending || !op.dispatched {
+        if op.receipt.state != BrowserOperationState::Pending {
+            // The exact current host and receipt owner have already been fenced.
+            // Never replace the authoritative terminal outcome or revive work.
+            return Err(BrowserError::ObsoleteEvent);
+        }
+        if !op.dispatched {
             return Err(BrowserError::NotDispatched);
         }
         Ok(op)
