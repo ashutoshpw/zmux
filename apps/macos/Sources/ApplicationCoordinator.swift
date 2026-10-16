@@ -832,7 +832,6 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     /// `FileLoadPolicy.maxInFlight` at a time, so opening or restoring many file tabs queues them
     /// instead of overflowing the Rust file worker's queue.
     let fileLoadGate = FileLoadGate()
-    func filePanelFocused(_ surface: UInt64) {}
     func filePanelStateChanged(_ surface: UInt64) { refreshFileChrome() }
     func filePanelReport(_ message: String) { reportError(message) }
     func filePanelDetach(_ owner: FileOwnerToken) {

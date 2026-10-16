@@ -9,7 +9,6 @@ protocol FilePanelOwner: AnyObject {
     func fileCall(_ request: FileHostRequest, body: Data) async throws -> FileHostReply
     /// Admission control for the requests that load a whole file (attach, reload).
     var fileLoadGate: FileLoadGate { get }
-    func filePanelFocused(_ surface: UInt64)
     /// Dirty state, banner or title changed; window chrome (tab marker, header) should refresh.
     func filePanelStateChanged(_ surface: UInt64)
     func filePanelReport(_ message: String)

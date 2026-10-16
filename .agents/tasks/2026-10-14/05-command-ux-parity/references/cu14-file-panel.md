@@ -2046,3 +2046,24 @@ Tests:
 583 after fix round 2: the new contract test); clippy `-D warnings`; license inventory; native bridge
 checks. No Swift was compiled or run; every gate under "UNAVAILABLE gates" above, including
 `scripts/check-file-editor-model` for the new fixture cases, is still UNAVAILABLE.
+
+### Merge of origin/main (1f122f4) into the branch
+
+PR 2 reported CONFLICTING/DIRTY against main, so CI never started. `origin/main` (1f122f4: attention
+relay, `native_frames` delta delivery, shell integration, terminal CPU audit, notifications, status
+menu) was merged at 5cf538a with a merge commit; no history was rewritten.
+
+- Seven textual conflicts (plan.md, status.md, App.swift, ApplicationCoordinator.swift,
+  NativeBridge.swift, WorkspaceViews.swift, `crates/native-bridge/src/lib.rs`) were resolved keeping
+  both sides. Semantic overlaps checked: `MODEL_VERSION` 7 and `SESSION_DOCUMENT_VERSION` 10 (main
+  stayed at 6 and 9; the Swift `modelVersion == 7` guard is kept inside main's new frame-envelope
+  `poll()`), the C ABI exports and `zmux.h` prototypes of both sides, and `macos-development.yml`
+  (the three file panel fixture checks plus main's sidebar and status steps).
+- `scripts/check` PASS on the merged tree (Rust, CLI, both C ABI suites, `cargo build --locked`).
+- UNAVAILABLE: every Swift compile, `scripts/check-file-editor-model`, `scripts/check-file-close-resolution`,
+  `scripts/check-file-load-gate`, `scripts/build-macos-dev`, the packaged in-app smoke and
+  `scripts/check-native-sidebar` (no Swift toolchain on this host). The merged Swift is verified only by
+  the hosted macOS workflow.
+- Wiring follow-ups: `-framework PDFKit` added to the explicit framework list in `scripts/build-macos-dev`
+  (`FilePanelView.swift` imports PDFKit), `file_panel` added to the required evidence keys in
+  `scripts/check-macos-app`, and the unused `filePanelFocused(_:)` owner requirement removed.
