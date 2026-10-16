@@ -36,6 +36,7 @@ fn limits() -> RestoreLimits {
     RestoreLimits {
         terminals: 8,
         browsers: 4,
+        files: 16,
     }
 }
 
@@ -408,7 +409,8 @@ fn malformed_documents_and_stale_runtime_ids_are_rejected_before_restore() {
             .clone()
             .validate(RestoreLimits {
                 terminals: 2,
-                browsers: 4
+                browsers: 4,
+                files: 16
             })
             .is_err()
     );
@@ -417,7 +419,8 @@ fn malformed_documents_and_stale_runtime_ids_are_rejected_before_restore() {
             .clone()
             .validate(RestoreLimits {
                 terminals: 8,
-                browsers: 0
+                browsers: 0,
+                files: 16
             })
             .is_err()
     );
@@ -795,4 +798,263 @@ fn version_five_todos_are_explicit_validated_ordered_and_legacy_readers_never_si
         assert_eq!(migrated["version"], SESSION_DOCUMENT_VERSION);
         assert_eq!(migrated["workspaces"][0]["todos"], json!([]));
     }
+}
+
+// ---- file surfaces (CU-14 S1) ----
+
+fn file_fixture() -> (WorkspaceStore, PaneId) {
+    let mut store = fixture();
+    let pane = store.snapshot().workspaces[0].focused_pane;
+    for (path, mode) in [
+        ("/Users/a/proj/README.md", FileMode::Markdown),
+        ("/Users/a/proj/src/main.rs", FileMode::Text),
+        ("/Users/a/proj/logo.png", FileMode::Image),
+    ] {
+        store
+            .apply(Action::CreateFile {
+                pane_id: pane,
+                path: path.into(),
+                mode,
+                focus: false,
+            })
+            .unwrap();
+    }
+    (store, pane)
+}
+fn decode(wire: Value, limits: RestoreLimits) -> Result<ValidatedSessionDocument, String> {
+    serde_json::from_value::<SessionDocument>(wire)
+        .map_err(|e| e.to_string())?
+        .validate(limits)
+        .map_err(|e| e.to_string())
+}
+fn file_surfaces(wire: &mut Value) -> &mut Vec<Value> {
+    // The fixture's last pane is the second leaf of the vertical split.
+    wire["workspaces"][0]["root"]["second"]["pane"]["surfaces"]
+        .as_array_mut()
+        .unwrap()
+}
+
+#[test]
+fn v10_round_trips_file_surfaces() {
+    let (mut store, _) = file_fixture();
+    let files = |store: &WorkspaceStore| -> Vec<(SurfaceId, String, Option<FileSurface>)> {
+        store
+            .snapshot()
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| p.surfaces.clone())
+            .filter(|s| s.kind == SurfaceKind::File)
+            .map(|s| (s.id, s.title, s.file))
+            .collect()
+    };
+    // A user rename is part of the saved descriptor.
+    let readme = files(&store)[0].0;
+    store
+        .apply(Action::RenameSurface {
+            surface_id: readme,
+            name: "readme (renamed)".into(),
+        })
+        .unwrap();
+    let before = files(&store);
+    assert_eq!(before.len(), 3);
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    assert_eq!(wire["version"], 10);
+    let saved = file_surfaces(&mut wire.clone()).clone();
+    assert_eq!(
+        saved[2],
+        json!({"id": readme.0, "title": "readme (renamed)",
+               "content": {"kind":"file","path":"/Users/a/proj/README.md","mode":"markdown"}})
+    );
+    let validated = decode(wire, limits()).unwrap();
+    assert_eq!(validated.file_count(), 3);
+    assert_eq!(validated.terminal_count(), 3, "files need no session ids");
+    let prepared = WorkspaceStore::prepare_session_restore(
+        validated,
+        &[SessionId(1000), SessionId(1001), SessionId(1002)],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        prepared.effects.len(),
+        3,
+        "restoring files starts no session"
+    );
+    assert_eq!(files(&prepared.store), before);
+    // The restored store captures an identical document again.
+    assert_eq!(
+        prepared.store.session_document().unwrap().workspaces,
+        store.session_document().unwrap().workspaces
+    );
+}
+
+#[test]
+fn v9_rejects_file_content() {
+    let (store, _) = file_fixture();
+    let mut wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    wire["version"] = json!(9);
+    let error = decode(wire, limits()).unwrap_err();
+    assert!(
+        error.contains("file surfaces require session version 10"),
+        "{error}"
+    );
+}
+
+#[test]
+fn legacy_versions_still_load() {
+    // Version 10 keeps every earlier reader: a v9 document without files and the
+    // v9-only workspace-group field still validate, then migrate forward to v10.
+    let wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
+    assert_eq!(wire["version"], 10);
+    let mut v9 = wire.clone();
+    v9["version"] = json!(9);
+    let validated = decode(v9, limits()).expect("v9 stays readable");
+    assert_eq!(validated.file_count(), 0);
+    let restored = WorkspaceStore::prepare_session_restore(
+        validated,
+        &[SessionId(1000), SessionId(1001), SessionId(1002)],
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(restored.store.session_document().unwrap()).unwrap()["version"],
+        10
+    );
+    // Version 11 does not exist yet.
+    let mut future = wire;
+    future["version"] = json!(11);
+    assert!(decode(future, limits()).is_err());
+}
+
+#[test]
+fn capture_omits_dirty_and_content() {
+    let (mut store, _) = file_fixture();
+    let id = store.snapshot().workspaces[0]
+        .root
+        .panes()
+        .iter()
+        .flat_map(|p| p.surfaces.iter())
+        .find(|s| s.kind == SurfaceKind::File)
+        .unwrap()
+        .id;
+    store
+        .apply(Action::ObserveFile {
+            surface_id: id,
+            dirty: true,
+        })
+        .unwrap();
+    let text = serde_json::to_string(&store.session_document().unwrap()).unwrap();
+    assert!(!text.contains("dirty"), "{text}");
+    assert!(!text.contains("sha256"));
+    // A persisted dirty field is a schema violation, not silently ignored.
+    let mut wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    let saved = file_surfaces(&mut wire);
+    saved[2]["content"]["dirty"] = json!(true);
+    assert!(decode(wire.clone(), limits()).is_err());
+    let saved = file_surfaces(&mut wire);
+    saved[2]["content"].as_object_mut().unwrap().remove("dirty");
+    saved[2]["content"]["text"] = json!("unsaved");
+    assert!(decode(wire, limits()).is_err());
+    // Restore always starts clean.
+    let prepared = WorkspaceStore::prepare_session_restore(
+        decode(
+            serde_json::to_value(store.session_document().unwrap()).unwrap(),
+            limits(),
+        )
+        .unwrap(),
+        &[SessionId(1000), SessionId(1001), SessionId(1002)],
+        None,
+    )
+    .unwrap();
+    assert!(
+        prepared
+            .store
+            .snapshot()
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| p.surfaces.iter())
+            .filter_map(|s| s.file.as_ref())
+            .all(|f| !f.dirty)
+    );
+}
+
+#[test]
+fn restore_rejects_invalid_or_duplicate_file_paths() {
+    let (store, _) = file_fixture();
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    assert!(decode(wire.clone(), limits()).is_ok());
+    let long = format!("/{}", "a".repeat(4096));
+    for path in [
+        "",
+        "relative.txt",
+        "/",
+        "/tmp/dir/",
+        "/tmp/../x",
+        "/tmp/./x",
+        "/tmp//x",
+        "/tmp/x\0y",
+        "/tmp/x\ny",
+        long.as_str(),
+    ] {
+        let mut bad = wire.clone();
+        file_surfaces(&mut bad)[2]["content"]["path"] = json!(path);
+        assert!(decode(bad, limits()).is_err(), "{path:?}");
+    }
+    // A duplicate within a pane, and across workspaces, is rejected.
+    let mut duplicate = wire.clone();
+    file_surfaces(&mut duplicate)[3]["content"]["path"] = json!("/Users/a/proj/README.md");
+    let error = decode(duplicate, limits()).unwrap_err();
+    assert!(
+        error.contains("already open") || error.contains("duplicate"),
+        "{error}"
+    );
+    // Unknown mode and image/pdf are parsed strictly.
+    let mut bad_mode = wire.clone();
+    file_surfaces(&mut bad_mode)[2]["content"]["mode"] = json!("video");
+    assert!(decode(bad_mode, limits()).is_err());
+    let mut missing = wire.clone();
+    file_surfaces(&mut missing)[2]["content"]
+        .as_object_mut()
+        .unwrap()
+        .remove("mode");
+    assert!(decode(missing, limits()).is_err());
+    // A blank title is as invalid as for every other kind.
+    let mut blank = wire;
+    file_surfaces(&mut blank)[2]["title"] = json!("  ");
+    assert!(decode(blank, limits()).is_err());
+}
+
+#[test]
+fn restore_enforces_file_limit() {
+    let (store, _) = file_fixture();
+    let document = store.session_document().unwrap();
+    for files in [0, 2] {
+        assert!(
+            document
+                .clone()
+                .validate(RestoreLimits {
+                    terminals: 8,
+                    browsers: 4,
+                    files
+                })
+                .is_err(),
+            "limit {files}"
+        );
+    }
+    assert!(
+        document
+            .validate(RestoreLimits {
+                terminals: 8,
+                browsers: 4,
+                files: 3
+            })
+            .is_ok()
+    );
+}
+
+#[test]
+fn model_version_is_seven() {
+    assert_eq!(MODEL_VERSION, 7);
+    assert_eq!(SESSION_DOCUMENT_VERSION, 10);
 }

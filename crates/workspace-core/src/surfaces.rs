@@ -6,6 +6,77 @@ use super::*;
 pub enum SurfaceKind {
     Terminal,
     Browser,
+    File,
+}
+
+/// How a file tab is presented. Fixed at creation; the owner picks it from the extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileMode {
+    Text,
+    Markdown,
+    Image,
+    Pdf,
+}
+impl FileMode {
+    /// Only text-like modes hold unsaved edits.
+    pub fn is_editable(self) -> bool {
+        matches!(self, Self::Text | Self::Markdown)
+    }
+}
+
+/// Identity and a trusted dirty bit only. File content, hashes and error state never
+/// enter the model, the snapshot or the persisted session document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FileSurface {
+    pub path: String,
+    pub mode: FileMode,
+    pub dirty: bool,
+}
+
+pub const MAX_FILE_PATH_BYTES: usize = 4096;
+
+/// A stored file path is the canonical absolute path chosen by the trusted opener:
+/// UTF-8, bounded, free of control characters and of any relative or empty component.
+pub(crate) fn validate_file_path(path: &str) -> Result<(), ActionError> {
+    let invalid =
+        |reason: &str| ActionError::InvalidOperation(format!("file path is invalid: {reason}"));
+    if path.len() > MAX_FILE_PATH_BYTES {
+        return Err(invalid("longer than 4096 bytes"));
+    }
+    let Some(rest) = path.strip_prefix('/') else {
+        return Err(invalid("must be absolute"));
+    };
+    if path.chars().any(char::is_control) {
+        return Err(invalid("contains a control character"));
+    }
+    if rest.is_empty() || rest.ends_with('/') {
+        return Err(invalid("must name a file, not a directory"));
+    }
+    if rest
+        .split('/')
+        .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(invalid(
+            "must be canonical without ., .. or empty components",
+        ));
+    }
+    Ok(())
+}
+
+fn file_title(path: &str) -> String {
+    let title: String = path
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(MAX_NAME_CHARS)
+        .collect();
+    if title.trim().is_empty() {
+        "File".into()
+    } else {
+        title
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -22,6 +93,7 @@ pub struct Surface {
     pub local_tmux: Option<zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity>,
     pub local_zellij: Option<LocalZellijIdentity>,
     pub local_zellij_completion: Option<Box<LocalZellijCompletion>>,
+    pub file: Option<FileSurface>,
 }
 impl Surface {
     pub(crate) fn terminal(id: SurfaceId, session_id: SessionId) -> Self {
@@ -38,6 +110,7 @@ impl Surface {
             local_tmux: None,
             local_zellij: None,
             local_zellij_completion: None,
+            file: None,
         }
     }
 }
@@ -220,6 +293,7 @@ impl WorkspaceStore {
                     local_tmux: None,
                     local_zellij: None,
                     local_zellij_completion: None,
+                    file: None,
                 };
                 let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
                 pane.surfaces.push(surface);
@@ -228,6 +302,46 @@ impl WorkspaceStore {
                     self.focus(wi, pane_id);
                 }
             }
+            Action::CreateFile {
+                pane_id,
+                path,
+                mode,
+                focus,
+            } => {
+                validate_file_path(&path)?;
+                let wi = self.workspace_index(pane_id)?;
+                let pane = self.pane(pane_id)?;
+                Self::check_tab_capacity(pane.surfaces.len() + 1)?;
+                self.ensure_file_path_free(&path)?;
+                let id = SurfaceId(self.reserve(1)?);
+                let surface = Surface {
+                    id,
+                    kind: SurfaceKind::File,
+                    session_id: None,
+                    url: None,
+                    navigation: 0,
+                    browser_profile_id: None,
+                    title: file_title(&path),
+                    cwd: None,
+                    remote: None,
+                    local_tmux: None,
+                    local_zellij: None,
+                    local_zellij_completion: None,
+                    file: Some(FileSurface {
+                        path,
+                        mode,
+                        dirty: false,
+                    }),
+                };
+                let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
+                pane.surfaces.push(surface);
+                if focus {
+                    pane.selected_surface = id;
+                    self.focus(wi, pane_id);
+                }
+            }
+            // `apply_inner` routes ObserveFile before this dispatcher: it may be a no-op.
+            Action::ObserveFile { .. } => unreachable!("file observation dispatched earlier"),
             Action::NavigateBrowser { surface_id, url }
             | Action::ObserveBrowser {
                 surface_id,
@@ -313,6 +427,7 @@ impl WorkspaceStore {
             Action::CloseSurface { surface_id } => {
                 let (wi, pane_id, index) = self.location(surface_id)?;
                 self.ensure_settled(&[surface_id])?;
+                self.ensure_closeable(&[surface_id])?;
                 let surface = self.pane(pane_id)?.surfaces[index].clone();
                 self.remember(
                     wi,
@@ -329,6 +444,9 @@ impl WorkspaceStore {
                 let pane = self.pane(pane_id)?;
                 let ids: Vec<_> = pane.surfaces.iter().map(|s| s.id).collect();
                 self.ensure_settled(&ids)?;
+                // The kept tab stays open, so only the tabs that close can hold unsaved text.
+                let closing: Vec<_> = ids.iter().copied().filter(|id| *id != surface_id).collect();
+                self.ensure_closeable(&closing)?;
                 let tabs: Vec<_> = pane
                     .surfaces
                     .iter()
@@ -398,6 +516,7 @@ impl WorkspaceStore {
                     .flat_map(|p| p.surfaces.iter().map(|s| s.id))
                     .collect();
                 self.ensure_settled(&ids)?;
+                self.ensure_closeable(&ids)?;
                 self.remember(
                     wi,
                     workspace.name.clone(),
@@ -422,6 +541,7 @@ impl WorkspaceStore {
         let pane = self.pane(pane_id)?.clone();
         let ids: Vec<_> = pane.surfaces.iter().map(|s| s.id).collect();
         self.ensure_settled(&ids)?;
+        self.ensure_closeable(&ids)?;
         self.remember(wi, "Terminal pane".into(), ClosedContent::Pane { pane })?;
         for id in ids {
             self.remove_surface(id, effects)?;
@@ -475,6 +595,64 @@ impl WorkspaceStore {
             ));
         }
         Ok(())
+    }
+    /// User-initiated closes must not discard unsaved editor text. The model bit is a
+    /// reconciled mirror of the native view's state (see the file panel design, D7/D8).
+    pub(crate) fn ensure_closeable(&self, ids: &[SurfaceId]) -> Result<(), ActionError> {
+        if self
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .any(|s| ids.contains(&s.id) && s.file.as_ref().is_some_and(|f| f.dirty))
+        {
+            return Err(ActionError::InvalidOperation(
+                "file has unsaved changes; save or discard it in the app".into(),
+            ));
+        }
+        Ok(())
+    }
+    fn ensure_file_path_free(&self, path: &str) -> Result<(), ActionError> {
+        if self
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .any(|s| s.file.as_ref().is_some_and(|f| f.path == path))
+        {
+            return Err(ActionError::InvalidOperation(
+                "file is already open in another tab".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Returns whether the model changed; repeating the stated value is a no-op.
+    pub(crate) fn observe_file(
+        &mut self,
+        surface_id: SurfaceId,
+        dirty: bool,
+    ) -> Result<bool, ActionError> {
+        let (wi, pane, index) = self.location(surface_id)?;
+        let surface = &mut self.state.workspaces[wi]
+            .root
+            .pane_mut(pane)
+            .unwrap()
+            .surfaces[index];
+        let Some(file) = surface.file.as_mut() else {
+            return Err(ActionError::InvalidOperation(
+                "surface is not a file".into(),
+            ));
+        };
+        if dirty && !file.mode.is_editable() {
+            return Err(ActionError::InvalidOperation(
+                "only text and markdown files can have unsaved changes".into(),
+            ));
+        }
+        let changed = file.dirty != dirty;
+        file.dirty = dirty;
+        Ok(changed)
     }
     pub(crate) fn check_tab_capacity(count: usize) -> Result<(), ActionError> {
         if count > MAX_SURFACES_PER_PANE {
@@ -657,6 +835,9 @@ impl WorkspaceStore {
         pane_id: PaneId,
         effects: &mut Vec<Effect>,
     ) -> Result<Surface, ActionError> {
+        if let Some(file) = &old.file {
+            self.ensure_file_path_free(&file.path)?;
+        }
         let ids = self.reserve(2)?;
         let surface = Surface {
             id: SurfaceId(ids),
@@ -674,6 +855,11 @@ impl WorkspaceStore {
             local_tmux: old.local_tmux.clone(),
             local_zellij: old.local_zellij.clone(),
             local_zellij_completion: old.local_zellij_completion.clone(),
+            // The unsaved text died with its view; a reopened file always reloads from disk.
+            file: old.file.as_ref().map(|file| FileSurface {
+                dirty: false,
+                ..file.clone()
+            }),
         };
         Self::start(pane_id, &surface, effects);
         Ok(surface)

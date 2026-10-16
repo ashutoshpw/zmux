@@ -205,7 +205,9 @@ struct CompletedLocalZellijHistory: Decodable, Sendable {
     let receipt: Receipt
     let viewport: CapturedViewport?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory? }
+/// Identity and a trusted dirty mirror only; file content never travels in the snapshot.
+struct FileSurface: Decodable, Sendable { let path: String; let mode: String; let dirty: Bool }
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory?; let file: FileSurface? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }

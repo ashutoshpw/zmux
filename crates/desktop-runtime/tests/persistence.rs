@@ -31,6 +31,7 @@ impl Directory {
             RestoreLimits {
                 terminals: 8,
                 browsers: 4,
+                files: 16,
             },
         )
         .unwrap()
@@ -76,7 +77,7 @@ fn loaded(worker: &PersistenceWorker, path: &Path) -> LoadedSession {
         .result
         .unwrap()
     {
-        PersistenceOutcome::Loaded(value) => value,
+        PersistenceOutcome::Loaded(value) => *value,
         other => panic!("expected load completion, got {other:?}"),
     }
 }
@@ -564,7 +565,7 @@ fn concurrent_instances_reserve_disjoint_ids_or_report_a_retryable_lock_conflict
             result
         };
         match result {
-            Ok(PersistenceOutcome::Loaded(value)) => Ok(value),
+            Ok(PersistenceOutcome::Loaded(value)) => Ok(*value),
             other => Err(format!("{other:?}")),
         }
     }
