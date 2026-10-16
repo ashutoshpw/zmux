@@ -58,6 +58,8 @@ pub enum Request {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Receipt {
+    pub input_ready: bool,
+    pub attachment_id: Option<Uuid>,
     pub epoch: Uuid,
     pub operation_id: u64,
     pub state: String,
@@ -149,6 +151,7 @@ pub(crate) struct ZellijTag {
     pub launch_id: u64,
 }
 pub(crate) struct ZellijCompletion {
+    pub admission: Option<local_zellij::ClientAdmission>,
     pub tag: ZellijTag,
     pub observer: Option<local_zellij::ObserverHandle>,
     pub owner_uuid: Option<Uuid>,
@@ -528,6 +531,7 @@ impl Worker {
                             Ok(ready.session),
                             None,
                             ZellijCompletion {
+                                admission: Some(ready.admission),
                                 tag: completion_tag,
                                 observer: Some(ready.observer),
                                 owner_uuid: Some(ready.record.id),
@@ -539,6 +543,7 @@ impl Worker {
                             Err(failure.error),
                             failure.cleanup,
                             ZellijCompletion {
+                                admission: None,
                                 tag: completion_tag,
                                 observer: failure.observer,
                                 owner_uuid: None,
@@ -610,6 +615,8 @@ impl Worker {
             },
         );
         self.local_zellij.receipts.push(Receipt {
+            input_ready: false,
+            attachment_id: None,
             epoch: self.local_zellij.epoch,
             operation_id: id,
             state: "starting".into(),
@@ -636,6 +643,33 @@ impl Worker {
         let mut dirty = false;
         for _ in 0..MAX_OPERATIONS {
             match self.local_zellij.events_rx.try_recv() {
+                Ok(LaunchEvent::TransportConnected {
+                    correlation,
+                    frontend,
+                    attachment_id,
+                    execution_contract_version,
+                }) => {
+                    let valid = self
+                        .zellij_consumer(correlation.operation_id)
+                        .is_some_and(|job| {
+                            job.correlation == correlation
+                                && !job.cancel.load(Ordering::Acquire)
+                                && Instant::now() < job.deadline
+                                && self.zellij_job_target_matches(job)
+                        });
+                    if valid
+                        && let Some(receipt) =
+                            self.local_zellij.receipt_mut(correlation.operation_id)
+                        && receipt.workload_exit.is_none()
+                        && !receipt.input_ready
+                    {
+                        receipt.state = "transport_connected".into();
+                        receipt.frontend_pid = Some(frontend.pid);
+                        receipt.attachment_id = Some(attachment_id);
+                        receipt.execution_contract_version = Some(execution_contract_version);
+                        dirty = true;
+                    }
+                }
                 Ok(LaunchEvent::OwnerReserved {
                     correlation,
                     owner_uuid,
@@ -1009,7 +1043,10 @@ impl Worker {
             .into();
             if !complete {
                 receipt.error.get_or_insert_with(|| {
-                    "local Zellij final cleanup evidence was incomplete or unsuccessful".into()
+                    format!(
+                        "local Zellij final cleanup evidence was incomplete or unsuccessful; cli_exit={exit_code:?}; frontend_exit={:?}; transport={:?}",
+                        final_receipt.owned_client_exit, final_receipt.transport
+                    )
                 });
                 self.cleanup_error = receipt.error.clone();
             }
@@ -1096,6 +1133,22 @@ impl Worker {
         let Some(metadata) = &completion.zellij else {
             return;
         };
+        if let Some(local_zellij::ClientAdmission::TerminalObserved { receipt, deadline }) =
+            &metadata.admission
+            && let Err(error) = self.observe_zellij_completion(
+                metadata.tag.correlation.clone(),
+                (**receipt).clone(),
+                *deadline,
+            )
+        {
+            let rejected = std::mem::replace(
+                &mut completion.result,
+                Err(SessionError::Failure(error.to_string())),
+            );
+            if let Ok(session) = rejected {
+                completion.cleanup = Some(session);
+            }
+        }
         let matched = self
             .local_zellij
             .jobs
@@ -1113,7 +1166,22 @@ impl Worker {
                 .is_some_and(|job| {
                     !self.shared.stop.load(Ordering::Acquire)
                         && !job.cancel.load(Ordering::Acquire)
-                        && Instant::now() < job.deadline
+                        && match &metadata.admission {
+                            Some(local_zellij::ClientAdmission::TerminalObserved {
+                                receipt,
+                                deadline,
+                            }) => {
+                                job.completion_deadline == Some(*deadline)
+                                    && Instant::now() < *deadline
+                                    && receipt.digest().is_ok_and(|digest| {
+                                        job.completion_digest.as_ref() == Some(&digest)
+                                    })
+                            }
+                            Some(local_zellij::ClientAdmission::InputReady { .. }) => {
+                                Instant::now() < job.deadline && job.completion_digest.is_none()
+                            }
+                            None => false,
+                        }
                         && self.zellij_job_target_matches(job)
                 });
         if completion.result.is_ok() && !authorized {
@@ -1154,12 +1222,21 @@ impl Worker {
             if error.is_some() {
                 receipt.state = "failed".into();
             } else if receipt.workload_exit.is_none() {
-                receipt.state = if metadata.frontend_pid.is_some() {
-                    "transport_connected"
+                receipt.state = if matches!(
+                    metadata.admission,
+                    Some(local_zellij::ClientAdmission::InputReady { .. })
+                ) {
+                    "input_ready"
                 } else {
                     "completion_pending"
                 }
                 .into();
+            }
+            if let Some(local_zellij::ClientAdmission::InputReady { attachment_id }) =
+                metadata.admission
+            {
+                receipt.input_ready = error.is_none();
+                receipt.attachment_id = Some(attachment_id);
             }
             receipt.error = error.clone();
             receipt.frontend_pid = metadata.frontend_pid;

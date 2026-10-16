@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "capability": "zmux.zellij.frontend.input_ready",
+  "version": 1,
+  "capability_argument": "--zmux-input-readiness-protocol",
+  "capability_argument_policy": "sole argument, handled before logger/config/cache initialization",
+  "capability_stdout": "{\"capability\":\"zmux.zellij.frontend.input_ready\",\"version\":1,\"transport\":\"unix\",\"max_frame_bytes\":1024}\n",
+  "environment": "ZMUX_ZELLIJ_FRONTEND_READY",
+  "supported_systems": [
+    "linux",
+    "macos"
+  ],
+  "descriptor": {
+    "max_bytes": 8192,
+    "unknown_or_duplicate_fields": "reject",
+    "fields": {
+      "version": "integer equal to 1",
+      "attachment_id": "nonnil UUID",
+      "owner_uuid": "nonnil UUID",
+      "owner_generation": "nonnil UUID",
+      "parent_pid": "positive platform PID, equal to current getppid and connected kernel peer PID",
+      "parent_uid": "current effective UID and connected kernel peer UID",
+      "socket": "canonical runtime_base/a<32 lowercase hex UUID>/r; runtime_base is canonical /tmp (/private/tmp on Darwin) with sticky ownership semantics",
+      "namespace_identity": "[device u64, nonzero inode u64]",
+      "socket_identity": "[device u64, nonzero inode u64]",
+      "nonce": "64 lowercase ASCII hex characters",
+      "deadline_monotonic_ms": "absolute CLOCK_MONOTONIC milliseconds, copied unchanged from original end-to-end native startup descriptor deadline; positive remaining budget at most10000ms"
+    },
+    "file_policy": "root/r.json, private owned regular single-link file, no-follow bounded read; canonical base safe UID/sticky mode and root0700/socket0600 inode checks before and after connect"
+  },
+  "frames": {
+    "length_prefix": "u32 little endian",
+    "max_body_bytes": 1024,
+    "maximum_total_frames": 3,
+    "unknown_or_duplicate_fields": "reject",
+    "common_fields": [
+      "version",
+      "event",
+      "attachment_id",
+      "nonce",
+      "sequence"
+    ],
+    "sequence": [
+      {
+        "sequence": 1,
+        "sender": "CLI parent",
+        "event": "challenge"
+      },
+      {
+        "sequence": 2,
+        "sender": "frontend",
+        "event": "input_ready"
+      },
+      {
+        "sequence": 3,
+        "sender": "CLI parent",
+        "event": "accepted"
+      }
+    ],
+    "accepted_teardown": "Frontend reporter validates accepted3 then closes channel and finishes; CLI must observe EOF/recheck full child identity/cancellation/fixed deadline before forwarding observer4Ready. Actual frontend remains alive."
+  },
+  "emission": {
+    "first_condition": "main consumed DoneParsingStdinQuery and actual shared parser.should_parse is false under its mutex",
+    "second_condition": "first typed server Render after that transition completed every stdout write and flush successfully",
+    "early_render": "cannot satisfy second condition before first condition",
+    "queue_capacity": 1,
+    "main_thread": "nonblocking try_send only; no control I/O or wait",
+    "reporter": "one owned joined thread, fixed shared monotonic deadline and cancellation; partial nonblocking control I/O, no user input or terminal markers",
+    "deadline_clock": "actual CLOCK_MONOTONIC milliseconds on both peers; never Rust Instant epoch"
+  },
+  "authentication": {
+    "frontend_checks": "kernel socket parent PID/UID equal descriptor and current direct parent, nonce, attachment ID, inode/type/mode/deadline; retain connected parent through accepted",
+    "CLI_checks_required_by_integrator": "kernel peer full exact retained frontend identity PID/UID/parent/start/boot/configured image, nonce, attachment/owner generation, namespace/socket identity and current cancellation/deadline",
+    "macos_peer_pid": "public LOCAL_PEERPID getsockopt wrapper with exact output size; no interprocess1.2.1 peer_pid fallback because it is unsupported on Darwin"
+  },
+  "integration_boundary": {
+    "native_observer_version_reserved": 4,
+    "existing_execution_admission_observer": 3,
+    "completion_control_versions_unchanged": [
+      1,
+      2
+    ],
+    "transport_connected": "progress only",
+    "scope": "dependency reporter only; no core/runtime edits, package acquisition or native default activation",
+    "deadline_ownership": "Native coordinator computes absolutemonoms once at namespace creation from original remaining startup budget; observer4 carries it; CLI min(localbudget,nativedeadline) and forwards same absolute deadline unchanged. No progress/reconnect refresh."
+  },
+  "environment_capture": "Root main captures/removes variable as its first operation before logger, config/cache, threads or subprocess paths; passes owned optional path through commands::start_client to library, no global storage"
+}

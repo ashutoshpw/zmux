@@ -593,6 +593,13 @@ pub(super) fn attach(
         broker: Broker::start(&record)?,
         child: None,
     };
+    let mut readiness = observer
+        .as_ref()
+        .and_then(|o| o.readiness())
+        .map(|request| {
+            super::input_readiness::Gate::create(&attachment.broker.root, &record, request)
+        })
+        .transpose()?;
     let config = record.runtime()?.join("config/config.kdl");
     let mut command = Command::new(&owner.binary);
     supervisor::environment(&mut command, &attachment.broker.root);
@@ -608,6 +615,9 @@ pub(super) fn attach(
             "--session-serialization",
             "false",
         ]);
+    if let Some(readiness) = &readiness {
+        command.env(super::input_readiness::ENV, readiness.descriptor());
+    }
     attachment.child = Some(OwnedChild::spawn(&mut command)?);
     let child = attachment.child.as_mut().expect("owned attachment child");
     let broker = &mut attachment.broker;
@@ -624,6 +634,7 @@ pub(super) fn attach(
     let mut requested_cancel = false;
     let mut cancel_deadline = None;
     let mut connected = false;
+    let mut input_ready = false;
     let mut completed = None;
     while child.observe(false)?.is_none() {
         if terminal.events(child, || {
@@ -669,10 +680,35 @@ pub(super) fn attach(
             if !connected {
                 super::check_deadline(startup_deadline, "observer authenticated transport")?;
                 if report.authenticated_connections > 0 {
-                    observer.connected(record.id, &identity)?;
+                    observer.connected(
+                        record.id,
+                        &identity,
+                        readiness.as_ref().map(|gate| gate.attachment_id),
+                    )?;
                     connected = true;
                 }
             }
+        }
+        if completed.is_none()
+            && !input_ready
+            && !requested_cancel
+            && connected
+            && let Some(gate) = &mut readiness
+            && gate.poll(&identity)?
+        {
+            terminal.startup_events()?;
+            super::check_deadline(startup_deadline, "frontend input readiness")?;
+            record.verify_live()?;
+            observer
+                .as_mut()
+                .expect("requested observer readiness")
+                .input_ready(
+                    record.id,
+                    record.execution_binding()?.owner_generation(),
+                    gate.attachment_id,
+                    &identity,
+                )?;
+            input_ready = true;
         }
         if !report.errors.is_empty() {
             return Err(fail(format!(
@@ -685,6 +721,7 @@ pub(super) fn attach(
     let outcome = child
         .observe(false)?
         .ok_or_else(|| fail("missing owned child exit"))?;
+    drop(readiness);
     let report = broker.close()?;
     let preservation = record.verify_live();
     let reaped = child.reap()?;
@@ -723,15 +760,18 @@ pub(super) fn attach(
     if !report.errors.is_empty() {
         return Err(fail(format!("relay failed: {:?}", report.errors)));
     }
-    if report.authenticated_connections == 0 {
-        return Err(fail("client ended without any authenticated transport"));
-    }
     let completed_authenticated = if let Some(receipt) = &completed {
         super::completion::authenticate(&record, Instant::now() + Duration::from_secs(2))?.as_ref()
             == Some(receipt)
     } else {
         false
     };
+    // Completion may win after Subscribe but before this frontend connects.
+    // Only the same re-authenticated terminal publisher can resolve that race;
+    // a missing transport alone never establishes a successful attachment.
+    if report.authenticated_connections == 0 && !completed_authenticated {
+        return Err(fail("client ended without any authenticated transport"));
+    }
     report.confirm_detach(
         requested_cancel,
         outcome,

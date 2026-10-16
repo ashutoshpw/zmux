@@ -599,7 +599,7 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
         assert_eq!(denied.finish(), 1);
         assert!(
             String::from_utf8_lossy(&denied.output).contains(expected),
-            "wrong namespace rejection: {}",
+            "wrong namespace rejection (expected {expected}, runtime {runtime:?}): {}",
             String::from_utf8_lossy(&denied.output)
         );
         let identity: zmux_session_runtime::child::ProcessIdentity =
@@ -639,8 +639,23 @@ fn real_foreground_bootstrap_detach_and_reattach_keep_the_original_owned_workloa
     fs::rename(saved, backend).unwrap();
     let moved = runtime.with_extension("held");
     fs::rename(&runtime, &moved).unwrap();
-    reject("No such file");
-    assert!(!runtime.exists(), "attach recreated a missing runtime");
+    // The retained backend can independently recreate its metadata cache at
+    // the old path. Install an explicit private replacement instead of racing
+    // that write and mistaking it for attach recreating the original namespace.
+    fs::DirBuilder::new().mode(0o700).create(&runtime).unwrap();
+    let replacement_root = fs::symlink_metadata(&runtime).unwrap();
+    reject("reserved namespace/socket was replaced");
+    use std::os::unix::fs::MetadataExt;
+    let current_root = fs::symlink_metadata(&runtime).unwrap();
+    assert_eq!(
+        (current_root.dev(), current_root.ino()),
+        (replacement_root.dev(), replacement_root.ino()),
+        "attach replaced the fixture's substituted namespace"
+    );
+    assert!(current_root.is_dir());
+    assert_eq!(current_root.uid(), nix::unistd::geteuid().as_raw());
+    assert_eq!(current_root.mode() & 0o077, 0);
+    fs::remove_dir_all(&runtime).unwrap();
     fs::rename(moved, runtime).unwrap();
     fs::remove_file(&proof).unwrap();
     let mut second = Client::new(&f, &["local-zellij", "attach", "--headless", "--id", &id]);

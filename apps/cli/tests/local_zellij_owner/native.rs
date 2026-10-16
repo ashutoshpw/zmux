@@ -174,7 +174,7 @@ while time.monotonic()<end:
     let connected = wait(&desktop, |s| {
         s.local_zellij_operations
             .iter()
-            .any(|r| r.state == "transport_connected")
+            .any(|r| r.state == "input_ready" && r.input_ready)
             && checkpoint.exists()
     });
     let first = connected.local_zellij_operations.last().unwrap().clone();
@@ -276,9 +276,9 @@ while time.monotonic()<end:
         },
     );
     let attached = wait(&desktop, |s| {
-        s.local_zellij_operations
-            .iter()
-            .any(|r| r.operation_id != first.operation_id && r.state == "transport_connected")
+        s.local_zellij_operations.iter().any(|r| {
+            r.operation_id != first.operation_id && r.state == "input_ready" && r.input_ready
+        })
     });
     let (_, session) = terminal(&attached, owner);
     assert_eq!(
@@ -586,7 +586,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
         let running = wait(&desktop, |s| {
             s.local_zellij_operations
                 .iter()
-                .any(|r| r.state == "transport_connected")
+                .any(|r| r.state == "input_ready" && r.input_ready)
                 && s.control_frames.iter().any(|f| {
                     f.snapshot
                         .as_ref()
@@ -839,7 +839,7 @@ fn actual_completion_writer_failure_retains_live_unconsumed_publisher() {
     let running = wait(&desktop, |s| {
         s.local_zellij_operations
             .iter()
-            .any(|r| r.state == "transport_connected")
+            .any(|r| r.state == "input_ready" && r.input_ready)
             && s.control_frames.iter().any(|f| {
                 f.snapshot
                     .as_ref()
@@ -941,4 +941,302 @@ fn actual_completion_writer_failure_retains_live_unconsumed_publisher() {
         "R03 actual failed completion save: {}",
         serde_json::json!({"owner_uuid":owner,"workload_exit":0,"real_S01_writer_failed":true,"sentinel_unchanged":true,"native_ack_sent":false,"original_publisher_retained_until_explicit_cleanup":true,"physical_session_cleanup_complete":true})
     );
+}
+
+#[test]
+fn actual_typed_input_ready_delivers_one_silent_first_line_per_attachment() {
+    let fixture = Fixture::new();
+    let state = fixture.root.join("readiness-desktop");
+    fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+    let count = fixture.root.join("silent-start-count");
+    let lines = fixture.root.join("silent-lines");
+    let script = fixture.root.join("silent.py");
+    fs::write(&script,format!("import pathlib,select,sys,time\nend=time.monotonic()+30\nwith open({count:?},'ab') as f:f.write(b'x')\nfor i in range(2):\n if not select.select([0],[],[],max(0,end-time.monotonic()))[0]:sys.exit(98)\n line=sys.stdin.readline()\n if not line:sys.exit(99)\n with open({lines:?},'a') as f:f.write(line)\nsys.exit(7)\n",count=count.to_str().unwrap(),lines=lines.to_str().unwrap())).unwrap();
+    let profile = uuid::Uuid::new_v4();
+    let desktop = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(state));
+    let initial = wait(&desktop, |s| {
+        !s.persistence.startup_pending && s.pending_launches == 0 && !s.model.workspaces.is_empty()
+    });
+    let pane = initial.model.workspaces[0].focused_pane;
+    send(
+        &desktop,
+        100,
+        DesktopCommand::LocalZellij {
+            request: ZellijRequest::Start {
+                profile_id: profile,
+                pane_id: pane,
+                name: "silent-ready".into(),
+                cwd: fixture.root.clone(),
+                command: Some(format!("exec python3 '{}'", script.display())),
+                focus: true,
+            },
+        },
+    );
+    let first = wait(&desktop, |s| {
+        s.local_zellij_operations.iter().any(|r| r.input_ready)
+    });
+    let operation = first.local_zellij_operations.last().unwrap();
+    assert_eq!(operation.state, "input_ready");
+    assert_eq!(operation.execution_contract_version, Some(2));
+    let owner = operation.owner_uuid.unwrap();
+    let first_operation = operation.operation_id;
+    let first_attachment = operation.attachment_id.unwrap();
+    let (surface, session) = terminal(&first, owner);
+    let record: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+    record.verify_live().unwrap();
+    // No workload text, file, sleep, extra key, or viewport marker admits input.
+    let first_line = format!("first-{}", uuid::Uuid::new_v4());
+    send(
+        &desktop,
+        101,
+        DesktopCommand::Input {
+            session_id: session,
+            text: format!("{first_line}\r"),
+        },
+    );
+    wait(&desktop, |_| {
+        fs::read_to_string(&lines).is_ok_and(|text| text == format!("{first_line}\n"))
+    });
+    assert_eq!(fs::read(&count).unwrap(), b"x");
+    send(
+        &desktop,
+        102,
+        DesktopCommand::Action {
+            action: Action::CloseSurface {
+                surface_id: surface,
+            },
+        },
+    );
+    wait(&desktop, |s| {
+        s.local_zellij_operations
+            .iter()
+            .find(|r| r.operation_id == first_operation)
+            .is_some_and(|r| {
+                r.state == "frontend_joined"
+                    && r.session_joined
+                    && r.monitor_joined
+                    && r.namespace_cleaned
+                    && r.error.is_none()
+            })
+    });
+    record.verify_live().unwrap();
+    send(
+        &desktop,
+        103,
+        DesktopCommand::LocalZellij {
+            request: ZellijRequest::Attach {
+                profile_id: profile,
+                owner_uuid: owner,
+                pane_id: pane,
+                focus: true,
+            },
+        },
+    );
+    let second = wait(&desktop, |s| {
+        s.local_zellij_operations
+            .iter()
+            .any(|r| r.operation_id != first_operation && r.input_ready)
+    });
+    let operation = second.local_zellij_operations.last().unwrap();
+    let second_attachment = operation.attachment_id.unwrap();
+    assert_ne!(second_attachment, first_attachment);
+    assert_eq!(operation.execution_contract_version, Some(2));
+    let (_, session) = terminal(&second, owner);
+    let current: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+    assert_eq!(current.id, record.id);
+    assert_eq!(current.server, record.server);
+    assert_eq!(current.supervisor, record.supervisor);
+    assert_eq!(current.workload, record.workload);
+    current.verify_live().unwrap();
+    let second_line = format!("second-{}", uuid::Uuid::new_v4());
+    send(
+        &desktop,
+        104,
+        DesktopCommand::Input {
+            session_id: session,
+            text: format!("{second_line}\r"),
+        },
+    );
+    let completed = wait(&desktop, |s| {
+        s.local_zellij_operations
+            .last()
+            .is_some_and(|r| r.session_joined)
+    });
+    let operation = completed.local_zellij_operations.last().unwrap();
+    assert_eq!(
+        operation.workload_exit,
+        Some(zmux_remote_runtime::local_zellij::completion::WorkloadExit::Exited(7))
+    );
+    assert!(
+        operation.final_frame_received
+            && operation.monitor_joined
+            && operation.namespace_cleaned
+            && operation.error.is_none(),
+        "{}",
+        serde_json::to_value(operation).unwrap()
+    );
+    assert!(operation.completion_saved_revision.is_some());
+    assert_eq!(
+        fs::read_to_string(&lines).unwrap(),
+        format!("{first_line}\n{second_line}\n")
+    );
+    assert_eq!(fs::read(&count).unwrap(), b"x");
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let cleanup = fixture.output(&[
+        "local-zellij",
+        "cleanup",
+        "--id",
+        &owner.to_string(),
+        "--generation",
+        &record
+            .completion
+            .as_ref()
+            .unwrap()
+            .owner_generation
+            .to_string(),
+    ]);
+    assert!(
+        cleanup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup.stderr)
+    );
+    eprintln!(
+        "R03 typed input readiness: {}",
+        serde_json::json!({"owner_uuid":owner,"first_attachment":first_attachment,"second_attachment":second_attachment,"silent_workload":true,"input_admission":"typed_input_ready","first_line_once":true,"second_line_once":true,"startup_count":1,"actual_saved_completion":true,"actual_frontend_session_joined":true,"workload_exit":7})
+    );
+}
+
+#[test]
+fn actual_terminal_completion_before_input_ready_saves_and_joins_without_interactive_admission() {
+    for code in [0, 7] {
+        let fixture = Fixture::new();
+        let state = fixture.root.join("terminal-before-ready");
+        fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+        let count = fixture.root.join("finite-once");
+        let profile = uuid::Uuid::new_v4();
+        let desktop = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(state));
+        let initial = wait(&desktop, |s| {
+            !s.persistence.startup_pending
+                && s.pending_launches == 0
+                && !s.model.workspaces.is_empty()
+        });
+        send(
+            &desktop,
+            200,
+            DesktopCommand::LocalZellij {
+                request: ZellijRequest::Start {
+                    profile_id: profile,
+                    pane_id: initial.model.workspaces[0].focused_pane,
+                    name: "terminal-before-ready".into(),
+                    cwd: fixture.root.clone(),
+                    command: Some(format!("printf x >> '{}'; exit {code}", count.display())),
+                    focus: true,
+                },
+            },
+        );
+        let completed = wait(&desktop, |s| {
+            s.local_zellij_operations
+                .last()
+                .is_some_and(|r| r.session_joined)
+        });
+        let operation = completed.local_zellij_operations.last().unwrap();
+        assert!(
+            !operation.input_ready,
+            "finite completion must not manufacture input admission"
+        );
+        assert_eq!(operation.execution_contract_version, Some(2));
+        assert_eq!(
+            operation.workload_exit,
+            Some(zmux_remote_runtime::local_zellij::completion::WorkloadExit::Exited(code))
+        );
+        assert!(
+            operation.final_frame_received
+                && operation.monitor_joined
+                && operation.namespace_cleaned
+                && operation.error.is_none(),
+            "{}",
+            serde_json::to_value(operation).unwrap()
+        );
+        assert!(operation.completion_saved_revision.is_some());
+        assert_eq!(fs::read(&count).unwrap(), b"x");
+        let owner = operation.owner_uuid.unwrap();
+        let record: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+        desktop.shutdown(Duration::from_secs(5)).unwrap();
+        let cleanup = fixture.output(&[
+            "local-zellij",
+            "cleanup",
+            "--id",
+            &owner.to_string(),
+            "--generation",
+            &record
+                .completion
+                .as_ref()
+                .unwrap()
+                .owner_generation
+                .to_string(),
+        ]);
+        assert!(
+            cleanup.status.success(),
+            "{}",
+            String::from_utf8_lossy(&cleanup.stderr)
+        );
+        eprintln!(
+            "R03 completion before input readiness: {}",
+            serde_json::json!({"owner_uuid":owner,"workload_exit":code,"input_ready":false,"actual_saved_completion":true,"actual_frontend_session_joined":true,"startup_count":1})
+        );
+    }
+}
+
+#[test]
+fn unsupported_readiness_capability_refuses_before_any_owner_reservation() {
+    // A probe-only configured program supplies an unsupported capability. It is
+    // never a fake owner/frontend or semantic-ready producer.
+    use std::os::unix::fs::PermissionsExt;
+    let mut fixture = Fixture::new();
+    let probe = fixture.root.join("unsupported-probe");
+    let queried = fixture.root.join("capability-queried");
+    let forbidden = fixture.root.join("backend-must-not-launch");
+    fs::write(&probe,format!("#!/bin/sh\ncase \"$1\" in\n --version) printf 'zellij 0.43.0\\n';;\n --zmux-input-readiness-protocol) printf x > '{}'; printf 'capability unavailable\\n' >&2; exit 2;;\n *) printf x > '{}'; exit 99;;\nesac\n",queried.display(),forbidden.display())).unwrap();
+    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    fixture.binary = probe;
+    let state = fixture.root.join("unsupported-desktop");
+    fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+    let profile = uuid::Uuid::new_v4();
+    let desktop = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(state));
+    let initial = wait(&desktop, |s| {
+        !s.persistence.startup_pending && s.pending_launches == 0 && !s.model.workspaces.is_empty()
+    });
+    send(
+        &desktop,
+        300,
+        DesktopCommand::LocalZellij {
+            request: ZellijRequest::Start {
+                profile_id: profile,
+                pane_id: initial.model.workspaces[0].focused_pane,
+                name: "unsupported-ready".into(),
+                cwd: fixture.root.clone(),
+                command: Some("exit 99".into()),
+                focus: true,
+            },
+        },
+    );
+    let failed = wait(&desktop, |s| {
+        s.local_zellij_operations
+            .last()
+            .is_some_and(|r| r.session_joined)
+    });
+    let operation = failed.local_zellij_operations.last().unwrap();
+    assert!(
+        queried.exists(),
+        "refusal must reach the required capability probe"
+    );
+    assert!(!forbidden.exists());
+    assert!(fixture.records().is_none());
+    assert!(
+        !operation.input_ready
+            && operation.owner_uuid.is_none()
+            && operation.checkpoint_revision.is_none()
+    );
+    assert!(operation.error.is_some() && operation.monitor_joined && operation.namespace_cleaned);
+    let _ = desktop.shutdown(Duration::from_secs(5));
 }

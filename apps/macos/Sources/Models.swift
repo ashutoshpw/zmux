@@ -188,7 +188,37 @@ struct CompletedLocalZellijHistory: Decodable, Sendable {
     let receipt: Receipt
     let viewport: CapturedViewport?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory? }
+struct NativeLocalZellijIdentity: Decodable, Sendable {
+    let profileId: UUID
+    let ownerUuid: UUID
+}
+
+/// Presentation of the Rust owner's correlation and physical-join receipts.
+/// Decoding this projection does not authenticate readiness independently.
+struct NativeLocalZellijOperation: Decodable, Sendable {
+    let inputReady: Bool
+    let attachmentId: UUID?
+    let epoch: UUID
+    let operationId: UInt64
+    let state: String
+    let profileId: UUID
+    let ownerUuid: UUID?
+    let surface: UUID
+    let checkpointRevision: UInt64?
+    let frontendPid: UInt32?
+    let error: String?
+    let finalFrameReceived: Bool
+    let monitorJoined: Bool
+    let namespaceCleaned: Bool
+    let sessionJoined: Bool
+    let frontendExitCode: UInt32?
+    let workloadExit: CompletedLocalZellijHistory.Receipt.Exit?
+    let executionContractVersion: UInt8?
+    let completionSavedRevision: UInt64?
+    let receiptDigest: String?
+}
+
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory?; let localZellij: NativeLocalZellijIdentity? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
@@ -316,6 +346,8 @@ struct BrowserProfileState: Decodable, Sendable {
 }
 struct WorkspaceIdentity: Decodable, Sendable { let workspaceId: UInt64; let uuid: UUID }
 struct DesktopSnapshot: Decodable, Sendable {
+    let localZellijEpoch: UUID
+    let localZellijOperations: [NativeLocalZellijOperation]
     let workspaceIdentities: [WorkspaceIdentity]
     let windowEpoch: UUID
     let windowRequests: [NativeWindowRequest]

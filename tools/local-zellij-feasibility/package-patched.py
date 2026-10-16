@@ -19,6 +19,14 @@ from owner_contract import source_hashes, verify_logs
 from package_build import PLUGINS
 from package_notices import collect as collect_notices
 from package_platform import collect as collect_platform
+from readiness_package import (
+    VARIANT,
+    verify_owner as verify_readiness_owner,
+    retain_sources as retain_readiness_sources,
+    verify_sources as verify_readiness_sources,
+    verify_consumer as verify_readiness_consumer,
+    verify_archive as verify_readiness_archive,
+)
 
 
 def read_json(path):
@@ -27,7 +35,7 @@ def read_json(path):
     return json.loads(path.read_text())
 
 
-def verify_chain(producer_path, owner_path):
+def verify_chain(producer_path, owner_path, readiness_owner_path=None):
     built = read_json(producer_path)
     owner = read_json(owner_path)
     if built["status"] != "passed" or owner["status"] != "passed" or not built.get("embedded_assets_rebuilt"):
@@ -79,6 +87,12 @@ def verify_chain(producer_path, owner_path):
         raise RuntimeError("actual owner suite phases missing")
     if owner["executed_owner_contract"] != verify_logs(owner_path.parent):
         raise RuntimeError("owner semantic contract evidence changed")
+    readiness = built.get("input_readiness", {}).get("requested") is True
+    if readiness:
+        verify_readiness_owner(producer_path, built, binary, readiness_owner_path, producer.digest)
+        verify_readiness_consumer(owner_path)
+    elif readiness_owner_path is not None:
+        raise RuntimeError("legacy package cannot consume a readiness owner receipt")
     return built, owner, binary, assets
 
 
@@ -87,7 +101,10 @@ def main():
     parser.add_argument("--producer-receipt", required=True, type=Path)
     parser.add_argument("--owner-receipt", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--readiness-owner-receipt", type=Path,
+                        help="mandatory exact actual readiness owner for the separate readiness variant")
     parser.add_argument("--reviewed-policy-sha256", help="explicit operator assertion of independently reviewed exact notice policy")
+    parser.add_argument("--reviewed-readiness-source-sha256", help="exact reviewed readiness inventory required for finite diagnostic package retention")
     parser.add_argument("--prepare-only", action="store_true", help="local review artifact; never promotable or named as a distributable")
     args = parser.parse_args()
     if not args.output.is_absolute():
@@ -103,7 +120,15 @@ def main():
             raise RuntimeError("promotion requires the exact independently reviewed notice-policy SHA256; use --prepare-only for local review")
         producer_path = args.producer_receipt.resolve()
         owner_path = args.owner_receipt.resolve()
-        built, owner, binary, assets = verify_chain(producer_path, owner_path)
+        readiness_owner_path = args.readiness_owner_receipt.resolve() if args.readiness_owner_receipt else None
+        built, owner, binary, assets = verify_chain(producer_path, owner_path, readiness_owner_path)
+        readiness = built.get("input_readiness", {}).get("requested") is True
+        if readiness:
+            if not args.prepare_only and args.reviewed_readiness_source_sha256 != built["input_readiness"]["inventory_sha256"]:
+                raise RuntimeError("diagnostic readiness retention requires the exact reviewed source inventory SHA256")
+            receipt["scope"] = "finite diagnostic readiness package only; no public release, default acquisition or native activation"
+        elif args.reviewed_readiness_source_sha256 is not None:
+            raise RuntimeError("legacy package cannot consume a reviewed readiness source assertion")
         environment = {key: value for key, value in os.environ.items() if key in built["build_environment_keys"] and not key.startswith("CARGO_")}
         environment.update(LANG="C", LC_ALL="C", TZ="UTC")
         for variable in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR"):
@@ -127,6 +152,10 @@ def main():
         (payload / "bin").mkdir(parents=True)
         shutil.copy2(binary, payload / "bin/zellij")
         notice = collect_notices(producer_path.parent, payload, sysroot, producer.digest)
+        corresponding_readiness = None
+        if readiness:
+            retain_readiness_sources(payload, built, producer.digest)
+            corresponding_readiness = verify_readiness_sources(payload, built, producer)
         shutil.copy2(output / "platform.json", payload / "platform.json")
         provenance = payload / "PROVENANCE"
         provenance.mkdir()
@@ -140,7 +169,14 @@ def main():
         for path in sorted(owner_path.parent.iterdir()):
             if path.is_file() and path.suffix in (".log", ".json"):
                 shutil.copy2(path, provenance / ("owner-" + path.name))
+        if readiness_owner_path is not None:
+            for path in sorted(readiness_owner_path.parent.iterdir()):
+                if path.is_file() and path.suffix in (".log", ".json"):
+                    shutil.copy2(path, provenance / ("readiness-owner-" + path.name))
         inputs = ["produce-patched.py", "run-patched-owner.py", "package-patched.py", "package_build.py", "package_notices.py", "package_sources.py", "package_platform.py", "notice-policy.json", "patched-producer-lock.json", "stdin-eintr.rs", "validate-wasm.rs", "capture-stdout.py", "owner_contract.py", "patches/0001-retry-interrupted-stdin.patch"]
+        if readiness:
+            inputs += ["readiness_package.py", "check-readiness-package-gates.py", "input-readiness-reporter.rs", "input-readiness-protocol.json",
+                       "input-readiness-source.json", "input-readiness-owner.py", "patches/0002-optional-input-readiness.patch"]
         inputs += [str(path.relative_to(HERE)) for path in sorted((HERE / "licenses/components").iterdir()) if path.is_file()]
         for name in inputs:
             target = provenance / "inputs" / name
@@ -154,6 +190,14 @@ def main():
                     "promotion_ready": not args.prepare_only, "notices": notice,
                     "metadata_only_text_supplements": read_json(policy)["metadata_only_text_supplements"],
                     "scope": receipt["scope"], "files": {}}
+        if readiness:
+            manifest.update(variant=VARIANT, diagnostic_only=True, input_readiness={
+                "asserted_reviewed_source_inventory_sha256": args.reviewed_readiness_source_sha256,
+                "protocol_sha256": producer.digest(HERE / "input-readiness-protocol.json"),
+                "source_inventory_sha256": built["input_readiness"]["inventory_sha256"],
+                "owner_receipt_sha256": producer.digest(readiness_owner_path),
+                "corresponding_source": corresponding_readiness,
+                "consumer_owner_contract": verify_readiness_consumer(owner_path)})
         for path in sorted(payload.rglob("*")):
             if path.is_symlink():
                 raise RuntimeError("package payload contains a link")
@@ -164,8 +208,9 @@ def main():
         if producer.digest(binary) != built["binary_sha256"] or producer.digest(payload / "bin/zellij") != built["binary_sha256"]:
             raise RuntimeError("tested executable changed while packaging")
         (payload / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        prefix = "UNREVIEWED-" if args.prepare_only else ""
-        name = prefix + "zellij-0.43.0-zmux-" + platform["target"] + "-" + policy_sha[:12] + ".tar.gz"
+        prefix = "UNREVIEWED-" if args.prepare_only else "DIAGNOSTIC-" if readiness else ""
+        variant = "-" + VARIANT + "-" + built["input_readiness"]["inventory_sha256"][:12] if readiness else ""
+        name = prefix + "zellij-0.43.0-zmux-" + platform["target"] + variant + "-" + policy_sha[:12] + ".tar.gz"
         archive = output / name
         with archive.open("xb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped, tarfile.open(fileobj=zipped, mode="w|") as stream:
             for path in sorted(payload.rglob("*")):
@@ -177,6 +222,8 @@ def main():
                 info.mode = 0o755 if path == payload / "bin/zellij" else 0o644
                 with path.open("rb") as data:
                     stream.addfile(info, data)
+        if readiness:
+            receipt["input_readiness_archive"] = verify_readiness_archive(archive, manifest, built, producer.digest, promotion_ready=not args.prepare_only)
         receipt.update(status="passed", promotion_ready=not args.prepare_only, archive=str(archive),
                        archive_sha256=producer.digest(archive), binary_sha256=built["binary_sha256"],
                        manifest_sha256=producer.digest(payload / "manifest.json"), notices=notice,

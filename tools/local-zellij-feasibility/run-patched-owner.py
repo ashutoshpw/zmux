@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
-from owner_contract import source_hashes, verify_logs
+from owner_contract import owner_checks, source_hashes, verify_logs
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -63,11 +63,7 @@ def main():
         receipt["source_sha"] = (output / "source.log").read_text().strip()
         runner.run(["rustc", "+1.95.0", "--verbose", "--version"], "rustc", output, phases, timeout=30, cwd=ROOT)
         environment = dict(os.environ, ZMUX_TEST_ZELLIJ_BIN=str(binary), CARGO_TARGET_DIR=str(target), CARGO_BUILD_JOBS="2")
-        checks = [
-            ["cargo", "+1.95.0", "test", "--locked", "-p", "zmux-session-runtime", "--test", "child", "--test", "lifecycle", "--test", "shutdown", "--", "--nocapture"],
-            ["cargo", "+1.95.0", "test", "--locked", "-p", "zmux-remote-runtime", "--lib", "local_zellij", "--", "--nocapture"],
-            ["cargo", "+1.95.0", "test", "--locked", "-p", "zmux", "--features", "local-zellij-conformance", "--test", "local_zellij", "--test", "local_zellij_owner", "--", "--nocapture"],
-        ]
+        checks = owner_checks(toolchain="+1.95.0")
         for index, command in enumerate(checks):
             runner.run(command, f"owner-{index}", output, phases, timeout=300, cwd=ROOT, env=environment)
             if any(phase["log_bytes_seen"] != phase["log_bytes_retained"] for phase in phases):

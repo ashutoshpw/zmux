@@ -128,7 +128,13 @@ impl Host {
             let mut offset = 0;
             while offset < bytes.len() {
                 match stream.read(&mut bytes[offset..]) {
-                    Ok(0) => panic!("observer EOF: {}", String::from_utf8_lossy(&client.output)),
+                    Ok(0) => {
+                        let exit = client.finish();
+                        panic!(
+                            "observer EOF with CLI exit {exit}: {}",
+                            String::from_utf8_lossy(&client.output)
+                        );
+                    }
                     Ok(count) => offset += count,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         client.pump(true);

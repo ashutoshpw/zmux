@@ -2,6 +2,7 @@ import AppKit
 import WebKit
 
 enum UICommand: Sendable {
+    case localZellij(NativeLocalZellijRequest)
     case window(String, UInt64?, Bool?)
     case windowEvent(NativeWindowEvent)
     case workspaceCreate(UInt64, String)
@@ -100,14 +101,14 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
     }
 
-    func start(storage: NativeDesktopStorage = .applicationSupport, terminalEngine: String? = nil) async throws {
+    func start(storage: NativeDesktopStorage = .applicationSupport, terminalEngine: String? = nil, localZellij: NativeLocalZellijConfiguration? = nil) async throws {
         guard !startRequested, shutdownTask == nil else {
             throw BridgeFailure(message: "The application desktop cannot be started more than once or after shutdown.")
         }
         startRequested = true
         _ = mainWindowHost
         WindowLifecycleSmoke.trace("coordinator before bridge.start")
-        try await bridge.start(storage: storage, terminalEngine: terminalEngine)
+        try await bridge.start(storage: storage, terminalEngine: terminalEngine, localZellij: localZellij)
         WindowLifecycleSmoke.trace("coordinator after bridge.start")
         guard shutdownTask == nil else {
             throw BridgeFailure(message: "Application shutdown interrupted desktop startup.")
@@ -137,6 +138,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 guard let self, !Task.isCancelled, self.shutdownTask == nil else { break }
                 do {
                     switch command {
+                    case .localZellij(let request): try await self.bridge.localZellij(request)
                     case .window(let operation, let window, let focus): try await self.bridge.window(operation, window: window, focus: focus)
                     case .windowEvent(let event): try await self.bridge.windowEvent(event)
                     case .workspaceMove(let workspace, let destination, let focus): try await self.bridge.moveWorkspace(workspace, destination: destination, focus: focus)

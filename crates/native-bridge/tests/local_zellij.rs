@@ -56,20 +56,16 @@ fn start(desktop: u64, pane: &Value, profile: uuid::Uuid, cwd: &Path) -> Value {
 }
 
 #[test]
-fn configured_foreign_owner_is_explicit_and_refuses_a_noncapable_dependency_before_reservation() {
+fn configured_foreign_owner_is_explicit_and_refuses_a_nonready_client_before_reservation() {
     let root = std::env::temp_dir().join(format!("zmux-native-ready-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let state = root.join("state");
     let profile_root = root.join("profile");
-    let probe = root.join("unsupported-probe");
-    let queried = root.join("capability-queried");
-    let forbidden = root.join("backend-must-not-launch");
-    // A capability-only negative fixture is never an owner or Ready producer.
-    fs::write(&probe, format!("#!/bin/sh\ncase \"$1\" in\n --version) printf 'zellij 0.43.0\\n';;\n --zmux-input-readiness-protocol) printf x > '{}'; exit 2;;\n *) printf x > '{}'; exit 99;;\nesac\n",queried.display(),forbidden.display())).unwrap();
-    fs::set_permissions(&probe, fs::Permissions::from_mode(0o700)).unwrap();
+    // This real short-lived executable cannot speak the retained CLI protocol.
+    // It proves configuration threading and refusal only, never owner readiness.
     let profile = uuid::Uuid::new_v4();
-    let local = json!({"installation":{"epoch":uuid::Uuid::new_v4(),"cli":"/bin/true","zellij":probe},
+    let local = json!({"installation":{"epoch":uuid::Uuid::new_v4(),"cli":"/bin/true","zellij":"/bin/true"},
                        "profiles":[{"id":profile,"root":profile_root}]});
     let desktop = configured(json!({"state_directory":state,"local_zellij":local}));
     assert_eq!(
@@ -103,9 +99,27 @@ fn configured_foreign_owner_is_explicit_and_refuses_a_noncapable_dependency_befo
     assert!(receipt["error"].is_string());
     assert_eq!(receipt["monitor_joined"], true);
     assert_eq!(receipt["namespace_cleaned"], true);
-    assert_eq!(fs::read(&queried).unwrap(), b"x");
-    assert!(!forbidden.exists());
-    assert_eq!(zmux_desktop_destroy(desktop.value), 0);
+    assert!(profile_root.is_dir());
+    assert_eq!(fs::read_dir(&profile_root).unwrap().count(), 0);
+    // The compatibility destroy helper reports intentional launch issues as
+    // INTERNAL. Inspect that public shutdown report rather than hiding it.
+    let begin = zmux_desktop_shutdown_begin(desktop.value, 5000, 0);
+    assert_eq!(begin.status, 0);
+    let ticket = consume(begin.value)["ticket"].as_u64().unwrap();
+    let stopped = zmux_desktop_shutdown_wait(desktop.value, ticket, 5000);
+    assert_eq!(stopped.status, 0);
+    let stopped = consume(stopped.value);
+    assert_eq!(stopped["physical_cleanup_complete"], true, "{stopped}");
+    let expected = receipt["error"].as_str().unwrap();
+    let issues = stopped["issues"].as_array().unwrap();
+    assert!(
+        !issues.is_empty()
+            && issues
+                .iter()
+                .all(|row| row.as_str().is_some_and(|text| text.contains(expected))),
+        "intentional owner refusal must remain visible without unrelated cleanup errors: {stopped}"
+    );
+    assert_eq!(zmux_desktop_shutdown_release(desktop.value, ticket), 0);
 
     let ordinary = configured(json!({"state_directory":root.join("ordinary-state")}));
     assert_eq!(ordinary.status, 0);

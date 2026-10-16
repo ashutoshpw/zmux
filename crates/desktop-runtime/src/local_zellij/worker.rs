@@ -1,6 +1,6 @@
 use super::{
-    Authorization, AuthorizationReceiver, ClientLaunchFailure, ClientReady, EventSender,
-    LaunchEvent, LaunchOperation, LaunchRequest, Observation, ObserverHandle,
+    Authorization, AuthorizationReceiver, ClientAdmission, ClientLaunchFailure, ClientReady,
+    EventSender, LaunchEvent, LaunchOperation, LaunchRequest, Observation, ObserverHandle,
     namespace::{Namespace, View},
 };
 use std::{
@@ -236,6 +236,7 @@ fn configured_cli_identity(
 mod tests;
 
 struct Ready {
+    admission: ClientAdmission,
     record: Record,
     frontend: Option<ProcessIdentity>,
     execution_contract_version: u8,
@@ -253,6 +254,7 @@ pub(crate) fn launch_client(
         let (namespace, listener) = Namespace::create(
             request.correlation.clone(),
             process_identity(std::process::id())?,
+            request.startup_deadline,
         )?;
         Ok((validated, namespace, listener))
     };
@@ -388,13 +390,22 @@ pub(crate) fn launch_client(
             SessionError::Failure("observer rejected retained CLI identity handoff".into())
         })?;
         loop {
-            if cancellation.load(Ordering::Acquire) || Instant::now() >= deadline {
+            if cancellation.load(Ordering::Acquire) {
                 return Err(SessionError::Failure(
                     "foreground Zellij startup cancelled or expired; do not replay".into(),
                 ));
             }
             match ready_rx.try_recv() {
-                Ok(Ok(ready)) => return Ok(ready),
+                Ok(Ok(ready)) => {
+                    if matches!(ready.admission, ClientAdmission::InputReady { .. })
+                        && Instant::now() >= deadline
+                    {
+                        return Err(SessionError::Failure(
+                            "frontend input readiness arrived after startup deadline".into(),
+                        ));
+                    }
+                    return Ok(ready);
+                }
                 Ok(Err(e)) => return Err(SessionError::Failure(e)),
                 Err(TryRecvError::Disconnected) => {
                     return Err(SessionError::Failure(
@@ -402,6 +413,11 @@ pub(crate) fn launch_client(
                     ));
                 }
                 Err(TryRecvError::Empty) => (),
+            }
+            if Instant::now() >= deadline {
+                return Err(SessionError::Failure(
+                    "frontend input readiness startup deadline; input unavailable".into(),
+                ));
             }
             if session.snapshot()?.state != zmux_session_runtime::State::Running {
                 return Err(SessionError::Failure(
@@ -415,6 +431,7 @@ pub(crate) fn launch_client(
         Ok(ready) => Ok(ClientReady {
             session,
             observer,
+            admission: ready.admission,
             record: ready.record,
             frontend: ready.frontend,
             execution_contract_version: ready.execution_contract_version,
@@ -575,11 +592,13 @@ impl Monitor {
             LaunchOperation::Attach { identity } => Some(identity.owner_uuid),
         };
         let mut record: Option<Record> = None;
-        let mut connected = false;
+        let mut transport: Option<(ProcessIdentity, uuid::Uuid)> = None;
+        let mut handed_off = false;
         let mut completed = None;
+        let mut terminal_pending = None;
         loop {
-            let frame = receive(&mut stream, &request, stopped, !connected)?;
-            if frame.version != 3
+            let frame = receive(&mut stream, &request, stopped, !handed_off)?;
+            if frame.version != 4
                 || frame.context != request.correlation
                 || frame.nonce != nonce
                 || frame.sequence != sequence + 1
@@ -632,7 +651,7 @@ impl Monitor {
                     send_ack(
                         &mut stream,
                         Acknowledgment {
-                            version: 3,
+                            version: 4,
                             context: request.correlation.clone(),
                             nonce: nonce.clone(),
                             sequence: 2,
@@ -649,7 +668,7 @@ impl Monitor {
                     owner = Some(owner_uuid);
                 }
                 Event::OwnerBound { record: bound }
-                    if !connected && record.is_none() && Some(bound.id) == owner =>
+                    if !handed_off && record.is_none() && Some(bound.id) == owner =>
                 {
                     if bound.verify_live().is_err()
                         && completion::authenticate(&bound, request.startup_deadline)?.is_none()
@@ -679,31 +698,94 @@ impl Monitor {
                 Event::TransportConnected {
                     owner_uuid,
                     frontend,
-                } if !connected && Some(owner_uuid) == owner && record.is_some() => {
+                    attachment_id,
+                } if transport.is_none()
+                    && terminal_pending.is_none()
+                    && !handed_off
+                    && Some(owner_uuid) == owner
+                    && record.is_some() =>
+                {
+                    let attachment_id = attachment_id
+                        .filter(|id| !id.is_nil())
+                        .ok_or_else(|| fail("missing readiness attachment identity"))?;
                     if frontend.parent_pid != cli.pid
+                        || frontend.uid != cli.uid
+                        || frontend.executable != validated.zellij
+                    {
+                        return Err(fail("frontend is not the configured bound CLI child"));
+                    }
+                    let frontend_live = match process_identity(frontend.pid) {
+                        Ok(current) if current == frontend => true,
+                        Ok(_) => return Err(fail("frontend live identity changed")),
+                        Err(_) => false,
+                    };
+                    let bound = record.as_ref().expect("bound record");
+                    if !frontend_live || bound.verify_live().is_err() {
+                        // Transport progress may be queued before a finite Child
+                        // ends and the CLI tears down its frontend. Retain only
+                        // independently authenticated terminal evidence, without
+                        // publishing progress or seeding the InputReady binding.
+                        let terminal = completion::authenticate(bound, request.startup_deadline)?
+                            .ok_or_else(|| {
+                            fail("historical transport has no authenticated terminal outcome")
+                        })?;
+                        terminal.matches(bound)?;
+                        terminal_pending = Some(terminal);
+                        continue;
+                    }
+                    startup(&request, stopped)?;
+                    view.validate()?;
+                    events
+                        .try_send(LaunchEvent::TransportConnected {
+                            correlation: request.correlation.clone(),
+                            frontend: frontend.clone(),
+                            attachment_id,
+                            execution_contract_version: record
+                                .as_ref()
+                                .expect("bound record")
+                                .execution_binding()?
+                                .contract_version(),
+                        })
+                        .map_err(|_| fail("native transport progress queue unavailable"))?;
+                    transport = Some((frontend, attachment_id));
+                }
+                Event::InputReady {
+                    owner_uuid,
+                    owner_generation,
+                    attachment_id,
+                    frontend,
+                } if !handed_off
+                    && terminal_pending.is_none()
+                    && completed.is_none()
+                    && Some(owner_uuid) == owner
+                    && record.is_some() =>
+                {
+                    let bound = record.as_ref().expect("bound owner");
+                    if transport.as_ref() != Some(&(frontend.clone(), attachment_id))
+                        || owner_generation != bound.execution_binding()?.owner_generation()
+                        || frontend.parent_pid != cli.pid
                         || frontend.uid != cli.uid
                         || frontend.executable != validated.zellij
                         || process_identity(frontend.pid)? != frontend
                     {
-                        return Err(fail("frontend is not the live bound CLI child"));
+                        return Err(fail(
+                            "input readiness differs from exact current frontend/attachment",
+                        ));
                     }
-                    record.as_ref().expect("checked record").verify_live()?;
+                    bound.verify_live()?;
                     startup(&request, stopped)?;
                     view.validate()?;
                     ready
                         .try_send(Ok(Ready {
-                            record: record.as_ref().expect("checked record").clone(),
+                            admission: ClientAdmission::InputReady { attachment_id },
+                            record: bound.clone(),
                             frontend: Some(frontend),
-                            execution_contract_version: record
-                                .as_ref()
-                                .expect("checked record")
+                            execution_contract_version: bound
                                 .execution_binding()?
                                 .contract_version(),
                         }))
-                        .map_err(|_| {
-                            fail("native retained-Session readiness receiver unavailable")
-                        })?;
-                    connected = true;
+                        .map_err(|_| fail("native input readiness receiver unavailable"))?;
+                    handed_off = true;
                 }
                 Event::WorkloadFinished {
                     owner_uuid,
@@ -711,6 +793,14 @@ impl Monitor {
                 } if Some(owner_uuid) == owner && record.is_some() && completed.is_none() => {
                     let bound = record.as_ref().expect("bound owner");
                     receipt.matches(bound)?;
+                    if terminal_pending
+                        .as_ref()
+                        .is_some_and(|expected| expected != &receipt)
+                    {
+                        return Err(fail(
+                            "correlated terminal event differs from historical transport proof",
+                        ));
+                    }
                     let authenticated =
                         completion::authenticate(bound, Instant::now() + Duration::from_secs(2))?;
                     if authenticated.as_ref() != Some(&receipt) {
@@ -719,12 +809,22 @@ impl Monitor {
                         ));
                     }
                     let deadline = Instant::now() + Duration::from_secs(10);
-                    if !connected {
-                        startup(&request, stopped)?;
+                    if !handed_off {
+                        if stopped.load(Ordering::Acquire)
+                            || request.cancellation.load(Ordering::Acquire)
+                        {
+                            return Err(fail(
+                                "terminal completion handoff cancelled; publisher retained",
+                            ));
+                        }
                         ready
                             .try_send(Ok(Ready {
+                                admission: ClientAdmission::TerminalObserved {
+                                    receipt: Box::new(receipt.clone()),
+                                    deadline,
+                                },
                                 record: bound.clone(),
-                                frontend: None,
+                                frontend: transport.as_ref().map(|(frontend, _)| frontend.clone()),
                                 execution_contract_version: bound
                                     .execution_binding()?
                                     .contract_version(),
@@ -732,7 +832,7 @@ impl Monitor {
                             .map_err(|_| {
                                 fail("completed retained Session readiness unavailable")
                             })?;
-                        connected = true;
+                        handed_off = true;
                     }
                     events
                         .try_send(LaunchEvent::WorkloadFinished {
@@ -775,7 +875,7 @@ impl Monitor {
                     }
                     view.validate()?;
                     let ack = Acknowledgment {
-                        version: 3,
+                        version: 4,
                         context: request.correlation.clone(),
                         nonce: nonce.clone(),
                         sequence: sequence + 1,
@@ -810,7 +910,7 @@ impl Monitor {
                 Event::FrontendFinished {
                     owner_uuid,
                     receipt,
-                } if connected && Some(owner_uuid) == owner => {
+                } if (transport.is_some() || completed.is_some()) && Some(owner_uuid) == owner => {
                     let bound = record.as_ref().expect("connected record");
                     let outcome_valid = match &receipt.owner_outcome {
                         Some(OwnerOutcome::WorkloadCompleted(terminal)) => {

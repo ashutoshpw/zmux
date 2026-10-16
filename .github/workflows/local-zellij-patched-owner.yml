@@ -3,12 +3,24 @@ name: Patched zellij production owner
 on:
   workflow_dispatch:
     inputs:
+      input_readiness:
+        description: Run only the reviewed Darwin dependency readiness experiment
+        type: boolean
+        default: false
+      reviewed_readiness_source_sha256:
+        description: Exact reviewed readiness source inventory SHA256 (required for readiness)
+        type: string
+        default: ''
       dependency_package:
-        description: Build source plugins and retain an independently reviewed dependency package
+        description: Build source plugins and a reviewed package (readiness defaults to ephemeral preparation)
+        type: boolean
+        default: false
+      retain_readiness_package:
+        description: Retain a separately reviewed diagnostic readiness package for seven days
         type: boolean
         default: false
       reviewed_notice_policy_sha256:
-        description: Exact independently reviewed notice-policy SHA256 (required for package upload)
+        description: Exact independently reviewed notice-policy SHA256 (required for package work)
         type: string
         default: ''
 
@@ -20,7 +32,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  reject-invalid-readiness-retention:
+    if: inputs.retain_readiness_package && inputs.input_readiness != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require explicit readiness mode for diagnostic retention
+        run: |
+          echo "Diagnostic readiness retention requires input_readiness=true" >&2
+          exit 1
+
+  input-readiness:
+    if: inputs.input_readiness
+    uses: ./.github/workflows/local-zellij-input-readiness.yml
+    with:
+      reviewed_readiness_source_sha256: ${{ inputs.reviewed_readiness_source_sha256 }}
+      dependency_package: ${{ inputs.dependency_package }}
+      retain_readiness_package: ${{ inputs.retain_readiness_package }}
+      reviewed_notice_policy_sha256: ${{ inputs.reviewed_notice_policy_sha256 }}
+
   patched-production-owner:
+    if: inputs.input_readiness != true && inputs.retain_readiness_package != true
     strategy:
       fail-fast: false
       matrix:
