@@ -42,9 +42,17 @@ enum BrowserDownloadSmoke {
     }
     private static func drivePanel(_ phase: String, currentName: String, destination: URL) async throws {
         guard let app = Bundle.main.executableURL else { throw BridgeFailure(message: "Native save driver cannot identify its exact app") }
-        let executable = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("native-save-panel-driver")
         let arguments = [phase, String(getpid()), app.path, currentName, destination.deletingLastPathComponent().path, destination.lastPathComponent]
         let output = destination.deletingLastPathComponent().appendingPathComponent("ax-" + phase + "-" + destination.lastPathComponent + ".log")
+        try await runDriver(arguments, output: output)
+    }
+    private static func preflight(report: URL) async throws {
+        guard let app = Bundle.main.executableURL else { throw BridgeFailure(message: "Native save driver cannot identify its exact app") }
+        let output = report.deletingLastPathComponent().appendingPathComponent("native-download-preflight.log")
+        try await runDriver(["preflight", String(getpid()), app.path], output: output)
+    }
+    private static func runDriver(_ arguments: [String], output: URL) async throws {
+        let executable = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("native-save-panel-driver")
         try await Task.detached {
             guard FileManager.default.isExecutableFile(atPath: executable.path),
                   FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
@@ -84,7 +92,7 @@ enum BrowserDownloadSmoke {
             }
             FileHandle.standardError.write(data)
             guard !timedOut, process.terminationReason == .exit, process.terminationStatus == 0 else {
-                throw BridgeFailure(message: "Native download acceptance gated: external save-panel UI input failed (" + String(process.terminationStatus) + "): " + String(decoding: data, as: UTF8.self))
+                throw BridgeFailure(message: "Native download acceptance gated: external save-panel driver " + (arguments.first ?? "unknown") + " failed (" + String(process.terminationStatus) + "): " + String(decoding: data, as: UTF8.self))
             }
         }.value
     }
@@ -93,11 +101,14 @@ enum BrowserDownloadSmoke {
         try await removal.value
     }
     static func validate(
-        origin: String, window: NSWindow,
+        origin: String, window: NSWindow, report: URL,
         cli: @escaping @MainActor ([String], Bool) async throws -> Data,
         snapshot: @MainActor () -> DesktopSnapshot?,
         browser: @MainActor (UInt64) -> BrowserView?
     ) async throws {
+        // Discover an unavailable host capability before creating a browser,
+        // admitting a download or presenting a sheet. This is never acceptance.
+        try await preflight(report: report)
         let setup = Task<URL, Error>.detached {
             let requested = FileManager.default.temporaryDirectory
                 .appendingPathComponent("zmux-native-download-" + UUID().uuidString, isDirectory: true)

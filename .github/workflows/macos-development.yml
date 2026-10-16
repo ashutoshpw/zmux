@@ -81,6 +81,8 @@ jobs:
             dist/zmux-dev-universal-*.zip.sha256
             dist/build-info.json
             dist/native-smoke.json
+            dist/native-smoke.json.stages.json
+            dist/native-download-preflight.log
             dist/native-windows.json
             dist/native-resources.json
             dist/Zmux-native-smoke.png
@@ -98,6 +100,8 @@ jobs:
             dist/native-*.log
             dist/native-window-*.json
             dist/native-smoke.json
+            dist/native-smoke.json.stages.json
+            dist/native-download-preflight.log
             dist/native-windows.json
             dist/native-resources.json
             dist/native-failure-process.json

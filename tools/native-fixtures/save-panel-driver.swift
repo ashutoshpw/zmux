@@ -22,28 +22,36 @@ enum SavePanelDriver {
     @MainActor
     private static func drive() throws {
         let arguments = CommandLine.arguments
-        guard arguments.count == 7, ["select", "accept"].contains(arguments[1]),
+        guard arguments.count > 1,
+              (arguments.count == 4 && arguments[1] == "preflight") ||
+              (arguments.count == 7 && ["select", "accept"].contains(arguments[1])),
               let pid = Int32(arguments[2]), pid > 0, pid != getpid() else {
-            throw Failure(description: "Expected select|accept APP_PID EXECUTABLE CURRENT_NAME DIRECTORY NEW_NAME")
-        }
-        // Never prompt, grant permissions or alter TCC. A host without this
-        // authorization cannot establish native save acceptance.
-        guard AXIsProcessTrusted() else {
-            print("{\"accessibility_trusted\":false,\"native_save_acceptance\":\"gated\"}")
-            throw Failure(description: "External Accessibility input is not trusted; native download acceptance remains gated. No permission prompt or TCC change was attempted.")
-        }
-        guard CGPreflightPostEventAccess() else {
-            throw Failure(description: "Targeted native key input is not authorized; native download acceptance remains gated. No permission request was attempted.")
+            throw Failure(description: "Expected preflight APP_PID EXECUTABLE or select|accept APP_PID EXECUTABLE CURRENT_NAME DIRECTORY NEW_NAME")
         }
         guard let running = NSRunningApplication(processIdentifier: pid),
               running.executableURL?.standardizedFileURL.path == URL(fileURLWithPath: arguments[3]).standardizedFileURL.path else {
             throw Failure(description: "Target PID is not the exact packaged application executable")
+        }
+        // Never prompt, grant permissions or alter TCC. A host without this
+        // authorization cannot establish native save acceptance.
+        let accessibilityTrusted = AXIsProcessTrusted()
+        let postEventAccess = CGPreflightPostEventAccess()
+        if arguments[1] == "preflight" || !accessibilityTrusted || !postEventAccess {
+            let status = accessibilityTrusted && postEventAccess ? "capability_only" : "gated"
+            print("{\"accessibility_trusted\":\(accessibilityTrusted),\"post_event_access\":\(postEventAccess),\"target_pid\":\(pid),\"phase\":\"\(arguments[1])\",\"native_save_acceptance\":\"\(status)\"}")
+        }
+        guard accessibilityTrusted else {
+            throw Failure(description: "External Accessibility input is not trusted; native download acceptance remains gated. No permission prompt or TCC change was attempted.")
+        }
+        guard postEventAccess else {
+            throw Failure(description: "Targeted native key input is not authorized; native download acceptance remains gated. No permission request was attempted.")
         }
         let app = AXUIElementCreateApplication(pid)
         var actual: pid_t = 0
         guard AXUIElementGetPid(app, &actual) == .success, actual == pid else {
             throw Failure(description: "Accessibility application identity differs from the target PID")
         }
+        if arguments[1] == "preflight" { return }
         let deadline = ContinuousClock.now + .seconds(10)
         // The public AX attribute has no kAXSheetsAttribute export in this SDK.
         let sheetsAttribute = "AXSheets"
