@@ -1,7 +1,8 @@
 //! Versioned topology descriptors. No process state, input, filesystem or network I/O.
 //!
 //! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
-//! descriptors; V4 adds canonical window membership; V5 adds workspace todos; V6 adds attach-only local Zellij identity.
+//! descriptors; V4 adds canonical window membership; V5 adds workspace todos;
+//! V6 adds attach-only local Zellij identity; V7 adds bounded completed history.
 //! Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
@@ -10,7 +11,7 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 6;
+pub const SESSION_DOCUMENT_VERSION: u32 = 7;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -122,6 +123,11 @@ pub struct SavedSurface {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SavedContent {
+    CompletedLocalZellijTerminal {
+        profile_id: uuid::Uuid,
+        owner_uuid: uuid::Uuid,
+        history: Box<LocalZellijCompletion>,
+    },
     LocalZellijTerminal {
         profile_id: uuid::Uuid,
         owner_uuid: uuid::Uuid,
@@ -306,6 +312,23 @@ impl Validation {
                     valid_name(surface.title.clone())
                         .map_err(|_| invalid("invalid surface title"))?;
                     match &surface.content {
+                        SavedContent::CompletedLocalZellijTerminal {
+                            profile_id,
+                            owner_uuid,
+                            history,
+                        } => {
+                            if self.version < 7 {
+                                return Err(invalid(
+                                    "completed local Zellij history requires session version 7",
+                                ));
+                            }
+                            history
+                                .validate(&LocalZellijIdentity {
+                                    profile_id: *profile_id,
+                                    owner_uuid: *owner_uuid,
+                                })
+                                .map_err(|error| invalid(error.to_string()))?;
+                        }
                         SavedContent::LocalZellijTerminal {
                             profile_id,
                             owner_uuid,
@@ -495,6 +518,22 @@ impl SavedTree {
                                 surface.title.clone()
                             },
                             content: match surface.kind {
+                                SurfaceKind::Terminal
+                                    if surface.local_zellij_completion.is_some() =>
+                                {
+                                    let identity = surface
+                                        .local_zellij
+                                        .as_ref()
+                                        .expect("validated completed descriptor");
+                                    SavedContent::CompletedLocalZellijTerminal {
+                                        profile_id: identity.profile_id,
+                                        owner_uuid: identity.owner_uuid,
+                                        history: surface
+                                            .local_zellij_completion
+                                            .clone()
+                                            .expect("checked completed history"),
+                                    }
+                                }
                                 SurfaceKind::Terminal if surface.local_zellij.is_some() => {
                                     let identity =
                                         surface.local_zellij.as_ref().expect("checked descriptor");
@@ -569,6 +608,28 @@ impl SavedTree {
                             remote: None,
                             local_tmux: None,
                             local_zellij: None,
+                            local_zellij_completion: None,
+                        },
+                        SavedContent::CompletedLocalZellijTerminal {
+                            profile_id,
+                            owner_uuid,
+                            history,
+                        } => Surface {
+                            id: saved.id,
+                            kind: SurfaceKind::Terminal,
+                            session_id: None,
+                            url: None,
+                            navigation: 0,
+                            browser_profile_id: None,
+                            title: saved.title,
+                            cwd: None,
+                            remote: None,
+                            local_tmux: None,
+                            local_zellij: Some(LocalZellijIdentity {
+                                profile_id,
+                                owner_uuid,
+                            }),
+                            local_zellij_completion: Some(history),
                         },
                         content => {
                             let session_id = ids.next().expect("validated injected session count");

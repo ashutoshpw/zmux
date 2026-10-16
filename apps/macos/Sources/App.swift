@@ -76,6 +76,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var notificationDelivery: NotificationDelivery { coordinator.notificationDelivery }
     private var imagePastes: ClipboardImagePastes { coordinator.imagePastes }
     private var terminals: [UInt64: TerminalView] { coordinator.terminals }
+    private var completedHistories: [UInt64: CompletedTerminalHistoryView] { coordinator.completedHistories }
     private var browsers: [UInt64: BrowserView] { coordinator.browsers }
     var browserViewportSize: NSSize { canvas.bounds.size }
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
@@ -357,6 +358,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             // A hidden sidebar cannot keep keyboard focus. Preserve content
             // responders otherwise, including a browser address field/editor.
             if let terminal = focusedTerminal { window.makeFirstResponder(terminal) }
+            else if let surface = focusedPane?.selectedSurface, let history = completedHistories[surface] {
+                window.makeFirstResponder(history.outputResponder)
+            }
             else if let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
                 window.makeFirstResponder(browser.webView)
             }
@@ -542,6 +546,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             } else if let responder = window.firstResponder as? TerminalView, responder !== terminal {
                 window.makeFirstResponder(terminal)
             }
+        } else if let pane = focusedPane, let history = completedHistories[pane.selectedSurface] {
+            pendingBrowserFocus = nil
+            if selectionChanged || !didSetInitialTerminalFocus {
+                window.makeFirstResponder(history.outputResponder)
+                didSetInitialTerminalFocus = true
+            }
         } else if let pane = focusedPane, let browser = browsers[pane.selectedSurface] {
             if selectionChanged || (layoutChanged && detachedContentResponder) {
                 pendingBrowserFocus = pane.selectedSurface
@@ -653,6 +663,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             detail = error
         } else if let pane = focusedPane, pane.selected.kind == "browser" {
             detail = pane.selected.url == "about:blank" ? "Private browser" : (pane.selected.url ?? "Private browser")
+        } else if let completion = focusedPane?.selected.localZellijCompletion {
+            detail = completion.receipt.workloadExit.label
         } else if let workingDirectory = focusedViewport(in: snapshot)?.workingDirectory, !workingDirectory.isEmpty {
             detail = (workingDirectory as NSString).abbreviatingWithTildeInPath
         } else if let endpoint = focusedPane?.selected.remote {
@@ -762,6 +774,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 terminal.onResize = { [weak self] rows, cols in self?.enqueue(.resize(session, rows, cols)) }
                 terminal.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
                 view = terminal
+            } else if let completion = pane.selected.localZellijCompletion {
+                let focus: () -> Void = { [weak self] in
+                    self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil))
+                }
+                view = coordinator.completedHistory(surface: pane.selectedSurface, history: completion, onFocus: focus)
             } else {
                 // Reconciliation owns profile validation, datastore selection and
                 // automation binding. Presentation must never bypass that owner.
@@ -2711,6 +2728,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let storage: NativeDesktopStorage
                 if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
                     storage = .transient
+                } else if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
@@ -2720,6 +2739,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
+                    do {
+                        try await CompletedTerminalHistorySmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native completed history failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Completed history cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--terminal-selection-smoke"), CommandLine.arguments.count > index + 1 {
                     do {
                         try await TerminalSelectionSmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
@@ -2784,7 +2815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
+                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }

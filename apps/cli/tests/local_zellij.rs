@@ -36,7 +36,7 @@ fn production_supervisor_rejects_changed_starter_and_unauthorized_spawn() {
         fs,
         io::{Read, Write},
         os::unix::{
-            fs::{DirBuilderExt, OpenOptionsExt},
+            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
             net::UnixListener,
         },
         time::{Duration, Instant},
@@ -61,7 +61,7 @@ fn production_supervisor_rejects_changed_starter_and_unauthorized_spawn() {
         if changed_starter {
             starter.start[0] += 1;
         }
-        let spec = serde_json::json!({"socket":socket,"starter":starter,"program":std::fs::canonicalize(env!("CARGO_BIN_EXE_zmux")).unwrap(),"nonce":"a".repeat(64),"cwd":root,"shell":"/bin/sh","command":format!("printf started > '{}'", proof.display())});
+        let spec = serde_json::json!({"socket":socket,"starter":starter,"program":std::fs::canonicalize(env!("CARGO_BIN_EXE_zmux")).unwrap(),"nonce":"a".repeat(64),"cwd":root,"shell":"/bin/sh","command":format!("printf started > '{}'", proof.display()),"owner_uuid":uuid::Uuid::new_v4(),"owner_generation":uuid::Uuid::new_v4(),"profile":root});
         let path = root.join(if changed_starter {
             "changed.json"
         } else {
@@ -100,12 +100,16 @@ fn production_supervisor_rejects_changed_starter_and_unauthorized_spawn() {
             peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut length = [0; 4];
             peer.read_exact(&mut length).unwrap();
-            assert_eq!(u32::from_le_bytes(length), 66);
-            let mut nonce = [0; 66];
-            peer.read_exact(&mut nonce).unwrap();
+            let length = u32::from_le_bytes(length) as usize;
+            assert!((1..=4096).contains(&length));
+            let mut body = vec![0; length];
+            peer.read_exact(&mut body).unwrap();
+            let hello: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(hello["nonce"], "a".repeat(64));
+            let endpoint = root.join("completion.sock").symlink_metadata().unwrap();
             assert_eq!(
-                serde_json::from_slice::<String>(&nonce).unwrap(),
-                "a".repeat(64)
+                hello["completion_socket"],
+                serde_json::json!([endpoint.dev(), endpoint.ino()])
             );
             let denied = b"\"not-authorized\"";
             peer.write_all(&(denied.len() as u32).to_le_bytes())
