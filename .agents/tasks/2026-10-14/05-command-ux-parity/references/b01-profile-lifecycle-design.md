@@ -150,5 +150,20 @@ removal so a missing callback is unknown, never treated as a cleanup retry. Nati
 failure retains the exact error and generated namespace; it never deletes WebKit
 filesystem paths. No user's bundle, stores or running app are touched.
 
-The probe remains unexecuted. Its actual mounted-busy/released-success result is
-a design feasibility gate, separate from the production lease acquisition check.
+Run [38837864579](https://github.com/ashutoshpw/zmux/actions/runs/38837864579)
+executed exact commit `a32530fd36afafd21edfd99077331b502b7d99b4` on macOS 15.7.9
+arm64. Build/sign passed. The owned native process exited 1 after 4.287 seconds,
+without a watchdog timeout. Mounted A removal returned `WKWebSiteDataStore` code
+1, `Data store is in use`, and A data remained intact. After the A view/store weak
+references disappeared, the public removal callback returned no error. B remained
+intact, but the reopened-A emptiness assertion failed. Both removal callbacks
+arrived; this is a known reported-success callback followed by an unresolved data
+observation, not a pending/unknown removal outcome.
+
+The first report retained only a combined emptiness boolean. It cannot distinguish
+localStorage retention, cookie retention or an observation-format mismatch. A
+diagnostic-only follow-up retains bounded actual A/B observation strings plus A's
+localStorage/cookie values, preserving the same assertions, fresh generated IDs
+and one call per removal phase. No failed removal is retried. The native evidence
+does not yet admit production clear/delete, and remains separate from the
+production lease acquisition check.

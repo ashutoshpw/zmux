@@ -75,7 +75,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [B01 browser profiles](references/b01-browser-profiles.md) — explicit persistent profiles, catalog ownership, schema migration and isolation gates.
 - [B01 profile leases](references/b01-profile-leases.md) — shared/exclusive OS-lock prerequisite; native datastore namespace and physical lifetime integration remain open.
 - [B01 native profile lease acquisition](references/b01-native-profile-lease-acquisition.md) — fixed OS Library namespace, async pre-construction ownership and process-lifetime retention; clear/delete remain unavailable.
-- [B01 clear/delete lifecycle design](references/b01-profile-lifecycle-design.md) — read-only public API evidence, admission/lifetime lock ordering, busy restoration and selected-catalog deletion scope.
+- [B01 clear/delete lifecycle design](references/b01-profile-lifecycle-design.md) — read-only design and finite native probe; mounted busy/released callback success observed, empty reopen unresolved; production clear/delete unavailable.
 - [F04 session engine](references/f04-session-engine.md) — optional worker-owned engine, physical causal replies and remaining native/fidelity gates.
 - [F04 engine evaluation](references/f04-engine-evaluation.md) — pinned permissive sources, isolated C/Rust snapshot/reflow evidence and remaining engine/native decision gates.
 - [F04 candidate adapter](references/f04-adapter-candidate-design.md) — Viewport/input/effect ownership, page-allocation/history blockers, static packaging and executable fidelity/Mac workload gates.
