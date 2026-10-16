@@ -320,5 +320,267 @@ partial-write owner test (2.078s), scoped rustfmt and strict feature Clippy
 correction uses focused delta validation. Evidence:
 `target/agent-validation/r03-native-observer-correction-20261016/frozen-v1/receipt.json`,
 SHA256 `dbebb2d33a00dccc6d791f5da8c67b6c996145f2a84d8c7705433faba2e70414`.
-The final frozen V2 adds only this evidence note. A reviewed-source Darwin rerun
-remains pending.
+The final frozen V2 adds only this evidence note.
+
+Reviewed diagnostic source `4b96b48b777a46933d604b0481712c287a7b31ff` passed
+native run `38833738922` on macOS 15.7.9 ARM64. All 35 owner tests executed
+successfully (suite counts 2, 15, 3, 5, 3, 7), including observed Start/Attach actual
+input, startup-once, clean TERM/HUP final receipts, actual observer EOF and
+unsolicited-input rejection preserving the original live owner, version/downstream
+descriptor scrub, the nine acknowledgment/cancellation/deadline controls,
+deterministic partial lifecycle write refusal and the queued-input PENDIN probe.
+The emitted protocol receipt explicitly declares synthetic revision 42 and
+`native_durable_checkpoint_proven: false`.
+
+Independent verification matched all 262 source hashes, all nine complete phase
+logs, final dependency signature/version receipts and all 1,237 app-bundled
+dependency files against the retained package. The app ZIP is 72,048,293 bytes,
+SHA256 `7fe2640c4a62fef3ee80c67c3fa1e5dbc6487cbfef32806d7ce1463016afe539`.
+Outer artifact `12017848676` is 133,415,007 bytes, SHA256
+`4fe21be1a868f2a717dbc4ddf0d6943bab31c7db32c90c813b33a0c0e0cd8dd1`.
+The source/ARM64 Mach-O/plist/build metadata and retained producer/binary hashes
+also matched. No downloaded executable was run during verification. Receipt:
+`target/agent-validation/r03-native-observer-hosted-38833738922/verified-receipt.json`,
+SHA256 `aff06f4e8cfd314877a32368157adcda6c33a4f0484eac4a72fc739232c4b998`.
+
+This accepts the Cargo-built CLI observer path using the final app-bundled
+retained dependency on that host. It does not accept AppKit Start/Attach, a native
+durable checkpoint, Intel/universal or minimum-OS execution, or default/durable
+distribution. The failed `6949d8f` run remains a separate failed receipt.
+
+## V6 descriptor and S01 reservation checkpoint proposal
+
+2026-10-16, reviewed against committed `6949d8f`. The checkpoint remains design
+only; the first pure-core descriptor candidate is described below. No checkpoint
+or native Start implementation is admitted by this note. The foreground
+observer is committed, but its synthetic acknowledgment tests do not establish a
+native durable checkpoint. The S01 owner and foreground/consumer owner coordinated
+this proposal; the latter has no overlapping core/persistence edits.
+
+### Existing owner constraints
+
+- `workspace-core/src/restore.rs:124,451,612,645` owns saved terminal variants,
+  capture, validation and preparation. V5 required todo arrays already apply to
+  later versions (`:387`); preserve exact UUID/order/state/origin, bounds and
+  canonical window membership. Generic snapshots remain display-only.
+- `desktop-runtime/src/sessions.rs:246` rejects every pending launch for ordinary
+  Save/export/autosave capture. `:573,590` commits a complete prepared restore or
+  removes every provisional session on failure. Undo also owns provisional
+  surfaces; no checkpoint may make either restore candidate authoritative.
+- `sessions.rs:495` retains the latest safe model document in `p.committed`;
+  `:502` advances `saved_document` when a write is merely submitted. That cache is
+  not durability evidence. `:613-710` drains existing writes and flushes
+  `p.committed` at shutdown. A checkpoint that only writes a file could otherwise
+  be erased by this older fallback document while its launch is still pending.
+- `persistence.rs:124,160,263,307` provides one FIFO file worker with eight credits
+  covering queued, executing and unpolled completions. `:662,727` validates bounded
+  documents and performs private sibling write, file sync, atomic commit and
+  directory sync. A directory-sync error can follow visible replacement; it must
+  not be reported as an unchanged file or authorize a workload.
+- `local_zellij/files.rs:290-292` reserves durably, waits for the observer's exact
+  acknowledgment, then reaches supervisor creation. `observer.rs:223-278` accepts
+  only the matching full context/nonce/owner and nonzero declared revision. No
+  supervisor creation or Start retry belongs in the native consumer.
+- `desktop-runtime/src/lib.rs:2078,2174,2276` owns launch effects, charged workers,
+  generation-fenced completion and eventual Session adoption. `Slot::drop` cancels
+  its worker (`:844`). `shutdown.rs:235-318` cancels owners and waits for physical
+  joins under one root deadline; logical launch failure does not release capacity.
+
+Paths above are under `crates/`. Source inspection establishes existing behavior;
+this proposal has no new execution receipt.
+
+### Attach-only schema and recovery
+
+Add one original MIT terminal descriptor containing exactly nonnil `profile_id`
+and `owner_uuid`, represented as an exclusive v6 `SavedContent` variant. Reject
+that variant in v1-5, missing/null/nil IDs, unknown fields and command/path/socket/
+environment additions before reserving or launching. V6 still requires explicit
+v5 todo arrays and the v4 canonical window layout; v1-5 readers stay explicit.
+The descriptor counts as one terminal under the existing resource limits.
+
+Canonical surface construction and capture must reject mixed SSH, local-tmux and
+local-Zellij identity, including browser misuse. Do not add a serialization match
+priority that silently drops one identity. One shared pure descriptor validator
+serves direct actions, capture and restore. Installed-profile resolution, registry
+checks and all executable/process work stay on workers. Missing or changed
+profiles/owners produce explicit Attach failure; no shell or display-name fallback.
+
+Restore, undo, reopen and retry of an uncertain launch emit only Attach for the
+exact saved UUID. The core descriptor and its recovered launch effect have no
+workload Start alternative. A generic `StartSession` effect may create the outer
+PTY/CLI client, but its Zellij mode is always Attach. Full restore remains atomic;
+failed startup retains the original file/protection latch and existing explicit
+S01 recovery behavior. A starter workspace after a reported failed startup is not
+a reinterpretation of the failed Zellij descriptor as an ordinary shell.
+
+### Reserve identities before the foreground child
+
+The immutable observer envelope needs native surface/session UUIDs before CLI
+spawn. Add an opaque, pure core reservation ticket: consume IDs from the live
+allocator only after `ensure_reserved` verifies the durable allocation block,
+then hold route, namespace and allocated IDs in the pending operation. The ticket
+may reserve the workspace/pane IDs needed by a new-workspace route as well. Its
+IDs remain burned after failure/cancellation. Cloning an uncommitted allocator
+without advancing the live floor would let unrelated actions reuse them.
+
+There is no canonical ordinary-shell placeholder and no initial `StartSession`
+effect. The operation owns its provisional route, immutable correlation, original
+deadline, cancellation, actual Session/CLI child, observer namespace and charged
+capacity. The core ticket grants no filesystem/process authority. Installation
+must revalidate the live target and consume the opaque ticket once; no public raw
+ID insertion API is exposed through Action/FFI.
+
+After `OwnerReserved`, installation creates an attach-only surface with those same
+IDs and emits no second launch effect. The already-running retained Session is
+adopted into its exact reserved slot when the consumer completes; it is not
+respawned or reconstructed from an arbitrary PID. Before adoption, close/Slot
+cancellation must still reach the worker holding that physical Session/observer.
+
+### Checkpoint admission and durability acknowledgment
+
+Use a narrowly typed `SessionPersistence` checkpoint operation wrapping the
+existing `PersistenceWorker::submit_save` queue, not public ordinary Save, another
+worker, or a sidecar. Initially admit at most one reservation checkpoint at a
+time. Its private ticket seals the complete candidate document, capture revision,
+I/O operation ID, full observer correlation, profile/owner and launch generation.
+
+At authenticated `OwnerReserved`, plan against the latest canonical model and
+insert only the ticket's attach descriptor. Validate target identity, allocated
+ID bounds, browser profiles, canonical todos and the full enriched 512 KiB saved
+document using the same capture/serializer as S01. All checks on the executor are
+bounded and pure. Unrelated pending shell/SSH/tmux launches, startup/load, full
+restore and provisional undo prevent this admission; waiting, if used, consumes
+the original launch deadline and cancellation budget rather than renewing it.
+
+Submit the sealed candidate first. A rejected queue submission installs nothing
+and sends no acknowledgment; consumed IDs and the CLI's reserved owner are not
+reused or deleted. Once the queue accepts, atomically install the validated
+attach-only candidate and its pending slot/checkpoint metadata on the serialized
+action owner. This is a model commit, not a durable-success receipt. Model edits
+can continue afterward; never restore an older whole-model clone over them.
+
+Treat that installed descriptor as recovery-safe intent. Record its document in
+`p.committed` at queue acceptance/model installation, before any authorization,
+so cancellation/shutdown cannot fall back to a pre-reservation document. Subsequent safe captures may advance this
+baseline. An older Saved completion must never replace a newer `p.committed`.
+
+Normal autosave submission pauses while this typed checkpoint is in flight, though
+safe capture can keep the shutdown baseline current. Previously queued writes are
+ordered before it by the same FIFO writer. An unrelated Saved completion cannot
+clear the checkpoint or authorize it. On actual matching `Saved`, record the sealed
+document as saved, update its exact receipt/revision, then allow autosave to catch
+up from the latest canonical document. `saved_document`, a queued request, any
+other successful Save, or a completed PTY spawn cannot satisfy the checkpoint.
+
+Only then may the consumer issue one `ReservationCommitted`, after rechecking the
+installation epoch, operation, namespace, current surface/session IDs and launch
+generation, exact profile/owner descriptor, original deadline and cancellation/
+shutdown state. Correlation and the I/O ticket identify the sealed saved revision;
+an unrelated later topology or todo change need not invalidate this owner. Do not
+require equality with the latest whole-model revision: todo-only writes preserve
+that revision, and unrelated edits are not owner authorization. The acknowledgment
+returns the sealed revision, never a guessed/current counter.
+
+### Narrow pending-launch capture and rollback policy
+
+Do not remove the ordinary pending-launch guard globally. An internal recovery
+capture may allow pending launches only when **every** pending launch is certified
+as the exact active R03 operation/slot with a known attach-only descriptor. Count
+comparison alone or the presence of any R03 launch is insufficient. Reject full
+restore, provisional undo, unbound reservations, unrelated pending launch kinds
+and unmatched/stale worker generations. Public Save/export can retain their
+existing stricter stability behavior. Use this same narrow helper for autosave's
+committed baseline and shutdown capture, preserving later v5 todo edits while
+known R03 clients are still starting.
+
+Before queue acceptance, cancel the provisional operation and discard its candidate
+without undo history; other canonical state is unchanged and IDs stay burned.
+After acceptance, persistence failure/unknown completion retains the exact failed
+attach descriptor, cancels the frontend, disables authoritative overwrite through
+S01's existing failure latch, and never acknowledges or automatically retries
+Start. Disk replacement may already have happened. There is no compensating write
+of an older file or rollback over concurrent workspace/todo edits. Explicit user
+close may remove the tile; only a newer successful current-state save supersedes
+the older checkpoint through the existing queue.
+
+If close, stale generation or shutdown occurs before a late successful completion,
+record its actual persistence outcome but send no authorization. Shutdown cancels
+R03 jobs concurrently before draining/checkpoint decisions; even a completion
+already queued cannot regain authority. Drain accepted writes, preserve the latest
+safe `p.committed`, then perform the existing final flush/join. A successful or
+partially written acknowledgment followed by lost transport is uncertain: retain
+the attach-only owner identity and never construct another Start. Capacity and the
+observer namespace remain held until the actual Session/launch/observer workers
+have physically finished and joined under the existing root ticket.
+
+### Proposed verification and delivery boundary
+
+1. Pure core/document regression: exact v6 descriptor roundtrip, mixed identities,
+   injected variant in v1-5, malformed IDs/extra executable fields, preserved v5
+   todos/windows, live allocator burn despite cancellation/concurrent allocation,
+   and restore/undo effects that can only Attach. No new Start action is exposed.
+2. Real S01/observer owner regression: a reservation acknowledgment requires the
+   matching successful writer result and the exact descriptor on disk; queue-only,
+   wrong-operation, failed write, stale target/generation and canceled/shutdown
+   completion cannot authorize supervisor creation. Keep the actual foreground
+   owner and actual Session child boundary; a synthetic Saved receipt alone is not
+   durability proof. Test-only production exports/environment timing flags are
+   not needed; any isolated state-machine completion control must be labeled as
+   correlation evidence rather than filesystem evidence.
+3. Real filesystem/PTY cases: later todo edits and canonical topology are not
+   overwritten by checkpoint completion or final flush; restart attaches the same
+   owner, never creates another; failed full restore/undo retains source/history;
+   cancellation before reservation, while queued, after durable save and after
+   authorization preserves the owner and retains charged capacity until joins.
+4. Preserve S01 corrupt-file, no-follow, final-save failure and shared shutdown
+   suites, plus the frozen foreground observer's actual socket/CLI tests. Native
+   Start remains closed until this checkpoint contract is approved and implemented.
+   Packaged Darwin save/close/reopen, blocked-output quit and actual owner
+   preservation remain separate required consumer/native acceptance.
+
+
+### Checkpoint acceptance matrix (implementation still pending)
+
+| Boundary | Canonical/disk policy | Authorization and physical ownership |
+| --- | --- | --- |
+| Cancel before OwnerReserved | No canonical target; IDs remain burned | No acknowledgment or retry; join provisional CLI/observer |
+| Queue rejects candidate | No candidate installation or new recovery write | No acknowledgment; reserved registry owner remains explicit |
+| Queue accepts; write pending | Install validated attach intent and safe recovery baseline; saved cache is not proof | Retain launch charge; no acknowledgment |
+| Accepted write errors or result is unknown | Retain failed exact descriptor; protect authoritative file, which may have changed | Cancel frontend; never authorize/replay Start |
+| Saved arrives while current fences match | Record exact sealed successful revision; do not regress newer committed capture | One acknowledgment only while original deadline and cancellation permit |
+| Cancel/close precedes or follows Saved, before acknowledgment | Record actual I/O result; retain failed intent or explicit canonical close | No acknowledgment; late success cannot revive operation |
+| Acknowledgment fully/partly sent then channel lost | Keep exact attach-only identity; no compensating old-file write | Outcome uncertain; no new Start; retain until physical joins |
+| Shutdown with accepted checkpoint | Revoke authorization first, drain existing writer, flush latest safe canonical baseline | Cancel launch/observer concurrently; root deadline does not release unjoined owners |
+
+Known canceled R03 workers must retain their generation tickets until join. A
+recovery capture must distinguish an exact known canceled/retiring R03 ticket
+(with no authorization and an intentionally omitted closed surface) from an
+unknown worker generation. Otherwise a shutdown fallback could resurrect a tile
+closed while its checkpoint was queued. Capture/close ordering must also account
+for an unrelated ordinary launch admitted before the next poll; this is an explicit
+checkpoint implementation test/design boundary, not permission to serialize
+unrelated provisional topology. The first pure-core slice does not change S01
+capture or shutdown policy.
+
+### First pure-core implementation boundary
+
+The approved first slice adds the v6 attach descriptor, an existing-pane opaque
+reservation ticket and a prepared candidate. New-workspace route reservation,
+checkpoint dispatch/acknowledgment and native launch remain separate gates. The
+candidate is fully validated before queue submission and becomes a store by an
+infallible ownership transfer; the caller must submit and install on one serialized
+owner turn, with no interleaving mutation. Preparation emits no launch effect and
+cannot spawn a second client. Core restore/undo emits only the typed
+`AttachLocalZellijSession`; until its authenticated consumer exists, both runtime
+action and session-restore admission reject it explicitly before any candidate
+publication or process spawn. This prevents an ordinary-shell downgrade while
+retaining S01's protected-file recovery starter.
+
+The descriptor regression first fails on baseline's unknown v6 variant and passes
+after the original core implementation. Tests cover malformed/old-version payloads,
+terminal resource admission, burned/replayed/foreign/stale/capacity-limited tickets,
+latest todo preservation, and workspace/last-tab/last-pane failed Attach recovery.
+The real runtime refusal fixture verifies the original v6 bytes remain untouched
+through shutdown and candidate todos never appear in the fallback workspace.
+Runtime-only identity lookup, checkpoint durability and native execution are not
+claimed by these pure-core/unsupported-admission checks.

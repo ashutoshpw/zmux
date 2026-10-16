@@ -244,7 +244,10 @@ fn workspace_todos_survive_real_save_shutdown_and_fresh_reopen_without_transient
     assert_eq!(changed[0]["state"], "completed");
     let disk: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
-    assert_eq!(disk["version"], 5);
+    assert_eq!(
+        disk["version"],
+        zmux_workspace_core::SESSION_DOCUMENT_VERSION
+    );
     assert_eq!(
         disk["workspaces"][0]["todos"], changed,
         "todo-only mutation must autosave without another topology action"
@@ -546,7 +549,10 @@ fn final_surface_move_keeps_live_pty_and_persists_only_the_destination_checklist
     });
     let disk: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
-    assert_eq!(disk["version"], 5);
+    assert_eq!(
+        disk["version"],
+        zmux_workspace_core::SESSION_DOCUMENT_VERSION
+    );
     assert_eq!(disk["workspaces"].as_array().unwrap().len(), 1);
     assert_eq!(disk["workspaces"][0]["id"], destination.id.0);
     assert_eq!(
@@ -573,6 +579,77 @@ fn final_surface_move_keeps_live_pty_and_persists_only_the_destination_checklist
     );
     assert!(restored.model.closed_items.is_empty());
     reopened.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn unsupported_zellij_restore_retains_v6_source_and_never_launches_it_as_an_ordinary_shell() {
+    use zmux_workspace_core::{
+        LocalZellijIdentity,
+        todo::{TodoEntry, TodoOrigin, TodoState},
+    };
+    let directory = Directory::new();
+    let mut seed = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    seed.apply(Action::CreateWorkspace {
+        name: "requires exact Zellij owner".into(),
+    })
+    .unwrap();
+    let owner = seed.snapshot().workspaces[0].clone();
+    seed.replace_workspace_todos(
+        owner.id,
+        vec![TodoEntry {
+            id: uuid::Uuid::from_u128(1),
+            text: "must remain in protected source".into(),
+            state: TodoState::Completed,
+            origin: TodoOrigin::Agent,
+        }],
+    )
+    .unwrap();
+    let ticket = seed
+        .reserve_local_zellij_surface(owner.focused_pane)
+        .unwrap();
+    seed = seed
+        .prepare_local_zellij_surface(
+            &ticket,
+            LocalZellijIdentity {
+                profile_id: uuid::Uuid::from_u128(10),
+                owner_uuid: uuid::Uuid::from_u128(20),
+            },
+            true,
+        )
+        .unwrap()
+        .into_store();
+    let source = serde_json::to_vec(&seed.session_document().unwrap()).unwrap();
+    directory.write(&source);
+    let desktop = directory.desktop();
+    let failed = wait(&desktop, |snapshot| {
+        ready(snapshot) && snapshot.persistence.error.is_some()
+    });
+    assert!(
+        failed
+            .persistence
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("attach client is unavailable")
+    );
+    assert!(!failed.persistence.autosave_enabled);
+    assert_eq!(
+        failed.model.workspaces.len(),
+        1,
+        "only S01's explicit recovery starter may be present"
+    );
+    assert_ne!(
+        failed.model.identity_namespace,
+        seed.snapshot().identity_namespace
+    );
+    assert!(
+        failed.workspace_metadata.is_empty(),
+        "failed candidate todos cannot be published"
+    );
+    assert_eq!(failed.control_frames.len(), 1);
+    assert_eq!(fs::read(directory.0.join("session.json")).unwrap(), source);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    assert_eq!(fs::read(directory.0.join("session.json")).unwrap(), source);
 }
 
 #[test]

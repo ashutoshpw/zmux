@@ -20,6 +20,7 @@ pub struct Surface {
     pub cwd: Option<String>,
     pub remote: Option<zmux_remote_runtime::SshConnectionConfig>,
     pub local_tmux: Option<zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity>,
+    pub local_zellij: Option<LocalZellijIdentity>,
 }
 impl Surface {
     pub(crate) fn terminal(id: SurfaceId, session_id: SessionId) -> Self {
@@ -34,6 +35,7 @@ impl Surface {
             cwd: None,
             remote: None,
             local_tmux: None,
+            local_zellij: None,
         }
     }
 }
@@ -214,6 +216,7 @@ impl WorkspaceStore {
                     cwd: None,
                     remote: None,
                     local_tmux: None,
+                    local_zellij: None,
                 };
                 let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
                 pane.surfaces.push(surface);
@@ -470,7 +473,7 @@ impl WorkspaceStore {
         }
         Ok(())
     }
-    fn check_tab_capacity(count: usize) -> Result<(), ActionError> {
+    pub(crate) fn check_tab_capacity(count: usize) -> Result<(), ActionError> {
         if count > MAX_SURFACES_PER_PANE {
             return Err(ActionError::Capacity {
                 resource: "tabs per pane",
@@ -490,6 +493,14 @@ impl WorkspaceStore {
     }
     fn start(pane_id: PaneId, surface: &Surface, effects: &mut Vec<Effect>) {
         if let Some(session_id) = surface.session_id {
+            if let Some(identity) = &surface.local_zellij {
+                effects.push(Effect::AttachLocalZellijSession {
+                    pane_id,
+                    session_id,
+                    identity: identity.clone(),
+                });
+                return;
+            }
             effects.push(Effect::StartSession {
                 pane_id,
                 session_id,
@@ -652,6 +663,7 @@ impl WorkspaceStore {
             cwd: old.cwd.clone().filter(|_| old.remote.is_none()),
             remote: old.remote.as_ref().map(|remote| remote.for_restore()),
             local_tmux: old.local_tmux.clone(),
+            local_zellij: old.local_zellij.clone(),
         };
         Self::start(pane_id, &surface, effects);
         Ok(surface)
@@ -808,7 +820,8 @@ impl WorkspaceStore {
         let waiting: Vec<_> = effects
             .iter()
             .filter_map(|e| match e {
-                Effect::StartSession { session_id, .. } => Some(*session_id),
+                Effect::StartSession { session_id, .. }
+                | Effect::AttachLocalZellijSession { session_id, .. } => Some(*session_id),
                 _ => None,
             })
             .collect();

@@ -258,7 +258,10 @@ fn legacy_versions_require_fresh_reserved_window_identity_and_keep_logical_ids()
             Some(SessionId(1000))
         );
         assert_eq!(prepared.store.next_identifier(), 1002);
-        assert_eq!(prepared.store.session_document().unwrap().version, 5);
+        assert_eq!(
+            prepared.store.session_document().unwrap().version,
+            SESSION_DOCUMENT_VERSION
+        );
     }
 }
 
@@ -541,7 +544,7 @@ fn browser_profile_session_versions_never_drop_or_invent_storage_identity() {
         })
         .unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 5);
+    assert_eq!(wire["version"], SESSION_DOCUMENT_VERSION);
     assert_eq!(
         wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["profile_id"],
         profile.to_string()
@@ -700,7 +703,7 @@ fn version_five_todos_are_explicit_validated_ordered_and_legacy_readers_never_si
         .replace_workspace_todos(workspace, items.clone())
         .unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 5);
+    assert_eq!(wire["version"], SESSION_DOCUMENT_VERSION);
     assert_eq!(
         wire["workspaces"][0]["todos"],
         serde_json::to_value(&items).unwrap()
@@ -783,7 +786,7 @@ fn version_five_todos_are_explicit_validated_ordered_and_legacy_readers_never_si
         .unwrap();
         assert!(restored.store.snapshot().workspaces[0].todos.is_empty());
         let migrated = serde_json::to_value(restored.store.session_document().unwrap()).unwrap();
-        assert_eq!(migrated["version"], 5);
+        assert_eq!(migrated["version"], SESSION_DOCUMENT_VERSION);
         assert_eq!(migrated["workspaces"][0]["todos"], json!([]));
     }
 }

@@ -1,7 +1,7 @@
 //! Versioned topology descriptors. No process state, input, filesystem or network I/O.
 //!
 //! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
-//! descriptors; V4 adds canonical window membership; V5 adds workspace todos.
+//! descriptors; V4 adds canonical window membership; V5 adds workspace todos; V6 adds attach-only local Zellij identity.
 //! Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
@@ -10,7 +10,7 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 5;
+pub const SESSION_DOCUMENT_VERSION: u32 = 6;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -122,6 +122,10 @@ pub struct SavedSurface {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SavedContent {
+    LocalZellijTerminal {
+        profile_id: uuid::Uuid,
+        owner_uuid: uuid::Uuid,
+    },
     LocalTmuxTerminal {
         identity: zmux_remote_runtime::local_multiplexer::LocalTmuxIdentity,
     },
@@ -302,6 +306,23 @@ impl Validation {
                     valid_name(surface.title.clone())
                         .map_err(|_| invalid("invalid surface title"))?;
                     match &surface.content {
+                        SavedContent::LocalZellijTerminal {
+                            profile_id,
+                            owner_uuid,
+                        } => {
+                            if self.version < 6 {
+                                return Err(invalid(
+                                    "local Zellij descriptors require session version 6",
+                                ));
+                            }
+                            LocalZellijIdentity {
+                                profile_id: *profile_id,
+                                owner_uuid: *owner_uuid,
+                            }
+                            .validate()
+                            .map_err(|e| invalid(e.to_string()))?;
+                            self.terminals += 1;
+                        }
                         SavedContent::LocalTmuxTerminal { identity } => {
                             if self.version < 3 {
                                 return Err(invalid(
@@ -385,7 +406,7 @@ impl SessionDocument {
         for workspace in &self.workspaces {
             if (self.version >= 5) != workspace.todos.present {
                 return Err(invalid(
-                    "todo arrays are required only in session version 5",
+                    "todo arrays are required in session version 5 and later",
                 ));
             }
         }
@@ -474,6 +495,14 @@ impl SavedTree {
                                 surface.title.clone()
                             },
                             content: match surface.kind {
+                                SurfaceKind::Terminal if surface.local_zellij.is_some() => {
+                                    let identity =
+                                        surface.local_zellij.as_ref().expect("checked descriptor");
+                                    SavedContent::LocalZellijTerminal {
+                                        profile_id: identity.profile_id,
+                                        owner_uuid: identity.owner_uuid,
+                                    }
+                                }
                                 SurfaceKind::Terminal if surface.local_tmux.is_some() => {
                                     SavedContent::LocalTmuxTerminal {
                                         identity: surface
@@ -539,31 +568,56 @@ impl SavedTree {
                             cwd: None,
                             remote: None,
                             local_tmux: None,
+                            local_zellij: None,
                         },
                         content => {
                             let session_id = ids.next().expect("validated injected session count");
-                            let (cwd, remote, local_tmux) = match content {
+                            let (cwd, remote, local_tmux, local_zellij) = match content {
+                                SavedContent::LocalZellijTerminal {
+                                    profile_id,
+                                    owner_uuid,
+                                } => (
+                                    None,
+                                    None,
+                                    None,
+                                    Some(LocalZellijIdentity {
+                                        profile_id,
+                                        owner_uuid,
+                                    }),
+                                ),
                                 SavedContent::LocalTmuxTerminal { identity } => {
-                                    (None, None, Some(identity))
+                                    (None, None, Some(identity), None)
                                 }
-                                SavedContent::LocalTerminal { cwd } => (cwd, None, None),
-                                SavedContent::SshTerminal { connection } => {
-                                    (None, Some(SshConnectionConfig::from(&connection)), None)
-                                }
+                                SavedContent::LocalTerminal { cwd } => (cwd, None, None, None),
+                                SavedContent::SshTerminal { connection } => (
+                                    None,
+                                    Some(SshConnectionConfig::from(&connection)),
+                                    None,
+                                    None,
+                                ),
                                 _ => unreachable!(),
                             };
-                            effects.push(Effect::StartSession {
-                                pane_id: pane.id,
-                                session_id,
-                                cwd: cwd.clone(),
-                                remote: remote.clone(),
-                                local_tmux: local_tmux.clone().map(Box::new),
-                            });
+                            if let Some(identity) = &local_zellij {
+                                effects.push(Effect::AttachLocalZellijSession {
+                                    pane_id: pane.id,
+                                    session_id,
+                                    identity: identity.clone(),
+                                });
+                            } else {
+                                effects.push(Effect::StartSession {
+                                    pane_id: pane.id,
+                                    session_id,
+                                    cwd: cwd.clone(),
+                                    remote: remote.clone(),
+                                    local_tmux: local_tmux.clone().map(Box::new),
+                                });
+                            }
                             let mut surface = Surface::terminal(saved.id, session_id);
                             surface.title = saved.title;
                             surface.cwd = cwd;
                             surface.remote = remote;
                             surface.local_tmux = local_tmux;
+                            surface.local_zellij = local_zellij;
                             surface
                         }
                     })
@@ -610,6 +664,8 @@ impl WorkspaceStore {
     }
 
     pub fn session_document(&self) -> Result<SessionDocument, RestoreError> {
+        self.validate_terminal_descriptors()
+            .map_err(|e| invalid(e.to_string()))?;
         let document = SessionDocument {
             format: FORMAT.into(),
             version: SESSION_DOCUMENT_VERSION,
