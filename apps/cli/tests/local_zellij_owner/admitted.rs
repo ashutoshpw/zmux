@@ -16,8 +16,9 @@ fn arbitrary_exec_keeps_the_admitted_child_attachable_and_retains_its_actual_exi
     let python = String::from_utf8(python.stdout).unwrap().trim().to_owned();
     let counter = f.root.join("exec-count");
     let proof = f.root.join("one-input");
+    let workload_identity = f.root.join("workload-identity.json");
     let script = f.root.join("arbitrary.py");
-    fs::write(&script, format!("import pathlib,sys\nwith open({counter:?},'ab') as f:f.write(b'x')\nprint('ADMITTED-EXEC-READY',flush=True)\nline=sys.stdin.readline()\npathlib.Path({proof:?}).write_text(line)\nsys.exit(7)\n",counter=counter.to_str().unwrap(),proof=proof.to_str().unwrap())).unwrap();
+    fs::write(&script, format!("import json,os,pathlib,sys\nwith open({counter:?},'ab') as f:f.write(b'x')\npathlib.Path({identity:?}).write_text(json.dumps({{'pid':os.getpid(),'parent_pid':os.getppid()}}))\nprint('ADMITTED-EXEC-READY',flush=True)\nline=sys.stdin.readline()\npathlib.Path({proof:?}).write_text(line)\nsys.exit(7)\n",counter=counter.to_str().unwrap(),proof=proof.to_str().unwrap(),identity=workload_identity.to_str().unwrap())).unwrap();
     let command = format!("exec '{python}' -u '{}'", script.display());
     let mut first = Client::with_environment(
         &f,
@@ -43,7 +44,13 @@ fn arbitrary_exec_keeps_the_admitted_child_attachable_and_retains_its_actual_exi
     let lifetime: ProcessLifetime = serde_json::from_value(binding["lifetime"].clone()).unwrap();
     let current = process_identity(lifetime.pid).unwrap();
     assert_eq!(ProcessLifetime::from(&current), lifetime);
-    assert_eq!(current.executable, PathBuf::from(&python));
+    let reported: Value = serde_json::from_slice(&fs::read(&workload_identity).unwrap()).unwrap();
+    assert_eq!(reported["pid"], lifetime.pid);
+    assert_eq!(reported["parent_pid"], lifetime.parent_pid);
+    // A Python launcher can legitimately re-exec its app-bundle binary on
+    // Darwin. The final image is evidence; it need not equal the invocation path.
+    assert!(current.executable.is_absolute());
+    let workload_image = current.executable.clone();
     assert_ne!(
         serde_json::to_value(&current.executable).unwrap(),
         binding["invocation"]["shell"]
@@ -51,6 +58,10 @@ fn arbitrary_exec_keeps_the_admitted_child_attachable_and_retains_its_actual_exi
     assert_ne!(
         serde_json::to_value(&current.executable).unwrap(),
         binding["workload_birth"]["executable"]
+    );
+    eprintln!(
+        "R03 arbitrary exec identity: {}",
+        serde_json::json!({"invocation":python,"kernel_image":workload_image,"reported":reported,"admitted_lifetime":lifetime})
     );
     kill(Pid::from_raw(first.pid() as i32), Signal::SIGTERM).unwrap();
     assert_eq!(
@@ -67,6 +78,10 @@ fn arbitrary_exec_keeps_the_admitted_child_attachable_and_retains_its_actual_exi
     let mut second = Client::new(&f, &["local-zellij", "attach", "--headless", "--id", id]);
     second.rendered("ADMITTED-EXEC-READY");
     assert_eq!(process_lifetime(lifetime.pid).unwrap(), lifetime);
+    assert_eq!(
+        process_identity(lifetime.pid).unwrap().executable,
+        workload_image
+    );
     second.send(b"one-admitted-input\r");
     assert_eq!(
         second.finish(),

@@ -590,12 +590,26 @@ fn actual_registry_capacity_refuses_sixty_fifth_reservation_before_any_workload(
     // The optional observer connects before registry admission. Capacity refusal
     // may connect, but must emit no OwnerReserved frame or workload authority.
     let (mut refused_observer, _) = host.listener.accept().unwrap();
-    refused_observer.set_nonblocking(false).unwrap();
-    refused_observer
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
+    // Darwin can reject SO_RCVTIMEO after the refusing CLI has already closed
+    // this connection. Check the same no-frame/EOF contract without that option.
+    refused_observer.set_nonblocking(true).unwrap();
+    let eof_deadline = Instant::now() + Duration::from_secs(1);
     let mut byte = [0];
-    assert_eq!(refused_observer.read(&mut byte).unwrap(), 0);
+    loop {
+        assert!(
+            Instant::now() < eof_deadline,
+            "refusing CLI observer did not close"
+        );
+        match refused_observer.read(&mut byte) {
+            Ok(0) => break,
+            Ok(_) => panic!("capacity refusal emitted an observer frame"),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("capacity refusal observer EOF check: {error}"),
+        }
+    }
     assert_eq!(fixture.records().unwrap(), before);
     assert!(!marker.exists());
     let list = fixture.output(&["local-zellij", "list"]);
