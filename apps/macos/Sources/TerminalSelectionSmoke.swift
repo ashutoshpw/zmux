@@ -481,7 +481,7 @@ enum TerminalSelectionSmoke {
               phase.rows == viewport.size.rows, phase.columns == viewport.size.cols,
               viewport.size.rows >= 8, viewport.size.cols >= 64, viewport.size.cols <= 240,
               NSApp.isActive, window.isVisible, window.isKeyWindow, NSApp.keyWindow === window, window.firstResponder === view else {
-            throw failure("Wrapped-copy prerequisite differs: phase=\(phase.phase)/\(key) child=\(phase.pid)/\(result.childPID) parent=\(phase.parentPID)/\(getpid()) nonceMatches=\(phase.nonce == result.nonce) kernel=\(phase.rows)x\(phase.columns) viewport=\(viewport.size.rows)x\(viewport.size.cols) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) exactKey=\(NSApp.keyWindow === window) terminalResponder=\(window.firstResponder === view)")
+            throw failure("Wrapped-copy prerequisite differs: phase=\(phase.phase ?? "<missing>")/\(key) child=\(phase.pid)/\(result.childPID) parent=\(phase.parentPID)/\(getpid()) nonceMatches=\(phase.nonce == result.nonce) kernel=\(phase.rows)x\(phase.columns) viewport=\(viewport.size.rows)x\(viewport.size.cols) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) exactKey=\(NSApp.keyWindow === window) terminalResponder=\(window.firstResponder === view)")
         }
         try observeRows(viewport, phase: key, result: &result)
         return viewport

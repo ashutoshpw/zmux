@@ -172,3 +172,8 @@ were independently checked against Git/artifact bytes. Retained result:
 The follow-up changes only the diagnostic message to retain every observed
 predicate (phase, PID/parent, nonce match, dimensions, active/visible/key/responder).
 No guard, event, deadline, activation policy or product path is relaxed.
+
+The first diagnostic revision e9d464a failed strict Swift compilation because
+phase.phase is optional and interpolating it directly is a warning treated as an
+error. Runs38861373416/38861358174 did not reach native runtime. The follow-up
+prints an explicit <missing> fallback; the prerequisite predicate is unchanged.
