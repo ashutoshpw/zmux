@@ -545,7 +545,7 @@ image/PDF needs no base64). Request header at most 16384 bytes. Request total: a
 bytes for every op except `save`, whose total is at most `16384 + 2097152` (named
 `MAX_FILE_SAVE_FRAME_BYTES`), the same "one strict command may exceed the ordinary cap" rule the
 paste envelope uses. Response total at most the existing 8 MiB buffer cap; the largest legal
-reply is `4 + 16384 + 7340032`, which fits. `Reservation::new()` is taken FIRST (before any
+reply is `4 + 16384 + 7340032`, which fits. (Amended in S4 fix round 7: the 16384 cap binds request headers only. Rust never caps a reply header, and an open reply echoes each path plus a surface receipt, so a legal 16-item open can send a header past 16384 (17,372 bytes measured with 16 long existing paths). The reply header is bounded only by the 8 MiB buffer.) `Reservation::new()` is taken FIRST (before any
 queueing), exactly as the download/transfer exports do; a `CAPACITY` result means nothing ran.
 
 C status codes follow the existing set: `INVALID_ARGUMENT` for a malformed/oversized frame,

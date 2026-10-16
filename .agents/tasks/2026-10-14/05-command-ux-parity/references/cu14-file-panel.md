@@ -888,7 +888,7 @@ none is claimed. The Linux-testable part is the contract between Rust and Swift:
 `crates/native-bridge/tests/swift_file_contract.rs`, three contract tests in the original slice
 (eight tests after fix round 1, which added five structure tests; twelve after fix round 2, which
 added four more; sixteen after fix round 4; eighteen after fix round 5, which also renamed every
-source-text test with a `pin_` prefix, see below; twenty after fix round 6), all green. Test names quoted in earlier fix-round
+source-text test with a `pin_` prefix, see below; twenty after fix round 6; twenty-two after fix round 7), all green. Test names quoted in earlier fix-round
 sections are the names at the time; the structure tests now carry the `pin_` prefix:
 
 - `swift_decodables_name_exactly_the_fields_the_real_rust_wire_carries`: runs a real Desktop
@@ -1436,3 +1436,36 @@ Deviations and limits:
   `@MainActor` final class is Sendable), the `any FileCloseParticipant` array built from `[Panel]`,
   `?? .failed()` on an optional `CommandOutcome`, and `withCheckedContinuation` storing its
   continuation in a `@MainActor` property.
+
+### Fix round 7 (S4 review findings, two blocking, both verified valid and fixed)
+
+| # | Finding | Verified? | Fix |
+|---|---------|-----------|-----|
+| 1 | Every file editor shares the window's single `NSUndoManager`: undo could change a hidden tab's unsaved text, and any load (`applyText`) cleared every tab's history. | Yes, by reading: the editor had `allowsUndo = true` and no delegate; AppKit then answers with the window's manager; the only undo handling in the sources was `editor.undoManager?.removeAllActions()`. Not reproducible here (no macOS). | `FilePanelView` owns `undoHistory` (`UndoManager`, `levelsOfUndo = 200`, bounded), sets `editor.delegate = self`, and answers `undoManager(for:)` with it for the editor only (the read-only Markdown view gets nil). `applyText` clears `undoHistory`, never the window's manager. No other `removeAllActions` exists in the panel. |
+| 2 | `FileHostReply.decode` rejected any reply header over `FileHostLimits.maxHeader` (16384), a request cap. Rust never caps reply headers; a legal File > Open of many long paths succeeds, creates the tabs, then fails in Swift with `invalid_reply`/`outcomeUnknown`, losing the per-item results. | Yes, and measured: a new test opens 16 existing files at ~650-character paths (request header within 16384) through the real `zmux_desktop_file` export and gets a reply header of 17,372 bytes with `ok:true` and 16 items. The design's D15 claim that the largest legal reply header is 16384 was wrong; amended in the design (D15 and the limits table). | New `FileHostLimits.maxReplyHeader = 8_388_608` (the native bridge `MAX_RESPONSE_BYTES`); `decode` bounds the header by it and still requires `4 + headerLength <= bytes.count`. `maxHeader` stays the request cap. Rust is unchanged. |
+
+Tests (`crates/native-bridge/tests/swift_file_contract.rs`, now 22 tests, 2 added):
+
+- `swift_accepts_the_largest_legal_open_reply_header_the_real_rust_export_sends` is a contract test
+  that executes real Rust: it asserts the probe request is itself legal, the reply is `ok` with 16
+  items and a header past the request cap, that `FileHostLimits.maxReplyHeader` covers it and equals
+  the bridge's `MAX_RESPONSE_BYTES` (read from `src/lib.rs`), and that `decode` uses `maxReplyHeader`,
+  never `maxHeader`. It fails against the previous code (no `maxReplyHeader`; the reply is larger than
+  the old limit).
+- `pin_every_file_editor_has_its_own_undo_history` is a structure pin (the Swift is not run): the
+  per-panel manager, the delegate, the `undoManager(for:)` answer, `applyText` clearing only it, no
+  `editor.undoManager` use and exactly one `removeAllActions`. It cannot prove AppKit routes Cmd-Z
+  to the panel's manager; that is a macOS-only check.
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test result
+lines, 569 passed, 0 failed, 2 ignored, the previous 567 plus 2; clippy `-D warnings`; license
+inventory; `scripts/check-native-bridge`). Determinism of the changed binary (`swift_file_contract`,
+22 tests, two real Desktop tests among them, each with its own temp directory): 20 serial runs, 0
+failures; then 4 rounds of 8 copies started together and waited for individually, 32 runs, 0
+failures (no extra CPU hogs this round; the 8 simultaneous copies were the contention).
+
+Still UNAVAILABLE (unchanged; no Swift toolchain): `scripts/check-macos-sources` (type-checks the new
+`undoManager(for:)` delegate method on a `@MainActor` `NSTextViewDelegate`, `UndoManager` property
+initialiser and `maxReplyHeader`), `scripts/check-file-editor-model`, `scripts/check-file-close-resolution`,
+`scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke and every hosted macOS
+workflow. Not run anywhere: the undo-isolation behaviour in a real window.
