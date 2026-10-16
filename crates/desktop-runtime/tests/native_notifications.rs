@@ -25,6 +25,108 @@ use zmux_desktop_runtime::{
 use zmux_workspace_core::Action;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn native_menu_mutations_capture_scope_cursor_and_epoch_without_changing_focus() {
+    let fixture = Fixture::new();
+    let desktop = fixture.desktop();
+    let initial = wait(&desktop, |s| {
+        !s.persistence.startup_pending && s.pending_launches == 0 && !s.model.workspaces.is_empty()
+    });
+    let first = initial.model.workspaces[0].id;
+    let first_surface = initial.model.workspaces[0].root.panes()[0].selected().id;
+    let second = execute(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Other notification owner".into(),
+            },
+        },
+    );
+    let second_surface = second.model.workspaces.last().unwrap().root.panes()[0]
+        .selected()
+        .id;
+    let focused = execute(
+        &desktop,
+        2,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Keep selected".into(),
+            },
+        },
+    );
+    let notify = |surface_id, title: &str| Command::Attention {
+        action: AttentionCommand::Notify {
+            surface_id,
+            title: title.into(),
+            subtitle: String::new(),
+            body: String::new(),
+            desktop: Some(false),
+            reply: false,
+        },
+    };
+    let first_event = execute(&desktop, 3, notify(first_surface, "Captured first"));
+    let first_id = first_event.notifications.last().unwrap().id;
+    let captured = execute(&desktop, 4, notify(second_surface, "Captured other owner"));
+    let cursor = captured.notifications.last().unwrap().id;
+    let arrival = execute(
+        &desktop,
+        5,
+        notify(first_surface, "Arrived after menu opening"),
+    );
+    let latest_id = arrival.notifications.last().unwrap().id;
+    let mutation = |kind, scope, epoch, namespace| {
+        serde_json::from_value::<NativeAttentionAction>(serde_json::json!({
+            "action":"mutate", "mutation":kind, "workspace_id":scope,
+            "through_id":cursor, "epoch":epoch, "identity_namespace":namespace,
+        }))
+        .expect("native menu mutations must be admitted by the shared owner")
+    };
+    let epoch = captured.native_notifications.epoch;
+    let namespace = captured.model.identity_namespace;
+    let receipt = desktop
+        .native_notification_action(mutation("mark_read", Some(first), epoch, namespace))
+        .unwrap();
+    assert!(receipt.focused_window_id.is_none());
+    assert!(receipt.focused_workspace_id.is_none());
+    let read = wait(&desktop, |s| {
+        s.notifications.iter().any(|n| n.id == first_id && n.read)
+    });
+    assert_eq!(
+        read.model.focused_workspace,
+        focused.model.focused_workspace
+    );
+    assert!(
+        read.notifications
+            .iter()
+            .filter(|n| n.id != first_id)
+            .all(|n| !n.read)
+    );
+    for (wrong_epoch, wrong_namespace) in [
+        (uuid::Uuid::new_v4(), namespace),
+        (epoch, uuid::Uuid::new_v4()),
+    ] {
+        assert!(
+            desktop
+                .native_notification_action(mutation("clear", None, wrong_epoch, wrong_namespace))
+                .is_err()
+        );
+        assert_eq!(wait(&desktop, |_| true).notifications.len(), 3);
+    }
+    desktop
+        .native_notification_action(mutation("clear", None, epoch, namespace))
+        .unwrap();
+    let cleared = wait(&desktop, |s| s.notifications.len() == 1);
+    assert_eq!(cleared.notifications[0].id, latest_id);
+    assert!(!cleared.notifications[0].read);
+    assert_eq!(
+        cleared.model.focused_workspace,
+        focused.model.focused_workspace
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
