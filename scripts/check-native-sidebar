@@ -13,21 +13,24 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--skip-build", action="store_true", help="Use the existing universal development bundle")
+    parser.add_argument("--skip-build", action="store_true", help="Use the existing development bundle")
+    parser.add_argument("--architecture", choices=["universal", "host"], default="universal")
     args = parser.parse_args()
     if platform.system() != "Darwin":
         raise SystemExit("Native sidebar acceptance requires macOS")
     root = Path(__file__).resolve().parent.parent
     if not args.skip_build:
-        subprocess.run([str(root / "scripts/build-macos-dev")], cwd=root, check=True)
+        subprocess.run([str(root / "scripts/build-macos-dev"), "--architecture", args.architecture], cwd=root, check=True)
     dist = root / "dist"
     executable = dist / "zmux.app/Contents/MacOS/zmux-app"
     metadata = json.loads((dist / "build-info.json").read_text())
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if metadata["source_sha"] != source_sha:
         raise RuntimeError("Packaged app does not match the current source commit")
-    if set(metadata["architectures"]) != {"arm64", "x86_64"}:
-        raise RuntimeError("Sidebar acceptance requires the universal development package")
+    expected_architectures = ({"arm64", "x86_64"} if args.architecture == "universal"
+                              else {"arm64" if platform.machine() == "arm64" else "x86_64"})
+    if set(metadata["architectures"]) != expected_architectures:
+        raise RuntimeError("Sidebar package architectures do not match the requested build")
     directory = Path(tempfile.mkdtemp(prefix="zms-", dir="/tmp")).resolve()
     directory.chmod(0o700)
     socket = directory / "c"
@@ -45,6 +48,7 @@ def main():
     process = None
     evidence = {"success": False, "source_sha": metadata["source_sha"],
                 "fixture_directory": str(directory), "socket_path": str(socket),
+                "architectures": metadata["architectures"],
                 "packaged_executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
                 "environment": "Allowlisted OS environment; explicit isolated profile and control socket"}
     try:
