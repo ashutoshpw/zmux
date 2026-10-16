@@ -53,6 +53,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 ## References
 
 - [Atomic readiness/native configuration](references/r03-input-readiness-native-config.md) — isolated typed bridge/action source; exact admission and actual relocated AppKit proof remain gated.
+- [Terminal pointer reporting](references/t01-pointer-reporting.md) — missing mouse button/motion routing, shared worker design and actual PTY/native acceptance plan.
 
 - [A02 provider hooks](references/a02-provider-hooks.md) — approved bounded Claude adapter, durable unknown-exposure suppression and explicit retry; actual-provider gate remains open.
 - [Wrapped word selection](references/t01-wrapped-word-selection.md) — logical word expansion across authoritative visible row wraps and native clipboard evidence.
