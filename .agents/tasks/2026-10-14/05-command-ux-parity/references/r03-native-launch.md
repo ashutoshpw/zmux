@@ -244,8 +244,8 @@ three existing CLI grammar/authentication tests, all seven foreground owner test
 and five local-Zellij runtime socket tests. Coverage includes actual observed
 Start/Attach input, startup-once and original live identities; fragmented protocol
 acknowledgment; nine refusal/cancellation/deadline controls; changed full launcher
-identity before reservation; EOF, unexpected input and final-publication failure
-while the original workload remains alive; and descriptor-key absence in the
+identity before reservation; actual EOF and unexpected input while the original
+workload remains alive; and descriptor-key absence in the
 actual version probe, backend, frontend, supervisor and workload environments.
 Only the boolean key-presence result is inspected; environment bytes are neither
 logged nor retained in evidence. A real Unix-socket backpressure control separately
@@ -275,6 +275,50 @@ SHA256 `8d075e5b9a399c867146261c4951904ad71e28975e0f7eef442b90b9bc96c749`.
 The first snapshot exposed a test-module placement lint; moving the module after
 the shared framing function fixed it without an allow/skip. The final V3 change
 records this validation note only; Rust verification is retained from V2.
-Independent source review and actual Darwin observer execution remain pending.
 The accepted packaged headless execution at `9ec70f7` predates this candidate and
 cannot establish its new observer behavior.
+
+### Darwin observer test-oracle correction
+
+Native run `38832049927` at exact source
+`6949d8f44cf114647e848c59c9b9081f3b529e3e` failed on macOS 15.7.9 ARM64.
+Package admission, native build/signature/version, 20 Session owner tests, five
+remote socket owner tests (including deterministic partial lifecycle publication),
+three CLI grammar/authentication tests and six of seven foreground tests passed.
+The observed Start/Attach test reached its final extra fixture after actual input,
+clean TERM/HUP final receipts, downstream descriptor scrub and live original-owner
+preservation after unsolicited input and actual observer EOF had passed. The only
+failure expected exit 1 after the peer called `shutdown(Read)` and the CLI received
+TERM; Darwin instead accepted the final small frame and the CLI exited 0.
+
+Peer `SHUT_RD` is not a portable oracle for a physical writer failure. The narrow
+correction removes that unsupported extra fixture, retains actual EOF failure and
+original-owner identity checks, and retains the deterministic real Unix-socket
+partial-write/no-wait/no-replay test. Production code is unchanged. An accepted
+physical write does not acknowledge peer consumption: the consumer still needs a
+complete correlated final frame, the CLI outcome and physical Session join before
+classifying completion. The positive test now emits a bounded protocol receipt
+which explicitly marks revision 42 as synthetic and does not claim a native
+durable checkpoint. Version-probe environment scrub remains its separate test.
+
+Failed-run evidence is retained under
+`target/agent-validation/r03-native-observer-hosted-38832049927/`; its receipt is
+failed and no final app ZIP was produced. This run does not establish complete
+native owner acceptance, GUI Start/Attach or a durable native checkpoint.
+Independent verification matched all 262 source inputs at that SHA, all nine
+phase log hashes/byte counts, artifact `12017438533` (62,691,033 bytes, SHA256
+`b5d90a281e4fa3f53cf79c97fd3d3fe10c56a91336bda230fb01982bb1a907b8`),
+and all 1,237 retained package files, including its manifest and binary hashes.
+No downloaded executable was run during verification. Verification receipt:
+`target/agent-validation/r03-native-observer-hosted-38832049927/verified-failure-receipt.json`.
+
+The isolated correction at that committed base plus only the test/doc delta
+passed the ten CLI grammar/foreground tests (22.021s including build), the
+partial-write owner test (2.078s), scoped rustfmt and strict feature Clippy
+(7.710s). Complete snapshot inputs remained unchanged. The prior full
+`scripts/check` acceptance is retained from observer frozen V2; this test-only
+correction uses focused delta validation. Evidence:
+`target/agent-validation/r03-native-observer-correction-20261016/frozen-v1/receipt.json`,
+SHA256 `dbebb2d33a00dccc6d791f5da8c67b6c996145f2a84d8c7705433faba2e70414`.
+The final frozen V2 adds only this evidence note. A reviewed-source Darwin rerun
+remains pending.
