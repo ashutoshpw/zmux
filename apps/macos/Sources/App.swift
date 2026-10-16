@@ -451,10 +451,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
               let selected = initial.model.focusedWorkspace, let responder = window.firstResponder,
               let terminal = focusedTerminal, responder === terminal else { throw BridgeFailure(message: "Group fixture lacks a live selected terminal") }
         let members = Array(initial.model.workspaces.prefix(2).map(\.id))
-        let pids = initial.frames.map { "\($0.sessionId):\($0.processId ?? 0)" }
+        let pids = Dictionary(uniqueKeysWithValues: initial.frames.map { ($0.sessionId, $0.processId ?? 0) })
         func unchanged() throws {
             guard snapshot?.model.focusedWorkspace == selected, window.firstResponder === responder,
-                  snapshot?.frames.map({ "\($0.sessionId):\($0.processId ?? 0)" }) == pids else {
+                  snapshot.map({ Dictionary(uniqueKeysWithValues: $0.frames.map { ($0.sessionId, $0.processId ?? 0) }) }) == pids else {
                 throw BridgeFailure(message: "Grouping changed terminal selection, responder or child identity")
             }
         }
