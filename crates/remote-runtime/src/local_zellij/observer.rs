@@ -53,7 +53,7 @@ impl Observer {
             serde_json::from_slice(&files::read_private(&path, FRAME_LIMIT)?)
                 .map_err(|error| fail(format!("invalid observer descriptor: {error}")))?;
         descriptor.context.validate()?;
-        if !matches!(descriptor.version, 1 | 2)
+        if !matches!(descriptor.version, 1..=3)
             || descriptor.nonce.len() != 64
             || !descriptor
                 .nonce
@@ -208,6 +208,14 @@ impl Observer {
         deadline: Instant,
         tick: impl FnMut() -> io::Result<()>,
     ) -> io::Result<()> {
+        if self.descriptor.version < 3
+            && record
+                .completion
+                .as_ref()
+                .is_some_and(|c| c.execution_contract.is_some())
+        {
+            return Err(fail("legacy observer cannot accept admitted V2 owner"));
+        }
         if !matches!(self.state, State::New | State::Authorized) {
             return Err(fail("observer bound transition rejected"));
         }
@@ -253,16 +261,16 @@ impl Observer {
     }
     pub(super) fn completed(
         &mut self,
-        receipt: &super::completion::TerminalReceiptV1,
+        receipt: &super::completion::TerminalReceipt,
         deadline: Instant,
         mut tick: impl FnMut() -> io::Result<()>,
     ) -> io::Result<u64> {
-        if self.descriptor.version != 2 || !matches!(self.state, State::Bound | State::Connected) {
+        if self.descriptor.version < 2 || !matches!(self.state, State::Bound | State::Connected) {
             return Err(fail("completion requires observer v2 bound state"));
         }
         self.emit(
             Event::WorkloadFinished {
-                owner_uuid: receipt.binding.owner_uuid,
+                owner_uuid: receipt.owner_uuid(),
                 receipt: receipt.clone(),
             },
             Some(deadline),
@@ -290,13 +298,13 @@ impl Observer {
         )?;
         let ack: Acknowledgment = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         if broker::peer(&self.stream)? != self.descriptor.launcher
-            || ack.version != 2
+            || ack.version != self.descriptor.version
             || ack.context != self.descriptor.context
             || ack.nonce != self.descriptor.nonce
             || ack.sequence != self.next()?
             || ack.event != "completion_committed"
-            || ack.owner_uuid != receipt.binding.owner_uuid
-            || ack.owner_generation != Some(receipt.binding.owner_generation)
+            || ack.owner_uuid != receipt.owner_uuid()
+            || ack.owner_generation != Some(receipt.owner_generation())
             || ack.receipt_digest.as_ref() != Some(&receipt.digest()?)
             || ack.document_revision == 0
         {

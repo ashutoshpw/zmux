@@ -15,6 +15,7 @@ pub(super) enum Invocation {
         generation: uuid::Uuid,
     },
     Supervisor(PathBuf),
+    Workload(PathBuf),
 }
 
 pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
@@ -99,6 +100,11 @@ pub(super) fn run(invocation: Invocation) -> Result<u8, Box<dyn Error>> {
             u8::try_from(zmux_remote_runtime::local_zellij::run_supervisor(&path)?).unwrap_or(1),
         );
     }
+    if let Invocation::Workload(path) = invocation {
+        return Ok(
+            u8::try_from(zmux_remote_runtime::local_zellij::run_workload(&path)?).unwrap_or(1),
+        );
+    }
     let mut terminal = if matches!(invocation, Invocation::Start { .. } | Invocation::Attach(_)) {
         Some(ForegroundTerminal::acquire()?)
     } else {
@@ -130,7 +136,7 @@ pub(super) fn run(invocation: Invocation) -> Result<u8, Box<dyn Error>> {
             );
             0
         }
-        Invocation::Supervisor(_) => unreachable!(),
+        Invocation::Supervisor(_) | Invocation::Workload(_) => unreachable!(),
     };
     Ok(u8::try_from(code).unwrap_or(1))
 }

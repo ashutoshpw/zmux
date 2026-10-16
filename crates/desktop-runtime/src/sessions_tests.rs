@@ -240,6 +240,8 @@ fn pending_start(
         session_joined: false,
         frontend_exit_code: None,
         workload_exit: None,
+        execution_contract_version: None,
+        execution_observation: None,
         completion_saved_revision: None,
         receipt_digest: None,
     });
@@ -581,6 +583,8 @@ fn attach_and_start_setup_refusal_publish_no_surface_and_burn_without_leaking_ti
             session_joined: false,
             frontend_exit_code: None,
             workload_exit: None,
+            execution_contract_version: None,
+            execution_observation: None,
             completion_saved_revision: None,
             receipt_digest: None,
         });
@@ -670,7 +674,7 @@ fn reopening_zellij_cannot_bypass_retained_launch_capacity_or_consume_closed_his
 }
 fn completion_receipt(
     owner: Uuid,
-) -> zmux_remote_runtime::local_zellij::completion::TerminalReceiptV1 {
+) -> zmux_remote_runtime::local_zellij::completion::TerminalReceipt {
     use zmux_remote_runtime::local_zellij::completion::{
         CommittedBinding, DOMAIN, TerminalReceiptV1, WorkloadExit,
     };
@@ -705,6 +709,51 @@ fn completion_receipt(
         workload_exit: WorkloadExit::Exited(7),
         child_reaped: true,
     }
+    .into()
+}
+fn admitted_completion_receipt(
+    owner: Uuid,
+    observation: zmux_remote_runtime::local_zellij::completion::ExecutionObservation,
+) -> zmux_remote_runtime::local_zellij::completion::TerminalReceipt {
+    use zmux_remote_runtime::local_zellij::{
+        admission::{AuthorizedInvocation, ChildLifetime, EXECUTION_DOMAIN, TERMINAL_DOMAIN},
+        completion::{ExecutionBindingV2, TerminalReceipt, TerminalReceiptV2},
+    };
+    let TerminalReceipt::V1(legacy) = completion_receipt(owner) else {
+        unreachable!()
+    };
+    let old = legacy.binding;
+    let mut birth = old.workload;
+    birth.executable = old.supervisor.executable.clone();
+    let lifetime = ChildLifetime::from(&birth);
+    let binding = ExecutionBindingV2 {
+        version: 2,
+        domain: EXECUTION_DOMAIN.into(),
+        owner_uuid: owner,
+        owner_generation: old.owner_generation,
+        namespace: old.namespace,
+        completion_socket: old.completion_socket,
+        server: old.server,
+        supervisor: old.supervisor,
+        workload_birth: birth,
+        lifetime,
+        invocation: AuthorizedInvocation {
+            shell: "/bin/sh".into(),
+            invocation_digest: "a".repeat(64),
+        },
+        admission_id: Uuid::new_v4(),
+    };
+    let binding_digest = binding.digest().unwrap();
+    TerminalReceipt::V2(TerminalReceiptV2 {
+        version: 2,
+        domain: TERMINAL_DOMAIN.into(),
+        binding,
+        binding_digest,
+        terminal_sequence: 1,
+        workload_exit: zmux_remote_runtime::local_zellij::completion::WorkloadExit::Exited(127),
+        child_reaped: true,
+        execution_observation: observation,
+    })
 }
 fn active_completion(
     worker: &mut Worker,
@@ -754,37 +803,70 @@ fn observe_completion(
 }
 #[test]
 fn completed_history_authorizes_only_its_actual_saved_and_outlives_startup_clock() {
-    let directory = Directory::new();
-    let mut worker = worker(&directory);
-    let (pending, authorization) = active_completion(&mut worker);
-    let expected = pending.receipt.clone();
-    let pending = observe_completion(&mut worker, pending);
-    worker.zellij_workload_finished(pending).unwrap();
-    assert!(
-        authorization.try_recv().is_err(),
-        "queued completion is not actual Saved"
-    );
-    saved(&mut worker);
-    let local_zellij::Authorization::Completion(ack) = authorization.try_recv().unwrap() else {
-        panic!("expected completion Saved")
-    };
-    assert_eq!(ack.owner_generation, expected.binding.owner_generation);
-    assert_eq!(ack.receipt_digest, expected.digest().unwrap());
-    assert!(ack.io_id > 0);
-    assert_eq!(
-        worker.local_zellij.receipts[0].completion_saved_revision,
-        Some(ack.document_revision)
-    );
-    let document: SessionDocument =
-        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
-    let wire = serde_json::to_value(document).unwrap();
-    let content = &wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"];
-    assert_eq!(content["kind"], "completed_local_zellij_terminal");
-    assert_eq!(
-        content["history"]["receipt"],
-        serde_json::to_value(expected).unwrap()
-    );
-    close_writer(&mut worker);
+    // V1, V2 immediate completion, and V2 exec failure keep distinct evidence
+    // through the same real writer; these are not live authentication controls.
+    for case in 0..3 {
+        let directory = Directory::new();
+        let mut worker = worker(&directory);
+        let (mut pending, authorization) = active_completion(&mut worker);
+        let (contract_version, observation_wire, expected_state) = match case {
+            0 => (1, serde_json::Value::Null, "workload_completed"),
+            1 => {
+                pending.receipt = admitted_completion_receipt(pending.receipt.owner_uuid(), zmux_remote_runtime::local_zellij::completion::ExecutionObservation::NotObserved);
+                (
+                    2,
+                    serde_json::json!({"kind":"not_observed"}),
+                    "workload_completed",
+                )
+            }
+            _ => {
+                pending.receipt = admitted_completion_receipt(pending.receipt.owner_uuid(), zmux_remote_runtime::local_zellij::completion::ExecutionObservation::ExecFailed {
+                    stage: zmux_remote_runtime::local_zellij::admission::ExecFailureStage::ConfiguredShellExec,
+                    errno: 2,
+                });
+                (
+                    2,
+                    serde_json::json!({"kind":"exec_failed","stage":"configured_shell_exec","errno":2}),
+                    "execution_failed",
+                )
+            }
+        };
+        let expected = pending.receipt.clone();
+        let pending = observe_completion(&mut worker, pending);
+        worker.zellij_workload_finished(pending).unwrap();
+        assert!(
+            authorization.try_recv().is_err(),
+            "queued completion is not actual Saved"
+        );
+        saved(&mut worker);
+        let local_zellij::Authorization::Completion(ack) = authorization.try_recv().unwrap() else {
+            panic!("expected completion Saved")
+        };
+        assert_eq!(ack.owner_generation, expected.owner_generation());
+        assert_eq!(ack.receipt_digest, expected.digest().unwrap());
+        assert!(ack.io_id > 0);
+        assert_eq!(
+            worker.local_zellij.receipts[0].completion_saved_revision,
+            Some(ack.document_revision)
+        );
+        let operation = &worker.local_zellij.receipts[0];
+        assert_eq!(operation.state, expected_state);
+        assert_eq!(operation.execution_contract_version, Some(contract_version));
+        assert_eq!(
+            serde_json::to_value(&operation.execution_observation).unwrap(),
+            observation_wire
+        );
+        let document: SessionDocument =
+            serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+        let wire = serde_json::to_value(document).unwrap();
+        let content = &wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"];
+        assert_eq!(content["kind"], "completed_local_zellij_terminal");
+        assert_eq!(
+            content["history"]["receipt"],
+            serde_json::to_value(expected).unwrap()
+        );
+        close_writer(&mut worker);
+    }
 }
 #[test]
 fn completed_history_queue_refusal_installs_nothing_and_write_failure_never_authorizes() {

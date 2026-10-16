@@ -53,7 +53,8 @@ fn departed(identity: &zmux_session_runtime::child::ProcessIdentity) -> bool {
     matches!(
         kill(Pid::from_raw(identity.pid as i32), None),
         Err(nix::errno::Errno::ESRCH)
-    ) || process_identity(identity.pid).is_ok_and(|current| current != *identity)
+    ) || zmux_session_runtime::child::process_lifetime(identity.pid)
+        .is_ok_and(|current| current != identity.into())
 }
 fn terminal(snapshot: &Snapshot, owner: uuid::Uuid) -> (SurfaceId, zmux_workspace_core::SessionId) {
     snapshot
@@ -177,6 +178,7 @@ while time.monotonic()<end:
             && checkpoint.exists()
     });
     let first = connected.local_zellij_operations.last().unwrap().clone();
+    assert_eq!(first.execution_contract_version, Some(2));
     let owner = first.owner_uuid.unwrap();
     assert!(
         first
@@ -202,6 +204,7 @@ while time.monotonic()<end:
     .unwrap();
     assert_eq!(cli.parent_pid, std::process::id());
     let record: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+    assert_eq!(record.execution_binding().unwrap().contract_version(), 2);
     record.verify_live().unwrap();
     // A broker connection is not semantic application readiness. Zellij drops
     // non-query input during its startup query window; actual pane rendering is
@@ -278,6 +281,14 @@ while time.monotonic()<end:
             .any(|r| r.operation_id != first.operation_id && r.state == "transport_connected")
     });
     let (_, session) = terminal(&attached, owner);
+    assert_eq!(
+        attached
+            .local_zellij_operations
+            .last()
+            .unwrap()
+            .execution_contract_version,
+        Some(2)
+    );
     let current: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
     assert_eq!(current.id, record.id);
     assert_eq!(current.server, record.server);
@@ -329,6 +340,7 @@ while time.monotonic()<end:
             .find(|r| r.operation_id == second)
             .is_some_and(|r| {
                 r.state == "frontend_joined"
+                    && r.execution_contract_version == Some(2)
                     && r.session_joined
                     && r.final_frame_received
                     && r.monitor_joined
@@ -589,6 +601,15 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
             .unwrap();
         let (_, session) = terminal(&running, owner);
         let record: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+        assert_eq!(record.execution_binding().unwrap().contract_version(), 2);
+        assert_eq!(
+            running
+                .local_zellij_operations
+                .last()
+                .unwrap()
+                .execution_contract_version,
+            Some(2)
+        );
         record.verify_live().unwrap();
         send(
             &desktop,
@@ -603,6 +624,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
         });
         let operation = completed.local_zellij_operations.last().unwrap();
         let value = serde_json::to_value(operation).unwrap();
+        assert_eq!(value["execution_contract_version"], 2);
         assert_eq!(
             value.get("workload_exit"),
             Some(&expected),
@@ -660,9 +682,14 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
             "internal lifecycle JSON must not overwrite workload history"
         );
         assert_eq!(
-            descriptors[0]["history"]["receipt"]["workload_exit"],
+            descriptors[0]["history"]["receipt"]["receipt"]["workload_exit"],
             expected
         );
+        assert_eq!(
+            descriptors[0]["history"]["receipt"]["execution_contract"],
+            "admitted_lifetime_v2"
+        );
+        assert_eq!(saved["version"], 8);
         // A fresh explicit Attach to an already completed retained owner uses
         // a real CLI Session but never launches a Zellij frontend or workload.
         let attach_state = fixture.root.join("completed-attach-desktop");
@@ -693,6 +720,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
         });
         let attached_receipt = attached.local_zellij_operations.last().unwrap();
         let attached_value = serde_json::to_value(attached_receipt).unwrap();
+        assert_eq!(attached_value["execution_contract_version"], 2);
         assert_eq!(
             attached_value["workload_exit"], expected,
             "{attached_value}"
@@ -735,7 +763,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
         )
         .unwrap()
         .unwrap();
-        assert_eq!(authenticated.workload_exit.mapped().unwrap(), code);
+        assert_eq!(authenticated.workload_exit().mapped().unwrap(), code);
         // A plausible disk receipt cannot replace the original live endpoint.
         // Restore only the exact retained socket inode after this denial.
         let runtime = zmux_remote_runtime::local_zellij::observer_protocol::runtime_base()
@@ -777,7 +805,7 @@ fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend
             "--id",
             &owner.to_string(),
             "--generation",
-            &authenticated.binding.owner_generation.to_string(),
+            &authenticated.owner_generation().to_string(),
         ]);
         assert!(
             cleanup.status.success(),
