@@ -8,11 +8,21 @@
     "input-readiness-protocol.json": "6b82937ff88c4325c0cdcec2b016ab2fd47ef8306948f67bd97a2a360a4332e4",
     "input-readiness-reporter.rs": "eb8511de6efd085d87ecdbf092fb2c336b3fe6723ab0575ca8d56f6c567708f8",
     "patches/0002-optional-input-readiness.patch": "5de516602dea459870746b3c945ff814e09d9b4e6c62938bfa2f767f07898946",
-    "produce-patched.py": "cce014d75f4ec4fa190db067ea230a36196822f82b5b712273db310f8f3d4ccc",
+    "produce-patched.py": "2abdc8bc6539ec31d99d4e79d03bea2d0fea46705c387bbac6bf782c659b8426",
     "input-readiness-owner.py": "0157be6228352e137223601c5f43eeec1b386696a05e7689be023bddae34375f",
     "run.py": "7ff02fccfa2fa6db01157eb0f6ff7bf7275cca1c0235ccb7c132ad89df8f7f46",
     "public_identity.c": "81bbf6615dabfafeca27a1047c0405920805d26cd74c3119b936c47f43bd3c73",
-    "pty_exec.c": "1e5e35935698b9b114a22ee01d2c90055fb470bbb2dd475b7081d8b62b37cb5c"
+    "pty_exec.c": "1e5e35935698b9b114a22ee01d2c90055fb470bbb2dd475b7081d8b62b37cb5c",
+    "package-patched.py": "3ad1873051dc47c7b9931956953cce581ed3f04adc2496b450e1ca936eb1a15d",
+    "readiness_package.py": "ad242ce09b3dc2fcc1ac79dc567ecbf6f774c3071e0f3cc8bc616d0088e0b147",
+    "check-readiness-package-gates.py": "5fd211930a70228131105bf23481e29d8b2d9ffac677dc4ef3a7606accf71105",
+    "package_sources.py": "aef5c98b00b922fbc31d3da92658b7af3e96d3c186890564df308e8e26976086",
+    "package_notices.py": "ce992d2ed10c689a38f48f731227560e6cb063401312fcfc5bd67b9a1341c5fe",
+    "package_platform.py": "07052e01eae091dfed5df4a42de3c0b184c7948c9f9c1774712f5d4a8318d08b",
+    "package_build.py": "71e6f0808aca41b2e0265972378fe88e5c148e8f022e358aaa5b9419233ddc66",
+    "owner_contract.py": "468b433741e1898107cfcd712537be8ee737a4cbdb34bebed393ddf8ad9247a8",
+    "run-patched-owner.py": "cfce71e17002a5b37c790592f70f963d5b0e7b95bed3025a0ed1c3b75a53970f",
+    "notice-policy.json": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79"
   },
   "upstream_files_sha256": {
     "src/main.rs": "02d5530be391aee6a9493ae68ef047c133a0bade025527b38a39f9d59712292d",
@@ -22,5 +32,5 @@
   },
   "dependency_changes": false,
   "default_enabled": false,
-  "scope": "source producer/reporter/actual frontend controls only; no package, core/runtime, or native activation"
+  "scope": "source producer/reporter/prepare-only package and actual frontend controls; no core/runtime, legacy admission or native/default activation"
 }

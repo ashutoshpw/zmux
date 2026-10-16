@@ -141,8 +141,6 @@ def main():
         parser.error("output must be absolute; jobs must be 1..4")
     if args.test_only and args.rebuild_plugins:
         parser.error("plugin package evidence requires the complete native build")
-    if args.input_readiness and args.rebuild_plugins:
-        parser.error("experimental readiness is not a dependency-package build")
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     lock = json.loads((HERE / "patched-producer-lock.json").read_text())

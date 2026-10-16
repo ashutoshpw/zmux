@@ -12,11 +12,11 @@ on:
         type: string
         default: ''
       dependency_package:
-        description: Build source plugins and retain an independently reviewed dependency package
+        description: Build source plugins and a reviewed package (readiness mode prepares an ephemeral package only)
         type: boolean
         default: false
       reviewed_notice_policy_sha256:
-        description: Exact independently reviewed notice-policy SHA256 (required for package upload)
+        description: Exact independently reviewed notice-policy SHA256 (required for package work)
         type: string
         default: ''
 
@@ -34,6 +34,7 @@ jobs:
     with:
       reviewed_readiness_source_sha256: ${{ inputs.reviewed_readiness_source_sha256 }}
       dependency_package: ${{ inputs.dependency_package }}
+      reviewed_notice_policy_sha256: ${{ inputs.reviewed_notice_policy_sha256 }}
 
   patched-production-owner:
     if: inputs.input_readiness != true

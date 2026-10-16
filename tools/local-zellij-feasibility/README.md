@@ -281,7 +281,8 @@ The [wire contract](input-readiness-protocol.json) and
 [source inventory](input-readiness-source.json) pin the sole-argument capability,
 private descriptor, exact four-file upstream footprint and source hashes. Ordinary
 producer mode, acquisition pins, retained v6 artifacts and native defaults remain
-unchanged. This mode cannot be combined with dependency-package/plugin rebuilding.
+unchanged. The separate prepare-only package path can explicitly rebuild plugins;
+it does not change retained package admission or upload executable bytes.
 
 ```sh
 python3 -B tools/local-zellij-feasibility/produce-patched.py --output /absolute/fresh/readiness-producer --input-readiness
@@ -337,7 +338,8 @@ For a feature-branch diagnostic, the existing registered
 `local-zellij-patched-owner.yml` dispatcher can select `input_readiness=true` and
 pass `reviewed_readiness_source_sha256`; it calls the same Darwin workflow.
 `input_readiness=false` preserves the existing Linux/Darwin owner and package
-paths. Combining readiness with `dependency_package=true` fails preflight.
+paths. Readiness plus `dependency_package=true` selects the separate ephemeral
+prepare-only path and requires the exact reviewed notice-policy hash as well.
 
 The dependency-only Darwin lane passed at source `d36bc91` in
 [run 38849682804](https://github.com/ashutoshpw/zmux/actions/runs/38849682804): seven
@@ -346,3 +348,28 @@ on macOS 15.7.9 ARM64. Sources, receipt/log hashes and the artifact ZIP digest w
 verified. The [dependency receipt](../../.agents/tasks/2026-10-14/05-command-ux-parity/references/r03-input-readiness-dependency.md)
 records the exact evidence and remaining native/package/macOS 14 runtime gates.
 The artifact contains source/evidence only; no executable bytes were uploaded.
+
+## Proposed separate readiness package owner
+
+After explicit source review, `--input-readiness --rebuild-plugins` uses the same
+ten-plugin source builder and Wasmtime validator, then builds the reviewed
+readiness native executable. The separate packager invocation requires both the
+full frozen public consumer owner (including named observer4 semantic receipts)
+and `--readiness-owner-receipt` from the actual silent frontend fixture.
+
+This variant requires `--prepare-only`; its distinct `input-readiness-v1` archive
+name and manifest retain the exact reporter, patch, protocol and producing
+inventory, plus all existing legal/source provenance. Packaging reconstructs the
+four compiled source hashes and checks the emitted archive. Focused gates reject
+missing owner/EOF semantics, a replaced named consumer behavior, incomplete
+corresponding source, changed protocol and a legacy variant label. Existing
+filtered upstream/registry source and plugin contracts remain owned by their
+unchanged implementations.
+
+The manual readiness workflow can select this package path with both exact
+reviewed source and notice-policy hashes. The package stays in the same job;
+only source/evidence uploads are configured. The old retained package pin and
+admission remain unchanged. Diagnostic native observer4 proof can consume the
+exact produced executable in that job; app-bundle admission and final bundled
+path testing remain separate. No package-build execution is claimed by this
+proposed owner extension.

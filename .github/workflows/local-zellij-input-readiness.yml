@@ -7,6 +7,14 @@ on:
         description: Exact parent-reviewed input-readiness-source.json SHA256
         type: string
         required: true
+      dependency_package:
+        description: Prepare a separate ephemeral source-built readiness package
+        type: boolean
+        default: false
+      reviewed_notice_policy_sha256:
+        description: Exact reviewed notice policy SHA256 (required for package preparation)
+        type: string
+        default: ''
 
   workflow_call:
     inputs:
@@ -16,6 +24,9 @@ on:
       dependency_package:
         type: boolean
         default: false
+      reviewed_notice_policy_sha256:
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -39,12 +50,15 @@ jobs:
         env:
           REVIEWED_READINESS_SHA256: ${{ inputs.reviewed_readiness_source_sha256 }}
           DEPENDENCY_PACKAGE: ${{ inputs.dependency_package || false }}
+          REVIEWED_NOTICE_POLICY_SHA256: ${{ inputs.reviewed_notice_policy_sha256 }}
         run: |
           python3 - <<'PYTHON'
           import hashlib, os, platform
           from pathlib import Path
           if os.environ["DEPENDENCY_PACKAGE"] == "true":
-              raise SystemExit("Readiness validation cannot be combined with dependency-package publication")
+              policy = hashlib.sha256(Path("tools/local-zellij-feasibility/notice-policy.json").read_bytes()).hexdigest()
+              if os.environ["REVIEWED_NOTICE_POLICY_SHA256"] != policy:
+                  raise SystemExit("Readiness package preparation requires the exact reviewed notice policy SHA256")
           actual = hashlib.sha256(Path("tools/local-zellij-feasibility/input-readiness-source.json").read_bytes()).hexdigest()
           if os.environ["REVIEWED_READINESS_SHA256"] != actual:
               raise SystemExit("Readiness execution requires the exact parent-reviewed source inventory SHA256")
@@ -54,9 +68,25 @@ jobs:
       - name: Install pinned host Rust
         run: rustup toolchain install 1.95.0 --profile minimal
       - name: Build fresh optional dependency and run actual reporter controls
-        run: python3 -B tools/local-zellij-feasibility/produce-patched.py --output "$RUNNER_TEMP/readiness-zellij" --jobs 2 --input-readiness
+        env:
+          DEPENDENCY_PACKAGE: ${{ inputs.dependency_package || false }}
+        run: |
+          package_args=()
+          if [ "$DEPENDENCY_PACKAGE" = true ]; then package_args+=(--rebuild-plugins); fi
+          python3 -B tools/local-zellij-feasibility/produce-patched.py --output "$RUNNER_TEMP/readiness-zellij" --jobs 2 --input-readiness "${package_args[@]}"
       - name: Exercise authenticated readiness and exact silent first lines
         run: python3 -B tools/local-zellij-feasibility/input-readiness-owner.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --output "$RUNNER_TEMP/readiness-owner"
+      - name: Exercise frozen public consumer including observer4 semantics
+        if: inputs.dependency_package
+        run: python3 -B tools/local-zellij-feasibility/run-patched-owner.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --output "$RUNNER_TEMP/readiness-public-owner"
+      - name: Prepare separate readiness package with complete source and notices
+        if: inputs.dependency_package
+        env:
+          REVIEWED_NOTICE_POLICY_SHA256: ${{ inputs.reviewed_notice_policy_sha256 }}
+        run: python3 -B tools/local-zellij-feasibility/package-patched.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/readiness-public-owner/receipt.json" --readiness-owner-receipt "$RUNNER_TEMP/readiness-owner/receipt.json" --output "$RUNNER_TEMP/readiness-package" --prepare-only --reviewed-policy-sha256 "$REVIEWED_NOTICE_POLICY_SHA256"
+      - name: Reject missing owner semantics and incomplete readiness source archives
+        if: inputs.dependency_package
+        run: python3 -B tools/local-zellij-feasibility/check-readiness-package-gates.py --producer-receipt "$RUNNER_TEMP/readiness-zellij/receipt.json" --owner-receipt "$RUNNER_TEMP/readiness-public-owner/receipt.json" --readiness-owner-receipt "$RUNNER_TEMP/readiness-owner/receipt.json" --package-output "$RUNNER_TEMP/readiness-package" --output "$RUNNER_TEMP/readiness-package-gates"
       - name: Retain source and host evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -67,6 +97,9 @@ jobs:
             ${{ runner.temp }}/readiness-zellij/*.log
             ${{ runner.temp }}/readiness-zellij/dependency-metadata.json
             ${{ runner.temp }}/readiness-zellij/prebuilt-assets-manifest.json
+            ${{ runner.temp }}/readiness-zellij/embedded-assets-manifest.json
+            ${{ runner.temp }}/readiness-zellij/plugins-compiler-units.json
+            ${{ runner.temp }}/readiness-zellij/native-compiler-units.json
             ${{ runner.temp }}/readiness-zellij/Zellij-LICENSE.md
             ${{ runner.temp }}/readiness-zellij/source/zellij-23bb542548d517f7f20a7fdd14a943f1a610df37/src/main.rs
             ${{ runner.temp }}/readiness-zellij/source/zellij-23bb542548d517f7f20a7fdd14a943f1a610df37/src/commands.rs
@@ -74,6 +107,15 @@ jobs:
             ${{ runner.temp }}/readiness-zellij/source/zellij-23bb542548d517f7f20a7fdd14a943f1a610df37/zellij-client/src/input_readiness.rs
             ${{ runner.temp }}/readiness-owner/receipt.json
             ${{ runner.temp }}/readiness-owner/*.log
+            ${{ runner.temp }}/readiness-public-owner/receipt.json
+            ${{ runner.temp }}/readiness-public-owner/*.log
+            ${{ runner.temp }}/readiness-package/receipt.json
+            ${{ runner.temp }}/readiness-package/*.log
+            ${{ runner.temp }}/readiness-package/platform.json
+            ${{ runner.temp }}/readiness-package/payload/manifest.json
+            ${{ runner.temp }}/readiness-package/payload/components.json
+            ${{ runner.temp }}/readiness-package/payload/SOURCES/upstream-source-provenance.json
+            ${{ runner.temp }}/readiness-package-gates/receipt.json
             .github/workflows/local-zellij-input-readiness.yml
             .github/workflows/local-zellij-patched-owner.yml
             tools/local-zellij-feasibility/input-readiness-protocol.json
@@ -90,6 +132,15 @@ jobs:
             tools/local-zellij-feasibility/pty_exec.c
             tools/local-zellij-feasibility/capture-stdout.py
             tools/local-zellij-feasibility/package_build.py
+            tools/local-zellij-feasibility/package-patched.py
+            tools/local-zellij-feasibility/readiness_package.py
+            tools/local-zellij-feasibility/check-readiness-package-gates.py
+            tools/local-zellij-feasibility/package_sources.py
+            tools/local-zellij-feasibility/package_notices.py
+            tools/local-zellij-feasibility/package_platform.py
+            tools/local-zellij-feasibility/owner_contract.py
+            tools/local-zellij-feasibility/run-patched-owner.py
+            tools/local-zellij-feasibility/notice-policy.json
             tools/terminal-feasibility/run.py
             scripts/process_group.py
           include-hidden-files: true
