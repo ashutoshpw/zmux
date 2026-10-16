@@ -16,9 +16,13 @@ private struct FilePanelFixture: Sendable {
 /// equivalents, the real bridge and a real directory. It checks observable behaviour only:
 /// per-item open results, rendered Markdown, image and PDF decode, dirty marker without losing
 /// the first responder, Cmd-S, external change (auto reload when clean, banner when dirty), the
-/// conflict prompt's Cancel / Overwrite / Reload, dirty-close protection, reopen from disk and
-/// dedupe. Conflict and close sheets are answered through the panel's own test seams so the
-/// smoke needs no human; every other path is the production one.
+/// conflict prompt's Cancel / Overwrite / Reload, dirty-close protection, reopen from disk,
+/// dedupe, the discard confirmation behind a banner Reload, a panel error state recovered with
+/// Retry, and no descriptor held on the fixture directory after every tab is closed. Session
+/// quit/restore (the `files.epoch` rotation) is not exercised: restore needs an empty desktop
+/// and would destroy the app state this journey runs in. Conflict, close and discard sheets are
+/// answered through the panel's own test seams so the smoke needs no human; every other path is
+/// the production one.
 @MainActor
 enum FilePanelSmoke {
     private static let markdownSource = "# Zmux heading\n\nSome *emphasis* and a [link](https://example.org).\n\n- one\n- two\n"
@@ -35,6 +39,17 @@ enum FilePanelSmoke {
         func next(_ kind: String) -> FileConflictChoice {
             seen.append(kind)
             return choices.isEmpty ? .cancel : choices.removeFirst()
+        }
+    }
+
+    @MainActor
+    private final class DiscardScript {
+        private var answers: [Bool]
+        private(set) var count = 0
+        init(_ answers: [Bool]) { self.answers = answers }
+        func next() -> Bool {
+            count += 1
+            return answers.isEmpty ? false : answers.removeFirst()
         }
     }
 
@@ -70,12 +85,12 @@ enum FilePanelSmoke {
         do {
             try await journey(fixture, window: window, host: host, coordinator: coordinator, cli: cli, tabs: tabs)
         } catch {
-            do { try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window) }
+            do { try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window, verifyDescriptors: false) }
             catch let secondary { throw BridgeFailure(message: "\(error); cleanup also failed: \(secondary)") }
             throw error
         }
-        try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window)
-        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, cancelled multi-file close, back-to-back closes, keyboard focus after load, reopen from disk and dedupe passed\n".utf8))
+        try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window, verifyDescriptors: true)
+        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, cancelled multi-file close, back-to-back closes, keyboard focus after load, reopen from disk, dedupe, banner Reload asks before discarding, error state recovered with Retry and no descriptor held after close passed\n".utf8))
     }
 
     private static func journey(
@@ -259,16 +274,79 @@ enum FilePanelSmoke {
             throw failure("back-to-back closes of dirty tabs were dropped or left an orphaned panel")
         }
         coordinator.fileCloseChoiceOverride = nil
+
+        // 11. A banner Reload replaces the buffer, so with unsaved text it asks first, exactly like
+        // File > Reload from Disk: Cancel changes nothing, Discard adopts the disk version.
+        _ = try openResult(try await cli(["open", f.text], true))
+        var secondID: UInt64?
+        try await wait("text tab opened again and loaded") {
+            guard let snapshot = coordinator.snapshot,
+                  let surface = fileSurfaces(snapshot).first(where: { $0.file?.path == f.text }),
+                  let view = coordinator.files[surface.id], view.isLoaded else { return false }
+            secondID = surface.id
+            return true
+        }
+        guard let id = secondID, let panel = coordinator.files[id] else { throw failure("the text tab did not open for the discard check") }
+        host.selectTab(id)
+        try await wait("text editor focused for the discard check") { window.isKeyWindow && window.firstResponder === panel.editorTextView }
+        typeText("K", into: panel.editorTextView)
+        try await wait("dirty before the banner Reload") { panel.isDirty && modelDirty(coordinator, id) == true }
+        try await write("zeta\n", to: f.text)
+        try await wait("changed-on-disk banner on the dirty panel") { if case .changedOnDisk = panel.banner { return true } else { return false } }
+        let confirmations = DiscardScript([false, true])
+        panel.discardConfirmation = { confirmations.next() }
+        guard panel.clickBannerButton(primary: true) else { throw failure("the changed-on-disk banner has no Reload button") }
+        try await wait("first discard confirmation") { confirmations.count == 1 }
+        _ = try await cli(["status"], false)
+        guard panel.isDirty, panel.editorTextView.string == "K" + "epsilon\n" else {
+            throw failure("Cancel in the discard confirmation still replaced the unsaved text")
+        }
+        guard panel.clickBannerButton(primary: true) else { throw failure("the banner lost its Reload button after Cancel") }
+        try await wait("Discard adopted the disk version") { confirmations.count == 2 && panel.editorTextView.string == "zeta\n" && !panel.isDirty }
+        panel.discardConfirmation = nil
+
+        // 12. A tab whose file vanished before it was reopened shows an explicit error state; the
+        // file coming back and Retry load it, with no tab recreated.
+        host.closeTerminalTab(id)
+        try await wait("clean text tab closed") { coordinator.snapshot.flatMap({ fileSurface($0, id) }) == nil }
+        try await remove(f.text)
+        host.reopenClosed()
+        var failedID: UInt64?
+        try await wait("reopened tab shows an error state") {
+            guard let snapshot = coordinator.snapshot,
+                  let surface = fileSurfaces(snapshot).first(where: { $0.file?.path == f.text }),
+                  let view = coordinator.files[surface.id], view.failureCode != nil else { return false }
+            failedID = surface.id
+            return true
+        }
+        guard let brokenID = failedID, let broken = coordinator.files[brokenID], broken.failureCode == "not_found",
+              broken.presentationSummary == "error:not_found" else {
+            throw failure("a vanished file did not produce the not_found error state")
+        }
+        try await write("restored\n", to: f.text)
+        broken.retry()
+        try await wait("Retry loaded the file") { broken.isLoaded && broken.failureCode == nil && broken.editorTextView.string == "restored\n" }
     }
 
     private static func cleanup(_ f: FilePanelFixture, host: MainWindowHost, coordinator: ApplicationCoordinator, selection: UInt64,
-                                responder: NSResponder?, window: NSWindow) async throws {
+                                responder: NSResponder?, window: NSWindow, verifyDescriptors: Bool) async throws {
         // A failed journey may leave a dirty tab; answer its sheet instead of waiting for a person.
         coordinator.fileCloseChoiceOverride = { _ in .discard }
         for panel in coordinator.files.values { panel.conflictChooser = nil }
         for surface in coordinator.snapshot.map({ fileSurfaces($0) }) ?? [] { host.closeTerminalTab(surface.id) }
         try await wait("fixture file tabs closed") { coordinator.snapshot.map { fileSurfaces($0).isEmpty } == true && coordinator.files.isEmpty }
         coordinator.fileCloseChoiceOverride = nil
+        // Every fixture tab is closed: nothing in this process may still hold a descriptor on the
+        // fixture directory. Detach is asynchronous, so poll briefly before declaring a leak.
+        if verifyDescriptors {
+            var held: [String] = []
+            for _ in 0..<20 {
+                held = try await openDescriptorPaths(under: f.directory)
+                if held.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(250))
+            }
+            guard held.isEmpty else { throw failure("descriptors still open on the fixture after every tab was closed: \(held)") }
+        }
         host.selectTab(selection)
         try await wait("original tab selected") {
             coordinator.snapshot?.workspace?.root.panes.contains { $0.selectedSurface == selection } == true
@@ -303,6 +381,25 @@ enum FilePanelSmoke {
               NSApp.mainMenu?.performKeyEquivalent(with: event) == true else {
             throw failure("Command-\(key.uppercased()) was not handled by an enabled File menu item")
         }
+    }
+    /// Paths under `directory` this process holds open, listed by `lsof` (always present on macOS).
+    private static func openDescriptorPaths(under directory: String) async throws -> [String] {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        return try await Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+            process.arguments = ["-nP", "-F", "n", "-p", String(pid)]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw BridgeFailure(message: "Native file panel: lsof exited with status \(process.terminationStatus)")
+            }
+            return String(decoding: data, as: UTF8.self).split(separator: "\n").filter { $0.hasPrefix("n" + directory) }.map(String.init)
+        }.value
     }
     private static func openResult(_ data: Data) throws -> [String: Any] {
         let text = String(decoding: data, as: UTF8.self)

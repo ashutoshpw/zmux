@@ -28,9 +28,15 @@ enum UICommand: Sendable {
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
     case pointer(UInt64, TerminalPointerEvent)
+}
+
+/// File-service work that can wait on a slow volume (a probe and an executor wait can hold one
+/// request for about three seconds). It has its own bounded queue and task so it can never stall
+/// terminal input, resize or wheel events queued behind it in the `UICommand` loop.
+enum FileCommand: Sendable {
     /// Paths chosen in `File > Open...`, whether to focus the first, and whether to force Markdown.
-    case fileOpen([String], Bool, Bool)
-    case fileDetach(FileOwnerToken)
+    case open([String], Bool, Bool)
+    case detach(FileOwnerToken)
 }
 
 /// Application lifetime owns one Rust Desktop. Main-window presenters borrow its
@@ -89,6 +95,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     private let stream: AsyncStream<UICommand>
     private let continuation: AsyncStream<UICommand>.Continuation
     private var commandTask: Task<Void, Never>?
+    /// Bound of the file queue; a request past it is refused visibly, never queued without limit.
+    static let fileCommandCapacity = 32
+    private let fileStream: AsyncStream<FileCommand>
+    private let fileContinuation: AsyncStream<FileCommand>.Continuation
+    private var fileCommandTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private let browserEvents = AsyncStream<(UInt64, BrowserHostEvent?)>.makeStream(bufferingPolicy: .bufferingOldest(256))
     private var browserEventGeneration: UInt64 = 0
@@ -111,6 +122,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
 
     init() {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
+        (fileStream, fileContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(Self.fileCommandCapacity))
     }
 
     func start(storage: NativeDesktopStorage = .applicationSupport, terminalEngine: String? = nil) async throws {
@@ -192,17 +204,29 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
                         try await self.bridge.pointer(session: session, event: event)
                     case .scroll(let session, let lines):
                         try await self.bridge.scroll(session: session, lines: lines)
-                    case .fileOpen(let paths, let focus, let forceMarkdown):
+                    case .resize(let session, let rows, let cols):
+                        try await self.bridge.resize(session: session, rows: rows, cols: cols)
+                    }
+                } catch {
+                    guard !Task.isCancelled, self.shutdownTask == nil else { break }
+                    self.reportError(error.localizedDescription)
+                }
+            }
+        }
+        fileCommandTask = Task { [weak self, fileStream] in
+            for await command in fileStream {
+                guard let self, !Task.isCancelled, self.shutdownTask == nil else { break }
+                do {
+                    switch command {
+                    case .open(let paths, let focus, let forceMarkdown):
                         let result = try await self.bridge.fileOpen(paths: paths, focus: focus, forceMarkdown: forceMarkdown)
                         let failures = result.items.filter { !$0.ok }.map { item -> String in
                             let operand = item.path ?? item.url ?? "item \(item.index)"
                             return operand + ": " + (item.error?.message ?? "could not be opened") + " (" + (item.error?.code ?? "unknown") + ")"
                         }
                         if !failures.isEmpty { self.reportError(failures.prefix(3).joined(separator: "; ")) }
-                    case .fileDetach(let owner):
+                    case .detach(let owner):
                         try await self.bridge.fileDetach(owner)
-                    case .resize(let session, let rows, let cols):
-                        try await self.bridge.resize(session: session, rows: rows, cols: cols)
                     }
                 } catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
@@ -258,7 +282,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
 
     private func performShutdown() async throws {
         continuation.finish()
+        fileContinuation.finish()
         commandTask?.cancel()
+        fileCommandTask?.cancel()
         pollingTask?.cancel()
         windowTasks.values.forEach { $0.cancel() }
         windowTasks.removeAll()
@@ -385,6 +411,26 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             reportError("The application desktop is closed; the command was not accepted")
         @unknown default:
             reportError("The application command queue is unavailable")
+        }
+        return false
+    }
+    /// Queues file-service work (`File > Open...`, releasing a binding) off the terminal input path.
+    /// A full or closed queue is reported, never dropped silently.
+    @discardableResult
+    func enqueueFile(_ command: FileCommand) -> Bool {
+        if case .open = command { mainWindowHost.clearErrorForCommand() }
+        switch fileContinuation.yield(command) {
+        case .enqueued: return true
+        case .dropped:
+            switch command {
+            case .open: reportError("The file queue is full (\(Self.fileCommandCapacity) requests waiting on the file service); the files were not opened. Try again shortly.")
+            case .detach: reportError("The file queue is full; a closed file’s binding stays until Zmux restarts")
+            }
+        case .terminated:
+            // A binding released during shutdown is cleaned up by the file service's own shutdown.
+            if case .open = command { reportError("The application desktop is closed; the files were not opened") }
+        @unknown default:
+            reportError("The file command queue is unavailable")
         }
         return false
     }
@@ -657,11 +703,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     func filePanelReport(_ message: String) { reportError(message) }
     func filePanelDetach(_ owner: FileOwnerToken) {
         // Not `enqueue`: an automatic release must not clear an error the person has not read.
-        switch continuation.yield(.fileDetach(owner)) {
-        case .enqueued, .terminated: break
-        case .dropped: reportError("Command queue is full; a closed file’s binding stays until Zmux restarts")
-        @unknown default: break
-        }
+        enqueueFile(.detach(owner))
     }
 
     func windowKeyChanged(_ host: MainWindowHost, key: Bool) {
