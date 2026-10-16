@@ -4,6 +4,15 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Focused macOS Actions38940969866 at362ea5c passes actual system-Bash group-HUP
+  cleanup and Ctrl-C, user startup and local Claude completion. Native repaint
+  and packaged SSH/tmux checks remain in progress before artifact upload.
+- Foundation38940970210 succeeds on Linux; macOS-latest fails allocating a fixture
+  directory (EEXIST), before testing shell behavior: parallel tests shared one
+  timestamp. Added a per-process atomic sequence to the private test directory
+  name. No runtime source/assertion change. Full portable checks pass again
+  (`/tmp/zmux-shell-fixture-allocation-check.log`). The targeted macOS run continues
+  on362ea5c; the fixture-only follow-up has identical app/runtime source.
 - Actions38938019009 catches Bash3.2 Ctrl-C recovery failure in the intermediate
   async-child wait repair before packaging. Reassessed with a private GNU Bash3.2
   compatibility build under /tmp (diagnosis only; no imported code/dependency).
