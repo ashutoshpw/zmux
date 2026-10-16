@@ -603,7 +603,7 @@ impl Worker {
                 io_id: 0,
             },
             deadline: pending.deadline,
-            generation: pending.receipt.binding.owner_generation,
+            generation: pending.receipt.owner_generation(),
             digest: pending.receipt.digest().map_err(failure)?,
         };
         let p = self.persistence.as_mut().expect("admitted persistence");

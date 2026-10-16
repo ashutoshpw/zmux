@@ -16,6 +16,87 @@ pub struct ProcessIdentity {
     pub executable: PathBuf,
 }
 
+/// One retained direct-Child lifetime across legitimate image/UID changes.
+/// This does not authenticate an executable or grant process signal authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessLifetime {
+    pub pid: u32,
+    pub parent_pid: u32,
+    pub start: [u64; 2],
+    pub boot: String,
+}
+
+impl From<&ProcessIdentity> for ProcessLifetime {
+    fn from(identity: &ProcessIdentity) -> Self {
+        Self {
+            pid: identity.pid,
+            parent_pid: identity.parent_pid,
+            start: identity.start,
+            boot: identity.boot.clone(),
+        }
+    }
+}
+
+/// Double-samples only PID/parent/start/boot, without executable or UID lookup.
+/// Missing or mixed samples remain errors; callers must retain their Child handle.
+pub fn process_lifetime(pid: u32) -> io::Result<ProcessLifetime> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Err(invalid("lifetime requires a positive platform PID"));
+    }
+    let first = lifetime_sample(pid)?;
+    let second = lifetime_sample(pid)?;
+    if first != second || first.start == [0, 0] || !valid_boot(&first.boot) {
+        return Err(invalid("process lifetime changed or is malformed"));
+    }
+    Ok(first)
+}
+
+#[cfg(target_os = "linux")]
+fn lifetime_sample(pid: u32) -> io::Result<ProcessLifetime> {
+    let stat = bounded_file(format!("/proc/{pid}/stat"), 16384)?;
+    let end = stat
+        .rfind(')')
+        .ok_or_else(|| invalid("invalid process stat"))?;
+    let fields: Vec<_> = stat[end + 1..].split_whitespace().collect();
+    let parent_pid = fields
+        .get(1)
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| invalid("missing parent identity"))?;
+    let start = fields
+        .get(19)
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| invalid("missing process start identity"))?;
+    let boot = bounded_file("/proc/sys/kernel/random/boot_id", 128)?;
+    Ok(ProcessLifetime {
+        pid,
+        parent_pid,
+        start: [start, 0],
+        boot: boot.trim().into(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn lifetime_sample(pid: u32) -> io::Result<ProcessLifetime> {
+    use sysctl::Sysctl;
+    let info = darwin_libproc::task_all_info(pid as i32)?.pbsd;
+    if info.pbi_pid != pid {
+        return Err(invalid("process lifetime PID changed"));
+    }
+    let boot = sysctl::Ctl::new("kern.bootsessionuuid")
+        .and_then(|ctl| ctl.value())
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let sysctl::CtlValue::String(boot) = boot else {
+        return Err(invalid("boot identity has an unexpected kernel type"));
+    };
+    Ok(ProcessLifetime {
+        pid,
+        parent_pid: info.pbi_ppid,
+        start: [info.pbi_start_tvsec, info.pbi_start_tvusec],
+        boot: boot.to_ascii_lowercase(),
+    })
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::other(message)
 }

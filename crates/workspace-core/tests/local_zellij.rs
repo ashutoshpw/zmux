@@ -359,7 +359,7 @@ fn v7_completed_history_restores_without_allocating_a_pty_or_replaying_attach() 
     let surface = &snapshot["workspaces"][0]["root"]["pane"]["surfaces"][0];
     assert!(surface["session_id"].is_null());
     let saved = serde_json::to_value(prepared.store.session_document().unwrap()).unwrap();
-    assert_eq!(saved["version"], 7);
+    assert_eq!(saved["version"], SESSION_DOCUMENT_VERSION);
     assert_eq!(
         saved["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"],
         wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]

@@ -274,6 +274,17 @@ fn parse(
     if command == Some("local-zellij") {
         return Ok((local_zellij::parse(tail)?, socket, timeout, password));
     }
+    if command == Some("__local-zellij-workload") {
+        if tail.len() != 1 {
+            return Err(CliError("invalid internal workload descriptor".into()));
+        }
+        return Ok((
+            Parsed::LocalZellij(local_zellij::Invocation::Workload(PathBuf::from(&tail[0]))),
+            socket,
+            timeout,
+            password,
+        ));
+    }
     if command == Some("__local-zellij-supervisor") {
         if tail.len() != 1 {
             return Err(CliError("invalid internal supervisor descriptor".into()));

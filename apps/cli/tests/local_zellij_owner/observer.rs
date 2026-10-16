@@ -10,6 +10,7 @@ use std::{
 };
 
 struct Host {
+    version: u8,
     root: PathBuf,
     descriptor: PathBuf,
     listener: UnixListener,
@@ -18,6 +19,9 @@ struct Host {
 }
 impl Host {
     fn new() -> Self {
+        Self::versioned(1)
+    }
+    fn versioned(version: u8) -> Self {
         let root = PathBuf::from("/tmp")
             .canonicalize()
             .unwrap()
@@ -50,7 +54,7 @@ impl Host {
             .unwrap();
         file.write_all(
             &serde_json::to_vec(&serde_json::json!({
-                "version": 1,
+                "version": version,
                 "socket": socket,
                 "launcher": process_identity(std::process::id()).unwrap(),
                 "context": context,
@@ -61,6 +65,7 @@ impl Host {
         .unwrap();
         file.sync_all().unwrap();
         Self {
+            version,
             root,
             descriptor,
             listener,
@@ -145,7 +150,7 @@ impl Host {
         let mut bytes = vec![0; length];
         exact(&mut bytes);
         let frame: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(frame["version"], 1);
+        assert_eq!(frame["version"], self.version);
         assert_eq!(frame["context"], self.context);
         assert_eq!(frame["nonce"], self.nonce);
         frame
@@ -155,7 +160,7 @@ impl Host {
     }
     fn acknowledgment(&self, reserved: &Value) -> Value {
         serde_json::json!({
-            "version": 1, "context": self.context, "nonce": self.nonce,
+            "version": self.version, "context": self.context, "nonce": self.nonce,
             "sequence": 2, "event": "reservation_committed",
             "owner_uuid": reserved["owner_uuid"], "document_revision": 42
         })
@@ -613,5 +618,78 @@ fn actual_registry_capacity_refuses_sixty_fifth_reservation_before_any_workload(
     eprintln!(
         "R03 real registry cap: {}",
         serde_json::json!({"actual_reserved_slots":64,"sixty_fifth_reservation":false,"workloads_spawned":0,"status_available":true,"list_available":true,"checkpoint_ack_origin":"synthetic_invalid_admission","native_durability_proven":false})
+    );
+}
+
+#[test]
+fn explicit_observer_two_keeps_raw_v1_completion_and_its_original_shell_contract() {
+    let fixture = Fixture::new();
+    let host = Host::versioned(2);
+    let count = fixture.root.join("legacy-two-count");
+    let command = format!(
+        "printf x >> '{}'; printf 'LEGACY_TWO_READY\\n'; IFS= read -r line; exit 7",
+        count.display()
+    );
+    let mut client = Client::with_environment(
+        &fixture,
+        &[
+            "local-zellij",
+            "start",
+            "legacy-two",
+            "--headless",
+            "--command",
+            &command,
+        ],
+        &host.environment(),
+    );
+    let mut stream = host.accept(&mut client, &count);
+    let reserved = host.receive(&mut stream, &mut client);
+    host.acknowledge(&mut stream, &reserved);
+    let bound = host.receive(&mut stream, &mut client);
+    assert_eq!(bound["event"], "owner_bound");
+    assert!(bound["record"]["completion"]["execution_contract"].is_null());
+    assert!(bound["record"]["completion"]["admission"].is_null());
+    assert_eq!(
+        bound["record"]["workload"]["executable"],
+        serde_json::json!(fs::canonicalize("/bin/bash").unwrap())
+    );
+    assert_eq!(
+        host.receive(&mut stream, &mut client)["event"],
+        "transport_connected"
+    );
+    client.rendered("LEGACY_TWO_READY");
+    client.send(b"one-legacy-input\r");
+    let completed = host.receive(&mut stream, &mut client);
+    assert_eq!(completed["event"], "workload_finished");
+    let receipt = &completed["receipt"];
+    assert_eq!(receipt["version"], 1);
+    assert!(receipt["execution_contract"].is_null());
+    assert!(receipt["receipt"].is_null());
+    let receipt: zmux_remote_runtime::local_zellij::completion::TerminalReceiptV1 =
+        serde_json::from_value(receipt.clone()).unwrap();
+    receipt.validate().unwrap();
+    host.send(&mut stream,&serde_json::json!({"version":2,"context":host.context,"nonce":host.nonce,"sequence":completed["sequence"].as_u64().unwrap()+1,"event":"completion_committed","owner_uuid":receipt.binding.owner_uuid,"document_revision":43,"owner_generation":receipt.binding.owner_generation,"receipt_digest":receipt.digest().unwrap()}));
+    assert_eq!(
+        client.finish(),
+        7,
+        "{}",
+        String::from_utf8_lossy(&client.output)
+    );
+    let finished = host.receive(&mut stream, &mut client);
+    assert_eq!(finished["event"], "frontend_finished");
+    assert_eq!(finished["owner_outcome"]["kind"], "workload_completed");
+    assert_eq!(fs::read(&count).unwrap(), b"x");
+    let cleanup = fixture.output(&[
+        "local-zellij",
+        "cleanup",
+        "--id",
+        &receipt.binding.owner_uuid.to_string(),
+        "--generation",
+        &receipt.binding.owner_generation.to_string(),
+    ]);
+    assert!(
+        cleanup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup.stderr)
     );
 }
