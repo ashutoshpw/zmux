@@ -885,3 +885,99 @@ fn the_smoke_covers_error_state_retry_and_descriptor_release_and_names_the_resto
         "an epoch change must keep unsaved text and re-attach only clean panels"
     );
 }
+
+#[test]
+fn the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it() {
+    // Every reply that replaces the buffer (manual reload, automatic reload, attach, re-attach and
+    // retry) must not race with typing: the editor is read-only from the moment the request is
+    // marked busy until its reply has been handled, and only `refreshEditable` makes it editable.
+    let panel = swift("FilePanelView.swift");
+    assert_eq!(
+        panel.matches("editor.isEditable = ").count(),
+        2,
+        "editor.isEditable must be assigned only by the initial setup and refreshEditable"
+    );
+    let gate = between(
+        &panel,
+        "private func refreshEditable()",
+        "// MARK: - Dirty tracking",
+    );
+    assert!(
+        gate.contains("isLoaded && writable && !editingSuspended"),
+        "the editable state must include the suspension flag: {gate}"
+    );
+    let apply_text = between(
+        &panel,
+        "private func applyText(",
+        "private func applyImage(",
+    );
+    assert!(
+        !apply_text.contains("editor.isEditable") && apply_text.contains("refreshEditable()"),
+        "applyText must go through refreshEditable, not assign isEditable"
+    );
+    let prepare = between(
+        &panel,
+        "private func prepareAttach()",
+        "private func finishAttach(",
+    );
+    assert!(
+        prepare.contains("busy = true\n        suspendEditing()"),
+        "an attach suspends editing in the same step that marks the panel busy: {prepare}"
+    );
+    let finish = between(
+        &panel,
+        "private func finishAttach(",
+        "private func beginAttach()",
+    );
+    let resume = finish
+        .find("resumeEditing()")
+        .expect("finishAttach resumes editing");
+    let applied = finish
+        .find("apply(reply)")
+        .expect("finishAttach applies the reply");
+    assert!(
+        finish
+            .find("busy = false")
+            .is_some_and(|busy| busy < resume),
+        "editing resumes after the request completed"
+    );
+    assert!(
+        resume < applied,
+        "editing resumes before apply, which then sets the final editable state itself"
+    );
+    let perform = between(
+        &panel,
+        "private func performReload(discard: Bool, automatic: Bool) async",
+        "// MARK: - Save",
+    );
+    let suspend = perform
+        .find("suspendEditing()")
+        .expect("a reload suspends editing");
+    let sent = perform
+        .find("await send(.reload")
+        .expect("a reload sends the request");
+    let resumed = perform
+        .find("resumeEditing()")
+        .expect("a reload resumes editing");
+    assert!(
+        perform
+            .find("busy = true")
+            .is_some_and(|busy| busy < suspend)
+            && suspend < sent,
+        "the reload suspends editing before the request is awaited"
+    );
+    assert!(
+        sent < resumed,
+        "the reload resumes editing only after the reply"
+    );
+    // No suspension point between the clean check in `reloadFromDisk` and `performReload`.
+    let manual = between(
+        &panel,
+        "func reloadFromDisk()",
+        "private func confirmDiscard()",
+    );
+    assert!(
+        manual.contains("if self.hasUnsavedChanges { guard await self.confirmDiscard() else { return } }\n            await self.performReload("),
+        "a clean panel must reach performReload without another suspension point: {manual}"
+    );
+}
