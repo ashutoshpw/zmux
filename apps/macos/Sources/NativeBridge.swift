@@ -361,11 +361,11 @@ actor NativeBridge {
                 zmux_desktop_file(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
             }
             guard result.status == 0 else {
-                // -2 is a malformed frame that Rust refused before doing any work; any other
-                // status leaves the effect unknown.
-                throw FileHostFailure(code: "transport",
-                    message: "The file channel returned status \(result.status); the operation was not replayed",
-                    outcomeUnknown: result.status != -2)
+                // -2, -4 and -5 are refused before Rust does any work (`FileBridgeRefusal`): -4
+                // and -5 are reported as the transient `busy`; any other status leaves the effect
+                // unknown.
+                let refusal = FileBridgeRefusal(status: result.status)
+                throw FileHostFailure(code: refusal.code, message: refusal.message, outcomeUnknown: refusal.outcomeUnknown)
             }
             return try FileHostReply.decode(Self.consume(result.value))
         }.value

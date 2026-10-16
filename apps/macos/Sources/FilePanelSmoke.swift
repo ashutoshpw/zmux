@@ -18,7 +18,8 @@ private struct FilePanelFixture: Sendable {
 /// the first responder, Cmd-S, external change (auto reload when clean, banner when dirty), the
 /// conflict prompt's Cancel / Overwrite / Reload, dirty-close protection, reopen from disk,
 /// dedupe, the discard confirmation behind a banner Reload, a panel error state recovered with
-/// Retry, and no descriptor held on the fixture directory after every tab is closed. Session
+/// Retry, sixteen tabs opened by one command that all load within the load gate's limit, and no
+/// descriptor held on the fixture directory after every tab is closed. Session
 /// quit/restore (the `files.epoch` rotation) is not exercised: restore needs an empty desktop
 /// and would destroy the app state this journey runs in. Conflict, close and discard sheets are
 /// answered through the panel's own test seams so the smoke needs no human; every other path is
@@ -90,7 +91,7 @@ enum FilePanelSmoke {
             throw error
         }
         try await cleanup(fixture, host: host, coordinator: coordinator, selection: originalSelection, responder: savedResponder, window: window, verifyDescriptors: true)
-        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, cancelled multi-file close, back-to-back closes, keyboard focus after load, reopen from disk, dedupe, banner Reload asks before discarding, error state recovered with Retry and no descriptor held after close passed\n".utf8))
+        FileHandle.standardError.write(Data("Native file panel: zmux open mixed batch, rendered Markdown, image and PDF decode, edit/dirty marker with retained focus, Cmd-S, external reload and banner, conflict Cancel/Overwrite/Reload, dirty-close protection, cancelled multi-file close, back-to-back closes, keyboard focus after load, reopen from disk, dedupe, banner Reload asks before discarding, error state recovered with Retry, sixteen simultaneous tabs all loaded within the load gate's limit and no descriptor held after close passed\n".utf8))
     }
 
     private static func journey(
@@ -383,6 +384,32 @@ enum FilePanelSmoke {
         try await write("restored\n", to: f.text)
         broken.retry()
         try await wait("Retry loaded the file") { broken.isLoaded && broken.failureCode == nil && broken.editorTextView.string == "restored\n" }
+
+        // 13. Sixteen file tabs from one command all load: the load gate queues them instead of
+        // overflowing the Rust file worker (which answers busy past eight queued jobs), none ends
+        // in an error state, and no more than the gate's limit was ever in flight.
+        let manyPaths = try await writeManyFiles(count: 16, in: f.directory)
+        let manyOpened = try openResult(try await cli(["open"] + manyPaths, false))
+        guard manyOpened["ok"] as? Bool == true, (manyOpened["items"] as? [[String: Any]])?.count == 16 else {
+            throw failure("opening sixteen files at once did not report sixteen successes: \(manyOpened)")
+        }
+        try await wait("sixteen simultaneous file tabs loaded") {
+            guard let snapshot = coordinator.snapshot else { return false }
+            let panels = fileSurfaces(snapshot).filter { surface in surface.file.map { manyPaths.contains($0.path) } == true }
+            return panels.count == 16 && panels.allSatisfy { coordinator.files[$0.id]?.isLoaded == true }
+        }
+        guard let manySnapshot = coordinator.snapshot else { throw failure("no snapshot after the sixteen-file open") }
+        let manyPanels = fileSurfaces(manySnapshot).compactMap { surface in
+            surface.file.flatMap { manyPaths.contains($0.path) ? coordinator.files[surface.id] : nil }
+        }
+        guard manyPanels.count == 16, manyPanels.allSatisfy({ $0.failureCode == nil }) else {
+            throw failure("a tab opened with fifteen others ended in an error state instead of loading")
+        }
+        let gate = coordinator.fileLoadGate
+        guard gate.peakInFlightCount >= 1, gate.peakInFlightCount <= FileLoadPolicy.defaultMaxInFlight,
+              gate.inFlightCount == 0, gate.waitingCount == 0 else {
+            throw failure("the load gate ran \(gate.peakInFlightCount) loads at once (limit \(FileLoadPolicy.defaultMaxInFlight)) or left work behind")
+        }
     }
 
     private static func cleanup(_ f: FilePanelFixture, host: MainWindowHost, coordinator: ApplicationCoordinator, selection: UInt64,
@@ -488,6 +515,15 @@ enum FilePanelSmoke {
             try Data([0x00, 0x01, 0x02, 0xff, 0x00]).write(to: URL(fileURLWithPath: directory + "/blob.bin"))
             try FileManager.default.createDirectory(atPath: directory + "/folder", withIntermediateDirectories: false)
             return FilePanelFixture(directory: directory)
+        }.value
+    }
+    private static func writeManyFiles(count: Int, in directory: String) async throws -> [String] {
+        try await Task.detached {
+            try (0..<count).map { (index: Int) -> String in
+                let path = directory + "/many-" + String(format: "%02d", index) + ".txt"
+                try Data(("many " + String(index) + "\n").utf8).write(to: URL(fileURLWithPath: path))
+                return path
+            }
         }.value
     }
     private static func write(_ text: String, to path: String) async throws {
