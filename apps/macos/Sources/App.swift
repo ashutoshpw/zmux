@@ -2734,6 +2734,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     storage = .transient
                 } else if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                } else if let index = CommandLine.arguments.firstIndex(of: "--profile-operations-smoke"), CommandLine.arguments.count > index + 4 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
@@ -2743,6 +2745,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--profile-operations-smoke"), CommandLine.arguments.count > index + 4 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                    let phase = CommandLine.arguments[index + 3]
+                    do {
+                        try await BrowserProfileAcceptance.run(coordinator: coordinator, report: report, phase: phase, origin: CommandLine.arguments[index + 4])
+                        try await coordinator.shutdown()
+                        try BrowserProfileAcceptance.shutdownComplete(report: report, phase: phase)
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native profile acceptance failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Native profile acceptance cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     do {
                         try await CompletedTerminalHistorySmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
@@ -2819,7 +2837,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
+                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }
