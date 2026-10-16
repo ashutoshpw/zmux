@@ -706,6 +706,15 @@ impl Adapter<'_> {
         Ok(())
     }
 }
+// Match std::os::unix::fs::MetadataExt's unsigned identity representation.
+// Darwin dev_t is signed i32; Linux rustix already exposes a u64 device ID.
+fn stat_identity(stat: &rustix::fs::Stat) -> (u64, u64) {
+    #[cfg(target_os = "macos")]
+    let device = stat.st_dev as u64;
+    #[cfg(not(target_os = "macos"))]
+    let device = stat.st_dev;
+    (device, stat.st_ino)
+}
 struct SocketDirectory {
     path: PathBuf,
     directory: plugin::Directory,
@@ -723,12 +732,12 @@ impl Drop for SocketDirectory {
             let current = at::statat(&self.parent, name, AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(io::Error::from)?;
             let pinned = self.directory.0.metadata()?;
-            if current.st_dev != pinned.dev() || current.st_ino != pinned.ino() {
+            if stat_identity(&current) != (pinned.dev(), pinned.ino()) {
                 return Err(CliError("owned socket directory replaced".into()));
             }
             let socket = at::statat(&self.directory.0, "event.sock", AtFlags::SYMLINK_NOFOLLOW)
                 .map_err(io::Error::from)?;
-            if (socket.st_dev, socket.st_ino) != self.socket {
+            if stat_identity(&socket) != self.socket {
                 return Err(CliError("owned hook socket replaced".into()));
             }
             at::unlinkat(&self.directory.0, "event.sock", AtFlags::empty())
