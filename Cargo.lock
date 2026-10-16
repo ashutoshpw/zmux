@@ -765,6 +765,7 @@ dependencies = [
  "uuid",
  "zmux-remote-runtime",
  "zmux-session-runtime",
+ "zmux-session-test-support",
  "zmux-terminal-adapter",
  "zmux-workspace-core",
 ]
@@ -826,6 +827,7 @@ name = "zmux-session-test-support"
 version = "0.1.0"
 dependencies = [
  "nix",
+ "portable-pty",
 ]
 
 [[package]]
