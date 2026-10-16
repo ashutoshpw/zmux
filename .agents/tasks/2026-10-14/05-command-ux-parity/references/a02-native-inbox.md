@@ -332,3 +332,22 @@ selects both real rows, and labels only the exact selected-body byte failure at
 not qualify. Production String equality remains unchanged in this fixture revision.
 The continued journey also replaces an actual decomposed editor draft with an
 independent precomposed literal using NSTextView.insertText and verifies saved bytes.
+
+## Unicode fixture prerequisite diagnosis
+
+Run [38858063145](https://github.com/ashutoshpw/zmux/actions/runs/38858063145), exact
+`41be7acd4ec26d4be064a56977db712cc4ff42e5`, passed both Swift 6 slices (87.353 s)
+and the arm64 package (259.030 s). Owned app PID 7158 exited 1 without timeout
+(5.080 s), after all three prerequisites and actual inbox/body/reply responder.
+The first new Unicode CLI send failed the generic exact attribution/body/durability
+assertion before the independent Unicode oracle; stage remains `entrypoint`,
+`unicodeBytes` is empty, and `unicode_behavioral_red` is false. This is not the
+intended product regression and authorizes no Unicode production repair.
+
+All 273 retained sources match frozen SHA256 hashes and bytes. Local artifacts:
+`/tmp/zmux-agent-inbox-unicode-red-38858063145/`. Archive SHA256:
+`1247d2265e69f49f0ccc25294f4c4da9f4daabc3b077255e7583896238da5f90`.
+The fixture now retains each bounded CLI send receipt with independently expected
+body bytes, sender and recipient plus decoded observed bytes. This distinguishes
+actual transport/state/attribution changes from a native fixture decoding issue
+without weakening an assertion or changing production comparisons.

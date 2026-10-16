@@ -488,7 +488,19 @@ enum AgentInboxSmoke {
         return value
     }
     private static func send(_ host: MainWindowHost, from sender: Child, to recipient: UUID, body: String) async throws -> Message {
-        let sent = try JSONDecoder().decode(Sent.self, from: await cli(host, ["agent", "message", recipient.uuidString, "--", body], caller: sender))
+        let response = try await cli(host, ["agent", "message", recipient.uuidString, "--", body], caller: sender)
+        let sent = try JSONDecoder().decode(Sent.self, from: response)
+        // Keep the independent CLI receipt and each exact assertion input even
+        // when a prerequisite fails before the selected-body Unicode oracle.
+        if let root = ProcessInfo.processInfo.environment["ZMUX_AGENT_INBOX_ROOT"] {
+            let proof = try JSONSerialization.data(withJSONObject: [
+                "expectedBodyUTF8": Array(body.utf8), "observedBodyUTF8": Array(sent.message.body.utf8),
+                "expectedSender": sender.surface.uuidString, "expectedRecipient": recipient.uuidString,
+                "receipt": try JSONSerialization.jsonObject(with: response)
+            ], options: [.sortedKeys])
+            let path = URL(fileURLWithPath: root).appendingPathComponent("cli-send-" + sent.message.request_id.uuidString.lowercased() + ".json")
+            try await Task.detached { try proof.write(to: path, options: .atomic) }.value
+        }
         guard sent.durability == "saved", sent.message.state == "queued", sent.message.body.utf8.elementsEqual(body.utf8),
               sent.message.sender.surface_id == sender.surface, sent.message.recipient.surface_id == recipient else { throw failure("CLI send lost exact attribution/body/durability") }
         return sent.message
