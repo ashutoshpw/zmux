@@ -20,3 +20,18 @@ regression plus previous cases green, retain exact sources and real child/kernel
 identity, then integrate only after source review and scoped checks. The existing
 terminal-selection Actions suite provides this gate independently of the full
 suite's outstanding Accessibility permission prerequisite.
+
+## Native red
+
+At `e54e3bb512c630e7c006f8e43bf43828a871d760`, run `38853562903` builds
+and passes the actual decoder checks and all 24 prior clipboard cases. The 25th,
+`wrapped_word_first_row`, copies 100 cells rather than the full 108-character word.
+Actual app5410/child5414 and all phase parent/nonce/kernel identities agree; native
+focus is established. Native exit1 in7.613s, no timeout. All266 retained sources
+match Git and recorded hashes. Archive SHA256:
+`9374bad7d9f466803b1f8c29c0b9df0808dbeffaccc82ff28d026382749a8b91`.
+
+The repair builds one displayed logical line from the same authoritative wrap
+predicate as clipboard joining, then maps AppKit UTF-16 boundaries back to exact
+row/cell endpoints. Word drag uses the existing common expansion path. No history
+outside the viewport is read or guessed. Native green remains pending.
