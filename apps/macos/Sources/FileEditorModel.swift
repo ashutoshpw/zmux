@@ -10,6 +10,9 @@ enum FileBanner: Equatable, Sendable {
     case ownerLost(String)
     case saveUnknown(UInt64)
     case saveResolved
+    /// The save's text is on disk and is the baseline, but the directory sync that makes it
+    /// durable failed (the code is shown). Save Again repeats the whole save, which is safe.
+    case savedUnsynced(String)
     case loadFailed(String)
     case message(String)
     /// Informational: the dirty bit has not been confirmed yet; the observation keeps retrying.
@@ -26,15 +29,17 @@ enum FileBanner: Equatable, Sendable {
     /// Left over from an attach or reload whose reply replaced the buffer, so it no longer applies.
     var isObsoleteAfterLoad: Bool {
         switch self {
-        case .loadFailed, .ownerLost, .saveResolved: return true
+        case .loadFailed, .ownerLost, .saveResolved, .savedUnsynced: return true
         default: return isExternal
         }
     }
 
     /// Left over from a save the file service confirmed.
     var isObsoleteAfterSave: Bool {
-        if case .saveResolved = self { return true }
-        return isExternal
+        switch self {
+        case .saveResolved, .savedUnsynced: return true
+        default: return isExternal
+        }
     }
 }
 
@@ -61,6 +66,8 @@ enum FileBannerAction: Equatable, Sendable {
     case reloadFromDisk
     case retry
     case copyText
+    /// Repeat the save of the current buffer (used after a save whose directory sync failed).
+    case saveAgain
     case dismiss
     case nothing
 }
@@ -84,6 +91,9 @@ struct FileEditorModel: Sendable, Equatable {
     /// True when the disk changed while the view had unsaved edits and the edits were kept.
     private(set) var externalPending = false
     private(set) var banner = FileBanner.none
+    /// True after a save whose text reached the disk but whose directory sync failed: the buffer
+    /// may be clean, yet one more save is still owed so the write becomes durable.
+    private(set) var durabilityUnconfirmed = false
 
     private(set) var autoReloadedDiskGeneration: UInt64 = 0
     private(set) var dismissedDiskGeneration: UInt64 = 0
@@ -126,7 +136,7 @@ struct FileEditorModel: Sendable, Equatable {
     // MARK: Save
 
     func canSave(editable: Bool, writable: Bool, attached: Bool, busy: Bool, staleOwner: Bool) -> Bool {
-        editable && writable && attached && !busy && isDirty && !staleOwner
+        editable && writable && attached && !busy && (isDirty || durabilityUnconfirmed) && !staleOwner
     }
 
     /// The exact bytes a save sends: the buffer, complete, as UTF-8.
@@ -143,6 +153,22 @@ struct FileEditorModel: Sendable, Equatable {
         if let reply { generation = reply }
         baseline = written
         externalPending = false
+        durabilityUnconfirmed = false
+        return setDirty(!Self.sameBytes(current, written))
+    }
+
+    /// A save failed after its rename: `written` is on disk and is now the baseline at
+    /// `generation`, which the failure reported. The service moved its generation on when it
+    /// adopted that text, so the view must too, or its next save is refused as stale and the
+    /// recovery dead-ends. The buffer is dirty only when text was typed meanwhile. One more save
+    /// stays owed (`durabilityUnconfirmed`) until a save is confirmed or the buffer is reloaded.
+    /// True when `isDirty` changed.
+    @discardableResult
+    mutating func savedWithoutDurability(written: String, current: String, generation committed: UInt64) -> Bool {
+        generation = committed
+        baseline = written
+        externalPending = false
+        durabilityUnconfirmed = true
         return setDirty(!Self.sameBytes(current, written))
     }
 
@@ -156,6 +182,7 @@ struct FileEditorModel: Sendable, Equatable {
     mutating func attached(generation value: UInt64) {
         generation = value
         externalPending = false
+        durabilityUnconfirmed = false
     }
 
     mutating func suspendEditing() { editingSuspended = true }
@@ -218,6 +245,12 @@ struct FileEditorModel: Sendable, Equatable {
         switch state {
         case "completed": return .saveResolved
         case "failed": return .message("The save that did not confirm in time failed (" + (code ?? "unknown") + "). Your text is unchanged.")
+        case "outcome_unknown":
+            // `timeout` means the worker may still be running and will resolve the receipt. Any
+            // other code is the worker's own final word (for example a directory sync failure
+            // that arrived after the wait gave up): nothing will ever resolve it, so waiting
+            // would be permanent. Offer the reload that shows what is on disk.
+            return code == "timeout" ? nil : .saveUnknown(0)
         default: return nil
         }
     }
@@ -240,8 +273,10 @@ struct FileEditorModel: Sendable, Equatable {
             return .reloadFromDisk
         case (.saveUnknown(let operation), false) where operation == 0:
             return .dismiss
-        case (.saveResolved, false):
+        case (.saveResolved, false), (.savedUnsynced, false):
             return .dismiss
+        case (.savedUnsynced, true):
+            return .saveAgain
         case (.loadFailed, true):
             return hasUnsavedChanges ? .dismiss : .retry
         case (.message, true):

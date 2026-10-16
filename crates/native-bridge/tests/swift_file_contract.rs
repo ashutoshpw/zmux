@@ -1231,8 +1231,8 @@ fn pin_dirty_detection_compares_utf8_bytes_not_canonical_equivalence() {
     );
     assert_eq!(
         model.matches("Self.sameBytes(").count(),
-        2,
-        "both the keystroke path and the post-save path of the model must use sameBytes"
+        3,
+        "the keystroke path and both post-save paths (confirmed and committed-but-unsynced) of the model must use sameBytes"
     );
     assert!(
         !panel.contains("sameBytes"),
@@ -1669,12 +1669,77 @@ fn the_file_editor_model_fixture_is_wired_into_macos_ci() {
         "a dismissed disk generation is not announced again",
         "reloads through reloadFromDisk",
         "no retry may replace the text",
+        "the next save is based on the generation the failure reported",
+        "a clean buffer can be saved while the directory sync is owed",
+        "a final unknown outcome stops waiting and offers Reload",
     ] {
         assert!(
             fixture.contains(scenario),
             "fixture scenario `{scenario}` is missing"
         );
     }
+}
+
+// A save whose rename landed but whose directory sync failed is a dead end unless the view rebases
+// on the generation the service adopted. Rust proves the generation travels with the failure
+// (`crates/desktop-runtime/tests/files.rs`, `file_channel` unit test); the model fixture proves
+// what the model does with it. This pins that the panel connects the two.
+#[test]
+fn pin_a_save_whose_directory_sync_failed_rebases_and_offers_a_repeat_save() {
+    let client = swift("FileHostClient.swift");
+    assert!(
+        client.contains("var committedGeneration: UInt64?")
+            && client.contains("committedGeneration: header.generation"),
+        "the failure must carry the generation the Rust failure header reports"
+    );
+    let panel = swift("FilePanelView.swift");
+    let failed = between(
+        &panel,
+        "private func saveFailed(_ failure: FileHostFailure, written: String)",
+        "if failure.isOwnerLoss",
+    );
+    let rebase = at(
+        failed,
+        "model.savedWithoutDurability(written: written, current: editor.string, generation: committed)",
+    );
+    let banner = at(failed, "setBanner(.savedUnsynced(failure.code))");
+    let waiting = at(failed, "setBanner(.saveUnknown(failure.opId ?? 0))");
+    assert!(
+        at(failed, "failure.committedGeneration") < rebase && rebase < banner && banner < waiting,
+        "a committed failure rebases before it shows the notice; only an uncommitted one waits: {failed}"
+    );
+    assert!(
+        at(&panel, "case .saveAgain: save()") > at(&panel, "model.bannerAction(primary: primary"),
+        "the notice's primary button must repeat the save"
+    );
+    assert!(
+        panel.contains("primary: \"Save Again\""),
+        "the unsynced notice must label its repeat-save button"
+    );
+    let model = swift("FileEditorModel.swift");
+    assert!(
+        model.contains("(isDirty || durabilityUnconfirmed)"),
+        "a clean buffer must still be saveable while the directory sync is owed"
+    );
+    let outcome = between(
+        &model,
+        "func saveOutcomeBanner(",
+        "mutating func bannerAction",
+    );
+    assert!(
+        outcome.contains("case \"outcome_unknown\"")
+            && outcome.contains("code == \"timeout\" ? nil : .saveUnknown(0)"),
+        "a final unknown outcome must stop waiting; a timeout keeps waiting: {outcome}"
+    );
+    let fixture = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tools/native-fixtures/file-editor-model.swift"),
+    )
+    .unwrap();
+    assert!(
+        fixture.contains("        unsyncedSave()\n"),
+        "the fixture must run the unsynced-save scenario"
+    );
 }
 
 #[test]

@@ -96,6 +96,59 @@ struct FileEditorModelProbe {
         expect(!pending.saveNeedsConflictPrompt(force: false), "a confirmed save ends the kept-edits state")
     }
 
+    /// A save whose rename landed but whose directory sync failed (`sync_failed`, outcome
+    /// unknown, committed generation reported). The text is on disk and the service moved its
+    /// generation on, so the view must rebase on that generation and a repeat save must be
+    /// possible and clean up after itself. Before the fix the view kept the old generation, so the
+    /// repeat save was refused as stale and the banner never cleared.
+    static func unsyncedSave() {
+        func can(_ m: FileEditorModel) -> Bool { m.canSave(editable: true, writable: true, attached: true, busy: false, staleOwner: false) }
+        var model = loaded("before\n", generation: 3)
+        model.textEdited("after\n")
+        expect(can(model), "control: the dirty buffer can be saved")
+        expect(model.savedWithoutDurability(written: "after\n", current: "after\n", generation: 4) && !model.isDirty,
+               "the text reached the disk, so the buffer is clean")
+        expect(model.generation == 4, "the next save is based on the generation the failure reported, not the stale one")
+        expect(model.durabilityUnconfirmed, "one more save is still owed")
+        expect(can(model), "a clean buffer can be saved while the directory sync is owed, so Save Again works")
+        expect(!model.saveNeedsConflictPrompt(force: false), "the rebased buffer does not ask about a conflict")
+        expect(model.textEdited("after\nmore") && model.isDirty && model.durabilityUnconfirmed, "typing afterwards stays dirty and the debt remains")
+        expect(model.textEdited("after\n") && !model.isDirty, "returning to the saved text is clean again")
+
+        // Typing while the failed save was in flight stays dirty and is not lost.
+        var racing = loaded("a", generation: 1)
+        racing.textEdited("ab")
+        expect(!racing.savedWithoutDurability(written: "ab", current: "abc", generation: 2) && racing.isDirty, "text typed during the failed save is still unsaved")
+
+        // The repeat save, once confirmed, ends the debt and the notice.
+        model.saved(written: "after\n", current: "after\n", generation: 5)
+        expect(!model.durabilityUnconfirmed && model.generation == 5, "a confirmed repeat save clears the debt and moves the base on")
+        expect(!can(model), "and a clean buffer with nothing owed cannot be saved again")
+
+        // A reload settles it too: the buffer is replaced by what is on disk.
+        var reloaded = loaded("x", generation: 1)
+        reloaded.textEdited("y")
+        reloaded.savedWithoutDurability(written: "y", current: "y", generation: 2)
+        reloaded.attached(generation: 3)
+        expect(!reloaded.durabilityUnconfirmed && !can(reloaded), "a reload ends the debt")
+
+        // The notice: its buttons repeat the save or dismiss, and a save or load clears it.
+        func press(_ primary: Bool) -> FileBannerAction {
+            var m = loaded("a")
+            m.setBanner(.savedUnsynced("sync_failed"))
+            return m.bannerAction(primary: primary, hasUnsavedChanges: false)
+        }
+        expect(press(true) == .saveAgain, "the primary button of the unsynced notice repeats the save")
+        expect(press(false) == .dismiss, "the secondary button dismisses it")
+        expect(FileBanner.savedUnsynced("x").isObsoleteAfterSave, "a confirmed save clears the unsynced notice")
+        expect(FileBanner.savedUnsynced("x").isObsoleteAfterLoad, "a load clears the unsynced notice")
+        expect(!FileBanner.savedUnsynced("x").isExternal, "it is not about the disk's state")
+        var sync = loaded("a")
+        sync.setBanner(.savedUnsynced("sync_failed"))
+        expect(sync.externalStateReported(state: "in_sync", diskGeneration: 4, errorCode: nil, attached: true, busy: false, hasUnsavedChanges: false) == .none,
+               "back in sync does not hide the notice: the text is visible but not yet durable")
+    }
+
     static func reloading() {
         expect(FileEditorModel.reloadNeedsConfirmation(hasUnsavedChanges: true), "a manual reload with unsaved text must ask")
         expect(!FileEditorModel.reloadNeedsConfirmation(hasUnsavedChanges: false), "a manual reload of a clean buffer need not ask")
@@ -186,6 +239,20 @@ struct FileEditorModelProbe {
         expect(unknown.saveOutcomeBanner(lastOperation: 0, state: "completed", code: nil) == nil, "operation 0 means the id is unknown and cannot be matched")
         unknown.setBanner(.none)
         expect(unknown.saveOutcomeBanner(lastOperation: 7, state: "completed", code: nil) == nil, "with no pending-save notice nothing is resolved")
+
+        // The worker's own final word on a save the wait gave up on (a directory sync that failed
+        // after the timeout) never turns into completed or failed. Waiting for it would be
+        // permanent, so the notice becomes the one with the Reload and Dismiss buttons.
+        var finalWord = loaded("a")
+        finalWord.setBanner(.saveUnknown(7))
+        expect(finalWord.saveOutcomeBanner(lastOperation: 7, state: "outcome_unknown", code: "sync_failed") == .saveUnknown(0), "a final unknown outcome stops waiting and offers Reload")
+        expect(finalWord.saveOutcomeBanner(lastOperation: 7, state: "outcome_unknown", code: "timeout") == nil, "an unknown outcome that is a timeout is still being waited for: the worker will resolve it")
+        expect(finalWord.saveOutcomeBanner(lastOperation: 8, state: "outcome_unknown", code: "sync_failed") == nil, "another operation's outcome is not this save's")
+        finalWord.setBanner(.saveUnknown(0))
+        expect(finalWord.saveOutcomeBanner(lastOperation: 7, state: "outcome_unknown", code: "sync_failed") == nil, "once resolved to the unmatched notice it is not resolved again")
+        let resolvedPrimary = finalWord.bannerAction(primary: true, hasUnsavedChanges: true)
+        let resolvedSecondary = finalWord.bannerAction(primary: false, hasUnsavedChanges: true)
+        expect(resolvedPrimary == .reloadFromDisk && resolvedSecondary == .dismiss, "the resolved notice has working buttons")
     }
 
     static func banners() {
@@ -232,6 +299,7 @@ struct FileEditorModelProbe {
     static func main() async {
         dirtyTracking()
         saving()
+        unsyncedSave()
         reloading()
         externalChanges()
         banners()
@@ -239,6 +307,6 @@ struct FileEditorModelProbe {
             for failure in failures { FileHandle.standardError.write(Data(("file editor model fixture failed: " + failure + "\n").utf8)) }
             exit(1)
         }
-        print("File editor model passed: byte-exact dirty tracking, exact save payload and generation, typing during a save stays dirty, reload and attach gating, automatic reload keeps typed text, external-change banners and dismissals, banner buttons never reload without confirmation.")
+        print("File editor model passed: byte-exact dirty tracking, exact save payload and generation, typing during a save stays dirty, reload and attach gating, automatic reload keeps typed text, external-change banners and dismissals, banner buttons never reload without confirmation, a save whose directory sync failed rebases on the reported generation and can be repeated, a final unknown save outcome stops waiting.")
     }
 }

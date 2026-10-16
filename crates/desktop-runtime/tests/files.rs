@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -44,10 +44,15 @@ struct Control {
     /// Runs once, just before the next backend `read`: an external writer that lands between a
     /// load's `fstat` and its read, at an exact and reproducible point.
     before_read: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// The next backend `sync_dir` fails once: the rename has already landed by then.
+    fail_next_sync_dir: AtomicBool,
 }
 impl Control {
     fn arm(&self, op: &'static str) {
         *self.gated.lock().unwrap() = Some(op);
+    }
+    fn fail_next_directory_sync(&self) {
+        self.fail_next_sync_dir.store(true, Ordering::SeqCst);
     }
     fn release(&self) {
         *self.gated.lock().unwrap() = None;
@@ -138,6 +143,13 @@ impl FileBackend for Gated {
         RealFs.unlink(dir, name)
     }
     fn sync_dir(&self, dir: &File) -> Result<(), FileError> {
+        self.0.pass("sync_dir");
+        if self.0.fail_next_sync_dir.swap(false, Ordering::SeqCst) {
+            return Err(FileError::new(
+                "io_error",
+                "injected directory sync failure",
+            ));
+        }
         RealFs.sync_dir(dir)
     }
 }
@@ -1096,6 +1108,90 @@ fn a_save_that_times_out_is_outcome_unknown_and_is_never_replayed() {
             .file_save(&owner, content.generation, false, b"again".to_vec()),
     );
     assert_eq!(stale.code, "stale_view");
+}
+
+#[test]
+fn a_save_whose_directory_sync_fails_reports_the_generation_its_text_now_has_and_a_retry_completes()
+{
+    let fx = Fixture::new();
+    let surface = fx.open("sync.txt", b"before");
+    let (owner, content) = fx.attach(surface);
+    fx.control.fail_next_directory_sync();
+    let unsynced =
+        failure(
+            fx.desktop
+                .file_save(&owner, content.generation, false, b"after".to_vec()),
+        );
+    assert_eq!(unsynced.code, "sync_failed");
+    assert!(unsynced.outcome_unknown, "the sync result is not confirmed");
+    let failed_op = unsynced.op_id.expect("the failed save names its operation");
+    // The rename landed and the service adopted the text, which moved the generation on. The
+    // failure carries that generation so the view can rebase instead of being refused as stale.
+    let committed = unsynced
+        .committed_generation
+        .expect("a failure whose content is visible reports the generation it was adopted at");
+    assert_eq!(committed, content.generation + 1);
+    assert_eq!(std::fs::read(fx.dir.join("sync.txt")).unwrap(), b"after");
+    let entry = fx.wait_receipt(surface, "save", "outcome_unknown");
+    assert_eq!(entry["generation"], committed);
+    assert_eq!(
+        entry["state"], "in_sync",
+        "the adopted text is the baseline"
+    );
+    assert_eq!(entry["last_op"]["op_id"], failed_op);
+    assert_eq!(entry["last_op"]["code"], "sync_failed");
+    // The stale base the view held is refused (nothing is written), which is why the generation
+    // must travel with the failure.
+    assert_eq!(
+        failure(
+            fx.desktop
+                .file_save(&owner, content.generation, false, b"after".to_vec())
+        )
+        .code,
+        "stale_view"
+    );
+    // A retry on the reported generation is a plain save of the same bytes: no conflict, and its
+    // completion replaces the unresolved receipt.
+    let retried = fx
+        .desktop
+        .file_save(&owner, committed, false, b"after".to_vec())
+        .expect("the retry of an adopted text is not a conflict");
+    assert_eq!(retried.generation, committed + 1);
+    assert_ne!(retried.op_id, failed_op);
+    let entry = fx.wait_receipt(surface, "save", "completed");
+    assert_eq!(entry["last_op"]["op_id"], retried.op_id);
+    assert_eq!(entry["generation"], retried.generation);
+    assert_eq!(
+        fx.control.count("sync_dir"),
+        2,
+        "the retry synced the directory"
+    );
+    assert_eq!(fx.control.count("rename"), 2);
+    assert_eq!(std::fs::read(fx.dir.join("sync.txt")).unwrap(), b"after");
+}
+
+#[test]
+fn only_a_failure_whose_text_became_the_baseline_reports_a_committed_generation() {
+    let fx = Fixture::new();
+    let surface = fx.open("plain.txt", b"disk");
+    let (owner, content) = fx.attach(surface);
+    // A conflict writes nothing, so it must not claim a generation.
+    std::fs::write(fx.dir.join("plain.txt"), b"someone else").unwrap();
+    let conflict =
+        failure(
+            fx.desktop
+                .file_save(&owner, content.generation, false, b"mine".to_vec()),
+        );
+    assert_eq!(conflict.code, "conflict");
+    assert_eq!(conflict.committed_generation, None);
+    // A refusal before anything was queued has none either.
+    let stale =
+        failure(
+            fx.desktop
+                .file_save(&owner, content.generation + 7, false, b"mine".to_vec()),
+        );
+    assert_eq!(stale.code, "stale_view");
+    assert_eq!(stale.committed_generation, None);
 }
 
 #[test]

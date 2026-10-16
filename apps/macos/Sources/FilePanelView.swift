@@ -851,11 +851,11 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             refreshHeader()
             return true
         case .failure(let failure):
-            return await saveFailed(failure)
+            return await saveFailed(failure, written: text)
         }
     }
 
-    private func saveFailed(_ failure: FileHostFailure) async -> Bool {
+    private func saveFailed(_ failure: FileHostFailure, written: String) async -> Bool {
         defer { refreshHeader() }
         if failure.code == "conflict" {
             switch await chooseConflict(failure.conflict) {
@@ -867,7 +867,16 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             }
         }
         if failure.outcomeUnknown {
-            setBanner(.saveUnknown(failure.opId ?? 0))
+            if let committed = failure.committedGeneration {
+                // The rename landed (only the directory sync failed): the text is on disk and the
+                // service adopted it as its baseline, so rebase on the generation it reported and
+                // offer a repeat save. Waiting for an operation that already finished would never
+                // end, and saving on the old generation would be refused as stale.
+                dirtyChanged(model.savedWithoutDurability(written: written, current: editor.string, generation: committed))
+                setBanner(.savedUnsynced(failure.code))
+            } else {
+                setBanner(.saveUnknown(failure.opId ?? 0))
+            }
             return false
         }
         if failure.isOwnerLoss || failure.code == "stale_view" {
@@ -1244,6 +1253,9 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             }
             return BannerStyle(text: "The save did not confirm in time (operation \(operation)). Waiting for the file service to report its outcome; do not save again yet.",
                                warning: true, primary: nil, secondary: nil)
+        case .savedUnsynced(let code):
+            return BannerStyle(text: "Your text was saved, but the folder could not be synced, so it may not survive a crash (" + code + "). Save Again repeats the save.",
+                               warning: true, primary: "Save Again", secondary: "Dismiss")
         case .saveResolved:
             return BannerStyle(text: "The save finished after a timeout. Reload from disk to continue.", warning: true, primary: "Reload", secondary: "Dismiss")
         case .loadFailed(let message):
@@ -1287,6 +1299,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             reloadFromDisk()
         case .retry: retry()
         case .copyText: copyTextToPasteboard()
+        case .saveAgain: save()
         case .dismiss: setBanner(.none)
         case .nothing: break
         }

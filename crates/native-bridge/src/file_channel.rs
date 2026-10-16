@@ -115,6 +115,9 @@ fn failure_header(failure: &FileFailure) -> Value {
             "message": failure.message.chars().take(256).collect::<String>(),
         },
     });
+    if let Some(generation) = failure.committed_generation {
+        header["generation"] = json!(generation);
+    }
     if let Some(conflict) = &failure.conflict {
         header["conflict"] = json!({
             "kind": conflict.kind,
@@ -199,4 +202,29 @@ pub fn execute(desktop: &Desktop, request: FileRequest, body: &[u8]) -> Vec<u8> 
         }
     };
     result.unwrap_or_else(|failure| encode(&failure_header(&failure), &[]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_whose_text_is_already_on_disk_carries_the_generation_to_rebase_on() {
+        let mut unsynced = FileFailure::new("sync_failed", "the directory could not be synced");
+        unsynced.op_id = Some(13);
+        unsynced.outcome_unknown = true;
+        unsynced.committed_generation = Some(4);
+        let header = failure_header(&unsynced);
+        assert_eq!(header["ok"], false);
+        assert_eq!(header["op_id"], 13);
+        assert_eq!(header["outcome_unknown"], true);
+        assert_eq!(header["error"]["code"], "sync_failed");
+        assert_eq!(header["generation"], 4);
+
+        let plain = failure_header(&FileFailure::new("conflict", "changed"));
+        assert!(
+            plain.get("generation").is_none(),
+            "a failure that adopted nothing names no generation: {plain}"
+        );
+    }
 }

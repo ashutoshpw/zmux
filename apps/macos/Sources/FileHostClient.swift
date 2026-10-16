@@ -48,6 +48,9 @@ struct FileHostFailure: Error, LocalizedError, Sendable {
     var opId: UInt64?
     var outcomeUnknown = false
     var conflict: FileConflict?
+    /// Set only when the failed save's text is already the file's visible baseline (the rename
+    /// landed and the directory sync failed): the generation that baseline now has.
+    var committedGeneration: UInt64?
 
     var errorDescription: String? { message + " (" + code + ")" }
     /// Only an `observe` (an idempotent absolute-state write) is retried automatically.
@@ -184,7 +187,8 @@ struct FileHostReply: Sendable {
             let body = header.error
             throw FileHostFailure(code: body?.code ?? "invalid_reply",
                 message: body?.message ?? "The file channel refused the request without a reason",
-                opId: header.opId, outcomeUnknown: header.outcomeUnknown ?? false, conflict: header.conflict)
+                opId: header.opId, outcomeUnknown: header.outcomeUnknown ?? false, conflict: header.conflict,
+                committedGeneration: header.generation)
         }
         return FileHostReply(header: header, body: Data(bytes[(4 + headerLength)...]))
     }
