@@ -1248,6 +1248,42 @@ fn destructive_profile_requests_require_native_owner_before_any_catalog_change()
 }
 
 #[test]
+fn original_profile_reconciliation_requires_native_owner_without_catalog_change() {
+    let fixture = Fixture::new();
+    let state = fixture.0.join("profile-reconcile-state");
+    let socket = fixture.0.join("profile-reconcile.sock");
+    let running = start_profile_app(&fixture, &state, &socket);
+    let profile = value(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "add", "Reconcile Work"],
+    );
+    let id = profile["id"].as_str().unwrap();
+    let intent = uuid::Uuid::new_v4().to_string();
+    let path = state.join(zmux_desktop_runtime::profiles::CATALOG_NAME);
+    let before = fs::read(&path).unwrap();
+    let original = profile_snapshot(&running.desktop, Instant::now() + Duration::from_secs(5));
+    let result = invoke(
+        &socket,
+        &fixture.0,
+        &["browser", "profiles", "reconcile", id, &intent],
+    );
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("native_profile_owner_unavailable"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let after = profile_snapshot(&running.desktop, Instant::now() + Duration::from_secs(5));
+    assert_eq!(after.model, original.model);
+    assert_eq!(
+        serde_json::to_value(after.browser_profiles.operations.clone()).unwrap(),
+        serde_json::to_value(original.browser_profiles.operations.clone()).unwrap()
+    );
+}
+
+#[test]
 fn persistent_profile_cli_resolves_names_and_uuids_reopens_and_reloads_real_catalog() {
     let fixture = Fixture::new();
     let state = fixture.0.join("profile-state");
