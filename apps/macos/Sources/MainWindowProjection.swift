@@ -34,7 +34,8 @@ struct MainWindowProjection: Sendable {
             var projected = snapshot
             projected.model = Model(identityNamespace: model.identityNamespace, modelVersion: model.modelVersion,
                 closedItems: model.closedItems, revision: model.revision, focusedWorkspace: window.selectedWorkspace,
-                workspaces: window.workspaceIds.compactMap { catalog[$0] }, windows: [window], focusedWindow: window.id)
+                workspaces: window.workspaceIds.compactMap { catalog[$0] }, windows: [window], focusedWindow: window.id,
+                workspaceGroups: model.workspaceGroups.filter { $0.windowId == window.id })
             return Self(identity: MainWindowIdentity(namespace: model.identityNamespace, windowId: window.id), snapshot: projected)
         }
     }

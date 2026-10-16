@@ -163,6 +163,9 @@ actor NativeBridge {
             "operation":["operation":"action", "action":["action":"move_workspace_to_window", "destination":destination.uuidString.lowercased(), "focus":focus]]
         ]])
     }
+    func workspaceGroup(_ command: WorkspaceGroupCommand) async throws {
+        try await send(["command": "action", "action": ["action": "workspace_group", "command": command.payload]])
+    }
     func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil, window: UInt64? = nil) async throws {
         var action: [String: Any] = ["action": name]
         if let window { action["window_id"] = window }

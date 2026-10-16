@@ -408,6 +408,8 @@ final class MainHeaderView: DraggableChromeView {
     let titleLabel = NSTextField(labelWithString: "Terminal")
     let detailLabel = NSTextField(labelWithString: "Starting shell…")
     let actions = NSStackView()
+    let leadingActions = NSStackView()
+    private var iconLeading: NSLayoutConstraint?
 
     init() {
         super.init(color: ZmuxPalette.chrome)
@@ -420,6 +422,7 @@ final class MainHeaderView: DraggableChromeView {
         titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
         titleLabel.textColor = .labelColor
         titleLabel.lineBreakMode = .byTruncatingTail
+        detailLabel.isHidden = true
         detailLabel.font = .systemFont(ofSize: 10.5)
         detailLabel.textColor = ZmuxPalette.subdued
         detailLabel.lineBreakMode = .byTruncatingMiddle
@@ -433,14 +436,20 @@ final class MainHeaderView: DraggableChromeView {
 
         actions.orientation = .horizontal
         actions.alignment = .centerY
-        actions.spacing = 3
+        actions.spacing = 1
         actions.translatesAutoresizingMaskIntoConstraints = false
+        leadingActions.orientation = .horizontal
+        leadingActions.translatesAutoresizingMaskIntoConstraints = false
+        actions.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let separator = SeparatorView()
         separator.translatesAutoresizingMaskIntoConstraints = false
-        for view in [icon, labels, actions, separator] { addSubview(view) }
+        for view in [icon, labels, leadingActions, actions, separator] { addSubview(view) }
+        iconLeading = leadingActions.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 13),
+            iconLeading!,
+            leadingActions.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.leadingAnchor.constraint(equalTo: leadingActions.trailingAnchor, constant: 5),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 16),
             icon.heightAnchor.constraint(equalToConstant: 16),
@@ -458,9 +467,16 @@ final class MainHeaderView: DraggableChromeView {
 
     required init?(coder: NSCoder) { nil }
 
+    func setSidebarCollapsed(_ collapsed: Bool) {
+        // Reserve the traffic lights in the content titlebar when the sidebar is hidden.
+        iconLeading?.constant = collapsed ? 76 : 8
+    }
+
     func update(title: String, detail: String, error: Bool) {
         titleLabel.stringValue = title
         detailLabel.stringValue = detail
+        titleLabel.toolTip = detail
+        titleLabel.textColor = error ? .systemRed : .labelColor
         detailLabel.textColor = error ? .systemRed : ZmuxPalette.subdued
         setAccessibilityLabel("Terminal: \(title)")
     }
@@ -845,5 +861,69 @@ private final class PaneDividerView: BackgroundView {
     }
     override func accessibilityPerformDecrement() -> Bool {
         guard let owner else { return false }; owner.setFraction(owner.fraction - 0.05); return true
+    }
+}
+
+/// A group header never changes terminal focus when its disclosure is pressed.
+@MainActor
+final class WorkspaceGroupRowView: NSControl {
+    let groupID: UInt64
+    let namespace: UUID
+    private let memberCount: Int
+    private let disclosure = NSImageView()
+    private let folder = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let countLabel = NSTextField(labelWithString: "")
+
+    init(group: WorkspaceGroup, namespace: UUID, containsSelection: Bool) {
+        self.groupID = group.id
+        self.memberCount = group.workspaceIds.count
+        self.namespace = namespace
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.backgroundColor = containsSelection && group.collapsed ? NSColor.white.withAlphaComponent(0.07).cgColor : NSColor.clear.cgColor
+        disclosure.image = NSImage(systemSymbolName: group.collapsed ? "chevron.right" : "chevron.down", accessibilityDescription: nil)
+        folder.image = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil)
+        for image in [disclosure, folder] {
+            image.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+            image.contentTintColor = ZmuxPalette.subdued
+        }
+        titleLabel.stringValue = group.name
+        titleLabel.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        countLabel.stringValue = String(group.workspaceIds.count)
+        countLabel.font = .systemFont(ofSize: 10)
+        countLabel.textColor = ZmuxPalette.subdued
+        countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for view in [disclosure, folder, titleLabel, countLabel] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 28),
+            disclosure.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            disclosure.centerYAnchor.constraint(equalTo: centerYAnchor),
+            disclosure.widthAnchor.constraint(equalToConstant: 10), disclosure.heightAnchor.constraint(equalToConstant: 12),
+            folder.leadingAnchor.constraint(equalTo: disclosure.trailingAnchor, constant: 5),
+            folder.centerYAnchor.constraint(equalTo: centerYAnchor),
+            folder.widthAnchor.constraint(equalToConstant: 13), folder.heightAnchor.constraint(equalToConstant: 13),
+            titleLabel.leadingAnchor.constraint(equalTo: folder.trailingAnchor, constant: 6),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: countLabel.leadingAnchor, constant: -5),
+            countLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            countLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("\(group.name), \(group.workspaceIds.count) workspaces")
+        setAccessibilityValue(group.collapsed ? "Collapsed" : "Expanded")
+        toolTip = (group.collapsed ? "Expand " : "Collapse ") + group.name
+    }
+    required init?(coder: NSCoder) { nil }
+    override var acceptsFirstResponder: Bool { false }
+    override func mouseDown(with event: NSEvent) { _ = sendAction(action, to: target) }
+    override func accessibilityPerformPress() -> Bool { sendAction(action, to: target) }
+    func updateAttention(unread: Int) {
+        countLabel.stringValue = unread > 0 ? "• \(unread)" : String(memberCount)
+        countLabel.textColor = unread > 0 ? .systemOrange : ZmuxPalette.subdued
+        countLabel.toolTip = unread > 0 ? "\(unread) unread notifications" : "\(memberCount) workspaces"
     }
 }

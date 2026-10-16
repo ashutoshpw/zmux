@@ -252,10 +252,15 @@ struct DesktopWindow: Decodable, Sendable {
     let workspaceIds: [UInt64]
     let selectedWorkspace: UInt64?
 }
+struct WorkspaceGroup: Decodable, Sendable {
+    let id: UInt64; let windowId: UInt64; let name: String
+    let workspaceIds: [UInt64]; let collapsed: Bool; let externalId: String?
+}
 struct Model: Decodable, Sendable {
     let identityNamespace: UUID; let modelVersion: UInt32; let closedItems: [ClosedItem]
     let revision: UInt64; let focusedWorkspace: UInt64?; let workspaces: [Workspace]
     let windows: [DesktopWindow]; let focusedWindow: UInt64?
+    let workspaceGroups: [WorkspaceGroup]
 }
 struct AttentionNotification: Decodable, Sendable {
     let id: UInt64; let surfaceId: UInt64?; let workspaceId: UInt64; let identityNamespace: UUID

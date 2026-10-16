@@ -90,12 +90,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     private var sidebarScroll: NSScrollView?
     private var sidebarDocumentConstraints: [NSLayoutConstraint] = []
-    private var sidebarModes: NSSegmentedControl?
+    private var showingNotifications = false
+    private var sidebarPrimaryButtons: [IconButton] = []
+    private lazy var sidebarToggleButton = IconButton(symbol: "sidebar.left", label: "Toggle sidebar (⌘B)", target: self, action: #selector(toggleSidebar))
+    private lazy var collapsedSidebarToggleButton = IconButton(symbol: "sidebar.left", label: "Show sidebar (⌘B)", target: self, action: #selector(toggleSidebar))
     private lazy var clearNotificationsButton = IconButton(symbol: "trash", label: "Clear displayed notifications", target: self, action: #selector(clearNotifications))
     private lazy var jumpToUnreadButton = IconButton(symbol: "arrow.up.forward.circle", label: "Jump to latest unread (⌘⇧U)", target: self, action: #selector(jumpToUnread))
     private var notificationList: NSStackView?
     private var notificationKey = ""
-    private lazy var notificationButton = IconButton(symbol: "bell", label: "Notifications", target: self, action: #selector(showNotifications))
+    private lazy var notificationButton = IconButton(symbol: "bell", label: "Notifications", target: self, action: #selector(toggleNotifications))
     private let canvas = BackgroundView(color: ZmuxPalette.terminal)
     private let workspaceList = FlippedStackView()
     private let mainHeader = MainHeaderView()
@@ -218,19 +221,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let sidebarChrome = DraggableChromeView(color: ZmuxPalette.sidebar)
         let sidebarSeparator = SeparatorView()
         let rightSeparator = SeparatorView()
-        let modes = NSSegmentedControl(images: [NSImage(systemSymbolName: "square.stack", accessibilityDescription: "Workspaces") ?? NSImage(), NSImage(systemSymbolName: "bell", accessibilityDescription: "Notifications") ?? NSImage()], trackingMode: .selectOne, target: self, action: #selector(sidebarModeChanged(_:)))
-        modes.segmentStyle = .texturedRounded
-        modes.selectedSegment = 0
-        modes.setToolTip("Workspaces", forSegment: 0)
-        modes.setToolTip("Notifications", forSegment: 1)
-        modes.setAccessibilityLabel("Sidebar tabs")
-        sidebarModes = modes
-
-        let newWorkspaceButton = makeIconButton(symbol: "plus", label: "New workspace", action: #selector(newWorkspace))
-        let cloudButton = makeIconButton(symbol: "icloud", label: "Cloud account", action: #selector(showCloudSettings))
-        let sidebarActions = NSStackView(views: [newWorkspaceButton, jumpToUnreadButton, clearNotificationsButton, cloudButton])
+        let newWorkspaceButton = makeIconButton(symbol: "plus", label: "New workspace (⌘N)", action: #selector(newWorkspace))
+        let optionsButton = makeIconButton(symbol: "chevron.down", label: "Workspace and group options", action: #selector(showWorkspaceOptions(_:)))
+        sidebarPrimaryButtons = [newWorkspaceButton, optionsButton]
+        let sidebarActions = NSStackView(views: [sidebarToggleButton, notificationButton, newWorkspaceButton, optionsButton, jumpToUnreadButton, clearNotificationsButton])
         sidebarActions.orientation = .horizontal
-        sidebarActions.spacing = 3
+        sidebarActions.spacing = 1
+        sidebarActions.setAccessibilityLabel("Sidebar controls")
 
         let scroll = NSScrollView()
         sidebarScroll = scroll
@@ -242,27 +239,26 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         workspaceList.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = workspaceList
         workspaceList.orientation = .vertical
-        workspaceList.alignment = .leading
-        workspaceList.spacing = 4
+        workspaceList.alignment = .trailing
+        workspaceList.spacing = 2
         workspaceList.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 8, right: 8)
 
         let splitRightButton = makeIconButton(symbol: "rectangle.split.2x1", label: "Split right", action: #selector(splitRight))
         let splitDownButton = makeIconButton(symbol: "rectangle.split.1x2", label: "Split down", action: #selector(splitDown))
         let browserButton = makeIconButton(symbol: "globe", label: "New browser tab", action: #selector(newBrowser))
         let newTabButton = makeIconButton(symbol: "plus", label: "New terminal tab (⌘T)", action: #selector(newTerminal))
-        let toggleSidebarButton = makeIconButton(symbol: "sidebar.left", label: "Toggle sidebar (⌘B)", action: #selector(toggleSidebar))
-        for button in [toggleSidebarButton, notificationButton, newTabButton, browserButton, splitRightButton, splitDownButton] {
+        mainHeader.leadingActions.addArrangedSubview(collapsedSidebarToggleButton)
+        for button in [newTabButton, browserButton, splitRightButton, splitDownButton] {
             mainHeader.actions.addArrangedSubview(button)
         }
 
-        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, modes, sidebarActions, scroll, cloudFooter, mainHeader, canvas, sidebarDivider] {
+        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, sidebarActions, scroll, cloudFooter, mainHeader, canvas, sidebarDivider] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
         content.addSubview(sidebarContainer)
         sidebarContainer.addSubview(sidebarPanel)
         sidebarContainer.layer?.masksToBounds = true
         sidebarPanel.addSubview(sidebarChrome)
-        sidebarPanel.addSubview(modes)
         sidebarPanel.addSubview(sidebarActions)
         sidebarPanel.addSubview(scroll)
         sidebarPanel.addSubview(cloudFooter)
@@ -281,11 +277,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             self.applySidebarLayout()
         }
 
-        for button in actionButtons + [notificationButton, jumpToUnreadButton, clearNotificationsButton] {
+        for button in actionButtons + [sidebarToggleButton, collapsedSidebarToggleButton, notificationButton, jumpToUnreadButton, clearNotificationsButton] {
             button.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 28),
-                button.heightAnchor.constraint(equalToConstant: 28)
+                button.widthAnchor.constraint(equalToConstant: 22),
+                button.heightAnchor.constraint(equalToConstant: 24)
             ])
         }
 
@@ -303,23 +299,20 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
             sidebarChrome.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             sidebarChrome.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
-            sidebarChrome.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
-            sidebarChrome.heightAnchor.constraint(equalToConstant: 42),
+            sidebarChrome.topAnchor.constraint(equalTo: content.topAnchor),
+            sidebarChrome.heightAnchor.constraint(equalToConstant: 32),
             sidebarSeparator.leadingAnchor.constraint(equalTo: sidebarChrome.leadingAnchor),
             sidebarSeparator.trailingAnchor.constraint(equalTo: sidebarChrome.trailingAnchor),
             sidebarSeparator.bottomAnchor.constraint(equalTo: sidebarChrome.bottomAnchor),
             sidebarSeparator.heightAnchor.constraint(equalToConstant: 1),
 
-            sidebarActions.trailingAnchor.constraint(equalTo: sidebarChrome.trailingAnchor, constant: -8),
+            sidebarActions.leadingAnchor.constraint(equalTo: sidebarChrome.leadingAnchor, constant: 76),
+            sidebarActions.trailingAnchor.constraint(lessThanOrEqualTo: sidebarChrome.trailingAnchor, constant: -6),
             sidebarActions.centerYAnchor.constraint(equalTo: sidebarChrome.centerYAnchor),
-            modes.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor, constant: 10),
-            modes.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 8),
-            modes.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor, constant: -10),
-            modes.heightAnchor.constraint(equalToConstant: 25),
 
             scroll.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: modes.bottomAnchor, constant: 7),
+            scroll.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 4),
             scroll.bottomAnchor.constraint(equalTo: cloudFooter.topAnchor),
 
             cloudFooter.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
@@ -333,8 +326,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
             mainHeader.leadingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
             mainHeader.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            mainHeader.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
-            mainHeader.heightAnchor.constraint(equalToConstant: 42),
+            mainHeader.topAnchor.constraint(equalTo: content.topAnchor),
+            mainHeader.heightAnchor.constraint(equalToConstant: 32),
             canvas.leadingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
             canvas.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             canvas.topAnchor.constraint(equalTo: mainHeader.bottomAnchor),
@@ -375,9 +368,173 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         sidebarPanelWidth?.constant = width
         sidebarWidth?.constant = sidebarCollapsed ? 0 : width
         sidebarPanel.isHidden = sidebarCollapsed
+        collapsedSidebarToggleButton.isHidden = !sidebarCollapsed
+        mainHeader.setSidebarCollapsed(sidebarCollapsed)
+        sidebarToggleButton.setAccessibilityValue(sidebarCollapsed ? "Collapsed" : "Expanded")
         sidebarDivider.isHidden = sidebarCollapsed
         sidebarDivider.update(width: width)
         content.layoutSubtreeIfNeeded()
+    }
+
+    /// Exercises production controls and the Rust owner; never fabricates a model.
+    func sidebarGroupingSmoke(report: URL) async throws {
+        if sidebarCollapsed { toggleSidebar() }
+        showWorkspaces()
+        window.setContentSize(NSSize(width: 900, height: 600))
+        sidebarLayout.resize(to: 224, availableWidth: 900)
+        applySidebarLayout()
+        window.makeKeyAndOrderFront(nil); NSApp.activate()
+        try await waitUntil { $0.workspace != nil && $0.frames.first?.snapshot?.state == "running" && self.nativeReady }
+        guard let content = window.contentView else { throw BridgeFailure(message: "Sidebar fixture has no content view") }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
+        func click(_ view: NSView) throws {
+            let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            func event(_ type: NSEvent.EventType) -> NSEvent? {
+                NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)
+            }
+            guard let down = event(.leftMouseDown), let up = event(.leftMouseUp) else {
+                throw BridgeFailure(message: "Could not construct native sidebar pointer event")
+            }
+            // NSButton tracks synchronously until mouse-up; queue its real release first.
+            NSApp.postEvent(up, atStart: true)
+            window.sendEvent(down)
+        }
+        func clickMenu(_ menu: NSMenu?, title: String) throws {
+            guard let menu, let item = menu.items.first(where: { $0.title == title }), item.isEnabled else {
+                throw BridgeFailure(message: "Missing enabled native menu: " + title)
+            }
+            menu.performActionForItem(at: menu.index(of: item))
+        }
+        func submitSheet(name: String, button: String) async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while window.attachedSheet == nil {
+                guard ContinuousClock.now < deadline else { throw BridgeFailure(message: "Group name sheet did not open") }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            guard let sheet = window.attachedSheet, let view = sheet.contentView,
+                  let field = descendants(view).compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
+                  let submit = descendants(view).compactMap({ $0 as? NSButton }).first(where: { $0.title == button }) else {
+                throw BridgeFailure(message: "Group name sheet has no editable field and submit button")
+            }
+            field.stringValue = name; submit.performClick(nil)
+        }
+        func geometry() throws {
+            content.layoutSubtreeIfNeeded()
+            let top = content.bounds.maxY
+            let sidebarTop = sidebarContainer.convert(sidebarContainer.bounds, to: content).maxY
+            let listTop = sidebarScroll.map { $0.convert($0.bounds, to: content).maxY } ?? 0
+            guard abs(sidebarTop - top) < 1, top - listTop <= 38,
+                  abs(mainHeader.bounds.height - 32) < 1 else { throw BridgeFailure(message: "Chrome still wastes a second toolbar row") }
+            let toggle = sidebarToggleButton.convert(sidebarToggleButton.bounds, to: content)
+            let bell = notificationButton.convert(notificationButton.bounds, to: content)
+            guard !sidebarToggleButton.isHiddenOrHasHiddenAncestor, toggle.width >= 22,
+                  toggle.maxX <= bell.minX + 1, bell.maxX <= sidebarContainer.frame.maxX,
+                  toggle.minX >= 74, abs(toggle.midY - bell.midY) < 1 else {
+                throw BridgeFailure(message: "Sidebar controls are clipped, overlapping, or cover traffic lights")
+            }
+            for button in mainHeader.actions.arrangedSubviews where !button.isHidden {
+                let rect = button.convert(button.bounds, to: content)
+                guard rect.width >= 22, rect.minX >= mainHeader.frame.minX, rect.maxX <= content.bounds.maxX else {
+                    throw BridgeFailure(message: "Main header action is clipped")
+                }
+            }
+        }
+        try geometry()
+        window.setContentSize(NSSize(width: 680, height: 420)); applySidebarLayout(); try geometry()
+        window.setContentSize(NSSize(width: 900, height: 600)); applySidebarLayout()
+        guard let add = sidebarPrimaryButtons.first else { throw BridgeFailure(message: "No new workspace icon") }
+        let initialCount = snapshot?.model.workspaces.count ?? 0
+        try click(add)
+        try await waitUntil { $0.model.workspaces.count == initialCount + 1 && $0.frames.first?.snapshot?.state == "running" }
+        guard let initial = snapshot, initial.model.workspaces.count >= 2,
+              let selected = initial.model.focusedWorkspace, let responder = window.firstResponder,
+              let terminal = focusedTerminal, responder === terminal else { throw BridgeFailure(message: "Group fixture lacks a live selected terminal") }
+        let members = Array(initial.model.workspaces.prefix(2).map(\.id))
+        let pids = initial.frames.map { "\($0.sessionId):\($0.processId ?? 0)" }
+        func unchanged() throws {
+            guard snapshot?.model.focusedWorkspace == selected, window.firstResponder === responder,
+                  snapshot?.frames.map({ "\($0.sessionId):\($0.processId ?? 0)" }) == pids else {
+                throw BridgeFailure(message: "Grouping changed terminal selection, responder or child identity")
+            }
+        }
+        try clickMenu(windowMenu.items.first(where: { $0.submenu?.title == "Workspace" })?.submenu, title: "New Workspace Group…")
+        try await submitSheet(name: "Local", button: "Create")
+        try await waitUntil { $0.model.workspaceGroups.contains { $0.name == "Local" } }
+        guard let group = snapshot?.model.workspaceGroups.first(where: { $0.name == "Local" }),
+              let other = members.first(where: { !group.workspaceIds.contains($0) }),
+              let row = workspaceRows.first(where: { $0.value == other })?.key,
+              let move = row.menu?.items.first(where: { $0.title == "Move to Group" })?.submenu else {
+            throw BridgeFailure(message: "Workspace row lacks group destination menu")
+        }
+        try clickMenu(move, title: "Local")
+        try await waitUntil { $0.model.workspaceGroups.first?.workspaceIds.count == 2 }
+        try unchanged()
+        guard let header = workspaceList.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView }).first else { throw BridgeFailure(message: "Group disclosure unavailable") }
+        try click(header)
+        try await waitUntil { $0.model.workspaceGroups.first?.collapsed == true }
+        guard workspaceRows.isEmpty else { throw BridgeFailure(message: "Collapsed group left member rows visible") }
+        try unchanged()
+        guard let collapsed = workspaceList.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView }).first else { throw BridgeFailure(message: "Collapsed header disappeared") }
+        try clickMenu(collapsed.menu, title: "Rename Group…")
+        try await submitSheet(name: "Project", button: "Rename")
+        try await waitUntil { $0.model.workspaceGroups.first?.name == "Project" }
+        guard let renamed = workspaceList.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView }).first else { throw BridgeFailure(message: "Renamed group header unavailable") }
+        try clickMenu(renamed.menu, title: "Expand Group")
+        try await waitUntil { $0.model.workspaceGroups.first?.collapsed == false }
+        guard workspaceRows.count == initialCount + 1 else { throw BridgeFailure(message: "Expanded group did not restore rows") }
+        try unchanged()
+        if let row = workspaceRows.first(where: { $0.value == other })?.key { try clickMenu(row.menu, title: "Remove from Group") }
+        else { throw BridgeFailure(message: "Expanded member row missing") }
+        try await waitUntil { $0.model.workspaceGroups.first?.workspaceIds.count == 1 }
+        guard let remaining = workspaceList.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView }).first else { throw BridgeFailure(message: "Remaining group header missing") }
+        try clickMenu(remaining.menu, title: "Ungroup Workspaces")
+        try await waitUntil { $0.model.workspaceGroups.isEmpty }
+        guard workspaceRows.count == initialCount + 1 else { throw BridgeFailure(message: "Ungroup closed a workspace") }
+        try unchanged()
+        // Retain a useful grouped screenshot after proving non-destructive ungroup.
+        newWorkspaceGroup(); try await submitSheet(name: "Local", button: "Create")
+        try await waitUntil { $0.model.workspaceGroups.first?.name == "Local" }
+        try unchanged()
+        _ = try await nativeCLI(["new-window", "--no-focus"], externalCaller: true)
+        try await waitUntil { _ in self.coordinator.snapshot?.model.windows.count == 2 && self.coordinator.mainWindowHosts.count == 2 }
+        guard let otherWindow = coordinator.snapshot?.model.windows.first(where: { $0.id != self.identity?.windowId }),
+              let otherWorkspace = otherWindow.workspaceIds.first else { throw BridgeFailure(message: "Second window has no workspace") }
+        _ = try await nativeCLI(["workspace-group", "create", "--window", String(otherWindow.id), "--from", String(otherWorkspace), "--name", "Foreign group"], externalCaller: true)
+        try await waitUntil { _ in self.coordinator.snapshot?.model.workspaceGroups.contains { $0.name == "Foreign group" } == true }
+        guard snapshot?.model.workspaceGroups.contains(where: { $0.name == "Foreign group" }) == false,
+              workspaceList.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView }).count == 1,
+              workspaceRows.keys.allSatisfy({ row in
+                  row.menu?.items.first(where: { $0.title == "Move to Group" })?.submenu?.items.contains(where: { $0.title == "Foreign group" }) != true
+              }), window.firstResponder === responder, window.isKeyWindow else {
+            throw BridgeFailure(message: "Foreign window group leaked into source sidebar or changed focus")
+        }
+        _ = try await nativeCLI(["close-window", "--window", String(otherWindow.id)], externalCaller: true)
+        try await waitUntil { _ in self.coordinator.snapshot?.model.windows.count == 1 && self.snapshot?.frames.count == pids.count }
+        try unchanged()
+        try click(notificationButton)
+        guard showingNotifications else { throw BridgeFailure(message: "Bell did not open inbox") }
+        try click(notificationButton)
+        guard !showingNotifications, sidebarScroll?.documentView === workspaceList else { throw BridgeFailure(message: "Bell did not return to workspaces") }
+        try click(sidebarToggleButton)
+        guard sidebarCollapsed, !collapsedSidebarToggleButton.isHiddenOrHasHiddenAncestor, sidebarContainer.bounds.width == 0 else { throw BridgeFailure(message: "Sidebar toggle vanished when collapsed") }
+        try unchanged()
+        try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-collapsed.png"))
+        try click(collapsedSidebarToggleButton)
+        guard !sidebarCollapsed, abs(sidebarContainer.bounds.width - 224) < 1 else { throw BridgeFailure(message: "Sidebar toggle did not restore its width") }
+        try unchanged(); try geometry()
+        try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar.png"))
+        let receipt: [String: Bool] = ["compact_toolbar": true, "visible_toggle": true, "groups": true, "group_menus": true,
+            "collapse_preserves_terminal": true, "focus_preserved": true, "sidebar_restored": true, "notification_toggle": true,
+            "window_scoping": snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true]
+        try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
+    }
+    private func captureSidebarImage(_ url: URL) throws {
+        guard let view = window.contentView, let image = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw BridgeFailure(message: "Sidebar drawing surface unavailable") }
+        view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
+        view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: image) }
+        guard let png = image.representation(using: .png, properties: [:]), png.count > 4096 else { throw BridgeFailure(message: "Sidebar screenshot unavailable") }
+        try png.write(to: url, options: .atomic)
     }
 
     func windowDidResize(_ notification: Notification) { applySidebarLayout() }
@@ -412,6 +569,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             ("New Window", #selector(newMainWindow), ""),
             ("Close Window", #selector(closeMainWindow), ""),
             ("New Workspace", #selector(newWorkspace), "n"),
+            ("New Workspace Group…", #selector(newWorkspaceGroup), ""),
             ("New Terminal Tab", #selector(newTerminal), "t"),
             ("New Browser Tab", #selector(newBrowser), ""),
             ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
@@ -577,7 +735,21 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             $0.removeFromSuperview()
         }
         workspaceRows.removeAll()
+        var emittedGroups = Set<UInt64>()
         for workspace in snapshot.model.workspaces {
+            let group = snapshot.model.workspaceGroups.first { $0.workspaceIds.contains(workspace.id) }
+            if let group {
+                if emittedGroups.insert(group.id).inserted {
+                    let header = WorkspaceGroupRowView(group: group, namespace: snapshot.model.identityNamespace,
+                        containsSelection: group.workspaceIds.contains(snapshot.model.focusedWorkspace ?? 0))
+                    header.target = self; header.action = #selector(toggleWorkspaceGroup(_:))
+                    header.menu = workspaceGroupMenu(group, namespace: snapshot.model.identityNamespace)
+                    header.translatesAutoresizingMaskIntoConstraints = false
+                    workspaceList.addArrangedSubview(header)
+                    header.widthAnchor.constraint(equalTo: workspaceList.widthAnchor, constant: -16).isActive = true
+                }
+                if group.collapsed { continue }
+            }
             let row = WorkspaceRowView(workspaceID: workspace.id)
             row.target = self
             row.action = #selector(workspaceSelected(_:))
@@ -589,13 +761,18 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             row.menu = workspaceMenu(for: workspace)
             row.translatesAutoresizingMaskIntoConstraints = false
             workspaceList.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: workspaceList.widthAnchor, constant: -16).isActive = true
+            row.widthAnchor.constraint(equalTo: workspaceList.widthAnchor, constant: group == nil ? -16 : -30).isActive = true
             workspaceRows[row] = workspace.id
         }
         window.recalculateKeyViewLoop()
     }
 
     private func updateWorkspaceRows(_ snapshot: DesktopSnapshot) {
+        for header in workspaceList.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView }) {
+            guard let group = snapshot.model.workspaceGroups.first(where: { $0.id == header.groupID }) else { continue }
+            let unread = snapshot.notifications.filter { !$0.read && $0.identityNamespace == snapshot.model.identityNamespace && group.workspaceIds.contains($0.workspaceId) }.count
+            header.updateAttention(unread: unread)
+        }
         for (row, workspaceID) in workspaceRows {
             guard let workspace = snapshot.model.workspaces.first(where: { $0.id == workspaceID }) else { continue }
             let isSelected = workspace.id == snapshot.model.focusedWorkspace
@@ -867,10 +1044,102 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             }
             if !move.items.isEmpty { menu.addItem(withTitle: "Move to Window", action: nil, keyEquivalent: "").submenu = move }
         }
+        menu.addItem(.separator())
+        appendWorkspaceGrouping(to: menu, workspace: workspace)
+        menu.addItem(.separator())
         let close = menu.addItem(withTitle: "Close Workspace", action: #selector(closeWorkspaceFromMenu(_:)), keyEquivalent: "")
         close.target = self
         close.representedObject = NSNumber(value: workspace.id)
         return menu
+    }
+
+    @objc private func showWorkspaceOptions(_ sender: NSView) {
+        let menu = NSMenu(title: "Workspace options")
+        for (title, action) in [("New Workspace", #selector(newWorkspace)), ("New Workspace Group…", #selector(newWorkspaceGroup)),
+                                ("Show Workspaces", #selector(showWorkspacesFromMenu)), ("Notifications", #selector(showNotifications)),
+                                ("Cloud Account…", #selector(showCloudSettings))] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: ""); item.target = self
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY), in: sender)
+    }
+    @objc private func showWorkspacesFromMenu() { showWorkspaces() }
+
+    @objc private func newWorkspaceGroup() {
+        guard let workspace = snapshot?.workspace else { return }
+        promptToCreateGroup(workspace: workspace)
+    }
+    private func promptToCreateGroup(workspace: Workspace) {
+        guard let snapshot, let owner = snapshot.model.windows.first(where: { $0.workspaceIds.contains(workspace.id) }) else { return }
+        let namespace = snapshot.model.identityNamespace
+        promptForGroupName(title: "New workspace group", initial: "New Group", button: "Create") { [weak self] name in
+            self?.enqueue(.workspaceGroup(namespace, .create(window: owner.id, name: name, members: [workspace.id])))
+        }
+    }
+    private func promptForGroupName(title: String, initial: String, button: String, completion: @escaping @MainActor (String) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "Group workspaces in this window. Terminal sessions keep running when the group is collapsed."
+        let field = NSTextField(string: initial)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: button); alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn { completion(field.stringValue) }
+        }
+    }
+    private func appendWorkspaceGrouping(to menu: NSMenu, workspace: Workspace) {
+        guard let snapshot else { return }
+        let namespace = snapshot.model.identityNamespace
+        let new = menu.addItem(withTitle: "New Group from Workspace…", action: #selector(createGroupFromMenu(_:)), keyEquivalent: "")
+        new.target = self
+        new.representedObject = WorkspaceGroupWorkspaceTarget(namespace: namespace, workspace: workspace.id)
+        let current = snapshot.model.workspaceGroups.first { $0.workspaceIds.contains(workspace.id) }
+        let destinations = snapshot.model.workspaceGroups.filter { $0.id != current?.id }
+        if !destinations.isEmpty {
+            let groups = NSMenu(title: "Move to Group")
+            for group in destinations {
+                addGroupCommand(to: groups, title: group.name, namespace: namespace, command: .add(group: group.id, workspace: workspace.id))
+            }
+            menu.addItem(withTitle: "Move to Group", action: nil, keyEquivalent: "").submenu = groups
+        }
+        if current != nil { addGroupCommand(to: menu, title: "Remove from Group", namespace: namespace, command: .remove(workspace.id)) }
+    }
+    private func addGroupCommand(to menu: NSMenu, title: String, namespace: UUID, command: WorkspaceGroupCommand) {
+        let item = menu.addItem(withTitle: title, action: #selector(performGroupCommand(_:)), keyEquivalent: "")
+        item.target = self; item.representedObject = WorkspaceGroupTarget(namespace: namespace, command: command)
+    }
+    private func workspaceGroupMenu(_ group: WorkspaceGroup, namespace: UUID) -> NSMenu {
+        let menu = NSMenu(title: group.name)
+        addGroupCommand(to: menu, title: group.collapsed ? "Expand Group" : "Collapse Group", namespace: namespace, command: .collapse(group.id, !group.collapsed))
+        let rename = menu.addItem(withTitle: "Rename Group…", action: #selector(renameWorkspaceGroup(_:)), keyEquivalent: "")
+        rename.target = self; rename.representedObject = WorkspaceGroupTarget(namespace: namespace, command: .rename(group.id, group.name))
+        menu.addItem(.separator())
+        addGroupCommand(to: menu, title: "Ungroup Workspaces", namespace: namespace, command: .ungroup(group.id))
+        return menu
+    }
+    @objc private func createGroupFromMenu(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? WorkspaceGroupWorkspaceTarget,
+              snapshot?.model.identityNamespace == target.namespace,
+              let workspace = snapshot?.model.workspaces.first(where: { $0.id == target.workspace }) else { return }
+        promptToCreateGroup(workspace: workspace)
+    }
+    @objc private func renameWorkspaceGroup(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? WorkspaceGroupTarget,
+              snapshot?.model.identityNamespace == target.namespace, case .rename(let id, let name) = target.command else { return }
+        promptForGroupName(title: "Rename group", initial: name, button: "Rename") { [weak self] name in
+            self?.enqueue(.workspaceGroup(target.namespace, .rename(id, name)))
+        }
+    }
+    @objc private func performGroupCommand(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? WorkspaceGroupTarget,
+              snapshot?.model.identityNamespace == target.namespace else { return }
+        enqueue(.workspaceGroup(target.namespace, target.command))
+    }
+    @objc private func toggleWorkspaceGroup(_ sender: WorkspaceGroupRowView) {
+        guard let snapshot, snapshot.model.identityNamespace == sender.namespace,
+              let group = snapshot.model.workspaceGroups.first(where: { $0.id == sender.groupID }) else { return }
+        enqueue(.workspaceGroup(sender.namespace, .collapse(group.id, !group.collapsed)))
     }
 
     @objc func newWorkspace() {
@@ -1178,13 +1447,19 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             view.topAnchor.constraint(equalTo: scroll.contentView.topAnchor), view.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)]
         NSLayoutConstraint.activate(sidebarDocumentConstraints)
     }
-    @objc private func sidebarModeChanged(_ sender: NSSegmentedControl) {
-        if sender.selectedSegment == 1 { showNotifications() }
-        else { setNotificationActionsVisible(false); setSidebarDocument(workspaceList) }
+    @objc private func toggleNotifications() {
+        if showingNotifications { showWorkspaces() } else { showNotifications() }
+    }
+    private func showWorkspaces() {
+        showingNotifications = false
+        setNotificationActionsVisible(false)
+        setSidebarDocument(workspaceList)
+        notificationButton.setAccessibilityValue("Workspaces")
     }
     @objc func showNotifications() {
         if sidebarCollapsed { toggleSidebar() }
-        sidebarModes?.selectedSegment = 1
+        showingNotifications = true
+        notificationButton.setAccessibilityValue("Notifications")
         setNotificationActionsVisible(true)
         if notificationList == nil {
             let list = FlippedStackView()
@@ -1239,6 +1514,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     @objc private func jumpToUnread() { notificationDelivery.jumpToUnread() }
     private func setNotificationActionsVisible(_ visible: Bool) {
+        for button in sidebarPrimaryButtons { button.isHidden = visible }
         clearNotificationsButton.isHidden = !visible
         jumpToUnreadButton.isHidden = !visible
     }
@@ -1488,7 +1764,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         enqueue(.input(originalSession, "printf '\\033]777;notify;Agent ready;Second review\\007'\r"))
         try await waitUntil { $0.notifications.contains { $0.surfaceId == originalPane.selectedSurface && !$0.read && $0.body == "Second review" } }
         showNotifications()
-        guard sidebarModes?.selectedSegment == 1, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
+        guard showingNotifications, !(notificationList?.arrangedSubviews.isEmpty ?? true), !notificationButton.isHidden else { throw BridgeFailure(message: "Notification inbox is unavailable") }
         try await smokeNotificationReply(surface: originalPane.selectedSurface, session: originalSession)
         _ = try await nativeCLI(["notify", "--surface", String(originalPane.selectedSurface), "--title", "CLI review", "--subtitle", "CLI follow up", "--body", "Review queued", "--desktop", "false"])
         try await waitUntil { value in
@@ -1508,7 +1784,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
         closeTerminalTab(attentionTab)
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
-        sidebarModes?.selectedSegment = 0
+        showingNotifications = false
         setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
         splitRight()
@@ -2028,7 +2304,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         selectWorkspace(foregroundWorkspace)
         try await waitUntil { $0.model.focusedWorkspace == foregroundWorkspace }
         try await smokeUnreadNotificationJump(workspace: retained, foregroundWorkspace: foregroundWorkspace)
-        sidebarModes?.selectedSegment = 0
+        showingNotifications = false
         setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
     }
@@ -2733,7 +3009,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try await NotificationPermissionSmoke.validate()
                 }
                 let storage: NativeDesktopStorage
-                if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
+                if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                } else if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
                     storage = .transient
                 } else if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
@@ -2748,6 +3026,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
+                    do {
+                        try await controller.sidebarGroupingSmoke(report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+                        try await coordinator.shutdown(); exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native sidebar smoke failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch { FileHandle.standardError.write(Data("Sidebar cleanup failed: \(error)\n".utf8)) }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--profile-operations-smoke"), CommandLine.arguments.count > index + 4 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     let phase = CommandLine.arguments[index + 3]
@@ -2840,7 +3128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
+                if CommandLine.arguments.contains("--sidebar-grouping-smoke") || CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }

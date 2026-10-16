@@ -5,6 +5,7 @@ enum UICommand: Sendable {
     case window(String, UInt64?, Bool?)
     case windowEvent(NativeWindowEvent)
     case workspaceCreate(UInt64, String)
+    case workspaceGroup(UUID, WorkspaceGroupCommand)
     case workspaceMove(UUID, UUID, Bool)
     case workspaceOrder(UUID, UUID, Int, UInt64)
     case workspaceNumber(UUID, Int)
@@ -144,6 +145,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                     case .workspaceOrder(let workspace, let window, let index, let revision): try await self.bridge.reorderWorkspace(workspace, window: window, index: index, revision: revision)
                     case .surfaceOrder(let namespace, let surface, let pane, let value, let relative, let revision): try await self.bridge.reorderSurface(namespace: namespace, surface: surface, pane: pane, value: value, relative: relative, revision: revision)
                     case .workspaceNumber(let window, let digit): try await self.bridge.selectWorkspaceNumber(digit, window: window)
+                    case .workspaceGroup(let namespace, let command):
+                        guard self.snapshot?.model.identityNamespace == namespace else { throw BridgeFailure(message: "Workspace group belongs to a previous desktop") }
+                        try await self.bridge.workspaceGroup(command)
                     case .workspaceCreate(let window, let name): try await self.bridge.action("create_workspace_in_window", title: name, window: window)
                     case .windowHistory(let window, let direction): try await self.bridge.action("navigate_focus_in_window", direction: direction, window: window)
                     case .windowReopen(let window, let id): try await self.bridge.action("reopen_closed_in_window", closed: id, window: window)
