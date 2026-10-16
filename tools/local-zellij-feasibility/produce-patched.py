@@ -133,12 +133,16 @@ def main():
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--cargo-target", type=Path, help="explicit absolute reusable Cargo cache")
     parser.add_argument("--test-only", action="store_true")
+    parser.add_argument("--input-readiness", action="store_true",
+                        help="explicit experimental frontend readiness patch and real reporter controls; no package/default activation")
     parser.add_argument("--rebuild-plugins", action="store_true", help="rebuild ten embedded WASM plugins and capture package provenance")
     args = parser.parse_args()
     if not args.output.is_absolute() or (args.cargo_target and not args.cargo_target.is_absolute()) or not 1 <= args.jobs <= 4:
         parser.error("output must be absolute; jobs must be 1..4")
     if args.test_only and args.rebuild_plugins:
         parser.error("plugin package evidence requires the complete native build")
+    if args.input_readiness and args.rebuild_plugins:
+        parser.error("experimental readiness is not a dependency-package build")
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
     lock = json.loads((HERE / "patched-producer-lock.json").read_text())
@@ -207,6 +211,16 @@ def main():
                "steps": [],
                "scope": "experimental producer; no acquisition swap, app redistribution or native feature closure"}
     try:
+        if args.input_readiness:
+            inventory_path = HERE / "input-readiness-source.json"
+            inventory = json.loads(inventory_path.read_text())
+            if inventory["source_commit"] != lock["source_commit"]:
+                raise RuntimeError("readiness inventory source commit mismatch")
+            for relative, expected in inventory["inputs_sha256"].items():
+                if digest(HERE / relative) != expected:
+                    raise RuntimeError(f"readiness source inventory mismatch: {relative}")
+            receipt["input_readiness"] = {"requested": True, "inventory_sha256": digest(inventory_path),
+                                          "inventory": inventory, "built": False}
         run(["rustc", "+" + lock["rust_toolchain"], "--verbose", "--version"], source, environment, output / "rustc.log", 30)
         receipt["rustc"] = (output / "rustc.log").read_text()
         # Cargo fingerprints can accept archived old mtimes in a different
@@ -243,6 +257,17 @@ def main():
         receipt["non_eintr_after"] = bad_green
         if bad_green["returncode"] or "NON_EINTR_FAILED" not in bad_green["output"]:
             raise RuntimeError("patched non-EINTR failure was swallowed")
+        if args.input_readiness:
+            run(["patch", "--batch", "--forward", "-p1", "-i",
+                 str(HERE / "patches/0002-optional-input-readiness.patch")],
+                source, environment, output / "input-readiness-patch.log", 30)
+            shutil.copy2(HERE / "input-readiness-reporter.rs", source / "zellij-client/src/input_readiness.rs")
+            for relative, expected in inventory["upstream_files_sha256"].items():
+                if digest(source / relative) != expected:
+                    raise RuntimeError(f"readiness patched source mismatch: {relative}")
+            controls = cargo + ["test", "--locked", "--release", "--no-default-features",
+                                "-p", "zellij-client", "--lib", "input_readiness::tests::", "--", "--nocapture"]
+            receipt["steps"].append(run(controls, source, environment, output / "input-readiness-controls.log"))
         if not args.test_only:
             build = cargo + ["build", "--locked", "--release", "-p", "zellij",
                              "--no-default-features", "--features", ",".join(lock["features"])]
@@ -262,6 +287,24 @@ def main():
             receipt["binary_version"] = (output / "version.log").read_text().strip()
             if receipt["binary_version"] != "zellij 0.43.0":
                 raise RuntimeError("patched producer version changed")
+            if args.input_readiness:
+                capability_home = output / "capability-home"
+                capability_home.mkdir(mode=0o700)
+                capability_environment = dict(environment, HOME=str(capability_home),
+                    XDG_CONFIG_HOME=str(capability_home / "config"),
+                    XDG_CACHE_HOME=str(capability_home / "cache"),
+                    XDG_DATA_HOME=str(capability_home / "data"),
+                    XDG_RUNTIME_DIR=str(capability_home / "runtime"),
+                    TMPDIR=str(capability_home), ZMUX_ZELLIJ_FRONTEND_READY="/nonexistent/probe-only")
+                run([product, inventory["capability_argument"]], capability_home, capability_environment,
+                    output / "input-readiness-capability.log", 10)
+                actual = (output / "input-readiness-capability.log").read_text()
+                expected = json.loads((HERE / "input-readiness-protocol.json").read_text())["capability_stdout"]
+                if actual != expected or list(capability_home.iterdir()):
+                    raise RuntimeError("readiness capability output/side-effect contract failed")
+                receipt["input_readiness"].update(built=True, capability_stdout=actual,
+                    capability_log_sha256=digest(output / "input-readiness-capability.log"),
+                    capability_home_unchanged=True)
             shutil.copy2(source / "LICENSE.md", output / "Zellij-LICENSE.md")
             receipt["license_sha256"] = digest(output / "Zellij-LICENSE.md")
             metadata_command = cargo + ["metadata", "--locked", "--format-version", "1", "--no-default-features", "--features", ",".join(lock["features"])]
@@ -272,6 +315,13 @@ def main():
             if not isinstance(metadata, dict) or metadata.get("version") != 1 or not isinstance(metadata.get("packages"), list) or not isinstance(metadata.get("resolve"), dict):
                 raise RuntimeError("Cargo metadata stdout is not one complete dependency graph")
             receipt["dependency_metadata_sha256"] = digest(metadata_path)
+        if args.input_readiness:
+            for relative, expected in inventory["inputs_sha256"].items():
+                if digest(HERE / relative) != expected:
+                    raise RuntimeError(f"readiness input changed during build: {relative}")
+            for relative, expected in inventory["upstream_files_sha256"].items():
+                if digest(source / relative) != expected:
+                    raise RuntimeError(f"readiness upstream source changed during build: {relative}")
         if digest(source / "Cargo.lock") != receipt["cargo_lock_sha256"]:
             raise RuntimeError("upstream dependency lock changed")
         if any(digest(path) != sha for path, sha in cargo_configs.items()):
