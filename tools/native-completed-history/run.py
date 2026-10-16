@@ -16,9 +16,12 @@ import shutil
 import subprocess
 import sys
 import uuid
+import zipfile
 
 REPO = Path(__file__).resolve().parents[2]
-OWN_INPUTS = ('tools/native-completed-history/run.py', '.github/workflows/macos-development.yml')
+CONTRACT_INPUT = 'tools/native-completed-history/HistoryDecoderContract.swift'
+OWN_INPUTS = ('tools/native-completed-history/run.py', '.github/workflows/macos-development.yml',
+              'tools/native-terminal-selection/run.py', CONTRACT_INPUT)
 LAUNCHER = '''import json,os,sys
 with open(sys.argv[1], 'x') as record:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'executable':sys.argv[2]},record)
@@ -33,7 +36,65 @@ def load(name, path):
     return module
 
 
-def fixture():
+def decoder_inputs():
+    # Reuse the real app dependency closure maintained by the selection probe;
+    # replace only its @main contract, never the production model definitions.
+    selection = load('completed_history_selection_inputs', REPO / 'tools/native-terminal-selection/run.py')
+    selection_contract = 'tools/native-terminal-selection/CopyMetadataContract.swift'
+    if selection.METADATA_INPUTS.count(selection_contract) != 1:
+        raise RuntimeError('Completed-history decoder dependency contract changed')
+    return tuple(name for name in selection.METADATA_INPUTS if name != selection_contract) + (CONTRACT_INPUT,)
+
+
+def run_decoder_contract(root, receipt, frozen, inputs, archive, native, runner, environment):
+    frameworks = REPO / 'dist/zmux.app/Contents/Frameworks'
+    bridge = frameworks / 'libzmux_native_bridge.dylib'
+    bridge_hash = native.digest(bridge)
+    with zipfile.ZipFile(archive) as packaged:
+        entry = packaged.getinfo('zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib')
+        if entry.file_size > 64 * 1024 * 1024:
+            raise RuntimeError('Completed-history archived decoder bridge exceeds its byte bound')
+        if hashlib.sha256(packaged.read(entry)).hexdigest() != bridge_hash:
+            raise RuntimeError('Completed-history decoder bridge differs from the archived app build')
+    receipt['history_decoder_inputs'] = {name: frozen[name] for name in inputs}
+    receipt['history_decoder_bridge_sha256'] = bridge_hash
+    retained = root / 'source'
+    probe = root / 'history-decoder-contract'
+    runner.run(['/usr/bin/xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6', '-warnings-as-errors',
+                '-strict-concurrency=complete', '-target', 'arm64-apple-macos14.0',
+                '-import-objc-header', str(retained / 'crates/native-bridge/include/zmux.h'),
+                *[str(retained / name) for name in inputs if name.endswith('.swift')],
+                '-L', str(frameworks), '-lzmux_native_bridge',
+                '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'UserNotifications',
+                '-Xlinker', '-rpath', '-Xlinker', str(frameworks), '-o', str(probe)],
+               'history-decoder-compile', root, receipt['phases'], timeout=60, cwd=REPO, env=environment)
+    output = runner.run([str(probe)], 'history-decoder-contract', root, receipt['phases'],
+                        timeout=5, cwd=REPO, env=environment)
+    result = json.loads(output)
+    accepted = ['legacy_v1_raw', 'v2_not_observed', 'v2_shell_observed',
+                'v2_exec_failed', 'v2_ordinary_exit127']
+    boundaries = [f'{contract}_{kind}_{value}' for contract in ('v1', 'v2')
+                  for kind, value in (('exited', 0), ('exited', 255), ('signaled', 1), ('signaled', 127))]
+    rejected = ['legacy_wrong_version', 'legacy_wrong_domain', 'legacy_with_v2_observation',
+                'unknown_contract', 'mixed_envelope', 'raw_with_nested_body', 'tag_without_body',
+                'body_without_tag', 'v2_body_wrong_version', 'v2_body_future_version', 'v2_body_wrong_domain',
+                'v2_missing_observation', 'v2_unknown_observation', 'v2_not_observed_with_failure',
+                'v2_shell_observed_with_failure', 'v2_exec_failure_wrong_stage', 'v2_exec_failure_zero_errno',
+                'v2_exec_failure_negative_errno', 'v2_exec_failure_overflow_errno', 'v2_exec_failure_missing_errno']
+    for contract in ('v1', 'v2'):
+        rejected.extend(f'{contract}_{kind}_{value}'
+                        for kind, value in (('exited', -1), ('exited', 256), ('signaled', 0), ('signaled', 128)))
+        rejected.extend(f'{contract}_{name}' for name in
+                        ('unknown_exit_kind', 'exit_value_type', 'short_digest', 'noncanonical_digest'))
+    expected = {'schema_version': 1, 'production_models_decoder': True,
+                'fixture_only_no_live_authority': True, 'accepted': accepted,
+                'accepted_exit_boundaries': boundaries, 'rejected': rejected}
+    if result != expected or native.digest(bridge) != bridge_hash:
+        raise RuntimeError('Completed-history actual Models decoder contract or bridge changed')
+    receipt['history_decoder_contract'] = result
+
+
+def fixture(contract="v1"):
     namespace, owner, profile, generation, boot = (str(uuid.uuid4()) for _ in range(5))
 
     def identity(pid, parent):
@@ -51,10 +112,31 @@ def fixture():
     receipt = {'version': 1, 'domain': 'zmux.local-zellij.terminal.v1', 'binding': binding,
                'binding_digest': digest, 'terminal_sequence': 1,
                'workload_exit': {'kind': 'exited', 'value': 7}, 'child_reaped': True}
+    labels = ['Process exited with status 7', 'Saved output · truncated']
+    if contract == 'v2':
+        birth = binding['workload']
+        binding = {'version': 2, 'domain': 'zmux.local-zellij.execution.v2',
+                   'owner_uuid': owner, 'owner_generation': generation,
+                   'namespace': binding['namespace'], 'completion_socket': binding['completion_socket'],
+                   'server': binding['server'], 'supervisor': binding['supervisor'],
+                   'workload_birth': birth,
+                   'lifetime': {name: birth[name] for name in ('pid', 'parent_pid', 'start', 'boot')},
+                   'invocation': {'shell': '/fixture-only/missing-shell', 'invocation_digest': 'a' * 64},
+                   'admission_id': str(uuid.uuid4())}
+        digest = hashlib.sha256(b'zmux.local-zellij.execution.v2\0' +
+                                json.dumps(binding, separators=(',', ':')).encode()).hexdigest()
+        receipt = {'execution_contract': 'admitted_lifetime_v2', 'receipt': {
+            'version': 2, 'domain': 'zmux.local-zellij.terminal.v2', 'binding': binding,
+            'binding_digest': digest, 'terminal_sequence': 1,
+            'workload_exit': {'kind': 'exited', 'value': 127}, 'child_reaped': True,
+            'execution_observation': {'kind': 'exec_failed', 'stage': 'configured_shell_exec', 'errno': 2}}}
+        labels = ['Shell launch failed (error 2)', 'Process exited with status 127', 'Saved output · truncated']
+    elif contract != 'v1':
+        raise ValueError('Unknown generated history contract')
     text = ''.join(f'row {row:03d} · α界 e\u0301🙂  \n' for row in range(64))
     content = {'kind': 'completed_local_zellij_terminal', 'profile_id': profile, 'owner_uuid': owner,
                'history': {'receipt': receipt, 'viewport': {'contents': text, 'truncated': True}}}
-    document = {'format': 'zmux.session', 'version': 7, 'identity_namespace': namespace,
+    document = {'format': 'zmux.session', 'version': 8 if contract == 'v2' else 7, 'identity_namespace': namespace,
                 'next_id': 10, 'focused_workspace': 1,
                 'workspaces': [{'id': 1, 'name': 'Fixture saved output', 'focused_pane': 2, 'todos': [],
                                 'root': {'kind': 'leaf', 'pane': {'id': 2, 'selected_surface': 3,
@@ -63,38 +145,14 @@ def fixture():
                                               {'id': 5, 'workspace_ids': [], 'selected_workspace': None}],
                                   'focused_window': 4}}
     assert len(text.encode()) <= 16_384 and len(json.dumps(document).encode()) <= 65_536
-    return document, text
+    return document, text, labels
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output', type=Path)
-    parser.add_argument('--check-inputs', action='store_true')
-    args = parser.parse_args()
-    native = load('completed_history_native_inputs', REPO / 'tools/native-idle-workloads/run.py')
-
-    def sources():
-        result = native.source_files()
-        for name in OWN_INPUTS:
-            path = REPO / name
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > 131_072:
-                raise RuntimeError('Completed-history fixture input exceeds its type/byte bound')
-            result[name] = native.digest(path)
-        if len(result) > 512:
-            raise RuntimeError('Completed-history retained source inventory exceeds its file bound')
-        return result
-
-    frozen = sources()
-    ast.parse(LAUNCHER)
-    document, text = fixture()
-    if args.check_inputs:
-        print(json.dumps({'sources': len(frozen), 'actual_native_execution': False,
-                          'fixture_generated_saved_history': True, 'app_seconds': 60}))
-        return 0
-    if platform.system() != 'Darwin' or platform.machine() != 'arm64' or args.output is None:
-        parser.error('Native completed-history execution requires Darwin ARM64 and --output')
-    root = args.output.resolve()
+def run_history_case(root, contract, source, scope, phases, native, runner, environment):
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    document, text, labels = fixture(contract)
+    environment = dict(environment, ZMUX_SOCKET=str(root / 'control.socket'),
+                       ZMUX_SOCKET_PATH=str(root / 'control.socket'))
     profile = root / 'profile'
     profile.mkdir(mode=0o700)
     saved = profile / 'session.json'
@@ -105,12 +163,85 @@ def main():
     oracle = report.with_suffix(report.suffix + '.expected.txt')
     oracle.write_text(text)
     oracle.chmod(0o600)
+    status_oracle = report.with_suffix(report.suffix + '.expected-status.json')
+    status_oracle.write_text(json.dumps(labels))
+    status_oracle.chmod(0o600)
+    launcher = root / 'owned-app-launch.py'
+    launcher.write_text(LAUNCHER)
+    executable = str(REPO / 'dist/zmux.app/Contents/MacOS/zmux-app')
+    runner.run([sys.executable, str(launcher), str(root / 'owned-launch.json'), executable,
+                '--completed-history-smoke', str(report), str(profile)], 'native-completed-history-' + contract, root,
+               phases, timeout=60, cwd=REPO, env=environment)
+    result = native.document(report)
+    owned = native.document(root / 'owned-launch.json')
+    required_checks = [
+        'actual_restore_model_and_mounted_saved_output',
+        'actual_select_all_and_exact_utf8_copy',
+        'native_typing_and_menu_paste_leave_output_read_only',
+        'canonical_cross_window_move_retains_selection_scroll_and_focus',
+        'source_window_close_retains_saved_output_state']
+    selection = 'row 020 · α界 e\u0301🙂  '
+    # NSRange is UTF-16, independent of Python code point or UTF-8 offsets.
+    start = len(text[:text.index(selection)].encode('utf-16-le')) // 2
+    length = len(selection.encode('utf-16-le')) // 2
+    positions = result['positions']
+    expected_copies = [('select_all', text), ('unicode_selection', selection),
+                       ('after_move', selection), ('after_source_close', selection)]
+    if (result['sourceSHA'] != source or result['state'] != 'complete'
+            or result['scope'] != scope or result['activationPID'] != result['appPID']
+            or result['appPID'] != owned['pid'] or owned['parent_pid'] != os.getpid()
+            or owned['executable'] != executable
+            or result['checks'] != required_checks or result['statusLabels'] != labels
+            or [(row['name'], row['expected']) for row in result['copies']] != expected_copies
+            or any(row['expected'].encode() != row['observed'].encode() for row in result['copies'])
+            or [row['stage'] for row in positions] != ['before_move', 'after_move', 'after_source_close']
+            or any((row['location'], row['length']) != (start, length) for row in positions)
+            or positions[0]['scrollY'] <= 20
+            or any(abs(row['scrollY'] - positions[0]['scrollY']) >= 0.5 for row in positions)):
+        raise RuntimeError('Actual restored history native report, copy or shutdown differs')
+    return {'contract': contract, 'native_report': result, 'owned_launch': owned,
+            'fixture_session_sha256': native.digest(root / 'fixture-session-input.json'),
+            'final_session_sha256': native.digest(saved), 'expected_output_sha256': native.digest(oracle),
+            'expected_status_sha256': native.digest(status_oracle)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--check-inputs', action='store_true')
+    args = parser.parse_args()
+    native = load('completed_history_native_inputs', REPO / 'tools/native-idle-workloads/run.py')
+    inputs = decoder_inputs()
+
+    def sources():
+        result = native.source_files()
+        for name in dict.fromkeys(OWN_INPUTS + inputs):
+            path = REPO / name
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 131_072:
+                raise RuntimeError('Completed-history fixture input exceeds its type/byte bound')
+            result[name] = native.digest(path)
+        if len(result) > 512:
+            raise RuntimeError('Completed-history retained source inventory exceeds its file bound')
+        return result
+
+    frozen = sources()
+    ast.parse(LAUNCHER)
+    for contract in ('v1', 'v2'):
+        fixture(contract)
+    if args.check_inputs:
+        print(json.dumps({'sources': len(frozen), 'actual_native_execution': False,
+                          'fixture_generated_saved_history': True, 'app_seconds': 60,
+                          'decoder_sources': len(inputs), 'decoder_seconds': 5, 'native_scenarios': ['v1', 'v2']}))
+        return 0
+    if platform.system() != 'Darwin' or platform.machine() != 'arm64' or args.output is None:
+        parser.error('Native completed-history execution requires Darwin ARM64 and --output')
+    root = args.output.resolve()
+    root.mkdir(mode=0o700, parents=True, exist_ok=False)
     source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
     receipt = {'schema_version': 1, 'state': 'starting', 'source_sha': source,
                'source_sha256': frozen, 'phases': [],
                'scope': 'fixture_generated_saved_history_native_presentation',
-               'supervisor_authentication_verified': False, 'core_no_launch_verified': False,
-               'fixture_session_sha256': native.digest(saved), 'expected_output_sha256': native.digest(oracle)}
+               'supervisor_authentication_verified': False, 'core_no_launch_verified': False}
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(('ZMUX_', 'DYLD_')) and key not in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS')}
     environment.update(CARGO_TARGET_DIR=str(REPO / 'target/agent-validation' / ('completed-history-' + str(uuid.uuid4())) / 'cargo'),
@@ -133,41 +264,12 @@ def main():
             raise RuntimeError('Completed-history app archive exceeds its byte bound')
         shutil.copy2(archive, root / archive.name)
         receipt.update(build_info=info, archive={'name': archive.name, 'sha256': native.digest(archive)})
-        launcher = root / 'owned-app-launch.py'
-        launcher.write_text(LAUNCHER)
-        executable = str(REPO / 'dist/zmux.app/Contents/MacOS/zmux-app')
-        runner.run([sys.executable, str(launcher), str(root / 'owned-launch.json'), executable,
-                    '--completed-history-smoke', str(report), str(profile)], 'native-completed-history', root,
-                   receipt['phases'], timeout=60, cwd=REPO, env=environment)
-        result = native.document(report)
-        owned = native.document(root / 'owned-launch.json')
-        required_checks = [
-            'actual_restore_model_and_mounted_saved_output',
-            'actual_select_all_and_exact_utf8_copy',
-            'native_typing_and_menu_paste_leave_output_read_only',
-            'canonical_cross_window_move_retains_selection_scroll_and_focus',
-            'source_window_close_retains_saved_output_state']
-        selection = 'row 020 · α界 e\u0301🙂  '
-        # NSRange is UTF-16, independent of Python code point or UTF-8 offsets.
-        start = len(text[:text.index(selection)].encode('utf-16-le')) // 2
-        length = len(selection.encode('utf-16-le')) // 2
-        positions = result['positions']
-        expected_copies = [('select_all', text), ('unicode_selection', selection),
-                           ('after_move', selection), ('after_source_close', selection)]
-        if (result['sourceSHA'] != source or result['state'] != 'complete'
-                or result['scope'] != receipt['scope'] or result['activationPID'] != result['appPID']
-                or result['appPID'] != owned['pid'] or owned['parent_pid'] != os.getpid()
-                or owned['executable'] != executable
-                or result['checks'] != required_checks
-                or [(row['name'], row['expected']) for row in result['copies']] != expected_copies
-                or any(row['expected'].encode() != row['observed'].encode() for row in result['copies'])
-                or [row['stage'] for row in positions] != ['before_move', 'after_move', 'after_source_close']
-                or any((row['location'], row['length']) != (start, length) for row in positions)
-                or positions[0]['scrollY'] <= 20
-                or any(abs(row['scrollY'] - positions[0]['scrollY']) >= 0.5 for row in positions)):
-            raise RuntimeError('Actual restored history native report, copy or shutdown differs')
-        receipt['native_report'] = result
-        receipt['owned_launch'] = owned
+        run_decoder_contract(root, receipt, frozen, inputs, root / archive.name, native, runner, environment)
+        receipt['history_cases'] = []
+        for contract in ('v1', 'v2'):
+            case = run_history_case(root / 'scenarios' / contract, contract, source, receipt['scope'],
+                                    receipt['phases'], native, runner, environment)
+            receipt['history_cases'].append(case)
         if sources() != frozen:
             raise RuntimeError('Completed-history inputs changed during the run')
         receipt['state'] = 'complete'
