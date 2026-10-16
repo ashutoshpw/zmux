@@ -411,6 +411,171 @@ fn workspace_todos_survive_real_save_shutdown_and_fresh_reopen_without_transient
 }
 
 #[test]
+fn final_surface_move_keeps_live_pty_and_persists_only_the_destination_checklist() {
+    use zmux_workspace_core::todo::{TodoEntry, TodoOrigin, TodoState};
+    let directory = Directory::new();
+    let mut seed = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    for name in ["retiring source", "surviving destination"] {
+        seed.apply(Action::CreateWorkspace { name: name.into() })
+            .unwrap();
+    }
+    let source = seed.snapshot().workspaces[0].clone();
+    let destination = seed.snapshot().workspaces[1].clone();
+    seed.replace_workspace_todos(
+        source.id,
+        vec![TodoEntry {
+            id: uuid::Uuid::from_u128(1),
+            text: "retire with the source owner".into(),
+            state: TodoState::Pending,
+            origin: TodoOrigin::User,
+        }],
+    )
+    .unwrap();
+    let destination_todos = vec![
+        TodoEntry {
+            id: uuid::Uuid::from_u128(101),
+            text: "destination first".into(),
+            state: TodoState::InProgress,
+            origin: TodoOrigin::Agent,
+        },
+        TodoEntry {
+            id: uuid::Uuid::from_u128(102),
+            text: "destination second".into(),
+            state: TodoState::Completed,
+            origin: TodoOrigin::User,
+        },
+    ];
+    seed.replace_workspace_todos(destination.id, destination_todos.clone())
+        .unwrap();
+    directory.write(&serde_json::to_vec(&seed.session_document().unwrap()).unwrap());
+    let desktop = directory.desktop();
+    let initial = wait(&desktop, ready);
+    let moving = initial.model.workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    let session_id = moving.session_id.unwrap();
+    let processes: std::collections::BTreeMap<_, _> = initial
+        .control_frames
+        .iter()
+        .map(|frame| (frame.session_id.0, frame.process_id.unwrap()))
+        .collect();
+    assert_eq!(processes.len(), 2, "fixture must launch two real PTYs");
+    send(
+        &desktop,
+        1,
+        Command::Input {
+            session_id,
+            text: "export ZMUX_FINAL_MOVE_VALUE=retained; printf '\\nFINAL_MOVE_READY\\n'\r".into(),
+        },
+    );
+    wait(&desktop, |snapshot| {
+        snapshot.control_frames.iter().any(|frame| {
+            frame.session_id == session_id
+                && frame.snapshot.as_ref().is_some_and(|terminal| {
+                    terminal
+                        .viewport
+                        .contents
+                        .lines()
+                        .any(|line| line == "FINAL_MOVE_READY")
+                })
+        })
+    });
+    send(
+        &desktop,
+        2,
+        Command::Action {
+            action: Action::MoveSurface {
+                surface_id: moving.id,
+                pane_id: destination.focused_pane,
+                index: 1,
+            },
+        },
+    );
+    let moved = wait(&desktop, |snapshot| snapshot.last_request_id == 2);
+    assert!(moved.last_error.is_none(), "{:?}", moved.last_error);
+    assert_eq!(moved.model.workspaces.len(), 1);
+    assert_eq!(moved.model.workspaces[0].id, destination.id);
+    assert_eq!(
+        moved.model.workspaces[0].root.panes()[0].selected_surface,
+        moving.id
+    );
+    assert!(moved.model.closed_items.is_empty());
+    assert_eq!(moved.workspace_metadata.len(), 1);
+    assert_eq!(moved.workspace_metadata[0].workspace_id, destination.id);
+    assert_eq!(moved.workspace_metadata[0].todos, destination_todos);
+    assert_eq!(
+        moved
+            .control_frames
+            .iter()
+            .map(|frame| (frame.session_id.0, frame.process_id.unwrap()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        processes,
+        "moving the final surface must preserve both real PTY processes"
+    );
+    send(
+        &desktop,
+        3,
+        Command::Input {
+            session_id,
+            text: "printf '\\nFINAL_MOVE_%s\\n' \"$ZMUX_FINAL_MOVE_VALUE\"\r".into(),
+        },
+    );
+    wait(&desktop, |snapshot| {
+        snapshot.control_frames.iter().any(|frame| {
+            frame.session_id == session_id
+                && frame.snapshot.as_ref().is_some_and(|terminal| {
+                    terminal
+                        .viewport
+                        .contents
+                        .lines()
+                        .any(|line| line == "FINAL_MOVE_retained")
+                })
+        })
+    });
+    send(
+        &desktop,
+        4,
+        Command::Session {
+            action: SessionCommand::Save,
+        },
+    );
+    wait(&desktop, |snapshot| {
+        snapshot.persistence.operations.iter().any(|operation| {
+            operation.kind == "save" && matches!(operation.state, OperationState::Completed)
+        })
+    });
+    let disk: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    assert_eq!(disk["version"], 5);
+    assert_eq!(disk["workspaces"].as_array().unwrap().len(), 1);
+    assert_eq!(disk["workspaces"][0]["id"], destination.id.0);
+    assert_eq!(
+        disk["workspaces"][0]["todos"],
+        serde_json::to_value(&destination_todos).unwrap()
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let reopened = directory.desktop();
+    let restored = wait(&reopened, ready);
+    assert_eq!(restored.model.workspaces.len(), 1);
+    assert_eq!(restored.model.workspaces[0].id, destination.id);
+    assert_eq!(restored.workspace_metadata.len(), 1);
+    assert_eq!(restored.workspace_metadata[0].todos, destination_todos);
+    let surfaces = &restored.model.workspaces[0].root.panes()[0].surfaces;
+    assert_eq!(surfaces.len(), 2);
+    let moved = surfaces
+        .iter()
+        .find(|surface| surface.id == moving.id)
+        .unwrap();
+    assert_ne!(
+        moved.session_id,
+        Some(session_id),
+        "fresh reopen creates a new shell generation"
+    );
+    assert!(restored.model.closed_items.is_empty());
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
 fn todo_file_capacity_uses_enriched_live_cwd_before_admission_without_latching_a_failed_save() {
     use zmux_desktop_runtime::{
         metadata::MetadataAction,

@@ -2,6 +2,52 @@
 
 Updated: 2026-10-15. This is a partial A01 slice; the package remains open.
 
+## A01f final-surface checklist lifetime (2026-10-16)
+
+The pinned behavior reference is cmux
+`3ba653b9e5afb11d0bc578031142950d6136697e`, inspected read-only. Public move
+help (`CLI/cmux.swift:21897-21919`; `docs/cli-contract.md:138,163`) permits moving
+a live surface between workspaces; checklist documentation
+(`docs/cli-contract.md:875-899`) assigns the persisted list to a workspace.
+`Sources/WorkspaceTodoState.swift:8-30` and workspace snapshot capture/restore
+(`Sources/Workspace.swift:215,379`; `Sources/Workspace+Todos.swift:254-272`)
+confirm that list ownership. The detached surface payload
+(`Sources/Workspace+DetachedSurfaceTransfer.swift:26-88`) carries panel/session
+attributes without the workspace checklist. Cross-workspace move calls empty
+source cleanup (`Sources/AppDelegate.swift:6032`); cleanup removes the emptied
+workspace/window with `recordHistory: false` (`:6915-6928`), and history creation
+is gated by that argument (`Sources/TabManager.swift:2637`). Session snapshots
+capture only live workspaces (`Sources/TabManager.swift:6887-6952`). This is source
+inspection, not a fresh native execution result. No implementation, test or asset
+was copied or translated into Zmux.
+
+Therefore moving the final surface is allowed even when its source has todos.
+The same live surface/session/process reaches the destination; the empty source
+workspace retires together with its checklist. The destination's exact list is
+unchanged, and the move neither adds an undo descriptor nor changes older close
+history. Source items are omitted from the next S01 save and never transferred
+or restored with the destination. Moving one of multiple surfaces leaves the
+surviving source checklist intact. Moving the full workspace between windows
+preserves its checklist. Explicit close/undo keeps A01e's exact removed-owner
+recovery behavior. Checklist-only archives would add behavior the reference does
+not promise, so none is introduced; session version remains 5.
+
+The original MIT repair removes only the temporary A01e final-surface refusal;
+close capture stays in `remember`, never generic removal. The core table covers
+nonempty/empty source lists, a distinct nonempty destination list, and stale/no
+history, including undo of an older tab after its source retired. The real S01
+regression launches two PTYs, retains session/PID and shell-local state through
+the move, inspects the saved file, then reopens and verifies only the exact
+destination checklist and moved surface return with fresh shell generations.
+No test-only production seam or schema change is needed. Native drag/multiwindow
+entrypoint parity and the broader frozen command/schema gates remain separate.
+The focused core and real-PTY commands first fail on the explicit A01e refusal
+and pass after its removal; retained logs are
+`/tmp/zmux-a01f-final-surface-{core,runtime}-baseline-red.log` and the matching
+`-green.log` files. The earlier A01e 310-test full receipt remains applicable to
+unchanged persistence/metadata architecture; A01f binds scoped suites to its exact
+six-file frozen delta on top of the committed browser-rename integration.
+
 ## A01e todo persistence implementation (2026-10-16; native acceptance pending)
 
 S01 currently writes version 4 documents through `stable_document()` and the
@@ -82,15 +128,9 @@ Implemented evidence and boundaries:
   Full-workspace and last-tab/last-pane recovery preserve IDs; surviving owners keep
   newer lists. Failed launches keep the exact recovery payload available for retry.
   Capture happens in the exact close descriptor, never generic topology cleanup.
-- Compatibility gap: moving the last surface out of a workspace with todos is
-  refused atomically with an instruction to move the workspace or clear its
-  checklist. Moving one of several surfaces keeps the source checklist; an empty
-  checklist preserves existing last-surface move behavior. Existing descriptors
-  always recreate saved surfaces, so archiving the moved surface would duplicate
-  it on undo. Supporting this move without losing checklist ownership requires a
-  future checklist-only owner/archive representation; this is not parity-complete.
-  The focused move regression first detects the unrelated old-history payload
-  graft, independently of refusal, then verifies both history and model unchanged.
+- Final-surface movement follows the A01f lifecycle below: retire the empty source
+  workspace/checklist without recovery history and preserve the destination list.
+  A01f supersedes the temporary A01e refusal, retaining exact close capture.
 - Todo-only changes preserve topology `model_revision`; a new desktop publication
   revision carries metadata changes. `--expect-revision` guards topology/target
   identity, not todo-list CAS. S01 compares whole captured documents, and actual
@@ -350,7 +390,9 @@ capacity. The public errors are `invalid_metadata` and `metadata_capacity`.
 
 List actions are classified as reads by the socket policy and do not change retained
 metadata. Mutations require write access and retain executor-time authorization.
-Metadata survives focus changes and surface moves because its owner is the workspace.
+Metadata survives focus changes and surface moves while its owning workspace survives.
+Moving its final surface retires the empty source workspace and its checklist; it does
+not transfer metadata to the destination or create recovery history.
 Closed-workspace state is pruned at publication. Source review confirms that a restored
 identity namespace resets the store; the restore test closes the workspace first, so
 its narrower behavioral evidence is that close-then-restore does not resurrect metadata. This is transient process state; session persistence is not implemented.

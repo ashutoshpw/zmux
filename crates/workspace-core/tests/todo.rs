@@ -154,14 +154,23 @@ fn tab_recovery_preserves_a_surviving_owners_newer_checklist_and_duplicate_recov
 }
 
 #[test]
-fn moving_last_surface_cannot_discard_checklist_or_rebind_it_to_unrelated_history() {
-    for stale_history in [true, false] {
+fn final_surface_move_retires_source_checklist_without_rebinding_destination_or_old_history() {
+    for (stale_history, source_todos) in [(true, true), (false, true), (true, false)] {
         let mut store = WorkspaceStore::default();
         let destination = create(&mut store);
-        let owner = create(&mut store);
+        let destination_todos = vec![
+            item(101, "destination list"),
+            item(102, "destination order"),
+        ];
         store
-            .replace_workspace_todos(owner.id, vec![item(1, "belongs to source workspace")])
+            .replace_workspace_todos(destination.id, destination_todos.clone())
             .unwrap();
+        let owner = create(&mut store);
+        if source_todos {
+            store
+                .replace_workspace_todos(owner.id, vec![item(1, "retired with source workspace")])
+                .unwrap();
+        }
         if stale_history {
             store
                 .apply(Action::CreateSurface {
@@ -173,35 +182,52 @@ fn moving_last_surface_cannot_discard_checklist_or_rebind_it_to_unrelated_histor
                 .apply(Action::CloseSurface { surface_id: extra })
                 .unwrap();
         }
-        let before = store.snapshot();
-        let result = store.apply(Action::MoveSurface {
-            surface_id: owner.root.panes()[0].selected_surface,
-            pane_id: destination.focused_pane,
-            index: 1,
-        });
-        assert_eq!(
-            store.snapshot().closed_items,
-            before.closed_items,
-            "moving a surface must never graft its workspace checklist onto an older close descriptor"
-        );
-        assert!(
-            result.is_err(),
-            "last-surface move must preserve checklist ownership, including with stale history={stale_history}"
-        );
-        assert_eq!(store.snapshot(), before, "refusal must be atomic");
-
-        // Clearing the checklist intentionally permits the existing destructive-owner move.
-        store.replace_workspace_todos(owner.id, vec![]).unwrap();
         let history = store.snapshot().closed_items;
-        store
+        let moved = owner.root.panes()[0].selected().clone();
+        let result = store
             .apply(Action::MoveSurface {
-                surface_id: owner.root.panes()[0].selected_surface,
+                surface_id: moved.id,
                 pane_id: destination.focused_pane,
                 index: 1,
             })
-            .unwrap();
-        assert_eq!(store.snapshot().workspaces.len(), 1);
-        assert_eq!(store.snapshot().closed_items, history);
+            .expect("a workspace checklist must not prevent moving its final live surface");
+        assert!(
+            result.effects.is_empty(),
+            "a move must not restart the live session"
+        );
+        let after = store.snapshot();
+        assert_eq!(after.workspaces.len(), 1);
+        assert_eq!(after.workspaces[0].id, destination.id);
+        assert_eq!(after.workspaces[0].todos, destination_todos);
+        assert_eq!(after.workspaces[0].root.panes()[0].selected(), &moved);
+        assert_eq!(after.workspaces[0].root.panes()[0].surfaces.len(), 2);
+        assert_eq!(
+            after.closed_items, history,
+            "a move must neither create recovery history nor graft its checklist onto an older descriptor"
+        );
+        if stale_history {
+            let restored = store
+                .apply(Action::ReopenClosed { closed_id: None })
+                .unwrap();
+            finish(&mut store, &restored.effects, true);
+            let recovered = store.snapshot();
+            assert_eq!(recovered.workspaces[0].todos, destination_todos);
+            assert!(
+                recovered.workspaces[1].todos.is_empty(),
+                "older tab history cannot recover the retired checklist"
+            );
+            assert_eq!(
+                recovered
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .filter(|s| s.id == moved.id)
+                    .count(),
+                1,
+                "undoing an older close cannot duplicate the moved live surface"
+            );
+        }
     }
 }
 
