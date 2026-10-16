@@ -240,7 +240,9 @@ extension StatusMenuController {
         func wait(_ message: String, _ predicate: @MainActor () -> Bool) async throws {
             let deadline = ContinuousClock.now + .seconds(10)
             while !predicate() {
-                guard ContinuousClock.now < deadline else { throw BridgeFailure(message: message) }
+                guard ContinuousClock.now < deadline else {
+                    throw BridgeFailure(message: "\(message); active=\(NSApp.isActive), hidden=\(NSApp.isHidden), key=\(NSApp.keyWindow?.windowNumber ?? -1), main=\(coordinator.mainWindowHost.window.windowNumber), visible=\(coordinator.mainWindowHost.window.isVisible)")
+                }
                 try await Task.sleep(for: .milliseconds(20))
             }
         }

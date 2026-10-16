@@ -172,3 +172,21 @@ waiting for active state and exact-process NSRunningApplication activation, with
 unique-PID Launch Services controls. This is diagnostic evidence, not product
 acceptance. The probe has no Desktop/PTY, uses its own unique bundle ID and exits
 after its finite observation sequence. Original control-action probing is retained.
+
+Probe `38911884391` at `94194cd` succeeds. Actual menu dispatch increments its
+counter and unhides/shows the window, but all cooperative activation orderings
+leave the probe inactive with no key window. Exact-process NSRunningApplication
+activation returns false. Each unique-PID Launch Services control returns the
+same running PID1219 and establishes active/key/visible state. Thus reordering
+makeKey/activate is not the repair. The preceding probe `38911741780` stopped
+before compilation because rg is unavailable on the runner; the SDK inspection
+uses installed grep and is not mistaken for activation evidence.
+
+Production now uses a shared `NativeApplicationActivation` owner only when an
+explicit status/notification presentation leaves the app inactive. It verifies
+the unique current bundle/process, disallows new-instance/substitute requests,
+requires the same PID in the callback and keeps at most one unresolved request.
+Waits are asynchronous and bounded to three seconds; timeout never automatically
+replays the request. A current native-window token/epoch gates post-activation
+presentation, and shared shutdown cancels that presentation. Notifications and
+status Show share this path. The same hidden-window assertion remains required.

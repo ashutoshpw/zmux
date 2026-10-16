@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Activation probe `38911884391` confirms cooperative/menu activation unhides but
+  does not gain active/key state; NSRunningApplication returns false. Launch
+  Services controls confirm the same PID and active/key state. Shared native
+  activation now uses that exact registered process with bounded/coalesced waits,
+  no new-instance/substitute request and live token/epoch guards. N03 records the
+  actual observations; the packaged hidden-app assertion remains required.
+  Full portable checks pass at reduced concurrency (`RUST_TEST_THREADS=2`), with
+  unchanged assertions/timeouts; `/tmp/zmux-status-activation-probe-check-2.log`.
+
 - Run `38909353414` at `5d1858d` fails hidden-application restoration after the
   earlier menu/minimization/power steps. Isolate AppKit activation with the finite
   standalone native-control activation scenario before changing production again.
