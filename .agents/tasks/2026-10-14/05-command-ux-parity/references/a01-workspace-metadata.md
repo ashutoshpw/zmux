@@ -208,3 +208,27 @@ Hosted receipt: Workspace metadata native row/inspector acceptance executed succ
 macOS38753451286 (universal build and packaged smoke). Parent downloaded and checked
 archive/source/required flags. This closes that subset native gate only; full package
 parity and applicable physical/external-host gates remain open.
+
+## PR lookup fixture admission repair (2026-10-15)
+
+The first actual Darwin PR validation rejected a lookup at its shared 250 ms
+deadline, then the test unconditionally read a gh descendant PID that had never
+been proven admitted. The retained failure cannot distinguish pre-gh preflight
+expiry from shell pre-marker scheduling. A real first-Git exec-sleeper reproduces
+the identical missing-marker panic while honoring the unchanged timeout.
+
+The repaired fixture separately requires real preflight timeout rejection within
+the original three-second bound, unchanged PR metadata and no gh child marker.
+Held-pipe/exited-leader and closed-stdio/live-leader fixtures publish readiness
+only after writing their actual descendant PID. Cancellation is sent only to the
+CLI process after that readiness, with a finite admission wait and three-second
+termination bound; descendants must be absent or zombies. Successful lookup
+closed-stdio cleanup and existing live-leader TERM coverage remain. No production
+process owner, timeout or cleanup assertion is relaxed. Evidence is specifically
+deadline before Git completion and descendant cleanup after TERM; this does not
+claim a timeout occurred after descendant admission.
+
+The deterministic preflight failure is retained in
+`/tmp/zmux-a01c-preflight-expiry-marker-red.log`; the same focused command passes
+in `/tmp/zmux-a01c-preflight-expiry-admission-green.log`. Actual macOS rerun and
+independent source/negative-control review remain separate gates.

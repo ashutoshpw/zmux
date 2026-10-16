@@ -322,30 +322,89 @@ fn pull_request_lookup_deadlines_and_failure_keep_metadata_and_stop_pipe_holding
     let workspace = id(&first, "focused_workspace");
     let attached = git.run(&app, &["pr", "17", "--workspace", &workspace], None);
     let child = git.root.join("descendant");
+    // The public timeout covers socket/Git preflight too. Expiring there must
+    // reject unchanged metadata without claiming the gh child ever existed.
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(git.bin.join("git"), "#!/bin/sh\nexec /bin/sleep 60\n").unwrap();
+    fs::set_permissions(git.bin.join("git"), fs::Permissions::from_mode(0o700)).unwrap();
+    let before = Instant::now();
+    let expired = git
+        .command(
+            &app,
+            &["--timeout", "250", "pr", "17", "--workspace", &workspace],
+            None,
+        )
+        .output()
+        .unwrap();
+    assert!(!expired.status.success());
+    assert!(before.elapsed() < Duration::from_secs(3));
+    assert!(
+        String::from_utf8_lossy(&expired.stderr).contains("deadline"),
+        "{}",
+        String::from_utf8_lossy(&expired.stderr)
+    );
+    assert!(
+        !child.exists(),
+        "preflight expiry must not reach the gh descendant fixture"
+    );
+    assert_eq!(
+        app.run(&["list-status", "--workspace", &workspace])["pull_request"],
+        attached["pull_request"]
+    );
+    fs::remove_file(git.bin.join("git")).unwrap();
+    let admitted = git.root.join("lookup-admitted");
     for body in [
         format!(
-            "sleep 60 &\nprintf '%s' \"$!\" > '{}'\nexit 0\n",
-            child.display()
+            "sleep 60 &\nprintf '%s' \"$!\" > '{}'\n: > '{}'\nexit 0\n",
+            child.display(),
+            admitted.display()
         ),
         format!(
-            "exec 1>&- 2>&-\nsleep 60 &\nprintf '%s' \"$!\" > '{}'\nwait\n",
-            child.display()
+            "exec 1>&- 2>&-\nsleep 60 &\nprintf '%s' \"$!\" > '{}'\n: > '{}'\nwait\n",
+            child.display(),
+            admitted.display()
         ),
     ] {
+        if admitted.exists() {
+            fs::remove_file(&admitted).unwrap();
+        }
+        if child.exists() {
+            fs::remove_file(&child).unwrap();
+        }
         git.gh(&body);
-        let before = Instant::now();
-        let output = git
-            .command(
-                &app,
-                &["--timeout", "250", "pr", "17", "--workspace", &workspace],
-                None,
-            )
-            .output()
+        let mut cli = git
+            .command(&app, &["pr", "17", "--workspace", &workspace], None)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .unwrap();
-        assert!(!output.status.success());
-        assert!(before.elapsed() < Duration::from_secs(3));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("deadline"));
+        let admission_deadline = Instant::now() + Duration::from_secs(2);
+        while !admitted.exists() {
+            assert!(
+                Instant::now() < admission_deadline,
+                "gh fixture was not admitted before cancellation"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        // Readiness is published only after the actual descendant PID is written.
         let pid: u32 = fs::read_to_string(&child).unwrap().parse().unwrap();
+        let before = Instant::now();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(cli.id() as i32),
+            nix::sys::signal::Signal::SIGTERM,
+        )
+        .unwrap();
+        while cli.try_wait().unwrap().is_none() {
+            assert!(before.elapsed() < Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(5));
+        }
+        let output = cli.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cancelled"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let state = Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", "stat="])
             .output()
@@ -431,7 +490,6 @@ fn pull_request_lookup_deadlines_and_failure_keep_metadata_and_stop_pipe_holding
     // Only the second Git query probes the optional target directory. A
     // nonrepository may be skipped, but permission/stream/encoding failures
     // must not disappear behind a misleading worktree-mismatch error.
-    use std::os::unix::fs::PermissionsExt;
     let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|path| path.join("git"))
         .find(|path| path.is_file())
