@@ -684,6 +684,93 @@ fn a_mixed_batch_creates_ordered_tabs_and_reports_each_item() {
 }
 
 #[test]
+fn an_upper_case_scheme_opens_a_browser_tab_with_the_canonical_scheme() {
+    let fx = Fixture::new();
+    let panes = fx.value(&["list-panes"]);
+    let pane = panes["panes"][0]["pane_id"].to_string();
+    let before = fx.pane_surfaces(&pane).len();
+    let result = fx.value(&[
+        "open",
+        "HTTPS://Example.org/Docs?Q=1",
+        "HtTp://example.net/",
+    ]);
+    assert_eq!(result["ok"], true, "{result}");
+    let items = result["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    for item in items {
+        assert_eq!(item["kind"], "url");
+        assert_eq!(item["ok"], true, "{item}");
+        assert!(item["surface"]["surface_id"].is_u64());
+    }
+    assert_eq!(items[0]["url"], "https://Example.org/Docs?Q=1");
+    assert_eq!(items[1]["url"], "http://example.net/");
+    let after = fx.pane_surfaces(&pane);
+    assert_eq!(after.len(), before + 2);
+    assert!(
+        after[before..]
+            .iter()
+            .all(|surface| surface["kind"] == "browser")
+    );
+}
+
+#[test]
+fn the_command_catalog_does_not_depend_on_the_working_directory() {
+    let first = private_dir("zc");
+    let second = private_dir("zc");
+    let socket = Path::new("relative-must-not-be-read");
+    let run = |cwd: &Path, args: &[&str]| zmux(socket, cwd, args).output().unwrap();
+    let catalog_a = run(&first, &["commands"]);
+    let catalog_b = run(&second, &["commands"]);
+    assert!(catalog_a.status.success(), "{}", stderr(&catalog_a));
+    assert!(catalog_b.status.success(), "{}", stderr(&catalog_b));
+    // Each probe request carries a fresh random id; everything else must be identical.
+    fn without_request_ids(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.remove("request_id");
+                map.values_mut().for_each(without_request_ids);
+            }
+            Value::Array(items) => items.iter_mut().for_each(without_request_ids),
+            _ => {}
+        }
+    }
+    let mut parsed_a: Value = serde_json::from_slice(&catalog_a.stdout).unwrap();
+    let mut parsed_b: Value = serde_json::from_slice(&catalog_b.stdout).unwrap();
+    without_request_ids(&mut parsed_a);
+    without_request_ids(&mut parsed_b);
+    assert_eq!(parsed_a, parsed_b);
+    let text = String::from_utf8(catalog_a.stdout).unwrap();
+    assert!(
+        !text.contains(first.to_str().unwrap()) && !text.contains(second.to_str().unwrap()),
+        "the catalog embeds a working directory"
+    );
+
+    // A working directory that was removed under the process must not matter either.
+    for args in [&["commands"][..], &["commands", "--check"][..]] {
+        let gone = private_dir("zg");
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("cd \"$1\" && rmdir \"$1\" && shift && exec \"$@\"")
+            .arg("sh")
+            .arg(&gone)
+            .arg(env!("CARGO_BIN_EXE_zmux"))
+            .args(args)
+            .env("HOME", &first)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?} from a removed directory: {}",
+            stderr(&output)
+        );
+        assert!(!gone.exists());
+    }
+    let _ = fs::remove_dir_all(first);
+    let _ = fs::remove_dir_all(second);
+}
+
+#[test]
 fn dedupe_no_focus_and_the_first_success_focus_rule() {
     let fx = Fixture::new();
     fx.write("a.txt", b"a\n");
