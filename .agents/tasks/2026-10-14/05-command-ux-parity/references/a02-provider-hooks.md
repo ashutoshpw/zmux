@@ -460,3 +460,15 @@ interrupted cleanup; `/tmp/zmux-a02-adapter-retirement-red.log` fails on losing 
 capability after actual journal-lock failure. Independent synthetic execution and
 idle samples: `/tmp/zmux-a02-adapter-pty-green-final.log`. No actual Claude turn,
 provider installation into user configuration, or native UI run occurred.
+
+## Darwin compile follow-up
+
+At main94e8330 Linux Foundation passes, but Darwin Foundation38856977385 and
+macOS development38856977404 fail compilation in SocketDirectory cleanup:
+rustix Darwin st_dev is signed i32, while MetadataExt::dev returns u64. Normalize
+stat device/inode identity to MetadataExt's representation with a macOS-specific
+cast before both comparisons; retain both exact replacement checks. No cleanup
+authority changes. Full Linux scripts/check passes395 tests/73groups/1existing
+ignored plus strict Clippy/notices/both ABI after repair. Hosted Darwin green
+remains required. Logs /tmp/zmux-main-94e8330-foundation-darwin-failure.log and
+/tmp/zmux-main-darwin-hook-identity-check.log.

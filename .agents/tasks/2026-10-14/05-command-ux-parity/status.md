@@ -5,6 +5,12 @@
 
 ## Active implementation
 
+- Main94e8330 Foundation Linux passes; Darwin Foundation38856977385 and native
+  build38856977404 fail on signed Darwin st_dev comparison in hook socket cleanup.
+  Scoped identity normalization retains exact directory/socket replacement guards;
+  Linux scripts/check395/73groups/1existing ignored and strict checks pass after
+  repair. Hosted Darwin verification remains required.
+
 - Combined mainf231186 checks pass395 tests/73groups/1existing ignored plus
   strict Clippy, notices and both native ABI checks. Log:
   /tmp/zmux-main-hooks-pointer-check-20261016.log. This validates integrated

@@ -129,13 +129,15 @@
       "exit_gate": "Production-owner protocol fixtures plus packaged Mac input/selection/scroll/IME/VoiceOver journeys pass; output floods and exited sessions remain inspectable without starving UI.",
       "implemented_slices": [
         "T01a function/navigation-key encoding with real native PTY byte acceptance at5f5005e",
-        "Displayed word/row/cell selection and authoritative soft-wrap copying; double-click and word drag span wrapped visible words"
+        "Displayed word/row/cell selection and authoritative soft-wrap copying; double-click and word drag span wrapped visible words",
+        "Semantic pointer reports use bounded desktop/session queue and authoritative vt100 worker modes; native event wiring remains pending"
       ],
       "verification_receipts": [
         "t01-terminal-input.md",
         "t01-native-selection.md",
         "t01-wrapped-selection.md",
-        "t01-wrapped-word-selection.md"
+        "t01-wrapped-word-selection.md",
+        "t01-pointer-reporting.md"
       ]
     },
     {
@@ -429,7 +431,8 @@
       "exit_gate": "Agent messages are distinct from human notifications; duplicate hooks, lease expiry, concurrent delivery and stale targets behave deterministically; real supported provider events reach the exact surface.",
       "implemented_slices": [
         "Durable local message/reply/inbox, exact consumer leases and bounded worker-owned journal",
-        "Durable unknown provider exposure, exact consumer retirement and explicit duplicate-risk retry; no automatic unknown replay"
+        "Durable unknown provider exposure, exact consumer retirement and explicit duplicate-risk retry; no automatic unknown replay",
+        "Opt-in local Claude context adapter with bounded original deadlines and exact retirement recovery; synthetic provider evidence only"
       ],
       "verification_receipts": [
         "a02-agent-messages-implementation.md",
@@ -717,12 +720,17 @@
       "feature": "Mouse reporting, pointer focus and alternate-screen wheel routing",
       "primary_package": "T01",
       "audit_status": "partial",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-terminal-ux.json#TERM-007",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "f231186"
+      ],
+      "verification_receipts": [
+        "t01-pointer-reporting.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Native event wiring/gesture lifecycle, optional engine and packaged physical interaction acceptance"
       ]
     },
     {
@@ -2379,12 +2387,17 @@
       "feature": "Agent lifecycle and provider hook processing",
       "primary_package": "A02",
       "audit_status": "missing",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-agents-remote.json#agent.hooks",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "036e478"
+      ],
+      "verification_receipts": [
+        "a02-provider-hooks.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Actual installed-provider delivery, other supported providers, attention/feed translation and native acceptance remain open"
       ]
     },
     {
