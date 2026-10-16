@@ -5,7 +5,7 @@
 //! physically retired. This primitive does not admit clear/delete operations.
 pub mod journal;
 mod mutations;
-pub use mutations::{ConstructionPermit, MutationRequest, MutationToken};
+pub use mutations::{ConstructionPermit, MutationRequest, MutationToken, NativeMutationOutcome};
 
 use crate::persistence::{check_file, profile_exists, state_directory};
 use rustix::fs::{self, AtFlags, Mode, OFlags};
@@ -120,7 +120,7 @@ enum Request {
     },
     MutationFinish {
         token: MutationToken,
-        failure: Option<String>,
+        outcome: NativeMutationOutcome,
         reply: Reply<()>,
     },
     IntentStatus {
@@ -244,10 +244,10 @@ impl LeaseService {
                         }
                         Request::MutationFinish {
                             token,
-                            failure,
+                            outcome,
                             reply,
                         } => {
-                            let _ = reply.try_send(registry.mutation_finish(token, failure));
+                            let _ = reply.try_send(registry.mutation_finish(token, outcome));
                         }
                         Request::IntentStatus {
                             profile,
@@ -338,11 +338,11 @@ impl LeaseService {
     pub fn mutation_finish(
         &self,
         token: MutationToken,
-        failure: Option<String>,
+        outcome: NativeMutationOutcome,
     ) -> Result<(), LeaseError> {
         self.call(|reply| Request::MutationFinish {
             token,
-            failure,
+            outcome,
             reply,
         })
     }

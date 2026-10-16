@@ -40,6 +40,29 @@ static char *snapshot(uint64_t desktop) {
 static char *lease(uint64_t desktop, const char *request) {
     return consume(zmux_desktop_profile_lease(desktop, (const uint8_t *)request, strlen(request)));
 }
+static char *native(const char *request) {
+    return consume(zmux_desktop_profile_native((const uint8_t *)request, strlen(request)));
+}
+static void native_ok(const char *request) {
+    char *response = native(request);
+    assert(strstr(response, "\"ok\":true") != NULL);
+    free(response);
+}
+static char *object_after(const char *text, const char *key) {
+    const char *start = strstr(text, key);
+    assert(start != NULL);
+    start += strlen(key);
+    assert(*start == '{');
+    const char *end = start;
+    int depth = 0;
+    do { if (*end == '{') { depth++; } else if (*end == '}') { depth--; } end++; } while (depth > 0 && *end);
+    assert(depth == 0);
+    size_t length = (size_t)(end - start);
+    char *copy = calloc(length + 1, 1);
+    assert(copy != NULL);
+    memcpy(copy, start, length);
+    return copy;
+}
 static void assert_exclusive_busy(const char *path) {
     pid_t child = fork();
     assert(child >= 0);
@@ -148,6 +171,76 @@ int main(int count, char **arguments) {
     free(status);
     struct stat after;
     assert(stat(lock_path, &after) == 0 && before.st_dev == after.st_dev && before.st_ino == after.st_ino);
+
+    /* Trusted ABI state-machine harness: these acknowledgments deliberately do
+       not claim WebKit execution. The native macOS owner supplies real callbacks. */
+    const char *controller = "de591758-a0c5-4f11-a0cd-4a2260c912c4";
+    size = snprintf(configuration, sizeof configuration,
+        "{\"state_directory\":\"%s\",\"profile_lease_directory\":\"%s\",\"profile_controller\":\"%s\"}", catalog, locks, controller);
+    desktop = zmux_desktop_create_configured((const uint8_t *)configuration, (size_t)size);
+    assert(desktop.status == ZMUX_OK);
+    for (int attempt = 0; ; attempt++) {
+        assert(attempt < 500);
+        char *text = snapshot(desktop.value);
+        int ready = strstr(text, "\"startup_pending\":false") && strstr(text, "\"loading\":false");
+        free(text);
+        if (ready) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    snprintf(request, sizeof request, "{\"operation\":\"delete\",\"profile\":\"%s\"}", profile);
+    admission = consume(zmux_desktop_profile_command(desktop.value, (const uint8_t *)request, strlen(request)));
+    assert(strstr(admission, "\"ok\":true") && strstr(admission, "\"state\":\"pending\""));
+    char intent[37] = {0};
+    const char *intent_start = strstr(admission, "\"intent\":\"");
+    assert(intent_start != NULL);
+    memcpy(intent, intent_start + strlen("\"intent\":\""), 36);
+    free(admission);
+    snprintf(request, sizeof request, "{\"operation\":\"drain\",\"controller\":\"%s\"}", controller);
+    assert(zmux_desktop_profile_native(NULL, 1).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_profile_native((const uint8_t *)"{}", 2).status == ZMUX_INVALID_ARGUMENT);
+    core = zmux_core_create();
+    assert(core.status == ZMUX_OK);
+    for (int index = 0; index < 16; index++) {
+        ZmuxResult held = zmux_core_dispatch(core.value, query, sizeof query - 1);
+        assert(held.status == ZMUX_OK); buffers[index] = held.value;
+    }
+    assert(zmux_desktop_profile_native((const uint8_t *)request, strlen(request)).status == ZMUX_CAPACITY);
+    for (int index = 0; index < 16; index++) { assert(zmux_buffer_release(buffers[index]) == ZMUX_OK); }
+    assert(zmux_core_destroy(core.value) == ZMUX_OK);
+    char *batch = native(request);
+    assert(strstr(batch, intent) && strstr(batch, "\"kind\":\"delete\""));
+    free(batch);
+    batch = native(request);
+    assert(strstr(batch, "\"requests\":[]"));
+    free(batch);
+    snprintf(request, sizeof request, "{\"operation\":\"begin\",\"controller\":\"%s\",\"intent\":\"%s\",\"stores\":[]}", controller, intent);
+    char *began = native(request);
+    assert(strstr(began, "\"ok\":true"));
+    char *writer = object_after(began, "\"token\":");
+    free(began);
+    assert(stat(lock_path, &after) == 0 && after.st_ino == before.st_ino && after.st_size > 0);
+    snprintf(request, sizeof request, "{\"operation\":\"advance\",\"token\":%s,\"phase\":\"clear_dispatched\"}", writer);
+    native_ok(request);
+    native_ok(request); /* acknowledgment is idempotent, not another effect */
+    snprintf(request, sizeof request, "{\"operation\":\"finish\",\"token\":%s,\"result\":{\"outcome\":\"aborted_before_clear\",\"message\":\"generic timeout after dispatch\"}}", writer);
+    char *refused = native(request);
+    assert(strstr(refused, "\"ok\":false"));
+    free(refused);
+    assert(stat(lock_path, &after) == 0 && after.st_size > 0);
+    const char *phases[] = { "clear_completed", "remove_dispatched", "remove_completed" };
+    for (int phase = 0; phase < 3; phase++) {
+        snprintf(request, sizeof request, "{\"operation\":\"advance\",\"token\":%s,\"phase\":\"%s\"}", writer, phases[phase]);
+        native_ok(request);
+    }
+    snprintf(request, sizeof request, "{\"operation\":\"finish\",\"token\":%s,\"result\":{\"outcome\":\"completed\"}}", writer);
+    native_ok(request);
+    assert(stat(lock_path, &after) == 0 && after.st_ino == before.st_ino && after.st_size == 0);
+    assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
+    snprintf(request, sizeof request, "{\"operation\":\"status\",\"controller\":\"%s\",\"profile\":\"%s\",\"intent\":\"%s\"}", controller, profile, intent);
+    status = native(request);
+    assert(strstr(status, "\"phase\":\"completed\"") && strstr(status, "\"physical_cleanup_pending\":false"));
+    free(status);
+    free(writer);
     free(token);
     /* The process-scoped service exits before its runner removes the known root. */
     puts("native_profile_lease_passed");

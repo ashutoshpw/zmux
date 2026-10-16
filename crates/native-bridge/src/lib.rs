@@ -2,6 +2,7 @@
 //! It does not yet execute session effects or implement native async rendering callbacks.
 
 mod profile_leases;
+mod profile_operations;
 
 use serde::Deserialize;
 use serde_json::json;
@@ -370,6 +371,7 @@ fn create_desktop(state_directory: Option<PathBuf>) -> Result<u64, i32> {
 struct DesktopConfiguration {
     state_directory: Option<PathBuf>,
     profile_lease_directory: Option<PathBuf>,
+    profile_controller: Option<uuid::Uuid>,
     #[serde(default)]
     terminal_engine: zmux_desktop_runtime::terminal_engine::TerminalEngineConfig,
 }
@@ -402,8 +404,23 @@ pub unsafe extern "C" fn zmux_desktop_create_configured(
                 return Err(INVALID_ARGUMENT);
             }
         }
+        let profile_native = match configuration.profile_controller {
+            Some(controller) => Some(profile_operations::register(
+                controller,
+                configuration
+                    .state_directory
+                    .as_ref()
+                    .ok_or(INVALID_ARGUMENT)?,
+                configuration
+                    .profile_lease_directory
+                    .as_ref()
+                    .ok_or(INVALID_ARGUMENT)?,
+            )?),
+            None => None,
+        };
         create_configured_desktop_with_leases(
             zmux_desktop_runtime::DesktopOptions {
+                profile_native,
                 state_directory: configuration.state_directory,
                 terminal_engine: configuration.terminal_engine,
                 ..Default::default()

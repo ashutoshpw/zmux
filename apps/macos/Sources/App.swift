@@ -925,6 +925,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 try await bridge.createBrowserProfile(name: name)
             }, rename: { id, name in
                 try await bridge.renameBrowserProfile(id: id, name: name)
+            }, changeData: { id, delete in
+                try await bridge.changeBrowserProfileData(id: id, delete: delete)
             }, open: { [weak self] profile in
                 guard let self, let pane = self.focusedPane,
                       let state = self.snapshot?.browserProfiles, state.enabled,

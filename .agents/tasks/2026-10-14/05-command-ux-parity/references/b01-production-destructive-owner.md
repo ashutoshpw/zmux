@@ -235,3 +235,93 @@ cannot be released through the unconstructed-release ABI.
 This slice does not yet register a native destructive owner, issue public WebKit effects,
 wire clear/delete CLI/manager actions, or establish native physical/shutdown acceptance.
 The public native-unavailable behavior remains deliberate until the connected owner is ready.
+
+## Connected source before native acceptance
+
+Foundation commit `4547f8c` follows the compiling red `cc1c54c`. Its generic failure
+string authority was tightened during connected review: native outcomes are now typed
+`Completed`, `AbortedBeforeClear` (Reserved only), or `RemovalFailed` (only the original
+RemoveDispatched callback). ClearDispatched cannot become FailedBeforeClear. A generic
+timeout/abort attempted after dispatch is rejected with the sentinel and original owner
+retained. Idempotent phase acknowledgment does not enqueue another native effect.
+
+The connected Rust owner, trusted controller ABI, Swift owner and CLI/manager paths
+are implemented. Every actual construction has namespace/browser-epoch/surface/profile
+identity and an initial or reuse permit through actual weak WKWebView registration.
+Mismatched prepared permits are explicitly acknowledged/retired without supplying an
+old store; unknown accepted permits remain charged. All download jobs, including
+retiring/conversion ownership, count as busy. Native preflight never closes user tabs.
+A single reserved native job retains the exact inactive store through the public clear
+callback, returns from its loading/clearing helper, retires controlled caller references,
+then dispatches one public UUID removal. Rust publishes success only after known native
+removal, durable correlated catalog commit, physical writer cleanup and ordinary catalog
+refresh. Native callbacks and physical accounting remain live through logical shutdown.
+No callback timeout is converted into failure or success, and no native effect is replayed.
+
+The manager confirms selected UUID/name and data loss. `browser profiles clear|delete`
+and the manager share `ProfileCommand`; `browser profiles status PROFILE_UUID INTENT_UUID`
+is read-only, including after catalog deletion or restart. Preflight status is explicit
+before journal admission; durable unknown status names original kind/phase and exposes
+unsupported recovery honestly. Client deadline messages retain the original intent.
+
+Portable verification passed:
+`CARGO_TARGET_DIR=target/agent-validation/profile-destructive-owner/cargo scripts/check`,
+log `/tmp/zmux-b01-connected-repository-check-isolated-final-20261016.log`.
+This includes6 lease-owner tests,1 shared runtime/socket/shutdown test and the expanded
+foreign C ABI harness, plus all existing workspace tests, Clippy and license checks.
+Two ignored subprocess entry helpers are exercised by lease tests. The shared runtime
+fixture now runs in its own test executable with reused catalog fixture support: adding
+its PTY fork to the lease-test executable exposed transient inherited catalog-guard
+contention in unrelated parallel lease cases. No production lock was retried or weakened.
+Earlier full-check failures (a Clippy unit expression and fixture isolation) are retained
+in logs, not treated as passing evidence. Native Swift source has not been compiled on
+this Linux host; public WebKit behavior is still an outstanding gate.
+
+Existing native main evidence is separate. A single generic bridge BUSY occurred in
+main22550c1/run38851088437 immediately before the mounted lease smoke. Source cannot
+attribute it to that expected lease refusal; the subprocess-only lease smoke uses no
+NativeBridge.failure path. main69ff15c/run38852633869 had no such generic BUSY, which does
+not establish a fix. NativeBridge errors now carry function/command/request/buffer context
+without changing the existing generic BUSY classification/retry policy. The original
+BUSY remains open until an attributable observation or repair establishes its origin.
+The broad native Save-panel Accessibility/post_event gate also remains separate.
+
+## Proposed focused macOS acceptance (review before dispatch)
+
+First run source typechecking for both native slices, then build the actual app/CLI from
+the reviewed frozen source. Do not dispatch a standalone WebKit diagnostic again. Add a
+focused packaged-app fixture before the broad Save-panel suite, with one isolated app
+process at a time, generated private catalog and generated UUIDs, and a public HTTP
+loopback origin. Keep the production fixed OS-Library lease root and production owner.
+No cookie replay, backup, private API, flush claim or extra retention delay is introduced.
+
+1. Create A/B/C using production metadata commands; open and seed actual A/B/C WebViews
+   with distinct cookies/localStorage through returning helpers. Verify each UUID/store
+   mapping and B isolation. Mounted and hidden A must refuse destructive admission without
+   catalog/data changes. Exercise a real pending download/conversion busy refusal, cancel
+   its original job and require physical retirement; do not approve a Save destination or
+   weaken the external Save-panel driver/TCC gate.
+2. Close A/C explicitly and observe actual weak view release before mutation. Use a real
+   independent lifetime-share holder to prove foreign busy, unchanged A and usable B.
+   Reap that exact helper. Clear A once via CLI and C once through actual manager controls
+   plus the data-loss confirmation. Require original-intent completed receipts/status,
+   stable selected UUID/name, new real A/C views empty and B cookies/localStorage intact.
+3. Reseed only generated fixture data where needed. Exercise confirmation cancellation
+   through the real manager and verify unchanged catalog/data. Delete C once through CLI
+   and A through manager confirmation. Require selected membership removal only, original
+   durable status after membership is gone, and intact B. No retry of admitted mutation.
+4. Persist a normal B layout, terminate the owned app normally, and verify the runner's
+   original PID exit/reap. Start one fresh owned reader process without reseeding to check
+   deleted membership, clear-result storage where applicable, and B data/UUID restoration.
+   Clean only generated fixture UUIDs with the production clear/delete owner and known
+   callbacks; record normal shutdown and exact owned process exit/reap again.
+5. Keep portable forged/late/out-of-order/native-timeout rejection and dispatched-crash
+   quarantine receipts alongside the native run. Missing native callbacks are never
+   synthesized. A deterministic native missing-callback/constructor-during-restore race
+   harness is a remaining gate if not directly exercised by this focused fixture; do not
+   infer that acceptance from successful ordinary lifecycle restore or source inspection.
+
+Freeze and review the fixture/runner before the hosted execution. Retain bounded logs,
+source/build identities, original UUID/intent receipts, callback phases, actual weak-view
+release checks and owned process cleanup. No broad B01/V01 parity or all-data-type seeding
+claim follows from this limited cookie/localStorage fixture.

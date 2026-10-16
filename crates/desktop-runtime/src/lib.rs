@@ -13,6 +13,7 @@ pub mod local_zellij;
 pub mod metadata;
 pub mod persistence;
 pub mod profile_leases;
+pub mod profile_native;
 pub mod profiles;
 mod replies;
 pub mod sessions;
@@ -281,6 +282,7 @@ struct Shared {
     stop: AtomicBool,
     shutdown: Mutex<Option<shutdown::Operation>>,
     snapshot: Mutex<Arc<Snapshot>>,
+    profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
 }
 pub struct Desktop {
     sender: SyncSender<Envelope>,
@@ -352,6 +354,7 @@ pub struct NativeNotificationExecution {
 /// Environment resolution remains deferred to background operation/launch workers.
 #[derive(Clone, Default)]
 pub struct DesktopOptions {
+    pub profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
     pub state_directory: Option<PathBuf>,
     pub local_tmux_profile: local_tmux::Profile,
     pub local_zellij: Option<local_zellij::Configuration>,
@@ -384,6 +387,7 @@ impl Desktop {
             shell,
             persistence,
             options.state_directory,
+            options.profile_native,
             options.local_tmux_profile,
             options.local_zellij,
             terminal_engine,
@@ -393,6 +397,7 @@ impl Desktop {
         shell: Shell,
         persistence: Option<sessions::SessionPersistence>,
         profile_directory: Option<PathBuf>,
+        profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
         tmux_profile: local_tmux::Profile,
         zellij_configuration: Option<local_zellij::Configuration>,
         terminal_engine: Option<zmux_session_runtime::EngineOptions>,
@@ -402,7 +407,7 @@ impl Desktop {
         let downloads = downloads::DownloadRuntime::default();
         let windows = windows::WindowRuntime::default();
         let agent_messages = agent_messages::Runtime::start(profile_directory.clone())?;
-        let profiles = profiles::ProfileRuntime::start(profile_directory)?;
+        let profiles = profiles::ProfileRuntime::start(profile_directory, profile_native.clone())?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let local_zellij = zellij_coordinator::Runtime::new(zellij_configuration);
         let attention = Attention::default();
@@ -411,6 +416,7 @@ impl Desktop {
             .map(|p| p.snapshot.clone())
             .unwrap_or_default();
         let shared = Arc::new(Shared {
+            profile_native,
             stop: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             snapshot: Mutex::new(Arc::new(Snapshot {
@@ -635,6 +641,20 @@ impl Desktop {
         execution
             .download_result
             .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
+    }
+
+    /// Read-only original intent lookup on the control worker, never core/UI.
+    pub fn profile_intent_status(
+        &self,
+        profile: uuid::Uuid,
+        intent: uuid::Uuid,
+    ) -> Result<serde_json::Value, DesktopError> {
+        self.shared
+            .profile_native
+            .as_ref()
+            .ok_or(profiles::ProfileError::NativeUnavailable)?
+            .lookup(profile, intent)
+            .map_err(|e| DesktopError::Failure(e.to_string()))
     }
 
     /// Admit one durable profile creation and return that exact executor receipt.
@@ -1452,6 +1472,22 @@ impl Worker {
                 Ok(())
             }
             Command::Profiles { action } => {
+                if let profiles::ProfileCommand::Clear { profile }
+                | profiles::ProfileCommand::Delete { profile } = &action
+                {
+                    let profile = self.profiles.resolve(profile)?;
+                    if self
+                        .model
+                        .snapshot()
+                        .workspaces
+                        .iter()
+                        .flat_map(|v| v.root.panes())
+                        .flat_map(|v| &v.surfaces)
+                        .any(|v| v.browser_profile_id == Some(profile))
+                    {
+                        return Err(DesktopError::Failure("browser profile is busy in an open or hidden tab; close it explicitly before retrying".into()));
+                    }
+                }
                 self.profile_operation_id = Some(self.profiles.admit(action)?);
                 Ok(())
             }
@@ -2177,7 +2213,8 @@ impl Worker {
                 "development build supports at most {MAX_BROWSERS} browser tabs"
             )));
         }
-        self.profiles.validate_model(&candidate.snapshot())?;
+        self.profiles
+            .validate_transition(&self.model.snapshot(), &candidate.snapshot())?;
         self.validate_todo_candidate(&candidate)?;
         self.ensure_reserved(&candidate)?;
         let mut move_windows = None;

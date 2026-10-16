@@ -251,6 +251,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         ControlCommand::DownloadWaitStatus { .. }
         | ControlCommand::LocalTmuxStatus { .. }
         | ControlCommand::BrowserProfilesStatus { .. }
+        | ControlCommand::BrowserProfileIntentStatus { .. }
         | ControlCommand::BrowserStatus { .. }
         | ControlCommand::SessionStatus { .. }
         | ControlCommand::ListUploads

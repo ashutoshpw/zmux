@@ -26,17 +26,25 @@ struct BrowserProfileLeaseToken: Codable, Sendable, Equatable {
     let mode: String
 }
 
+struct BrowserProfileConstructionPermit: Codable, Sendable, Equatable {
+    let construction: UUID
+    let lease: BrowserProfileLeaseToken
+}
+
 enum BrowserProfileLeaseClient {
     private struct Request: Encodable, Sendable {
         let operation: String
         var owner: BrowserProfileLeaseOwner?
         var profile: UUID?
         var token: BrowserProfileLeaseToken?
+        var construction: UUID?
+        var permit: BrowserProfileConstructionPermit?
     }
     private struct Failure: Decodable, Sendable { let message: String }
     private struct Response: Decodable, Sendable {
         let ok: Bool
         let token: BrowserProfileLeaseToken?
+        let permit: BrowserProfileConstructionPermit?
         let error: Failure?
         let outcomeUnknown: Bool?
     }
@@ -51,16 +59,39 @@ enum BrowserProfileLeaseClient {
                 return token
             }
             if response.outcomeUnknown != true {
-                throw BridgeFailure(message: response.error?.message ?? "Profile lease was not acquired.")
+                throw BrowserProfileNativeFailure(message: response.error?.message ?? "Profile lease was not acquired.", outcomeUnknown: false)
             }
             guard ContinuousClock.now < deadline else {
-                throw BridgeFailure(message: "Profile lease ownership remains unknown. No website store was constructed; the original owner is retained.")
+                throw BrowserProfileNativeFailure(message: "Profile lease ownership remains unknown. No website store was constructed; the original owner is retained.", outcomeUnknown: true)
             }
             // Status reconciles the original accepted owner. Never replay an
             // acquisition after a timeout, transport error or lost response.
             try await Task.sleep(for: .milliseconds(32))
             response = try await exchange(desktop: 0, Request(operation: "status", owner: owner))
         }
+    }
+
+    static func reuse(desktop: UInt64, token: BrowserProfileLeaseToken, construction: UUID) async throws -> BrowserProfileConstructionPermit {
+        var response = try await exchange(desktop: desktop, Request(operation: "reuse", token: token, construction: construction))
+        if response.outcomeUnknown == true {
+            response = try await exchange(desktop: 0, Request(operation: "construction_status", construction: construction))
+        }
+        guard response.ok, let permit = response.permit, permit.construction == construction, permit.lease == token else {
+            throw BrowserProfileNativeFailure(message: response.error?.message ?? "Original profile construction permit is unknown; acquisition was not replayed.", outcomeUnknown: response.outcomeUnknown ?? !response.ok)
+        }
+        return permit
+    }
+    static func constructed(_ token: BrowserProfileLeaseToken) async throws {
+        let response = try await exchange(desktop: 0, Request(operation: "constructed", token: token))
+        guard response.ok else { throw BrowserProfileNativeFailure(message: response.error?.message ?? "Original profile construction acknowledgment is unknown; owner retained.", outcomeUnknown: true) }
+    }
+    static func constructionDone(_ permit: BrowserProfileConstructionPermit) async throws {
+        var response = try await exchange(desktop: 0, Request(operation: "construction_done", permit: permit))
+        if response.outcomeUnknown == true {
+            response = try await exchange(desktop: 0, Request(operation: "construction_status", construction: permit.construction))
+            if response.ok, response.permit == nil { return }
+        }
+        guard response.ok else { throw BrowserProfileNativeFailure(message: response.error?.message ?? "Original construction permit remains retained.", outcomeUnknown: true) }
     }
 
     static func releaseUnconstructed(_ token: BrowserProfileLeaseToken) async throws {
@@ -71,7 +102,7 @@ enum BrowserProfileLeaseClient {
             let status = try await exchange(desktop: 0, Request(operation: "status", owner: token.owner))
             if status.ok, status.token == nil { return }
         }
-        throw BridgeFailure(message: response.error?.message ?? "Unconstructed profile lease release is unknown; ownership is retained.")
+        throw BrowserProfileNativeFailure(message: response.error?.message ?? "Unconstructed profile lease release is unknown; ownership is retained.", outcomeUnknown: true)
     }
 
     private static func exchange(desktop: UInt64, _ request: Request) async throws -> Response {
@@ -90,66 +121,9 @@ enum BrowserProfileLeaseClient {
             } catch {
                 // The worker may own a lock even when its response cannot be
                 // copied/decoded. Only original-owner status may reconcile it.
-                return Response(ok: false, token: nil,
+                return Response(ok: false, token: nil, permit: nil,
                     error: Failure(message: error.localizedDescription), outcomeUnknown: true)
             }
         }.value
-    }
-}
-
-/// Construction happens only on MainActor after acknowledged shared ownership.
-/// Constructed stores' Rust tokens remain held for the entire process lifetime.
-@MainActor
-final class BrowserProfileStores {
-    private let bridge: NativeBridge
-    private var stores: [UUID: WKWebsiteDataStore] = [:]
-    private var pending: [UUID: UUID] = [:]
-    private var failures: [UUID: UUID] = [:]
-
-    init(bridge: NativeBridge) { self.bridge = bridge }
-
-    func store(for profile: UUID, isNeeded: @escaping @MainActor () -> Bool,
-               refresh: @escaping @MainActor () -> Void,
-               reportError: @escaping @MainActor (String) -> Void) -> WKWebsiteDataStore? {
-        if let store = stores[profile] { return store }
-        guard pending[profile] == nil, failures[profile] == nil else { return nil }
-        guard stores.count + pending.count + failures.count < 32 else {
-            reportError("Browser profile data store capacity reached")
-            return nil
-        }
-        let storeOwner = UUID()
-        pending[profile] = storeOwner
-        let bridge = bridge
-        Task { [weak self] in
-            do {
-                let token = try await bridge.acquireBrowserProfileLease(profile: profile, store: storeOwner)
-                guard let self, self.pending[profile] == storeOwner else {
-                    try await bridge.releaseUnconstructedBrowserProfileLease(token)
-                    return
-                }
-                if isNeeded() {
-                    // No suspension between the final need check and actual
-                    // construction. There is no release path after this point.
-                    self.stores[profile] = WKWebsiteDataStore(forIdentifier: profile)
-                    self.pending.removeValue(forKey: profile)
-                    refresh()
-                } else {
-                    // Cancellation before any store construction can reclaim
-                    // the exact acquired token, including after Desktop close.
-                    try await bridge.releaseUnconstructedBrowserProfileLease(token)
-                    self.pending.removeValue(forKey: profile)
-                    refresh()
-                }
-            } catch {
-                guard let self else {
-                    FileHandle.standardError.write(Data(("Profile lease cleanup: " + error.localizedDescription + "\n").utf8))
-                    return
-                }
-                self.pending.removeValue(forKey: profile)
-                self.failures[profile] = storeOwner
-                reportError("Browser profile store unavailable: " + error.localizedDescription)
-            }
-        }
-        return nil
     }
 }
