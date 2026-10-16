@@ -8,7 +8,7 @@
 - Main `22550c1` Darwin Foundation checks pass in run `38851088457`, including
   the five real execution-admission tests. Linux Rust/Clippy/notices/ABI passed,
   then the DOM prerequisite failed because Chrome `--version` timed out with zero
-  output. Failed Linux job rerun once unchanged; retained raw log
+  output. Failed Linux job rerun once unchanged passed (attempt 2); retained raw log
   `/tmp/zmux-foundation-22550c1-linux.log`. Full native build remains separate.
 - Observer4 consumer passes its isolated Linux suite but stays off main until
   a matching readiness-capable dependency is admitted and bundled. Source review
