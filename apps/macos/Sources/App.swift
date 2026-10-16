@@ -388,6 +388,15 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let content = window.contentView else { throw BridgeFailure(message: "Sidebar fixture has no content view") }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
         func click(_ view: NSView) throws {
+            let beforeLayoutFrame = view.frame
+            content.layoutSubtreeIfNeeded()
+            if let header = view as? WorkspaceGroupRowView {
+                let center = NSPoint(x: header.bounds.midX, y: header.bounds.midY)
+                let inParent = header.convert(center, to: content.superview)
+                let hit = content.hitTest(inParent)
+                let action = header.action.map { NSStringFromSelector($0) } ?? "nil"
+                FileHandle.standardError.write(Data("Sidebar pointer: beforeLayoutFrame=\(beforeLayoutFrame), frame=\(header.frame), bounds=\(header.bounds), visible=\(header.visibleRect), hit=\(String(describing: hit)), target=\(String(describing: header.target)), action=\(action), cell=\(String(describing: header.cell)), key=\(window.isKeyWindow), sheet=\(window.attachedSheet != nil)\n".utf8))
+            }
             let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
             func event(_ type: NSEvent.EventType) -> NSEvent? {
                 NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -1137,6 +1146,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         enqueue(.workspaceGroup(target.namespace, target.command))
     }
     @objc private func toggleWorkspaceGroup(_ sender: WorkspaceGroupRowView) {
+        if CommandLine.arguments.contains("--sidebar-grouping-smoke") {
+            FileHandle.standardError.write(Data("Group disclosure action: id=\(sender.groupID), namespaceMatches=\(snapshot?.model.identityNamespace == sender.namespace)\n".utf8))
+        }
         guard let snapshot, snapshot.model.identityNamespace == sender.namespace,
               let group = snapshot.model.workspaceGroups.first(where: { $0.id == sender.groupID }) else { return }
         enqueue(.workspaceGroup(sender.namespace, .collapse(group.id, !group.collapsed)))

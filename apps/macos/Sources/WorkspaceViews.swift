@@ -921,7 +921,12 @@ final class WorkspaceGroupRowView: NSControl {
     override var acceptsFirstResponder: Bool { false }
     // Labels are presentation only. The whole header is one disclosure control.
     override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
-    override func mouseDown(with event: NSEvent) { _ = sendAction(action, to: target) }
+    override func mouseDown(with event: NSEvent) {
+        let dispatched = sendAction(action, to: target)
+        if CommandLine.arguments.contains("--sidebar-grouping-smoke") {
+            FileHandle.standardError.write(Data("Group header mouseDown: id=\(groupID), dispatched=\(dispatched)\n".utf8))
+        }
+    }
     override func accessibilityPerformPress() -> Bool { sendAction(action, to: target) }
     func updateAttention(unread: Int) {
         countLabel.stringValue = unread > 0 ? "• \(unread)" : String(memberCount)
