@@ -88,6 +88,33 @@ Swift6 compilation, actual AppKit coordinator phase actions, Darwin child-tree
 observations and shared shutdown remain required hosted gates. This Linux check
 does not establish native idle resource values or physical-Mac budgets.
 
+## First native idle receipt and start-column repair
+
+Run38827961978 at exacta85dc43 compiled the host app and completed idle-one,
+then created all eight real children. The observer rejected idle-eight warmup:
+the same first PID10820 had the same `Fri Oct 16 00:15:10 2026` start date,
+but Darwin ps appended four column-padding spaces once more child rows followed
+it. The existing process-table wrapper strips the whole output, so only the final
+row loses padding; splitting each row into five fields preserves padding on the
+remaining start column. This formatting change is not evidence of a child restart.
+
+Normalize only leading/trailing presentation whitespace when storing the start
+column in the existing process parser. Keep exact PID/date/start/registration
+identity checks and all coverage requirements. Retain the failed run without
+accepting idle-eight measurements or shared shutdown. Artifact12016251194 ZIP
+SHA256 `aff7f18933eda4d05d4cae2fbdbf2568cff1da7af7213be7cd7621d083ac63f1`
+is under `target/agent-validation/f04-idle-darwin-38827961978/`.
+
+All221 retained source copies match exacta85dc43 Git blobs. A replay of the
+actual retained multirow process columns preserves both observed padding forms:
+the original parser rejects the same PID/date, the repaired parser accepts it,
+and a one-second start change remains distinct. PID, PPID, RSS and CPU fields
+remain unchanged. Raw ps stdout was not retained by the observer; replay inputs
+reassemble only the actual retained columns and make no new native metric claim.
+Receipt `parser-repair-receipt.json` in that evidence directory has SHA256
+`253246c77bc4f31f320318d7c12b08468ee4fa4b8ea4f40a8944126f0d68a6a3`.
+Actual corrected Darwin execution of both phases and shared shutdown remains open.
+
 ## Later work
 
 Visible1MiB/s output, seven hidden producers with a foreground send-once marker,
