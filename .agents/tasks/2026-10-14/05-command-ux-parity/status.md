@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- Hook runtime long-TMPDIR regression56a2125 reproduces the Darwin startup
+  failure at the actual Desktop/PTY boundary. Bounded canonical socket selection
+  and pre-bind owned cleanup pass the same five scenarios and full Linux
+  scripts/check395 tests/73groups/1existing ignored, Clippy/notices/both ABI.
+  /tmp/zmux-hook-long-runtime-path-check-green.log. Main43508c1 Darwin compilation
+  passes but both hosted lanes stop at hook startup; the repaired SHA must rerun.
+
 - Main94e8330 Foundation Linux passes; Darwin Foundation38856977385 and native
   build38856977404 fail on signed Darwin st_dev comparison in hook socket cleanup.
   Scoped identity normalization retains exact directory/socket replacement guards;

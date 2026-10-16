@@ -7,6 +7,7 @@ use std::{
     os::{
         fd::AsRawFd,
         unix::{
+            ffi::OsStrExt,
             fs::{DirBuilderExt, MetadataExt, PermissionsExt},
             net::UnixListener,
         },
@@ -719,7 +720,7 @@ struct SocketDirectory {
     path: PathBuf,
     directory: plugin::Directory,
     parent: std::fs::File,
-    socket: (u64, u64),
+    socket: Option<(u64, u64)>,
 }
 impl Drop for SocketDirectory {
     fn drop(&mut self) {
@@ -735,13 +736,15 @@ impl Drop for SocketDirectory {
             if stat_identity(&current) != (pinned.dev(), pinned.ino()) {
                 return Err(CliError("owned socket directory replaced".into()));
             }
-            let socket = at::statat(&self.directory.0, "event.sock", AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(io::Error::from)?;
-            if stat_identity(&socket) != self.socket {
-                return Err(CliError("owned hook socket replaced".into()));
+            if let Some(expected) = self.socket {
+                let socket = at::statat(&self.directory.0, "event.sock", AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(io::Error::from)?;
+                if stat_identity(&socket) != expected {
+                    return Err(CliError("owned hook socket replaced".into()));
+                }
+                at::unlinkat(&self.directory.0, "event.sock", AtFlags::empty())
+                    .map_err(io::Error::from)?;
             }
-            at::unlinkat(&self.directory.0, "event.sock", AtFlags::empty())
-                .map_err(io::Error::from)?;
             at::unlinkat(&self.parent, name, AtFlags::REMOVEDIR).map_err(io::Error::from)?;
             Ok(())
         })();
@@ -830,16 +833,19 @@ fn launch(
     }
     let root_session = Uuid::new_v4().to_string();
     let runtime = Uuid::new_v4();
-    let path = env::temp_dir()
-        .canonicalize()?
-        .join(format!("zmux-hook-{}", runtime.simple()));
-    fs::DirBuilder::new().mode(0o700).create(&path)?;
-    let socket_path = path.join("event.sock");
-    let listener = UnixListener::bind(&socket_path)?;
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
-    let owned_directory = plugin::Directory::open(&path, false)?;
-    let metadata = fs::symlink_metadata(&socket_path)?;
+    // Darwin permits at most 103 pathname bytes. TMPDIR commonly lives under
+    // a long per-user /var/folders path; choose a bounded path before creating
+    // anything. The random directory remains private even in shared /tmp.
+    let name = format!("zmux-hook-{}", runtime.simple());
+    let mut path = env::temp_dir().canonicalize()?.join(&name);
+    if path.join("event.sock").as_os_str().as_bytes().len() > 103 {
+        path = Path::new("/tmp").canonicalize()?.join(&name);
+    }
+    if path.join("event.sock").as_os_str().as_bytes().len() > 103 {
+        return Err(CliError(
+            "hook socket path exceeds the Unix pathname limit".into(),
+        ));
+    }
     let parent = std::fs::File::from(
         rustix::fs::open(
             path.parent()
@@ -852,12 +858,20 @@ fn launch(
         )
         .map_err(io::Error::from)?,
     );
-    let _socket_dir = SocketDirectory {
+    fs::DirBuilder::new().mode(0o700).create(&path)?;
+    let owned_directory = plugin::Directory::open(&path, false)?;
+    let socket_path = path.join("event.sock");
+    let mut socket_dir = SocketDirectory {
         path,
         directory: owned_directory,
         parent,
-        socket: (metadata.dev(), metadata.ino()),
+        socket: None,
     };
+    let listener = UnixListener::bind(&socket_path)?;
+    let metadata = fs::symlink_metadata(&socket_path)?;
+    socket_dir.socket = Some((metadata.dev(), metadata.ino()));
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+    listener.set_nonblocking(true)?;
     let signals = Signals::new()?;
     let mut command = Command::new(&installed.provider.path);
     command

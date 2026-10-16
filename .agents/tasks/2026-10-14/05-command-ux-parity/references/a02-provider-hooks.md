@@ -472,3 +472,27 @@ authority changes. Full Linux scripts/check passes395 tests/73groups/1existing
 ignored plus strict Clippy/notices/both ABI after repair. Hosted Darwin green
 remains required. Logs /tmp/zmux-main-94e8330-foundation-darwin-failure.log and
 /tmp/zmux-main-darwin-hook-identity-check.log.
+
+## Long temporary-root startup regression (2026-10-16)
+
+Main43508c1 fixes Darwin device-ID compilation, but Foundation38857475918
+and native38857475923 fail before the first synthetic-provider barrier.
+A per-child long TMPDIR in the existing real Desktop/PTY scenario reproduces
+`path must be shorter than SUN_LEN` on Linux (regression56a2125). No global
+environment mutation, mock listener or new production test seam is involved.
+The existing short-root cases did not exercise the pathname bound.
+
+The repair chooses a canonical socket pathname within Darwin's103-byte bound
+before creating the directory, falling back to canonical /tmp when needed.
+The full random UUID,0700 directory,0600 socket and exact inode/device cleanup
+guards remain. A guard established before bind removes an empty owned directory
+on bind failure; an unexpected entry or replaced identity is retained with an
+explicit cleanup error. The same five actual-terminal scenarios pass after repair.
+Red logs: /tmp/zmux-hook-long-runtime-path-red.log and
+/tmp/zmux-hook-long-runtime-path-check-red.log. Focused green:
+/tmp/zmux-hook-long-runtime-path-green.log. This is a local runtime startup
+repair; actual-Claude and hosted Darwin verification remain separate gates.
+
+Full Linux scripts/check passes395 tests in73groups,1existing ignored, strict
+Clippy, dependency notices and both C ABI checks. Log:
+/tmp/zmux-hook-long-runtime-path-check-green.log.
