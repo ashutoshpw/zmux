@@ -407,3 +407,110 @@ fn v7_completed_history_rejects_corrupt_receipts_owner_mismatch_and_unbounded_vi
         assert!(validate(value).is_err(), "{corruption}");
     }
 }
+
+// Independently encoded V2 history fixture; the digest is precomputed from the
+// agreed canonical field order. It supplies no live publisher/Run authority.
+fn admitted_document() -> Value {
+    let mut value = completed_document();
+    value["version"] = json!(8);
+    value["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]["history"]["receipt"] =
+        serde_json::from_str(r#"{"execution_contract":"admitted_lifetime_v2","receipt":{"version":2,"domain":"zmux.local-zellij.terminal.v2","binding":{"version":2,"domain":"zmux.local-zellij.execution.v2","owner_uuid":"00000000-0000-0000-0000-000000000014","owner_generation":"00000000-0000-0000-0000-000000000015","namespace":{"root":[1,11],"socket":[1,12]},"completion_socket":[1,13],"server":{"pid":101,"uid":1000,"parent_pid":1,"start":[20,0],"boot":"11111111-1111-4111-8111-111111111111","executable":"/opt/zellij"},"supervisor":{"pid":102,"uid":1000,"parent_pid":101,"start":[30,0],"boot":"11111111-1111-4111-8111-111111111111","executable":"/opt/zmux"},"workload_birth":{"pid":103,"uid":1000,"parent_pid":102,"start":[40,0],"boot":"11111111-1111-4111-8111-111111111111","executable":"/opt/zmux"},"lifetime":{"pid":103,"parent_pid":102,"start":[40,0],"boot":"11111111-1111-4111-8111-111111111111"},"invocation":{"shell":"/bin/sh","invocation_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"admission_id":"00000000-0000-0000-0000-000000000016"},"binding_digest":"20e3c6ee26ec6507888571e2af25149b82e71a0ba0ee38d4602667300acedfa1","terminal_sequence":1,"workload_exit":{"kind":"exited","value":7},"child_reaped":true,"execution_observation":{"kind":"not_observed"}}}"#).unwrap();
+    value
+}
+#[test]
+fn v8_admitted_lifetime_history_preserves_classification_without_pty_or_start() {
+    for observation in [
+        json!({"kind":"not_observed"}),
+        json!({"kind":"shell_observed"}),
+        json!({"kind":"exec_failed","stage":"configured_shell_exec","errno":2}),
+    ] {
+        let mut wire = admitted_document();
+        wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]["history"]["receipt"]["receipt"]
+            ["execution_observation"] = observation;
+        let validated =
+            validate(wire.clone()).expect("V8 must accept explicitly admitted lifetime history");
+        assert_eq!(validated.terminal_count(), 0);
+        let mut prepared = WorkspaceStore::prepare_session_restore(validated, &[], None).unwrap();
+        assert!(
+            prepared.effects.is_empty(),
+            "history cannot authorize Attach or Start"
+        );
+        let snapshot = prepared.store.snapshot();
+        let surface = &snapshot.workspaces[0].root.panes()[0].surfaces[0];
+        assert!(surface.session_id.is_none());
+        let saved = serde_json::to_value(prepared.store.session_document().unwrap()).unwrap();
+        assert_eq!(saved["version"], 8);
+        assert_eq!(
+            saved["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"],
+            wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]
+        );
+        let closed = prepared
+            .store
+            .apply(Action::CloseSurface {
+                surface_id: surface.id,
+            })
+            .unwrap();
+        assert!(closed.effects.is_empty());
+        let closed_id = prepared.store.snapshot().closed_items[0].id;
+        let reopened = prepared
+            .store
+            .apply(Action::ReopenClosed {
+                closed_id: Some(closed_id),
+            })
+            .unwrap();
+        assert!(
+            reopened.effects.is_empty(),
+            "undo must preserve admitted history without replay"
+        );
+        let reopened = serde_json::to_value(prepared.store.session_document().unwrap()).unwrap();
+        assert_eq!(
+            reopened["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"],
+            wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"]
+        );
+    }
+}
+#[test]
+fn v8_history_rejects_contract_downgrade_mixed_identity_and_invalid_observation() {
+    for corruption in [
+        "v7",
+        "unknown_contract",
+        "mixed_contract",
+        "raw_v2",
+        "split_lifetime",
+        "owner",
+        "errno",
+        "stage",
+        "viewport",
+    ] {
+        let mut wire = admitted_document();
+        let content = &mut wire["workspaces"][0]["root"]["pane"]["surfaces"][0]["content"];
+        let envelope = &mut content["history"]["receipt"];
+        match corruption {
+            "v7" => wire["version"] = json!(7),
+            "unknown_contract" => envelope["execution_contract"] = json!("full_image_v1"),
+            "mixed_contract" => envelope["workload_exit"] = json!({"kind":"exited","value":0}),
+            "raw_v2" => *envelope = envelope["receipt"].clone(),
+            "split_lifetime" => {
+                envelope["receipt"]["binding"]["lifetime"]["pid"] = json!(104);
+                // Recomputed independently for this exact mismatched tuple, so
+                // digest rejection cannot mask missing identity-projection checks.
+                envelope["receipt"]["binding_digest"] =
+                    json!("4da6a2a9613474189338645721e4ed45fb6f04b515311ee4e03dfc8578365b14");
+            }
+            "owner" => content["owner_uuid"] = json!(uuid::Uuid::from_u128(25)),
+            "errno" => {
+                envelope["receipt"]["execution_observation"] =
+                    json!({"kind":"exec_failed","stage":"configured_shell_exec","errno":0})
+            }
+            "stage" => {
+                envelope["receipt"]["execution_observation"] =
+                    json!({"kind":"exec_failed","stage":"user_command","errno":2})
+            }
+            "viewport" => {
+                content["history"]["viewport"]["contents"] = json!("x".repeat(16 * 1024 + 1))
+            }
+            _ => unreachable!(),
+        }
+        assert!(validate(wire).is_err(), "accepted {corruption}");
+    }
+}
