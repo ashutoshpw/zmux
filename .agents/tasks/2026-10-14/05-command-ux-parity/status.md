@@ -5,6 +5,15 @@
 
 ## Active implementation
 
+- Screenshot-driven compact sidebar/group UI in progress. Shared group domain,
+  persistence and CLI integrated (0e77cac/b4aab55/e178d25/ffc635e); full scripts/check
+  passes, including strict Clippy/notices/both ABI and four group core tests.
+  Native UI now uses one32pt titlebar strip, visible expanded/collapsed toggles,
+  bell/workspace toggle, named collapsible headers and membership/context menus.
+  Dedicated manual sidebar native suite and universal artifact runner e7c4750.
+  Native compile, actual mouse/menu/sheet journey and screenshots pending on Actions;
+  no native acceptance or full-parity claim yet. See N01 compact groups reference.
+
 - Hosted Linux Foundation112e55a exposed an execution-admission fixture race:
   shell redirection creates the file before writing. Regression75ddce1 reproduces
   empty bytes with the actual admitted helper. The repair waits for authenticated

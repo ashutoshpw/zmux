@@ -159,3 +159,5 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [R03 S01 checkpoint](references/r03-s01-checkpoint.md) — durable save authorization, lineage and cancellation fences.
 
 - [R03 natural completion](references/r03-natural-completion.md) — live supervisor exit receipts, durable completed history and explicit retirement; implementation and native acceptance remain open.
+
+- [N01 compact groups](references/n01-compact-groups.md) — screenshot-driven compact chrome, visible sidebar toggle and native workspace group controls.
