@@ -465,8 +465,11 @@ enum AgentInboxSmoke {
               frame.snapshot?.viewport.contents.contains("AGENT_INBOX_READY_") == true else { return nil }
         return frame.processId
     }
-    private static func cli(_ host: MainWindowHost, _ arguments: [String], caller: Child? = nil) async throws -> Data {
-        if caller == nil { return try await host.nativeCLI(arguments, timeout: 5000, externalCaller: true) }
+    private static func cli(_ host: MainWindowHost, _ arguments: [String], caller: Child? = nil, input: Data? = nil) async throws -> Data {
+        if caller == nil {
+            guard input == nil else { throw failure("Host CLI cannot substitute the fixture stdin caller") }
+            return try await host.nativeCLI(arguments, timeout: 5000, externalCaller: true)
+        }
         let executable = Bundle.main.resourceURL!.appendingPathComponent("bin/zmux")
         return try await Task.detached {
             let process = Process()
@@ -477,7 +480,14 @@ enum AgentInboxSmoke {
             environment["ZMUX_SURFACE_ID"] = caller?.surface.uuidString
             process.environment = environment
             let pipe = Pipe(); process.standardOutput = pipe; process.standardError = pipe
+            let stdin = Pipe()
+            if input == nil { process.standardInput = FileHandle.nullDevice }
+            else { process.standardInput = stdin }
             try process.run()
+            if let input {
+                try stdin.fileHandleForWriting.write(contentsOf: input)
+                try stdin.fileHandleForWriting.close()
+            }
             let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
             guard process.terminationStatus == 0, data.count <= 131_072 else { throw failure("Exact-attribution CLI failed: " + String(decoding: data.prefix(2048), as: UTF8.self)) }
             return data
@@ -488,12 +498,16 @@ enum AgentInboxSmoke {
         return value
     }
     private static func send(_ host: MainWindowHost, from sender: Child, to recipient: UUID, body: String) async throws -> Message {
-        let response = try await cli(host, ["agent", "message", recipient.uuidString, "--", body], caller: sender)
+        // Darwin's argument-string bridge may decompose Unicode. Seed through
+        // the public byte-preserving stdin path, independent of AppKit rendering.
+        let response = try await cli(host, ["agent", "message", recipient.uuidString, "--", "-"],
+                                     caller: sender, input: Data(body.utf8))
         let sent = try JSONDecoder().decode(Sent.self, from: response)
         // Keep the independent CLI receipt and each exact assertion input even
         // when a prerequisite fails before the selected-body Unicode oracle.
         if let root = ProcessInfo.processInfo.environment["ZMUX_AGENT_INBOX_ROOT"] {
             let proof = try JSONSerialization.data(withJSONObject: [
+                "inputTransport": "stdin_utf8",
                 "expectedBodyUTF8": Array(body.utf8), "observedBodyUTF8": Array(sent.message.body.utf8),
                 "expectedSender": sender.surface.uuidString, "expectedRecipient": recipient.uuidString,
                 "receipt": try JSONSerialization.jsonObject(with: response)
