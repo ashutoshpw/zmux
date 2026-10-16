@@ -77,6 +77,14 @@ pub struct TerminalNotice {
     pub body: String,
 }
 
+/// Copy boundaries for one visible physical row, from the same parser snapshot
+/// as its drawing runs. Written spaces count; empty padding does not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RowCopy {
+    pub wraps_to_next: bool,
+    pub written_end: u16,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Viewport {
     pub notices: Vec<TerminalNotice>,
@@ -87,6 +95,7 @@ pub struct Viewport {
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub lines: Vec<Vec<Run>>,
+    pub row_copy: Option<Vec<RowCopy>>,
     pub application_cursor: bool,
     pub bracketed_paste: bool,
     pub hide_cursor: bool,
@@ -343,10 +352,11 @@ impl Terminal {
         }
     }
 
-    fn runs(&self) -> Vec<Vec<Run>> {
+    fn runs(&self) -> (Vec<Vec<Run>>, Vec<RowCopy>) {
         (0..self.size.rows)
             .map(|row| {
                 let mut runs: Vec<Run> = Vec::new();
+                let mut written_end = 0;
                 for col in 0..self.size.cols {
                     let cell = self
                         .parser
@@ -362,6 +372,9 @@ impl Terminal {
                         cell.contents()
                     };
                     let width = if cell.is_wide() { 2 } else { 1 };
+                    if cell.has_contents() {
+                        written_end = (col + width).min(self.size.cols);
+                    }
                     let style = Style {
                         foreground: color(cell.fgcolor()),
                         background: color(cell.bgcolor()),
@@ -388,14 +401,21 @@ impl Terminal {
                         });
                     }
                 }
-                runs
+                (
+                    runs,
+                    RowCopy {
+                        wraps_to_next: self.parser.screen().row_wrapped(row),
+                        written_end,
+                    },
+                )
             })
-            .collect()
+            .unzip()
     }
 
     /// Only the visible screen crosses the bridge, never a clone of complete scrollback.
     pub fn viewport(&self) -> Viewport {
         let (cursor_row, cursor_col) = self.parser.screen().cursor_position();
+        let (lines, row_copy) = self.runs();
         Viewport {
             notices: self.parser.callbacks().notices.clone(),
             title: self.parser.callbacks().title.clone(),
@@ -404,7 +424,8 @@ impl Terminal {
             contents: self.parser.screen().contents(),
             cursor_row,
             cursor_col,
-            lines: self.runs(),
+            lines,
+            row_copy: Some(row_copy),
             application_cursor: self.parser.screen().application_cursor(),
             bracketed_paste: self.parser.screen().bracketed_paste(),
             hide_cursor: self.parser.screen().hide_cursor(),

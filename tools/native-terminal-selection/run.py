@@ -3,6 +3,7 @@
 import argparse
 import ast
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,18 +12,44 @@ import shutil
 import subprocess
 import sys
 import uuid
+import zipfile
 
 REPO = Path(__file__).resolve().parents[2]
-OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos-development.yml')
+OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos-development.yml',
+              'tools/native-terminal-selection/CopyMetadataContract.swift')
+# Compile the complete real model dependency closure, including the bridge owner
+# used by NotificationDelivery; never substitute test definitions for app types.
+METADATA_INPUTS = tuple('apps/macos/Sources/' + name + '.swift' for name in (
+    'Models', 'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
+    'NotificationDelivery', 'NativeBridge', 'NativeStoragePath', 'TerminalKeyEncoder')) + (
+    'crates/native-bridge/include/zmux.h', 'tools/native-terminal-selection/CopyMetadataContract.swift')
 CHILD = '''#!/usr/bin/env python3
-import json,os,pathlib,time
+import fcntl,json,os,pathlib,select,struct,termios,time,tty
 root=pathlib.Path(os.environ['ZMUX_SELECTION_ROOT'])
 nonce=os.environ['ZMUX_SELECTION_NONCE']
+deadline=time.monotonic()+120
+tty.setraw(0)
 with (root/'child.json').open('x') as out:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce},out)
 rows=['alpha beta','alpha.beta  value_name /tmp/file','A界 e\\u0301🙂 Z','ab\\x1b[31mcd\\x1b[0mef','NATIVE_SELECTION_READY_'+nonce]
 os.write(1,('\\x1b[2J\\x1b[H'+'\\r\\n'.join(rows)+'\\r\\n').encode())
-time.sleep(120)
+for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_')]:
+ ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
+ if not ready:break
+ assert os.read(0,1)==key.encode()
+ rows_count,columns=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,bytes(8)))[:2]
+ assert 8<=rows_count<=120 and 64<=columns<=240
+ name='wrap-child.json' if key=='w' else 'copy-child-'+key+'.json'
+ with (root/name).open('x') as out:
+  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce,'rows':rows_count,'columns':columns,'phase':key},out)
+ payload='X'*(columns-1)+' EDGE'
+ if key=='v':payload='X'*(columns-2)+'界Z'
+ if key=='m':payload='X'*(columns-1)+'界Z'
+ if key=='u':payload='X'*(columns-1)+'e\\u0301🙂Z'
+ if key=='h':payload='HARD_A\\r\\n\\r\\nHARD_B'
+ if key=='p':payload+='\\r\\n'+'\\r\\n'.join('FILLER_'+str(n) for n in range(rows_count+4))
+ os.write(1,('\\x1b[2J\\x1b[H'+payload+'\\r\\n'+marker+nonce+'\\r\\n').encode())
+time.sleep(max(0,deadline-time.monotonic()))
 '''
 
 
@@ -53,6 +80,8 @@ def main():
 
     frozen = sources()
     ast.parse(CHILD)
+    if any(name not in frozen for name in METADATA_INPUTS):
+        raise RuntimeError('Selection decoder dependency is absent from retained sources')
     if args.check_inputs:
         print(json.dumps({'sources': len(frozen), 'actual_native_execution': False,
                           'app_seconds': 45, 'independent_child_seconds': 120}))
@@ -90,6 +119,26 @@ def main():
             raise RuntimeError('Selection app archive exceeds its byte bound')
         shutil.copy2(archive, root / archive.name)
         receipt.update(build_info=info, archive={'name': archive.name, 'sha256': native.digest(archive)})
+        decoder_probe = root / 'copy-metadata-contract'
+        frameworks = REPO / 'dist/zmux.app/Contents/Frameworks'
+        receipt['metadata_probe_inputs'] = {name: frozen[name] for name in METADATA_INPUTS}
+        receipt['metadata_bridge_sha256'] = native.digest(frameworks / 'libzmux_native_bridge.dylib')
+        with zipfile.ZipFile(archive) as packaged:
+            bridge_entry = packaged.getinfo('zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib')
+            if bridge_entry.file_size > 64 * 1024 * 1024:
+                raise RuntimeError('Selection archived decoder bridge exceeds its byte bound')
+            if hashlib.sha256(packaged.read(bridge_entry)).hexdigest() != receipt['metadata_bridge_sha256']:
+                raise RuntimeError('Selection decoder bridge differs from the archived app build')
+        runner.run(['/usr/bin/xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6', '-warnings-as-errors',
+                    '-strict-concurrency=complete', '-target', 'arm64-apple-macos14.0',
+                    '-import-objc-header', str(REPO / 'crates/native-bridge/include/zmux.h'),
+                    *[str(REPO / name) for name in METADATA_INPUTS if name.endswith('.swift')],
+                    '-L', str(frameworks), '-lzmux_native_bridge',
+                    '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'UserNotifications',
+                    '-Xlinker', '-rpath', '-Xlinker', str(frameworks), '-o', str(decoder_probe)],
+                   'metadata-compile', root, receipt['phases'], timeout=60, cwd=REPO, env=environment)
+        runner.run([str(decoder_probe)], 'metadata-contract', root, receipt['phases'],
+                   timeout=5, cwd=REPO, env=environment)
         child = root / 'selection-child.py'
         child.write_text(CHILD)
         child.chmod(0o700)
