@@ -262,6 +262,54 @@ fn headless_cli_attaches_detaches_and_reattaches_the_same_live_shell_without_app
     );
 }
 #[test]
+fn headless_cli_reads_session_state_without_a_utf8_locale() {
+    let f = Fixture::new();
+    // Hermetic: tmux consults only these variables to choose UTF-8 output; remove them
+    // (and pin the C locale) so the result never depends on the machine running the test.
+    let run = |args: &[&str], locale: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_zmux"));
+        command
+            .args(args)
+            .envs(f.environment())
+            .env_remove("ZMUX_SOCKET_PASSWORD")
+            .env_remove("LANG")
+            .env_remove("LC_ALL")
+            .env_remove("LC_CTYPE");
+        if let Some(locale) = locale {
+            command.env("LC_ALL", locale);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?} with locale {locale:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let started = run(
+        &[
+            "local-tmux",
+            "start",
+            "dev",
+            "--detached",
+            "--command",
+            "exec sleep 60",
+        ],
+        None,
+    );
+    let id = started["session"]["id"].as_str().unwrap();
+    for locale in [None, Some("C"), Some("POSIX")] {
+        let listed = run(&["local-tmux", "list", "--json"], locale);
+        assert_eq!(listed["sessions"][0]["id"], id);
+        assert_eq!(listed["sessions"][0]["state"], "live");
+        assert!(listed["unmanaged"].as_array().unwrap().is_empty());
+        let status = run(&["local-tmux", "status", "--id", id], locale);
+        assert_eq!(status["session"]["name"], "dev");
+        assert_eq!(status["session"]["state"], "live");
+    }
+}
+
+#[test]
 fn offline_help_and_invalid_gui_options_alias_or_client_forms_do_not_open_app_or_profile() {
     let f = Fixture::new();
     for command in ["local-tmux", "tmux"] {
