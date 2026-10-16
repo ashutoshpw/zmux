@@ -34,6 +34,11 @@ fn download(desktop: u64, command: &Value) -> ZmuxResult {
     // SAFETY: this immutable encoded request remains valid throughout the call.
     unsafe { zmux_desktop_download(desktop, data.as_ptr(), data.len()) }
 }
+fn browser_event(desktop: u64, value: &Value) -> i32 {
+    let data = serde_json::to_vec(value).unwrap();
+    // SAFETY: immutable bounded encoded storage is live for the whole call.
+    unsafe { zmux_desktop_browser_event(desktop, data.as_ptr(), data.len()) }
+}
 #[test]
 fn foreign_download_capacity_precedes_admission_and_callbacks_require_exact_owner() {
     let desktop = zmux_desktop_create();
@@ -119,6 +124,56 @@ fn foreign_download_capacity_precedes_admission_and_callbacks_require_exact_owne
     let rejected = download(desktop.value, &stale);
     assert_eq!(rejected.status, 0);
     assert_eq!(consume(rejected.value)["ok"], false);
+    // Logical retirement is published before AppKit can close the corresponding
+    // native view. Its exact detach is obsolete, and cannot cancel B's download.
+    let add = serde_json::to_vec(&json!({"version":1,"request_id":2,"payload":{"command":"action","action":{"action":"create_browser","pane_id":pane["id"],"url":"https://example.org/retired","focus":false}}})).unwrap();
+    // SAFETY: encoded request storage remains readable through dispatch.
+    let added = unsafe { zmux_desktop_dispatch(desktop.value, add.as_ptr(), add.len()) };
+    assert_eq!(added.status, 0);
+    assert_eq!(consume(added.value)["ok"], true);
+    let added = snapshot(desktop.value, |v| v["last_request_id"] == 2);
+    let retired = added["model"]["workspaces"][0]["root"]["pane"]["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "browser" && s["id"] != surface["id"])
+        .unwrap();
+    let retired_owner = json!({"epoch":added["browser_epoch"],"identity_namespace":added["model"]["identity_namespace"],"surface_id":retired["id"],"host_id":Uuid::new_v4(),"document_generation":1,"model_navigation":retired["navigation"]});
+    assert_eq!(
+        browser_event(
+            desktop.value,
+            &json!({"event":"attach","epoch":retired_owner["epoch"],"surface_id":retired_owner["surface_id"],"host_id":retired_owner["host_id"],"document_generation":1,"model_navigation":retired_owner["model_navigation"]})
+        ),
+        0
+    );
+    let close = serde_json::to_vec(&json!({"version":1,"request_id":3,"payload":{"command":"action","action":{"action":"close_surface","surface_id":retired["id"]}}})).unwrap();
+    // SAFETY: encoded request storage remains readable through dispatch.
+    let closed = unsafe { zmux_desktop_dispatch(desktop.value, close.as_ptr(), close.len()) };
+    assert_eq!(closed.status, 0);
+    assert_eq!(consume(closed.value)["ok"], true);
+    let closed = snapshot(desktop.value, |v| v["last_request_id"] == 3);
+    let downloads = closed["downloads"].clone();
+    assert_eq!(
+        browser_event(
+            desktop.value,
+            &json!({"event":"detach","owner":retired_owner})
+        ),
+        1
+    );
+    let mut foreign = retired_owner.clone();
+    foreign["host_id"] = owner["host_id"].clone();
+    assert_eq!(
+        browser_event(desktop.value, &json!({"event":"detach","owner":foreign})),
+        -6
+    );
+    let mut unknown = retired_owner.clone();
+    unknown["surface_id"] = json!(u64::MAX);
+    assert_eq!(
+        browser_event(desktop.value, &json!({"event":"detach","owner":unknown})),
+        -6
+    );
+    assert_eq!(browser_event(desktop.value, &json!({})), -2);
+    assert_eq!(snapshot(desktop.value, |_| true)["downloads"], downloads);
     // Reserve final publication before shutdown; this reservation must win
     // against cancellation while a second ordinary download is cancelled.
     for request in [
