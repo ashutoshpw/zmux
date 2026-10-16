@@ -825,12 +825,40 @@ fn profile_catalog(
             crate::profiles::ProfileCommand::Rename { profile, name } => {
                 catalog.rename(&profile, name)
             }
+            crate::profiles::ProfileCommand::Clear { .. }
+            | crate::profiles::ProfileCommand::Delete { .. } => {
+                return Err(PersistenceError::InvalidDocument(
+                    "destructive profile mutation requires known native completion".into(),
+                ));
+            }
         }
         .map_err(PersistenceError::InvalidDocument)?;
         let bytes = serialize_bounded(&catalog, MAX_PROFILE_BYTES, "browser profile catalog")?;
         atomic_write(&directory, OsStr::new(CATALOG_NAME), &bytes, true)?;
     }
     Ok(catalog)
+}
+
+/// Called only by the physical owner after known native UUID removal. Reread
+/// under the ordinary metadata lock so unrelated add/rename work is preserved.
+pub(crate) fn commit_native_profile(
+    directory: &File,
+    profile: Uuid,
+    delete: bool,
+) -> Result<(), PersistenceError> {
+    use crate::profiles::{CATALOG_NAME, MAX_PROFILE_BYTES};
+    let _lock = lock_named(directory, "browser-profiles.lock")?;
+    let mut catalog = read_profile_catalog(directory)?;
+    if delete {
+        catalog.profiles.retain(|value| value.id != profile);
+        let bytes = serialize_bounded(&catalog, MAX_PROFILE_BYTES, "browser profile catalog")?;
+        atomic_write(directory, OsStr::new(CATALOG_NAME), &bytes, true)?;
+    } else if !catalog.profiles.iter().any(|value| value.id == profile) {
+        return Err(PersistenceError::InvalidDocument(
+            "cleared profile catalog membership disappeared".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Anchored catalog identity check for the dedicated native lifetime-lease worker.

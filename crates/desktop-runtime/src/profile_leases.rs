@@ -3,6 +3,10 @@
 //! The native bridge must retain one service for the process lifetime and retain
 //! each shared token until every store, host and download/conversion reference is
 //! physically retired. This primitive does not admit clear/delete operations.
+pub mod journal;
+mod mutations;
+pub use mutations::{ConstructionPermit, MutationRequest, MutationToken};
+
 use crate::persistence::{check_file, profile_exists, state_directory};
 use rustix::fs::{self, AtFlags, Mode, OFlags};
 use serde::{Deserialize, Serialize};
@@ -19,6 +23,8 @@ use uuid::Uuid;
 
 pub const MAX_LEASES: usize = 64;
 pub const MAX_PENDING_REQUESTS: usize = 8;
+pub const MAX_CONSTRUCTION_PERMITS: usize = 32;
+pub const MAX_MUTATIONS: usize = 8;
 const ACKNOWLEDGEMENT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,12 +77,57 @@ pub enum LeaseError {
     UnsafeLock,
     #[error("browser profile lease token does not match its physical owner")]
     StaleToken,
+    #[error(
+        "browser profile intent is corrupt, unsafe or inconsistent; profile remains quarantined"
+    )]
+    UnsafeIntent,
+    #[error(
+        "browser profile operation {intent} is unresolved at {phase}; query the original operation; do not retry or reopen"
+    )]
+    Quarantined { intent: Uuid, phase: &'static str },
     #[error("browser profile lease I/O: {0}")]
     Io(String),
 }
 
-type Reply = SyncSender<Result<Option<LeaseToken>, LeaseError>>;
+type Reply<T = Option<LeaseToken>> = SyncSender<Result<T, LeaseError>>;
 enum Request {
+    ConstructionStatus {
+        construction: Uuid,
+        reply: Reply<Option<ConstructionPermit>>,
+    },
+    ReleaseUnconstructed {
+        token: LeaseToken,
+        reply: Reply<()>,
+    },
+    Reuse {
+        directory: PathBuf,
+        token: LeaseToken,
+        construction: Uuid,
+        reply: Reply<ConstructionPermit>,
+    },
+    ConstructionDone {
+        permit: ConstructionPermit,
+        reply: Reply<()>,
+    },
+    MutationStart {
+        request: MutationRequest,
+        reply: Reply<MutationToken>,
+    },
+    MutationAdvance {
+        token: MutationToken,
+        phase: journal::MutationPhase,
+        reply: Reply<()>,
+    },
+    MutationFinish {
+        token: MutationToken,
+        failure: Option<String>,
+        reply: Reply<()>,
+    },
+    IntentStatus {
+        profile: Uuid,
+        intent: Uuid,
+        reply: Reply<journal::IntentStatus>,
+    },
     Acquire {
         directory: PathBuf,
         owner: LeaseOwner,
@@ -86,6 +137,10 @@ enum Request {
     },
     Status {
         owner: LeaseOwner,
+        reply: Reply,
+    },
+    Constructed {
+        token: LeaseToken,
         reply: Reply,
     },
     Release {
@@ -115,34 +170,93 @@ impl LeaseService {
                     epoch: Uuid::new_v4(),
                     next: 1,
                     leases: HashMap::new(),
+                    constructions: HashMap::new(),
+                    mutations: HashMap::new(),
                 };
                 while let Ok(request) = receiver.recv() {
-                    let (result, reply) = match request {
+                    match request {
+                        Request::ConstructionStatus {
+                            construction,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(Ok(registry
+                                .constructions
+                                .get(&construction)
+                                .map(|v| v.permit)));
+                        }
+                        Request::ReleaseUnconstructed { token, reply } => {
+                            let result = if registry
+                                .leases
+                                .get(&token.id)
+                                .is_some_and(|v| v.token == token && !v.constructed)
+                            {
+                                registry.release(token)
+                            } else {
+                                Err(LeaseError::StaleToken)
+                            };
+                            let _ = reply.try_send(result);
+                        }
                         Request::Acquire {
                             directory,
                             owner,
                             profile,
                             mode,
                             reply,
-                        } => (
-                            registry.acquire(directory, owner, profile, mode).map(Some),
-                            reply,
-                        ),
-                        Request::Status { owner, reply } => (
-                            Ok(registry
+                        } => {
+                            let _ = reply.try_send(
+                                registry.acquire(directory, owner, profile, mode).map(Some),
+                            );
+                        }
+                        Request::Status { owner, reply } => {
+                            let _ = reply.try_send(Ok(registry
                                 .leases
                                 .values()
                                 .find(|lease| lease.token.owner == owner)
-                                .map(|lease| lease.token)),
-                            reply,
-                        ),
-                        Request::Release { token, reply } => {
-                            (registry.release(token).map(|()| None), reply)
+                                .map(|lease| lease.token)));
                         }
-                    };
-                    // A lost acknowledgement retains the acquired lease in the
-                    // bounded registry. Status recovers by its original owner.
-                    let _ = reply.try_send(result);
+                        Request::Constructed { token, reply } => {
+                            let _ =
+                                reply.try_send(registry.constructed(token).map(|()| Some(token)));
+                        }
+                        Request::Release { token, reply } => {
+                            let _ = reply.try_send(registry.release(token).map(|()| None));
+                        }
+                        Request::Reuse {
+                            directory,
+                            token,
+                            construction,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(registry.reuse(directory, token, construction));
+                        }
+                        Request::ConstructionDone { permit, reply } => {
+                            let _ = reply.try_send(registry.construction_done(permit));
+                        }
+                        Request::MutationStart { request, reply } => {
+                            let _ = reply.try_send(registry.mutation_start(request));
+                        }
+                        Request::MutationAdvance {
+                            token,
+                            phase,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(registry.mutation_advance(token, phase));
+                        }
+                        Request::MutationFinish {
+                            token,
+                            failure,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(registry.mutation_finish(token, failure));
+                        }
+                        Request::IntentStatus {
+                            profile,
+                            intent,
+                            reply,
+                        } => {
+                            let _ = reply.try_send(registry.intent_status(profile, intent));
+                        }
+                    }
                 }
             })
             .map_err(|error| LeaseError::Io(error.to_string()))?;
@@ -164,6 +278,12 @@ impl LeaseService {
         })?
         .ok_or(LeaseError::OutcomeUnknown)
     }
+    /// Actual native construction has completed under this exact permit.
+    /// Repeating this acknowledgment never constructs a store or changes owner.
+    pub fn constructed(&self, token: LeaseToken) -> Result<(), LeaseError> {
+        self.call(|reply| Request::Constructed { token, reply })
+            .map(|_| ())
+    }
     pub fn status(&self, owner: LeaseOwner) -> Result<Option<LeaseToken>, LeaseError> {
         self.call(|reply| Request::Status { owner, reply })
     }
@@ -171,10 +291,73 @@ impl LeaseService {
         self.call(|reply| Request::Release { token, reply })
             .map(|_| ())
     }
-    fn call(
+    pub fn construction_status(
         &self,
-        request: impl FnOnce(Reply) -> Request,
-    ) -> Result<Option<LeaseToken>, LeaseError> {
+        construction: Uuid,
+    ) -> Result<Option<ConstructionPermit>, LeaseError> {
+        self.call(|reply| Request::ConstructionStatus {
+            construction,
+            reply,
+        })
+    }
+    pub fn release_unconstructed(&self, token: LeaseToken) -> Result<(), LeaseError> {
+        self.call(|reply| Request::ReleaseUnconstructed { token, reply })
+    }
+    pub fn reuse(
+        &self,
+        directory: PathBuf,
+        token: LeaseToken,
+        construction: Uuid,
+    ) -> Result<ConstructionPermit, LeaseError> {
+        self.call(|reply| Request::Reuse {
+            directory,
+            token,
+            construction,
+            reply,
+        })
+    }
+    pub fn construction_done(&self, permit: ConstructionPermit) -> Result<(), LeaseError> {
+        self.call(|reply| Request::ConstructionDone { permit, reply })
+    }
+    pub fn mutation_start(&self, request: MutationRequest) -> Result<MutationToken, LeaseError> {
+        self.call(|reply| Request::MutationStart { request, reply })
+    }
+    pub fn mutation_advance(
+        &self,
+        token: MutationToken,
+        phase: journal::MutationPhase,
+    ) -> Result<(), LeaseError> {
+        self.call(|reply| Request::MutationAdvance {
+            token,
+            phase,
+            reply,
+        })
+    }
+    /// Known callback failure, or final metadata commit after known removal.
+    /// Unknown callbacks must retain this owner and query status instead.
+    pub fn mutation_finish(
+        &self,
+        token: MutationToken,
+        failure: Option<String>,
+    ) -> Result<(), LeaseError> {
+        self.call(|reply| Request::MutationFinish {
+            token,
+            failure,
+            reply,
+        })
+    }
+    pub fn intent_status(
+        &self,
+        profile: Uuid,
+        intent: Uuid,
+    ) -> Result<journal::IntentStatus, LeaseError> {
+        self.call(|reply| Request::IntentStatus {
+            profile,
+            intent,
+            reply,
+        })
+    }
+    fn call<T>(&self, request: impl FnOnce(Reply<T>) -> Request) -> Result<T, LeaseError> {
         let (sender, receiver) = mpsc::sync_channel(1);
         self.sender
             .try_send(request(sender))
@@ -193,10 +376,14 @@ struct Registry {
     epoch: Uuid,
     next: u64,
     leases: HashMap<u64, PhysicalLease>,
+    constructions: HashMap<Uuid, mutations::PhysicalConstruction>,
+    mutations: HashMap<Uuid, mutations::PhysicalMutation>,
 }
 struct PhysicalLease {
     token: LeaseToken,
     _lock: File,
+    admission: Option<File>,
+    constructed: bool,
 }
 impl Registry {
     fn acquire(
@@ -215,6 +402,12 @@ impl Registry {
         if self.leases.len() >= MAX_LEASES {
             return Err(LeaseError::Capacity);
         }
+        if self.mutations.values().any(|v| v.token.profile == profile) {
+            return Err(LeaseError::Busy);
+        }
+        if self.construction_count() >= MAX_CONSTRUCTION_PERMITS {
+            return Err(LeaseError::Capacity);
+        }
         let next = self.next.checked_add(1).ok_or(LeaseError::Exhausted)?;
         let directory =
             state_directory(&directory).map_err(|error| LeaseError::Io(error.to_string()))?;
@@ -223,30 +416,15 @@ impl Registry {
         {
             return Err(LeaseError::UnknownProfile);
         }
-        let name = lock_name(profile);
-        let lock = File::from(
-            fs::openat(
-                &self.directory,
-                name.as_str(),
-                OFlags::RDWR
-                    | OFlags::CREATE
-                    | OFlags::NOFOLLOW
-                    | OFlags::NONBLOCK
-                    | OFlags::CLOEXEC,
-                Mode::from_raw_mode(0o600),
-            )
-            .map_err(|error| LeaseError::Io(error.to_string()))?,
-        );
-        inspect(&self.directory, &lock, &name)?;
-        match mode {
-            LeaseMode::Shared => lock.try_lock_shared(),
-            LeaseMode::Exclusive => lock.try_lock(),
-        }
-        .map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => LeaseError::Busy,
-            std::fs::TryLockError::Error(error) => LeaseError::Io(error.to_string()),
-        })?;
-        inspect(&self.directory, &lock, &name)?;
+        journal::recover_terminal(&self.directory, profile)?;
+        let admission = open_lock(
+            &self.directory,
+            &journal::admission_name(profile),
+            mode,
+            false,
+        )?;
+        journal::ensure_unquarantined(&self.directory, profile)?;
+        let lock = open_lock(&self.directory, &lock_name(profile), mode, false)?;
         // Exclusive deletion cannot race this second identity check once all
         // native store construction and destructive owners use these leases.
         if !profile_exists(&directory, profile)
@@ -262,11 +440,36 @@ impl Registry {
             mode,
         };
         self.next = next;
-        self.leases
-            .insert(token.id, PhysicalLease { token, _lock: lock });
+        self.leases.insert(
+            token.id,
+            PhysicalLease {
+                token,
+                _lock: lock,
+                admission: Some(admission),
+                constructed: false,
+            },
+        );
         Ok(token)
     }
+    fn constructed(&mut self, token: LeaseToken) -> Result<(), LeaseError> {
+        let lease = self
+            .leases
+            .get_mut(&token.id)
+            .filter(|lease| lease.token == token && token.mode == LeaseMode::Shared)
+            .ok_or(LeaseError::StaleToken)?;
+        lease.constructed = true;
+        lease.admission = None;
+        Ok(())
+    }
     fn release(&mut self, token: LeaseToken) -> Result<(), LeaseError> {
+        if self
+            .mutations
+            .values()
+            .any(|v| v.token.profile == token.profile)
+            || self.constructions.values().any(|v| v.permit.lease == token)
+        {
+            return Err(LeaseError::Busy);
+        }
         if self
             .leases
             .get(&token.id)
@@ -280,8 +483,47 @@ impl Registry {
     }
 }
 
-fn inspect(directory: &File, lock: &File, name: &str) -> Result<(), LeaseError> {
-    check_file(lock, 0, "browser profile lease").map_err(|_| LeaseError::UnsafeLock)?;
+fn open_file(directory: &File, name: &str) -> Result<File, LeaseError> {
+    fs::openat(
+        directory,
+        name,
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    )
+    .map(File::from)
+    .map_err(|error| LeaseError::Io(error.to_string()))
+}
+fn open_lock(
+    directory: &File,
+    name: &str,
+    mode: LeaseMode,
+    allow_sentinel: bool,
+) -> Result<File, LeaseError> {
+    let lock = open_file(directory, name)?;
+    inspect_lock(directory, &lock, name, allow_sentinel)?;
+    match mode {
+        LeaseMode::Shared => lock.try_lock_shared(),
+        LeaseMode::Exclusive => lock.try_lock(),
+    }
+    .map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => LeaseError::Busy,
+        std::fs::TryLockError::Error(error) => LeaseError::Io(error.to_string()),
+    })?;
+    inspect_lock(directory, &lock, name, allow_sentinel)?;
+    Ok(lock)
+}
+fn inspect_lock(
+    directory: &File,
+    lock: &File,
+    name: &str,
+    allow_sentinel: bool,
+) -> Result<(), LeaseError> {
+    check_file(
+        lock,
+        journal::QUARANTINE_SENTINEL.len(),
+        "browser profile lease",
+    )
+    .map_err(|_| LeaseError::UnsafeLock)?;
     let descriptor = fs::fstat(lock).map_err(|error| LeaseError::Io(error.to_string()))?;
     let entry = fs::statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
         .map_err(|error| LeaseError::Io(error.to_string()))?;
@@ -291,10 +533,23 @@ fn inspect(directory: &File, lock: &File, name: &str) -> Result<(), LeaseError> 
         || descriptor.st_ino != entry.st_ino
         || descriptor.st_mode != entry.st_mode
         || descriptor.st_uid != entry.st_uid
-        || descriptor.st_size != 0
-        || entry.st_size != 0
+        || descriptor.st_size != entry.st_size
     {
         return Err(LeaseError::UnsafeLock);
+    }
+    if descriptor.st_size != 0 {
+        use std::os::unix::fs::FileExt;
+        let mut bytes = [0; journal::QUARANTINE_SENTINEL.len()];
+        if !allow_sentinel
+            || descriptor.st_size != bytes.len() as i64
+            || lock
+                .read_at(&mut bytes, 0)
+                .map_err(|error| LeaseError::Io(error.to_string()))?
+                != bytes.len()
+            || bytes != journal::QUARANTINE_SENTINEL
+        {
+            return Err(LeaseError::UnsafeLock);
+        }
     }
     Ok(())
 }
@@ -306,8 +561,13 @@ pub(crate) fn is_reserved_name(name: &std::ffi::OsStr) -> bool {
         return false;
     };
     let lower = name.to_ascii_lowercase();
-    lower
-        .strip_prefix("browser-profile-")
-        .and_then(|value| value.strip_suffix(".lock"))
-        .is_some_and(|value| Uuid::parse_str(value).is_ok())
+    lower.strip_prefix("browser-profile-").is_some_and(|value| {
+        [".admission.lock", ".intent.json", ".lock"]
+            .iter()
+            .any(|suffix| {
+                value
+                    .strip_suffix(suffix)
+                    .is_some_and(|uuid| Uuid::parse_str(uuid).is_ok())
+            })
+    })
 }
