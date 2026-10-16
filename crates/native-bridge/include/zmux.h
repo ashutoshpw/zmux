@@ -79,7 +79,8 @@ ZmuxResult zmux_desktop_download(uint64_t desktop, const uint8_t *request, size_
    is <= ZMUX_FILE_MAX_SAVE_FRAME. Ops: attach, reload, save, observe, detach, open.
    A reply buffer is reserved before any work: ZMUX_CAPACITY means nothing ran.
    Replies are frames; attach/reload carry the file bytes (<= 7340032) as the body.
-   Waits at most two seconds (five for save) and MUST run off the UI thread. A nonzero
+   Waits at most two seconds (five for save; about three for open: a one second probe
+   plus a two second native command) and MUST run off the UI thread. A nonzero
    status, a timeout or outcome_unknown=true must NOT be replayed automatically, EXCEPT
    "observe", an idempotent absolute-state write retried until the snapshot agrees.
    Failures are ok:false headers with a stable error.code; a malformed, truncated or

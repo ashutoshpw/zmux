@@ -115,7 +115,7 @@ The body is raw: no JSON escaping and no base64.
 | `save` request frame | header plus a body of at most 2097152 bytes (`ZMUX_FILE_MAX_SAVE_BODY`); frame at most 2113536 (`ZMUX_FILE_MAX_SAVE_FRAME`) |
 | Reply | at most the 8 MiB response cap; the largest file reply is 4 + 16384 + 7340032 |
 | Text / preview read cap | 2097152 / 7340032 bytes |
-| Waits | 2 s for attach, reload, observe, detach and open; 5 s for save |
+| Waits | 2 s for attach, reload, observe and detach; 5 s for save; about 3 s worst case for open (1 s probe of all operands plus the 2 s native command) |
 | Worker | 8 queued jobs plus one running; one operation in flight per tab; stalled after 5 s |
 
 A malformed, truncated, unknown-op, unknown-field, non-`save` body or oversized frame is
