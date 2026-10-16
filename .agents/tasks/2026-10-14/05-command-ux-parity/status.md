@@ -5,6 +5,22 @@
 
 ## Active implementation
 
+- R03 runtime/checkpoint prerequisite committed `dc43608` after all 21 staged
+  source hashes matched the independently reviewed freeze. Isolated `scripts/check`
+  passed 331 tests (one intentional ignored); actual Zellij conformance passed 12.
+  Normal finite completion, semantic input readiness and AppKit activation remain
+  open. Foundation38838984070 and native38838984041 started on that exact SHA.
+- Native smoke continuation committed `ac41162`: independent rendering, remote
+  clipboard, tmux and key checks precede the still-required Save-panel AX gate.
+  Bounded stage receipts and no-prompt preflight retain the actual failure;
+  missing host permission is not a pass. Source reviewed, Python syntax valid;
+  Swift and native execution pending Actions.
+- Browser lifecycle diagnostic `4f6a602` failed its unchanged reopened-profile
+  assertion: localStorage was cleared but cookie `probe=A` remained after the
+  successful public removal callback. The other profile retained its data.
+  Profile deletion remains open; a public store-data clearing correction is
+  being designed and must pass the original isolation assertions.
+
 - Published `12d5c14` passes foundation38836210021 on macOS and Linux, including
   unchanged Chrome DOM coverage. Exact-main selection38836229618 passes18 native
   clipboard cases; independent review binds235 source files, archive/plist,
