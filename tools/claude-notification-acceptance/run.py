@@ -160,7 +160,8 @@ time.sleep(30)
                 deadline = time.monotonic() + 10
                 while plugin.exists() and time.monotonic() < deadline:
                     time.sleep(.05)
-                if plugin.exists():
+                cleaned = not plugin.exists()
+                if not cleaned:
                     # Only this finite fixture's known process IDs and private
                     # lease filenames; no command arguments or file contents.
                     identity = json.loads((home / 'provider-process.json').read_text())
@@ -172,14 +173,26 @@ time.sleep(30)
                     states = subprocess.run(['ps','-p',','.join(map(str,sorted(ids))),
                                              '-o','pid=,ppid=,pgid=,stat=,comm='],
                                             capture_output=True,text=True,timeout=3,check=False)
+                    masks = subprocess.run(['ps','-p',','.join(map(str,sorted(ids))),
+                                            '-o','pid=,sig=,sigignore=,sigcatch='],
+                                           capture_output=True,text=True,timeout=3,check=False)
+                    result = library.zmux_desktop_snapshot(desktop.value, 0)
+                    runtime = {'status':result.status}
+                    if result.status == 0 and result.value:
+                        state = consume(result.value)
+                        runtime.update({key:state.get(key) for key in
+                                        ('cleanup_error','last_error','pending_launches')})
                     print(json.dumps({'fixture_cleanup_failure':True,'provider':identity,
                                       'local_ssh_pid':local_ssh,
                                       'lease_path':str(plugin.parent),
                                       'lease_entries':[p.relative_to(plugin.parent).as_posix()
                                                        for p in islice(plugin.parent.rglob('*'),32)],
                                       'owned_process_states':states.stdout[:4000],
+                                      'owned_signal_masks':masks.stdout[:4000],
+                                      'signal_probe_error':masks.stderr[:500],
+                                      'desktop_cleanup':runtime,
                                       'process_probe_error':states.stderr[:500]}),file=sys.stderr)
-                assert not plugin.exists(), 'Remote session hook directory survived SSH close'
+                assert cleaned, 'Remote session hook directory survived SSH close'
                 print(json.dumps({'authenticated_ssh':True, 'plain_claude_plugin':True,
                                   'via_tmux':args.via_tmux,
                                   'completion_while_provider_alive':True, 'exact_surface_attention':True,
