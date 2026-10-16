@@ -1,7 +1,7 @@
 # macOS menu bar parity correction
 
-**Audited:** 2026-10-16. **State:** status/attention implementation in progress;
-packaged native acceptance pending. Advanced action owners remain open.
+**Audited:** 2026-10-16. **State:** status/attention implementation accepted in the
+focused packaged native suite at `38bfc72`. Advanced action owners remain open.
 Reference: read-only cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
 Audit baseline: zmux `8258ccb` (application source unchanged from `cdbb392`).
 
@@ -190,3 +190,35 @@ Waits are asynchronous and bounded to three seconds; timeout never automatically
 replays the request. A current native-window token/epoch gates post-activation
 presentation, and shared shutdown cancels that presentation. Notifications and
 status Show share this path. The same hidden-window assertion remains required.
+
+## Accepted packaged status/attention slice
+
+Run [38912740671](https://github.com/ashutoshpw/zmux/actions/runs/38912740671)
+at `38bfc729ac0ecdac2e23ef3ba5c3bee113b35731` succeeds. Both arm64/x86_64 Swift
+source slices pass; the actual arm64 package passes all nine existing sidebar
+flags and ten status-menu flags: actual system status-button/menu opening,
+workspace context read/clear/UUID clipboard, captured read/clear preserving a new
+arrival, exact other-window preview opening, inbox presentation, minimized-window
+restoration, IOKit acquire/release, one application status owner and actual
+hidden-application restoration with original child identities. The subsequent
+shared shutdown verifies status-item/assertion removal before its physical cleanup
+receipt. The external runner confirms the original app PID9350 is absent and its
+owned socket is removed; its launch nonce and source SHA match the app receipt.
+
+Parent downloaded artifact12051123519, checked ZIP integrity, its published
+checksum, lowercase `zmux` display name, embedded source SHA and equality of the
+archived app executable with the actually tested process receipt. Both sidebar
+PNGs and the actual compact native status-button PNG were inspected.
+
+- Package: `zmux-dev-arm64-38bfc72.zip`.
+- ZIP SHA256: `314a9640f63bf79c9bac37de4de6106fc1b1061e023e96ebe73a721055ed3f88`.
+- Tested executable SHA256: `eb9b9d0e997e0d4694c73f835ecfa6e9cd898245adfce382414d13f94b82721a`.
+- Evidence retained locally under `/tmp/zmux-status-menu-38912740671/`.
+- Full portable tests/strict Clippy/notices/both foreign ABI checks pass with
+  `RUST_TEST_THREADS=2`; no assertions or deadlines were relaxed.
+
+This accepts the implemented status/attention slice and its named context actions.
+It does not accept full cmux parity, authenticated cloud/VM behavior, advanced
+status-menu actions, menu-bar-only preferences, an OS compositor screenshot of
+the entire open menu, Intel runtime or minimum-OS runtime. The regular final-close
+save/quit policy and the user's deferred Save Accessibility test remain unchanged.

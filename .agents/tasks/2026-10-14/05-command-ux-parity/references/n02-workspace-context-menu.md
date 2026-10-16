@@ -1,8 +1,9 @@
 # Workspace context menu parity correction
 
-**Audited:** 2026-10-16. **State:** incomplete; audit and acceptance specification only.
+**Audited:** 2026-10-16. **State:** partial; named attention/UUID/ordering actions
+implemented, broader menu behavior remains incomplete.
 Reference: read-only cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
-Current zmux: `8258ccb` (application source unchanged from `cdbb392`).
+Audit baseline: zmux `8258ccb` (application source unchanged from `cdbb392`).
 
 ## Delivery failure
 
@@ -156,3 +157,11 @@ selectors on an inactive workspace while another window retains unread attention
 Hosted execution remains pending. Pinning, mute/manual-unread, descriptions/colors,
 empty groups, batch closing, deep links, Finder and other open rows above remain
 unfinished; these additions do not close the whole context-menu or V01 gate.
+
+Subsequent native acceptance: run38912740671 at `38bfc72` passes the actual
+inactive-workspace read/clear/UUID clipboard actions, preserving the selected
+workspace and another real window's unread attention. See the
+[N03 receipt](n03-macos-menu-bar.md#accepted-packaged-statusattention-slice) for
+package/source/executable verification and the complete focused native scope.
+The remaining CM rows above stay open; conditional controls are not claimed as
+the complete frozen menu.

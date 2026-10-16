@@ -5,6 +5,17 @@
 
 ## Active implementation
 
+- Native status/attention slice accepted at `38bfc72`, run38912740671: both Swift
+  slices and all19 sidebar/status flags pass, including actual system menu opening,
+  captured attention mutations, inactive-workspace context actions, cross-window
+  preview opening, minimized/hidden app recovery and keep-awake release. Status
+  removal, physical cleanup, exact app PID9350 absence and owned socket removal pass.
+  Parent verified downloaded artifact12051123519, ZIP checksum314a9640...ed3f88,
+  lowercase name/source SHA and equality with the tested executable eb9b9d0e...82721a.
+  N03 records the exact receipt. Full portable checks pass at reduced concurrency;
+  broader CM/advanced menu and V01 parity gates remain open. Universal workflow
+  38912733102 remains separate from this accepted arm64 runtime scope.
+
 - Activation probe `38911884391` confirms cooperative/menu activation unhides but
   does not gain active/key state; NSRunningApplication returns false. Launch
   Services controls confirm the same PID and active/key state. Shared native
