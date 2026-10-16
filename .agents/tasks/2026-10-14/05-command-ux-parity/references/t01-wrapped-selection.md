@@ -82,17 +82,17 @@ The parent owns current-main publication and other active hosted workflows.
 
 ## Status
 
-In progress. Native intended red is independently accepted at8e96b17/run38837076163;
-all18 original cases passed before the19th exact wrapped-copy mismatch. The
-production metadata/copy repair and expanded24-case fixture are published on
-diagnostic5a71574, with independent production and fixture source reviews accepted.
-Run38839319267 compiled the actual app but stopped at the standalone decoder
-probe compilation boundary before any native clipboard execution. The harness
-repair now compiles the actual production model dependency closure and links the
-exact archived app bridge; its hosted rerun remains pending. Focused11 real adapter tests, strict Clippy, actual session history and
-six-phase portable PTY transport pass. Actual production Swift decoder compile,
-24 native clipboard cases/shared shutdown and parent current-main integration
-remain pending; no green is inferred from source or Linux checks.
+Diagnostic implementation accepted. Native intended red is independently accepted
+at8e96b17/run38837076163; all18 original cases passed before the19th exact
+wrapped-copy mismatch. The production metadata/copy repair and expanded24-case
+fixture pass actual native run38840412891 at353a97d, including production decoder
+compile/contracts,24 exact UTF8 clipboard cases and awaited shared shutdown.
+Independent source and artifact reviews pass. Focused11 real adapter tests, strict
+Clippy, actual session history and six-phase portable PTY transport also pass.
+The intermediate5a71574 run38839319267 was an actual app build success followed
+by a standalone harness dependency failure; corrected actual dependency linkage
+is included in353a97d. Parent current-main integration/exact-main acceptance
+remain pending. Optional exporter and broader selection gaps remain below.
 
 The parent published-main12d5c14 run38836229618 separately passes the existing18
 visible-selection cases, with exact235-source-copy artifact review. That does not
@@ -153,8 +153,9 @@ extent metadata within its resource contract. Current optional RawFrame does not
 Do not claim that gap, persistent selection anchors, autoscroll, wrapped-word
 expansion, rectangular selection, copy mode or mouse protocols closed here.
 
-The slice remains in progress pending the repaired harness hosted compile/contracts
-and actual native24-case green/shared shutdown. Parent current-main publication remains separate.
+The diagnostic slice is accepted after actual decoder/contracts and native24-case
+green/shared shutdown. Parent current-main publication and exact-main acceptance
+remain separate.
 
 
 ## First repair run: harness dependency failure
@@ -179,3 +180,43 @@ with an absolute rpath, verifies that bridge against the archived app, and recor
 the explicit compiled input hash subset plus bridge hash. All dependency sources
 were already in the retained all-app/crates inventory. No fake model definitions
 or copied decoder are introduced.
+
+
+## Accepted corrected native wrap green
+
+Run38840412891 at353a97d63fd05ea765500d829df896978f174813 passes the actual
+app build (278.034s), real production decoder dependency compile (17.9s), decoder
+contracts (0.062s), and actual native selection (8.045s), all exit0 without timeout.
+The decoder accepts valid/missing/null metadata and rejects all five independent
+malformed count/extent/grid-bound inputs. The probe's ten actual source/header
+inputs are retained and hashed; its linked bridge equals the actual archived app
+bridge. No production decoder or dependent type is replaced.
+
+All24 exact UTF8 clipboard cases pass through actual mounted view events and menu
+Copy. The unchanged intended-red19th case now retains99 X characters, U+0020 and
+EDGE with no inserted LF. Full-edge wide, combining/emoji, hard/blank and actual
+parked-history cases also pass. Actual app/activationPID14446 and childPID14451
+match parent/nonce across all six raw kernel phase observations; requested,
+viewport and kernel are31x100, and active/visible/key/terminal responder are true.
+Authoritative phase rows retain wraps and written extents; parked offset is8.
+The wide-margin policy case explicitly preserves false/99+3 written extents and
+hard LF. That engine-policy gap remains open.
+
+All226 retained sources match Git353a97d exactly; archive plist/source agree.
+Artifact12021162840 ZIP SHA256
+`e67b5579bfacfd6fbbd2985dd4acd3d58a253092dc8e334c6eefde1892d9cf2e`.
+App archive SHA256
+`e6f63415bc3d4d69be0dfec33a5cddfc91b924d35917c5ffea56378d62702444`.
+Actual archived bridge SHA256
+`1e8608e35006910b05b4f35172348538f68bdd321d474d90139bb1661aacf447`.
+Child source/artifact audit SHA256
+`62ea13da90f8138741f1db9538c6033393453372f9dfa4b571728481ead86822`.
+Independent artifact review SHA256
+`59c8bb2c496ad10f23a4ce5d2584a63b080d2d0a4f47cf111bce80e4407b2702`.
+The earlier narrow harness source review SHA256 is
+`1dfb988f1a434d0afb1dd74b34e0fcee217745fd831a4ce805e65f108e3cce8b`.
+
+Complete is saved after awaited actual shared shutdown and scoped owned app-group
+cleanup. No separate final PTY-child absence ps sample was retained. No physical
+pointer, VoiceOver, optional-engine metadata or broader full-parity claim follows.
+The parent owns current-main integration and exact-main validation.
