@@ -588,6 +588,11 @@ impl SaveFailure {
     }
 }
 
+/// On-disk size of a save: the body plus the UTF-8 BOM when the baseline had one.
+pub fn saved_size(body_len: usize, bom: bool) -> usize {
+    body_len + if bom { UTF8_BOM.len() } else { 0 }
+}
+
 /// Atomic same-directory save (design D13). `fence` is consulted after the temporary file is
 /// durable and immediately before the rename, the last point where a write can still be undone.
 pub fn save(
@@ -599,7 +604,9 @@ pub fn save(
     force: bool,
     fence: &dyn Fn() -> bool,
 ) -> Result<SaveSuccess, Box<SaveFailure>> {
-    if body.len() > MAX_TEXT_BYTES {
+    // The cap applies to the bytes that land on disk: a file the service writes must stay one
+    // it can read back, so a preserved BOM counts against the same limit as the body.
+    if saved_size(body.len(), bom) > MAX_TEXT_BYTES {
         return Err(SaveFailure::plain(too_large(MAX_TEXT_BYTES)));
     }
     validate_text(body).map_err(SaveFailure::plain)?;

@@ -280,3 +280,32 @@ bridge tests is handled by serialising those tests (the registry intentionally u
   success and `generation: 0`; nothing is adopted into a vanished entry.
 - `create_desktop_with_options` is a `#[doc(hidden)]` Rust-only seam (not a C export) so the bridge
   tests can inject `FilesConfig`; the foreign ABI offers only the configured constructors.
+
+### S2 fix round (review findings, all verified valid)
+
+1. Reload (or attach) completing after the view detached re-bound the detached host. Fixed with a
+   per-entry `detaches` counter bumped by `detach` and captured when a load is admitted; the worker
+   discards the result (receipt `failed` / `stale_owner`, in-flight cleared, nothing adopted) when
+   the counter moved. This covers a timed-out reload as well. Tests:
+   `a_reload_that_outlives_a_detach_never_rebinds_the_old_view` and
+   `a_timed_out_reload_finishing_after_detach_does_not_rebind_the_old_view`.
+2. A queued save whose owner detached returned `stale_owner` without clearing `in_flight`, wedging
+   the tab as `busy` with a `pending` receipt. The early-refusal path now clears `in_flight` and
+   records `failed` / `stale_owner`. Test:
+   `a_save_queued_behind_work_then_detached_releases_the_tab_and_never_writes`.
+3. The 2 MiB cap ignored the preserved UTF-8 BOM, so a save could produce a file `load` refuses.
+   The cap now applies to the on-disk size (`file_io::saved_size`), checked in `file_io::save` and
+   at service admission using the baseline's BOM flag (`too_large`, nothing written). Tests:
+   `a_preserved_bom_counts_against_the_save_cap_so_the_file_stays_readable` (file_io) and
+   `a_preserved_bom_counts_against_the_save_cap_end_to_end` (Desktop).
+4. Added the mandated `retried_observe_after_stale_owner_is_not_applied`: after detach, for a
+   different view's later dirty bit, for forged epoch/namespace owners and after surface close,
+   stale-owner observes are refused with `stale_owner` and change neither the dirty bit nor the
+   revision. Deviation: a queued-then-superseded observe cannot be staged, because detach and
+   close travel through the same FIFO executor queue as observe, so the test drives the retries
+   after each supersession instead. The executor re-check (`check_owner` in `file_host_event`)
+   remains as defence in depth.
+
+Red/green: with the `files.rs` source fix reverted, the three detach tests fail (27 pass, 3 fail);
+restored, all 30 `tests/files.rs` tests pass, repeatedly. Full `scripts/check` result recorded in
+the fix commit message. Swift/macOS gates remain UNAVAILABLE as above.
