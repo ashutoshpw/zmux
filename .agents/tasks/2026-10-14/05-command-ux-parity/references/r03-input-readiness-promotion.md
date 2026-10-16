@@ -14,11 +14,14 @@ immutable at `9a42f8510d84bb8b757e71cba1ff8ca45d134b5e`.
 The optional `retain_readiness_package` workflow input is false by default. True
 requires explicit readiness and package mode plus both reviewed source-inventory
 and notice-policy hashes; an invalid router mode fails descriptively and cannot
-run the legacy package job. The legacy job body and existing helpers/pin remain
-unchanged. The producer, source-built plugin builder, Wasmtime validator, four
+run the legacy package job. The legacy job body, generic package helpers and retained pin remain
+unchanged. The shared owner command selection repair is described below. The producer, source-built plugin builder, Wasmtime validator, four
 compiled readiness source hashes and all 19 consumer freeze hashes are unchanged.
-The source inventory remains
-`8047ccc7c75929c94c5551ef600081fd27eea501b03ece17785af02f095ffb51`.
+The source inventory is refreshed for the exact package/helper source inputs:
+`c5b795096378166585245b525d572007d02e1aad124157d12979dd7cbdf5cdb8`.
+All18 input digests are checked; protocol and four compiled upstream hashes stay
+unchanged. The first source freeze at fdfb786 is superseded, as it omitted this
+required refresh and was never dispatched.
 
 `package-patched.py` retains its successful producer/full public owner/actual
 silent owner and complete source/legal/plugin gates. Readiness non-prepare mode
@@ -55,3 +58,23 @@ strict workspace Clippy, notices and both C ABI owners passed. Dedicated target:
 `377d944ebf740628318af8ee62bfc6ca0cb498108c3bc82ac313c1f6d2722776`. No new producer dispatch has
 occurred. Current prepare-only evidence review and parent review of the exact
 promotion source freeze must pass before another producer run.
+
+## Narrow owner enumeration repair
+
+The [first combined Darwin attempt](r03-input-readiness-package-darwin.md)
+passed all actual runtime tests but correctly failed strict owner verification
+on an ignored reexec fixture in the broad outer filter. `owner_contract.py` now
+owns one command list for both `run-patched-owner.py` and `native-package.py`.
+Only the exact named fixture entrypoint is excluded from outer enumeration;
+real parent tests still execute it with `--exact --ignored`. The strict verifier
+function is unchanged and its required behavior list now names all five actual
+readiness protocol-parent tests. Focused execution of the shared production
+command passed14 actual tests, zero ignored. Frozen consumer source is unchanged.
+The parent approved a fresh combined chain after review of this repaired source
+freeze, avoiding a duplicate full producer run solely for the enumeration error.
+No new producer dispatch has occurred.
+
+Repaired source repository check passed again in the same sequential dedicated
+target:362 tests/70 groups, three explicit subprocess fixtures, strict Clippy,
+notices and both C ABI owners. Log SHA-256:
+`c2cbcfd59770d98cd88f62351f3473af1eb4cc4385f9a2d64920e0e2f8a07a97`.

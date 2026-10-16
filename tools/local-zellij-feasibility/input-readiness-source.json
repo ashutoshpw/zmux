@@ -13,15 +13,15 @@
     "run.py": "7ff02fccfa2fa6db01157eb0f6ff7bf7275cca1c0235ccb7c132ad89df8f7f46",
     "public_identity.c": "81bbf6615dabfafeca27a1047c0405920805d26cd74c3119b936c47f43bd3c73",
     "pty_exec.c": "1e5e35935698b9b114a22ee01d2c90055fb470bbb2dd475b7081d8b62b37cb5c",
-    "package-patched.py": "3ad1873051dc47c7b9931956953cce581ed3f04adc2496b450e1ca936eb1a15d",
-    "readiness_package.py": "ad242ce09b3dc2fcc1ac79dc567ecbf6f774c3071e0f3cc8bc616d0088e0b147",
-    "check-readiness-package-gates.py": "5fd211930a70228131105bf23481e29d8b2d9ffac677dc4ef3a7606accf71105",
+    "package-patched.py": "4602b4631d777f5052b305b29d48755c660650d783e43ef97b82e064c5c71b62",
+    "readiness_package.py": "14285ac398458627ef2221c0d240ed8fe2c1a2160c04267cd49aa314e5d7bdc1",
+    "check-readiness-package-gates.py": "3c585ad5c90da43870ee45c0cad62c48f96f4bd2adca830da2636fc155c07ca7",
     "package_sources.py": "aef5c98b00b922fbc31d3da92658b7af3e96d3c186890564df308e8e26976086",
     "package_notices.py": "ce992d2ed10c689a38f48f731227560e6cb063401312fcfc5bd67b9a1341c5fe",
     "package_platform.py": "07052e01eae091dfed5df4a42de3c0b184c7948c9f9c1774712f5d4a8318d08b",
     "package_build.py": "71e6f0808aca41b2e0265972378fe88e5c148e8f022e358aaa5b9419233ddc66",
-    "owner_contract.py": "468b433741e1898107cfcd712537be8ee737a4cbdb34bebed393ddf8ad9247a8",
-    "run-patched-owner.py": "cfce71e17002a5b37c790592f70f963d5b0e7b95bed3025a0ed1c3b75a53970f",
+    "owner_contract.py": "c09b07afdadf541767ca48cb1529830d554fffd729cf5f034cc4374e797526b7",
+    "run-patched-owner.py": "c264504cf5a80754e6e14c1dfb6fc35fa23a9e8400789ba2d188d339b4b3d829",
     "notice-policy.json": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79"
   },
   "upstream_files_sha256": {
@@ -32,5 +32,5 @@
   },
   "dependency_changes": false,
   "default_enabled": false,
-  "scope": "source producer/reporter/prepare-only package and actual frontend controls; no core/runtime, legacy admission or native/default activation"
+  "scope": "source producer/reporter/diagnostic readiness package and actual frontend controls; no core/runtime, legacy admission or native/default activation"
 }

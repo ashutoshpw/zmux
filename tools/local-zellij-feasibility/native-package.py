@@ -9,7 +9,7 @@ import platform
 import shutil
 import sys
 
-from owner_contract import source_hashes, verify_logs
+from owner_contract import owner_checks, source_hashes, verify_logs
 from package_admission import (MAX_ARCHIVE, Rejected, accept, digest, native_target,
                                pin, read_file, unpack_download, verify_download, verify_payload)
 
@@ -110,11 +110,7 @@ def main():
         environment["ZMUX_TEST_ZELLIJ_BIN"] = str(binary)
         # Reuse the actual production-owner suites and their shared semantic
         # verifier. The CLI is Cargo-built; Zellij is the final app-bundled path.
-        checks = [
-            ["cargo", "test", "--locked", "-p", "zmux-session-runtime", "--test", "child", "--test", "lifecycle", "--test", "shutdown", "--", "--nocapture"],
-            ["cargo", "test", "--locked", "-p", "zmux-remote-runtime", "--lib", "local_zellij", "--", "--nocapture"],
-            ["cargo", "test", "--locked", "-p", "zmux", "--features", "local-zellij-conformance", "--test", "local_zellij", "--test", "local_zellij_owner", "--", "--nocapture"],
-        ]
+        checks = owner_checks()
         for index, command in enumerate(checks):
             run(command, f"owner-{index}", 300)
         receipt["executed_owner_contract"] = verify_logs(output)

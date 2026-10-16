@@ -126,12 +126,15 @@ a user-facing artifact remains gated on the complete parity acceptance.
 - [x] Integrate frozen consumer and reviewed prepare-only package tooling.
 - [x] Run combined repository check and publish exact combined head.
 - [x] Dispatch one authorized prepare-only Darwin run at `9a42f851`.
-- [ ] Review run38852664400 source/evidence and exact native/package receipts.
+- [x] Review [run38852664400 source/evidence](r03-input-readiness-package-darwin.md); actual consumer passed, wrapper selection failed, package not run.
 - [x] Implement isolated [promotion/finite-retention source](r03-input-readiness-promotion.md).
 - [ ] Freeze promotion source and current prepare-only evidence for review.
 - [ ] Produce and independently review exact promoted readiness package.
 - [ ] Implement one atomic opt-in admission/consumer/native integration branch.
 - [ ] Prove final relocated bundle and actual AppKit behaviors before landing.
 
-The prepare-only run is still compiling. No later producer dispatch, promotion,
-retained executable, tuple replacement or native activation has occurred.
+The prepare-only run failed only at strict owner enumeration of an ignored
+reexec fixture; all actual consumer tests passed. The parent approved a narrow
+shared selection repair and one fresh combined chain after exact source review.
+No later producer dispatch, retained executable, tuple replacement or native
+activation has occurred.
