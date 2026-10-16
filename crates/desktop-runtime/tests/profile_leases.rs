@@ -6,103 +6,29 @@ use std::{
     process::{Child, Command, Stdio},
     sync::mpsc,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use uuid::Uuid;
 use zmux_desktop_runtime::{
-    persistence::{OperationId, PersistenceError, PersistenceOutcome, PersistenceWorker},
+    persistence::PersistenceError,
     profile_leases::{
-        LeaseError, LeaseMode, LeaseOwner, LeaseService, MutationRequest,
+        LeaseError, LeaseMode, LeaseOwner, LeaseService, MutationRequest, NativeMutationOutcome,
         journal::{MutationKind, MutationPhase, QUARANTINE_SENTINEL},
     },
 };
-use zmux_workspace_core::{Action, RestoreLimits, SessionDocument, WorkspaceStore};
+use zmux_workspace_core::{Action, SessionDocument, WorkspaceStore};
 
-struct Fixture {
-    root: PathBuf,
-    worker: Option<PersistenceWorker>,
-    profiles: [Uuid; 2],
-}
-impl Fixture {
-    fn new() -> Self {
-        let root = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("zmux-profile-leases-{}", Uuid::new_v4()));
-        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
-        let worker = PersistenceWorker::start(
-            root.join("state"),
-            RestoreLimits {
-                terminals: 8,
-                browsers: 4,
-            },
-        )
-        .unwrap();
-        let PersistenceOutcome::Profiles(catalog) = wait(
-            &worker,
-            worker.submit_profiles(Some("Work".into())).unwrap(),
-        )
-        .unwrap() else {
-            panic!("missing catalog")
-        };
-        let first = catalog.profiles[0].id;
-        let PersistenceOutcome::Profiles(catalog) = wait(
-            &worker,
-            worker.submit_profiles(Some("Other".into())).unwrap(),
-        )
-        .unwrap() else {
-            panic!("missing catalog")
-        };
-        Self {
-            root,
-            worker: Some(worker),
-            profiles: [first, catalog.profiles[1].id],
-        }
-    }
-    fn state(&self) -> PathBuf {
-        self.root.join("state")
-    }
-    fn lease_root(&self) -> PathBuf {
-        self.root.join("leases")
-    }
-    fn path(&self) -> PathBuf {
-        self.lease_root()
-            .join(format!("browser-profile-{}.lock", self.profiles[0]))
-    }
-    fn stop_catalog(&mut self) {
-        if let Some(mut worker) = self.worker.take() {
-            worker
-                .join_until(Instant::now() + Duration::from_secs(2))
-                .unwrap();
-        }
-    }
-}
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        self.stop_catalog();
-        fs::remove_dir_all(&self.root).unwrap();
-    }
-}
+#[path = "support/profile_fixture.rs"]
+mod profile_fixture;
+use profile_fixture::{Fixture, wait};
+
 fn owner() -> LeaseOwner {
     LeaseOwner {
         epoch: Uuid::new_v4(),
         store: Uuid::new_v4(),
     }
 }
-fn wait(
-    worker: &PersistenceWorker,
-    id: OperationId,
-) -> Result<PersistenceOutcome, PersistenceError> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(value) = worker.try_completion().unwrap() {
-            assert_eq!(value.operation_id, id);
-            return value.result;
-        }
-        assert!(Instant::now() < deadline, "catalog I/O did not complete");
-        thread::sleep(Duration::from_millis(2));
-    }
-}
+
 fn document() -> SessionDocument {
     let mut store = WorkspaceStore::with_identity_namespace(Uuid::new_v4());
     store
@@ -565,7 +491,7 @@ fn exact_native_phases_precede_catalog_commit_and_terminal_sentinel_release() {
             Err(LeaseError::StaleToken)
         ));
         assert!(matches!(
-            service.mutation_finish(token, None),
+            service.mutation_finish(token, NativeMutationOutcome::Completed),
             Err(LeaseError::StaleToken)
         ));
         for phase in [
@@ -575,6 +501,18 @@ fn exact_native_phases_precede_catalog_commit_and_terminal_sentinel_release() {
             MutationPhase::RemoveCompleted,
         ] {
             service.mutation_advance(token, phase).unwrap();
+            if phase == MutationPhase::ClearDispatched {
+                assert!(matches!(
+                    service.mutation_finish(
+                        token,
+                        NativeMutationOutcome::AbortedBeforeClear {
+                            message: "generic timeout after dispatch".into()
+                        }
+                    ),
+                    Err(LeaseError::StaleToken)
+                ));
+                assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
+            }
             assert_eq!(fs::read(&path).unwrap(), before);
             assert_eq!(
                 service
@@ -596,7 +534,9 @@ fn exact_native_phases_precede_catalog_commit_and_terminal_sentinel_release() {
                 .unwrap(),
         )
         .unwrap();
-        service.mutation_finish(token, None).unwrap();
+        service
+            .mutation_finish(token, NativeMutationOutcome::Completed)
+            .unwrap();
         let catalog: zmux_desktop_runtime::profiles::Catalog =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
@@ -754,7 +694,12 @@ fn known_partial_failure_restores_shared_ownership_and_catalog_retry_never_repla
         service.mutation_advance(first, phase).unwrap();
     }
     service
-        .mutation_finish(first, Some("known namespace removal failure".into()))
+        .mutation_finish(
+            first,
+            NativeMutationOutcome::RemovalFailed {
+                message: "known namespace removal failure".into(),
+            },
+        )
         .unwrap();
     assert_eq!(
         service
@@ -797,7 +742,7 @@ fn known_partial_failure_restores_shared_ownership_and_catalog_retry_never_repla
         .create(fixture.state())
         .unwrap();
     assert!(matches!(
-        service.mutation_finish(second, None),
+        service.mutation_finish(second, NativeMutationOutcome::Completed),
         Err(LeaseError::UnsafeIntent)
     ));
     assert_eq!(
@@ -815,7 +760,9 @@ fn known_partial_failure_restores_shared_ownership_and_catalog_retry_never_repla
     ));
     fs::remove_dir(fixture.state()).unwrap();
     fs::rename(original, fixture.state()).unwrap();
-    service.mutation_finish(second, None).unwrap();
+    service
+        .mutation_finish(second, NativeMutationOutcome::Completed)
+        .unwrap();
     assert_eq!(
         service
             .intent_status(second.profile, second.intent)

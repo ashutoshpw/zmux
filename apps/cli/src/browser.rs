@@ -31,6 +31,13 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                     },
                 }))
             }
+            ["profiles", action @ ("clear" | "delete"), profile] => Ok(Parsed::BrowserProfile(ControlCommand::BrowserProfiles {
+                action: if *action == "clear" { zmux_desktop_runtime::profiles::ProfileCommand::Clear { profile: (*profile).into() } } else { zmux_desktop_runtime::profiles::ProfileCommand::Delete { profile: (*profile).into() } },
+            })),
+            ["profiles", "status", profile, intent] => Ok(Parsed::App(ControlCommand::BrowserProfileIntentStatus {
+                profile: profile.parse().map_err(|_| CliError("profile status requires the original profile UUID".into()))?,
+                intent: intent.parse().map_err(|_| CliError("profile status requires the original intent UUID".into()))?,
+            })),
             ["profiles", "rename", profile, name] => {
                 zmux_desktop_runtime::profiles::validate_name(name).map_err(CliError)?;
                 Ok(Parsed::BrowserProfile(ControlCommand::BrowserProfiles {
@@ -41,7 +48,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 }))
             }
             _ => Err(CliError(
-                "browser profiles requires list, add NAME, or rename NAME_OR_UUID NEW_NAME".into(),
+                "browser profiles requires list, add NAME, rename NAME_OR_UUID NEW_NAME, clear/delete NAME_OR_UUID, or status PROFILE_UUID INTENT_UUID".into(),
             )),
         };
     }
@@ -795,6 +802,9 @@ pub(super) fn run_profile(
         }
         match receipt["state"].as_str() {
             Some("completed") => {
+                if receipt.get("intent").is_some_and(|value| !value.is_null()) {
+                    return Ok(receipt);
+                }
                 return receipt
                     .get("profile")
                     .filter(|value| !value.is_null())
@@ -812,10 +822,22 @@ pub(super) fn run_profile(
             Some("pending") => {}
             _ => return Err(CliError("invalid profile receipt state".into())),
         }
-        let budget = remaining(options, deadline, Some(id))?;
+        let recovery = |error: CliError| {
+            if let (Some(profile), Some(intent)) = (
+                receipt["profile"]["id"].as_str(),
+                receipt["intent"].as_str(),
+            ) {
+                CliError(format!(
+                    "{error}; original profile intent {intent}; query `zmux browser profiles status {profile} {intent}`; do not retry or reopen this profile"
+                ))
+            } else {
+                error
+            }
+        };
+        let budget = remaining(options, deadline, Some(id)).map_err(recovery)?;
         thread::sleep(Duration::from_millis(20).min(budget.timeout));
         receipt = response_result(request(
-            &remaining(options, deadline, Some(id))?,
+            &remaining(options, deadline, Some(id)).map_err(recovery)?,
             ControlCommand::BrowserProfilesStatus {
                 operation_id: Some(id),
                 epoch: Some(owner),

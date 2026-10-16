@@ -187,6 +187,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             while !Task.isCancelled {
                 guard let self, self.shutdownTask == nil else { break }
                 do {
+                    if self.snapshot?.browserProfiles.enabled == true {
+                        try await self.browserProfileStores.poll(downloadsBusy: { self.browserDownloads.isProfileBusy($0) }, modelBusy: { profile in
+                            self.snapshot?.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.contains { $0.browserProfileId == profile } ?? true
+                        }, reportError: { [weak self] in self?.reportError($0) })
+                    }
                     if self.browserEventsNeedRecovery {
                         // A wakeup, not a second sender: recovery must progress even
                         // when the last lifecycle event was the one that failed.
@@ -277,7 +282,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         shutdownImagesReleased = true
                     }
                 }
-                if downloadsComplete, shutdownImagesReleased, !nativeAcknowledged {
+                browserProfileStores.cancelUnused(activeOwners: [], reportError: { [weak self] in self?.reportError($0) })
+                if downloadsComplete, browserProfileStores.cleanupComplete, shutdownImagesReleased, !nativeAcknowledged {
                     try await bridge.nativeCleanupComplete(ticket: report.ticket)
                     nativeAcknowledged = true
                 }
@@ -394,6 +400,12 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             browserEpoch = snapshot.browserEpoch
         }
         browserDownloads.update(snapshot)
+        browserProfileStores.cancelUnused(activeOwners: Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { surface in
+            surface.browserProfileId.map { BrowserProfileStores.ConstructionOwner(namespace: snapshot.model.identityNamespace, browserEpoch: snapshot.browserEpoch, surface: surface.id, profile: $0) }
+        }), refresh: { [weak self] in
+            guard let self, self.shutdownTask == nil, let current = self.snapshot else { return }
+            do { try self.reconcile(current) } catch { self.reportError("Unused profile constructor reconcile: " + error.localizedDescription) }
+        }, reportError: { [weak self] in self?.reportError($0) })
         // Keep the bounded browser set mounted even when its tabs are hidden so
         // automation targets never need to change the user's selection or focus.
         for surface in snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap({ $0.surfaces }) where surface.kind == "browser" {
@@ -407,19 +419,28 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         reportError("Browser profile is unavailable; its data store was not replaced")
                         continue
                     }
-                    guard let acquired = browserProfileStores.store(for: profile, isNeeded: { [weak self] in
+                    guard let acquired = browserProfileStores.store(for: profile, surface: surface.id, namespace: snapshot.model.identityNamespace, browserEpoch: snapshot.browserEpoch, isNeeded: { [weak self] in
                         guard let self, self.shutdownTask == nil, let current = self.snapshot,
+                              current.model.identityNamespace == snapshot.model.identityNamespace, current.browserEpoch == snapshot.browserEpoch,
                               current.browserProfiles.profiles.contains(where: { $0.id == profile }) else { return false }
                         return current.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
-                            .contains { $0.kind == "browser" && $0.browserProfileId == profile }
+                            .contains { $0.id == surface.id && $0.kind == "browser" && $0.browserProfileId == profile }
                     }, refresh: { [weak self] in
                         guard let self, self.shutdownTask == nil, let current = self.snapshot else { return }
                         do { try self.reconcile(current) }
                         catch { self.reportError(error.localizedDescription) }
                     }, reportError: { [weak self] message in self?.reportError(message) }) else { continue }
-                    dataStore = acquired
-                } else { dataStore = .nonPersistent() }
-                view = BrowserView(surface: surface, owner: self, dataStore: dataStore)
+                    dataStore = acquired.store
+                    view = BrowserView(surface: surface, owner: self, dataStore: dataStore)
+                    browserProfileStores.constructed(acquired, profile: profile, view: view.webView,
+                        refresh: { [weak self] in
+                            guard let self, self.shutdownTask == nil, let current = self.snapshot else { return }
+                            do { try self.reconcile(current) } catch { self.reportError("Profile construction reconcile: " + error.localizedDescription) }
+                        }, reportError: { [weak self] in self?.reportError($0) })
+                } else {
+                    dataStore = .nonPersistent()
+                    view = BrowserView(surface: surface, owner: self, dataStore: dataStore)
+                }
                 view.frame = NSRect(x: 0, y: 0, width: min(1920, max(640, mainWindowHost.browserViewportSize.width)), height: min(1200, max(480, mainWindowHost.browserViewportSize.height)))
                 view.layoutSubtreeIfNeeded()
             }

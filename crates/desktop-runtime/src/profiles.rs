@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    sync::Arc,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -126,6 +127,7 @@ pub enum ProfileCommand {
 pub struct ProfileReceipt {
     pub epoch: Uuid,
     pub operation_id: u64,
+    pub intent: Option<Uuid>,
     pub state: String,
     pub profile: Option<Profile>,
     pub error: Option<String>,
@@ -145,15 +147,22 @@ pub(crate) struct ProfileRuntime {
     pending: HashMap<u64, (u64, Option<String>)>,
     next_id: u64,
     shutting_down: bool,
+    native: Option<Arc<crate::profile_native::NativeProfileOperations>>,
+    native_pending: HashMap<Uuid, (u64, bool)>,
 }
 impl ProfileRuntime {
-    pub fn start(directory: Option<PathBuf>) -> Result<Self, DesktopError> {
+    pub fn start(
+        directory: Option<PathBuf>,
+        native: Option<Arc<crate::profile_native::NativeProfileOperations>>,
+    ) -> Result<Self, DesktopError> {
         let mut runtime = Self {
             io: None,
             snapshot: ProfileSnapshot::default(),
             pending: HashMap::new(),
             next_id: 1,
             shutting_down: false,
+            native,
+            native_pending: HashMap::new(),
         };
         runtime.snapshot.epoch = Uuid::new_v4();
         if let Some(directory) = directory {
@@ -181,8 +190,55 @@ impl ProfileRuntime {
             return Err(failure(error));
         }
         if let ProfileCommand::Clear { profile } | ProfileCommand::Delete { profile } = &command {
-            self.resolve(profile)?;
-            return Err(ProfileError::NativeUnavailable.into());
+            let profile_id = self.resolve(profile)?;
+            let native = self
+                .native
+                .as_ref()
+                .ok_or(ProfileError::NativeUnavailable)?;
+            if self.snapshot.operations.len() == 16
+                && self
+                    .snapshot
+                    .operations
+                    .iter()
+                    .all(|v| v.state == "pending")
+            {
+                return Err(failure("browser profile receipts are full"));
+            }
+            let id = self.next_id;
+            let next = id
+                .checked_add(1)
+                .ok_or_else(|| failure("browser profile operation IDs exhausted"))?;
+            let kind = if matches!(&command, ProfileCommand::Clear { .. }) {
+                crate::profile_leases::journal::MutationKind::Clear
+            } else {
+                crate::profile_leases::journal::MutationKind::Delete
+            };
+            let intent = native.admit(profile_id, kind).map_err(failure)?;
+            if self.snapshot.operations.len() == 16 {
+                let index = self
+                    .snapshot
+                    .operations
+                    .iter()
+                    .position(|v| v.state != "pending")
+                    .unwrap();
+                self.snapshot.operations.remove(index);
+            }
+            self.next_id = next;
+            self.native_pending.insert(intent, (id, false));
+            self.snapshot.operations.push(ProfileReceipt {
+                epoch: self.snapshot.epoch,
+                operation_id: id,
+                intent: Some(intent),
+                state: "pending".into(),
+                profile: self
+                    .snapshot
+                    .profiles
+                    .iter()
+                    .find(|v| v.id == profile_id)
+                    .cloned(),
+                error: None,
+            });
+            return Ok(id);
         }
         let io = self
             .io
@@ -224,6 +280,7 @@ impl ProfileRuntime {
         self.snapshot.operations.push(ProfileReceipt {
             epoch: self.snapshot.epoch,
             operation_id: id,
+            intent: None,
             state: "pending".into(),
             profile: None,
             error: None,
@@ -232,6 +289,63 @@ impl ProfileRuntime {
     }
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        if let Some(native) = &self.native {
+            for (intent, result) in native.outcomes() {
+                let Some((id, refreshing)) = self.native_pending.get_mut(&intent) else {
+                    native.retire(intent);
+                    continue;
+                };
+                if *refreshing {
+                    continue;
+                }
+                match result {
+                    Ok(()) => match self.io.as_ref().map(|io| io.submit_profiles(None)) {
+                        Some(Ok(operation)) => {
+                            self.pending.insert(operation.0, (*id, None));
+                            *refreshing = true;
+                        }
+                        Some(Err(error)) => {
+                            if let Some(op) = self
+                                .snapshot
+                                .operations
+                                .iter_mut()
+                                .find(|v| v.operation_id == *id)
+                            {
+                                op.error = Some(format!(
+                                    "native completion known; catalog refresh pending: {error}"
+                                ));
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            if let Some(op) = self
+                                .snapshot
+                                .operations
+                                .iter_mut()
+                                .find(|v| v.operation_id == *id)
+                            {
+                                op.error = Some("native completion known; profile catalog worker unavailable for refresh".into());
+                                changed = true;
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        if let Some(op) = self
+                            .snapshot
+                            .operations
+                            .iter_mut()
+                            .find(|v| v.operation_id == *id)
+                        {
+                            op.state = "failed".into();
+                            op.error = Some(error);
+                        }
+                        self.native_pending.remove(&intent);
+                        native.retire(intent);
+                        changed = true;
+                    }
+                }
+            }
+        }
         loop {
             let completion = match self.io.as_ref().map(|io| io.try_completion()) {
                 Some(Ok(Some(completion))) => completion,
@@ -265,14 +379,28 @@ impl ProfileRuntime {
                         .iter_mut()
                         .find(|op| op.operation_id == id)
                     {
-                        op.profile = catalog
-                            .profiles
-                            .iter()
-                            .find(|profile| Some(&profile.name) == name.as_ref())
-                            .cloned();
+                        if op.intent.is_none() {
+                            op.profile = catalog
+                                .profiles
+                                .iter()
+                                .find(|profile| Some(&profile.name) == name.as_ref())
+                                .cloned();
+                        }
                         op.state = "completed".into();
                     }
                     self.snapshot.profiles = catalog.profiles;
+                    if let Some(intent) = self
+                        .snapshot
+                        .operations
+                        .iter()
+                        .find(|v| v.operation_id == id)
+                        .and_then(|v| v.intent)
+                    {
+                        self.native_pending.remove(&intent);
+                        if let Some(native) = &self.native {
+                            native.retire(intent);
+                        }
+                    }
                 }
                 result => {
                     let error = match result {
@@ -287,8 +415,18 @@ impl ProfileRuntime {
                         .iter_mut()
                         .find(|op| op.operation_id == id)
                     {
-                        op.state = "failed".into();
-                        op.error = Some(error);
+                        if let Some(intent) = op.intent {
+                            op.state = "pending".into();
+                            op.error = Some(format!(
+                                "native completion known; catalog refresh required: {error}"
+                            ));
+                            if let Some((_, refreshing)) = self.native_pending.get_mut(&intent) {
+                                *refreshing = false;
+                            }
+                        } else {
+                            op.state = "failed".into();
+                            op.error = Some(error);
+                        }
                     }
                 }
             }
@@ -300,7 +438,13 @@ impl ProfileRuntime {
     }
     pub(crate) fn poll_shutdown(&mut self) -> Result<bool, crate::persistence::PersistenceError> {
         self.shutting_down = true;
+        if let Some(native) = &self.native {
+            native.cancel_queued();
+        }
         self.poll();
+        if self.native.as_ref().is_some_and(|v| v.pending() > 0) {
+            return Ok(false);
+        }
         let Some(io) = &mut self.io else {
             return Ok(true);
         };
@@ -349,16 +493,53 @@ impl ProfileRuntime {
             })
             .map(|profile| profile.id)
             .ok_or_else(|| failure("unknown browser profile"))
+            .and_then(|id| {
+                if self.native.as_ref().is_some_and(|v| v.fenced(id)) {
+                    Err(failure("browser profile has a pending native operation"))
+                } else {
+                    Ok(id)
+                }
+            })
     }
     pub fn validate_model(&self, model: &Snapshot) -> Result<(), DesktopError> {
         for id in model
             .workspaces
             .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| &p.surfaces)
-            .filter_map(|surface| surface.browser_profile_id)
+            .flat_map(|v| v.root.panes())
+            .flat_map(|v| &v.surfaces)
+            .filter_map(|v| v.browser_profile_id)
         {
             self.resolve(&id.to_string())?;
+        }
+        Ok(())
+    }
+    pub fn validate_transition(
+        &self,
+        before: &Snapshot,
+        model: &Snapshot,
+    ) -> Result<(), DesktopError> {
+        for surface in model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+        {
+            let Some(id) = surface.browser_profile_id else {
+                continue;
+            };
+            if !self.snapshot.profiles.iter().any(|v| v.id == id) {
+                return Err(failure("unknown browser profile"));
+            }
+            let unchanged = before.identity_namespace == model.identity_namespace
+                && before
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .any(|old| old.id == surface.id && old.browser_profile_id == Some(id));
+            if !unchanged {
+                self.resolve(&id.to_string())?;
+            }
         }
         Ok(())
     }

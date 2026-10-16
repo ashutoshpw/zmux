@@ -72,6 +72,10 @@ pub enum ControlCommand {
     BrowserProfiles {
         action: crate::profiles::ProfileCommand,
     },
+    BrowserProfileIntentStatus {
+        profile: uuid::Uuid,
+        intent: uuid::Uuid,
+    },
     BrowserProfilesStatus {
         #[serde(default)]
         epoch: Option<uuid::Uuid>,
@@ -688,6 +692,10 @@ fn dispatch(
             request.request_id,
             Command::Profiles { action },
         ),
+        ControlCommand::BrowserProfileIntentStatus { profile, intent } => desktop
+            .profile_intent_status(profile, intent)
+            .map(|v| json!(v))
+            .map_err(desktop_error),
         ControlCommand::BrowserProfilesStatus {
             operation_id,
             epoch,

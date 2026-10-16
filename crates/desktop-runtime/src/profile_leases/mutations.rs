@@ -31,6 +31,15 @@ pub struct MutationRequest {
     pub kind: MutationKind,
     pub local_stores: Vec<LeaseToken>,
 }
+/// Only these correlated known outcomes may end physical ownership. A timeout,
+/// transport error or missing callback is deliberately not an outcome variant.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeMutationOutcome {
+    Completed,
+    AbortedBeforeClear { message: String },
+    RemovalFailed { message: String },
+}
 pub(super) struct PhysicalMutation {
     pub token: MutationToken,
     record: IntentRecord,
@@ -285,7 +294,27 @@ impl Registry {
             .ok_or(LeaseError::StaleToken)
     }
     fn ensure_current(&self, token: MutationToken) -> Result<(), LeaseError> {
-        if read(&self.directory, token.profile)?.as_ref() != Some(&self.exact(token)?.record) {
+        let mutation = self.exact(token)?;
+        inspect_lock(
+            &self.directory,
+            &mutation._admission,
+            &admission_name(token.profile),
+            false,
+        )?;
+        if let Some(lock) = &mutation.lifetime {
+            inspect_lock(&self.directory, lock, &lock_name(token.profile), true)?;
+            if mutation.record.phase != MutationPhase::Reserved
+                && !mutation.record.phase.terminal()
+                && lock
+                    .metadata()
+                    .map_err(|e| LeaseError::Io(e.to_string()))?
+                    .len()
+                    != QUARANTINE_SENTINEL.len() as u64
+            {
+                return Err(LeaseError::UnsafeIntent);
+            }
+        }
+        if read(&self.directory, token.profile)?.as_ref() != Some(&mutation.record) {
             return Err(LeaseError::UnsafeIntent);
         }
         Ok(())
@@ -367,26 +396,30 @@ impl Registry {
     pub(super) fn mutation_finish(
         &mut self,
         token: MutationToken,
-        failure: Option<String>,
+        outcome: NativeMutationOutcome,
     ) -> Result<(), LeaseError> {
         self.ensure_current(token)?;
         let phase = self.exact(token)?.record.phase;
         if phase.terminal() {
             return self.release_terminal(token);
         }
-        if let Some(error) = failure {
-            if error.len() > 1024 {
-                return Err(LeaseError::Capacity);
-            }
-            let terminal = match phase {
-                MutationPhase::Reserved | MutationPhase::ClearDispatched => {
-                    MutationPhase::FailedBeforeClear
+        if !matches!(outcome, NativeMutationOutcome::Completed) {
+            let (terminal, error) = match outcome {
+                NativeMutationOutcome::AbortedBeforeClear { message }
+                    if phase == MutationPhase::Reserved =>
+                {
+                    (MutationPhase::FailedBeforeClear, message)
                 }
-                MutationPhase::ClearCompleted | MutationPhase::RemoveDispatched => {
-                    MutationPhase::FailedPartial
+                NativeMutationOutcome::RemovalFailed { message }
+                    if phase == MutationPhase::RemoveDispatched =>
+                {
+                    (MutationPhase::FailedPartial, message)
                 }
                 _ => return Err(LeaseError::StaleToken),
             };
+            if error.len() > 1024 {
+                return Err(LeaseError::Capacity);
+            }
             if let Some(lock) = &self.exact(token)?.lifetime {
                 lock.unlock().map_err(|e| LeaseError::Io(e.to_string()))?;
             }

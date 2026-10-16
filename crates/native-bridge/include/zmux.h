@@ -66,6 +66,8 @@ ZmuxResult zmux_desktop_profile_command(uint64_t desktop, const uint8_t *request
    release use desktop=0 and survive logical Desktop shutdown. Never release a
    token after any WebKit datastore construction. */
 ZmuxResult zmux_desktop_profile_lease(uint64_t desktop, const uint8_t *request, size_t length);
+/* Trusted native controller only. Bounded, once-only effects; available after logical shutdown. */
+ZmuxResult zmux_desktop_profile_native(const uint8_t *request, size_t length);
 /* Trusted native download lifecycle JSON, <=16384 bytes. Waits at most two seconds
    off the UI thread. Missing acknowledgement must not replay admission/publication.
    Caller-generated fenced tokens correlate uncertain outcomes with later snapshots. */

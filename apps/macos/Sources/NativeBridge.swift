@@ -87,6 +87,7 @@ actor NativeBridge {
                 configuration["terminal_engine"] = try JSONSerialization.jsonObject(with: Data(terminalEngine.utf8))
             }
             if let stateDirectory {
+                configuration["profile_controller"] = profileLeaseEpoch.uuidString.lowercased()
                 configuration["state_directory"] = stateDirectory
                 configuration["profile_lease_directory"] = try BrowserProfileLeaseDirectory.resolve()
             }
@@ -105,6 +106,17 @@ actor NativeBridge {
         return try await BrowserProfileLeaseClient.acquire(desktop: handle,
             owner: BrowserProfileLeaseOwner(epoch: profileLeaseEpoch, store: store), profile: profile)
     }
+    func reuseBrowserProfileLease(_ token: BrowserProfileLeaseToken, construction: UUID) async throws -> BrowserProfileConstructionPermit {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop closed before profile construction admission.") }
+        return try await BrowserProfileLeaseClient.reuse(desktop: handle, token: token, construction: construction)
+    }
+    func acknowledgeBrowserProfileConstruction(_ token: BrowserProfileLeaseToken) async throws {
+        try await BrowserProfileLeaseClient.constructed(token)
+    }
+    func completeBrowserProfileConstruction(_ permit: BrowserProfileConstructionPermit) async throws {
+        try await BrowserProfileLeaseClient.constructionDone(permit)
+    }
+    func profileController() -> UUID { profileLeaseEpoch }
     func releaseUnconstructedBrowserProfileLease(_ token: BrowserProfileLeaseToken) async throws {
         try await BrowserProfileLeaseClient.releaseUnconstructed(token)
     }
@@ -187,6 +199,9 @@ actor NativeBridge {
     }
     func renameBrowserProfile(id: UUID, name: String) async throws -> BrowserProfileReceipt {
         try await mutateBrowserProfile(["operation": "rename", "profile": id.uuidString.lowercased(), "name": name])
+    }
+    func changeBrowserProfileData(id: UUID, delete: Bool) async throws -> BrowserProfileReceipt {
+        try await mutateBrowserProfile(["operation": delete ? "delete" : "clear", "profile": id.uuidString.lowercased()])
     }
     private func mutateBrowserProfile(_ command: [String: String]) async throws -> BrowserProfileReceipt {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
@@ -519,7 +534,7 @@ actor NativeBridge {
                 try await Task.sleep(for: .milliseconds(10))
                 continue
             }
-            guard result.status == 0 else { throw Self.failure(result.status) }
+            guard result.status == 0 else { throw Self.failure(result.status, operation: "send \(payload["command"] as? String ?? "unknown") request=\(requestId)") }
             let response = try JSONSerialization.jsonObject(with: Self.consume(result.value)) as? [String: Any]
             guard response?["ok"] as? Bool == true else {
                 let error = response?["error"] as? [String: Any]
@@ -528,19 +543,19 @@ actor NativeBridge {
             return
         }
     }
-    nonisolated static func consume(_ token: UInt64) throws -> Data {
+    nonisolated static func consume(_ token: UInt64, operation: String = #function) throws -> Data {
         defer {
             let status = zmux_buffer_release(token)
             if status != 0 { FileHandle.standardError.write(Data("Zmux buffer release failed: \(status)\n".utf8)) }
         }
         let length = zmux_buffer_length(token)
-        guard length.status == 0, length.value <= 8_388_608 else { throw Self.failure(length.status) }
+        guard length.status == 0, length.value <= 8_388_608 else { throw Self.failure(length.status, operation: "\(operation):buffer_length token=\(token)") }
         var data = Data(count: Int(length.value))
         let status = data.withUnsafeMutableBytes { bytes in
             zmux_buffer_copy(token, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
         }
-        guard status == 0 else { throw Self.failure(status) }
+        guard status == 0 else { throw Self.failure(status, operation: "\(operation):buffer_copy token=\(token)") }
         return data
     }
-    private nonisolated static func failure(_ status: Int32) -> BridgeFailure { BridgeFailure(message: "Native operation failed (\(status))") }
+    private nonisolated static func failure(_ status: Int32, operation: String = #function) -> BridgeFailure { BridgeFailure(message: "Native \(operation) failed (\(status))") }
 }
