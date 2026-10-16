@@ -46,8 +46,10 @@ AppKit routing/coordinate/selection risk rather than duplicating encoding tables
 
 Rust protocol/worker core committed as `1b6c0cd` after red regression `c53e150`;
 parent verification passed 388 tests, strict Clippy, notices and C ABI checks.
-Native fixture-only cohort now passes portable `scripts/check` and selection
-input/AST validation; actual packaged native red and native repair remain pending.
+Native fixture red `fdc8d03` and native repair `82a8983` plus fixture construction
+fix `52b5ef0` are committed. Actual packaged native red/green and retained source,
+archive and linked-bridge provenance are verified below. Physical-device,
+optional-engine and sustained native saturation acceptance remain separate gates.
 
 ## Worker dispatch delivered
 
@@ -67,8 +69,8 @@ Full scripts/check passes388 tests,1 existing ignored, strict Clippy/notices and
 both ABI checks (`/tmp/zmux-pointer-check-r2.log`). The first full run passed tests
 but Clippy requested an equivalent collapsed if in fixture polling; repaired.
 Independent session-storage review found no scoped protocol/lifecycle blocker.
-Native event wiring, published tracking hints and actual AppKit acceptance remain
-pending. This worker slice alone does not enable native mouse interaction.
+The native delivery below adds event wiring, published tracking hints and scoped
+AppKit acceptance; this worker slice alone did not enable native mouse interaction.
 
 ## Native regression design
 
@@ -114,5 +116,41 @@ The repair fixture preserves Shift copy and the real child's Ctrl-X delimiter,
 and adds simultaneous right/middle identities, same-cell modifier changes,
 outside/reentry clamping, actual responder cancellation and1003 hover. Portable scripts/check passes388 tests/72 groups,1 ignored, strict Clippy,
 notices and both C ABI checks (`/tmp/zmux-pointer-native-repair-check-final.log`).
-Native repair compilation/execution is still pending; portable checks are not
-AppKit or physical-mouse evidence.
+Actual packaged native verification is recorded below; portable checks alone
+are not AppKit or physical-mouse evidence.
+
+## Native accepted cohort
+
+Native production repair `82a8983` compiled successfully in run38858320759,
+including the strict Swift6 decoder probe. Its expanded fixture stopped at a
+construction prerequisite: NSEvent.mouseEvent for otherMouseDown did not carry
+middle button2. This was not a pointer-report mismatch and did not replace the
+intended red. Fixture-only `52b5ef0` sets the public Core Graphics button field,
+then asserts native event type, button, window and coordinates before sendEvent.
+No private/KVC setter, production seam or encoded input fallback was introduced.
+
+[Run38858961638](https://github.com/ashutoshpw/zmux/actions/runs/38858961638)
+at `52b5ef0a16214a096b68930e9b2a57b74384cf44` passed packaged build, strict Swift6
+metadata compile, malformed-wire decoder probe and all35 actual mounted native
+cases, followed by shared shutdown. The same raw child10051, parent10009,
+nonce33d50c8f-7731-4ec3-8218-529c080ab3f0 and31x100 kernel grid independently
+captured exact specified SGR bytes for1002 application gestures and1003 hover.
+The1002 capture verifies left/right/middle identity, simultaneous right/middle
+routes, duplicate cell+modifier suppression, modifier changes without a cell
+change, outside/reentry clamping and responder cancellation without duplicate
+release. Shift selection still copies `pointer` after Shift is released during
+the drag and emits no application bytes. Both captures retain Ctrl-X18 and empty
+trailing bytes. No physical mouse or optional-engine acceptance is implied.
+
+All268 retained input digests, embedded source plist, archive SHA256
+`495e0f1275f6f176f13fb5cdd431a7e7cccd50aa475e4767c7c236cf2af30b9a`
+and linked bridge/strict-probe SHA256
+`a980d053f71b5df7d5505fa574f4b67d8f7de4dbc07eb6f005d31d5bda2464de`
+were independently verified. Evidence:
+`/tmp/zmux-pointer-native-green-38858961638/`,
+`/tmp/zmux-pointer-native-green-verification-20261016.json` and verifier
+`/tmp/verify-zmux-pointer-native.py`. Fixture correction also passed full portable
+scripts/check388 tests/72 groups/1 ignored, Clippy, notices and both C ABI checks
+(`/tmp/zmux-pointer-middle-fixture-check.log`). No current-main integration build,
+physical-device run, optional-engine input or sustained native queue-saturation
+acceptance is claimed by this isolated branch cohort.
