@@ -1718,3 +1718,73 @@ fn obsolete_terminal_receipts_preserve_authoritative_outcomes_and_dispatch_guard
         }
     }
 }
+
+#[test]
+fn never_dispatched_receipts_remain_errors_before_and_after_deadline() {
+    for expired in [false, true] {
+        for complete in [false, true] {
+            for action in [
+                read(),
+                BrowserAction::Zoom {
+                    operation: BrowserZoom::Set { factor: 1.25 },
+                },
+            ] {
+                let (model, surface) = fixture();
+                let now = Instant::now();
+                let mut runtime = BrowserRuntime::default();
+                let owner = attach(&mut runtime, &model, surface, now);
+                let mut command = request(&model, surface, action);
+                command.timeout_ms = 10;
+                let id = runtime.admit(&model.snapshot(), command, now).unwrap();
+                let observed = if expired {
+                    now + Duration::from_millis(10)
+                } else {
+                    now
+                };
+                // No drain has issued this operation to a native host. Even
+                // deadline reconciliation cannot authenticate a native receipt.
+                let event = if complete {
+                    BrowserHostEvent::Complete {
+                        operation_id: id,
+                        owner: owner.clone(),
+                        result: json!({"unexpected":"native success"}),
+                    }
+                } else {
+                    BrowserHostEvent::Fail {
+                        operation_id: id,
+                        owner: owner.clone(),
+                        error: BrowserFailure {
+                            code: "unexpected_native_error".into(),
+                            message: "never dispatched".into(),
+                            outcome_unknown: true,
+                        },
+                    }
+                };
+                assert!(matches!(
+                    runtime.host_event(&model.snapshot(), event, observed),
+                    Err(BrowserError::NotDispatched)
+                ));
+                let receipt = serde_json::to_value(runtime.receipt(id).unwrap()).unwrap();
+                assert!(receipt["result"].is_null());
+                if expired {
+                    assert_eq!(receipt["state"], "failed");
+                    assert_eq!(receipt["error"]["code"], "browser_timeout");
+                    assert_eq!(receipt["error"]["outcome_unknown"], false);
+                    assert!(
+                        runtime
+                            .drain_requests(&model.snapshot(), observed)
+                            .requests
+                            .is_empty()
+                    );
+                } else {
+                    assert_eq!(receipt["state"], "pending");
+                    assert!(receipt["error"].is_null());
+                    let batch = runtime.drain_requests(&model.snapshot(), observed);
+                    assert_eq!(batch.requests.len(), 1);
+                    assert_eq!(batch.requests[0].operation_id, id);
+                    assert_eq!(batch.requests[0].owner, owner);
+                }
+            }
+        }
+    }
+}
