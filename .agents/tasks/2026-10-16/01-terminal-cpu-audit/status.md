@@ -4,6 +4,17 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Actions38933217178 at df1f4a8 validates the intended old-renderer metadata-only
+  failure, physical cleanup, both-target Swift compilation and local completion.
+  Current renderer passes the new damage assertions and proceeds through grouping,
+  attention and menu mutations. A later hidden-app status-menu restore fails with
+  visible=true but active=false/key=-1. No product artifact was uploaded.
+- Reveal now retains the pre-unhide hidden/inactive state when deciding whether
+  identity-bound Launch Services activation is needed, and renews cooperative
+  activation after its asynchronous callback before making the target key. The
+  unchanged hidden-app native assertion remains the regression owner; rerun pending.
+- Portable recheck after fixture repair passes at df1f4a8
+  (`/tmp/zmux-native-damage-layout-check.log`); this follow-up changes Swift only.
 - Native Actions38931295149 at e9badee passes both-architecture Swift type checks,
   local completion and Bash/sh/zsh startup tests. Prior-renderer proof fails on
   cursor repaint rather than the intended metadata assertion, with physical app
