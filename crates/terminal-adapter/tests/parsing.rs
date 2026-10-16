@@ -197,3 +197,172 @@ fn wheel_respects_negotiated_mouse_bytes_history_override_and_alternate_screen()
     wheel.lines = i32::MIN;
     assert_eq!(terminal.wheel(wheel), b"\x1bOB".repeat(32));
 }
+
+#[test]
+fn copy_rows_keep_actual_wraps_written_spaces_and_wide_margin_padding_distinct() {
+    use zmux_terminal_adapter::RowCopy;
+    for cols in [4, 7, 31] {
+        let mut terminal = Terminal::new(Size { rows: 5, cols }).unwrap();
+        let prefix = "x".repeat(usize::from(cols - 1));
+        terminal.process(format!("{prefix} T").as_bytes()).unwrap();
+        let spaced = terminal.viewport();
+        assert_eq!(spaced.contents, format!("{prefix} T"));
+        let copy = spaced.row_copy.unwrap();
+        assert_eq!(copy.len(), 5);
+        assert_eq!(
+            copy[0],
+            RowCopy {
+                wraps_to_next: true,
+                written_end: cols
+            }
+        );
+        assert_eq!(
+            copy[1],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 1
+            }
+        );
+        assert_eq!(
+            copy[2],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 0
+            }
+        );
+
+        terminal
+            .process(format!("\x1b[2J\x1b[H{prefix}界Z").as_bytes())
+            .unwrap();
+        let wide = terminal.viewport();
+        // vt100 deliberately treats a wide glyph moved from the final blank
+        // column as a hard row boundary. Preserve its policy; do not guess a
+        // soft wrap from text widths or manufacture a flag in the exporter.
+        assert_eq!(wide.contents, format!("{prefix}\n界Z"));
+        let copy = wide.row_copy.unwrap();
+        assert_eq!(
+            copy[0],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: cols - 1
+            }
+        );
+        assert_eq!(
+            copy[1],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 3
+            }
+        );
+
+        terminal.process(b"\x1b[2J\x1b[HA\r\n\r\nB ").unwrap();
+        let hard = terminal.viewport();
+        let copy = hard.row_copy.unwrap();
+        assert_eq!(
+            copy[0],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 1
+            }
+        );
+        assert_eq!(
+            copy[1],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 0
+            }
+        );
+        assert_eq!(
+            copy[2],
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 2
+            }
+        );
+    }
+}
+
+#[test]
+fn copy_row_metadata_matches_parked_history_and_refreshes_after_resize() {
+    use zmux_terminal_adapter::RowCopy;
+    let mut terminal = Terminal::new(Size { rows: 3, cols: 4 }).unwrap();
+    terminal.process(b"abc T\r\n1\r\n2\r\n3\r\n4").unwrap();
+    terminal.scroll(1000);
+    let parked = terminal.viewport();
+    assert!(parked.scrollback_offset > 0);
+    assert_eq!(parked.contents, "abc T\n1");
+    let copy = parked.row_copy.as_ref().unwrap();
+    assert_eq!(
+        copy,
+        &vec![
+            RowCopy {
+                wraps_to_next: true,
+                written_end: 4
+            },
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 1
+            },
+            RowCopy {
+                wraps_to_next: false,
+                written_end: 1
+            },
+        ]
+    );
+    terminal.process(b"\r\n5").unwrap();
+    let anchored = terminal.viewport();
+    assert_eq!(anchored.contents, parked.contents);
+    assert_eq!(anchored.row_copy, parked.row_copy);
+    assert!(anchored.scrollback_offset > parked.scrollback_offset);
+
+    // vt100 does not reflow on a width change. Require actual new geometry and
+    // refreshed flags, without claiming recovery of truncated logical text.
+    terminal.scroll(0);
+    terminal.resize(Size { rows: 4, cols: 6 }).unwrap();
+    terminal.process(b"\x1b[2J\x1b[H123456Z").unwrap();
+    let resized = terminal.viewport();
+    let copy = resized.row_copy.as_ref().unwrap();
+    assert_eq!(resized.size, Size { rows: 4, cols: 6 });
+    assert_eq!(copy.len(), 4);
+    assert_eq!(
+        copy[0],
+        RowCopy {
+            wraps_to_next: true,
+            written_end: 6
+        }
+    );
+    assert_eq!(
+        copy[1],
+        RowCopy {
+            wraps_to_next: false,
+            written_end: 1
+        }
+    );
+    terminal.resize(Size { rows: 4, cols: 8 }).unwrap();
+    let widened = terminal.viewport();
+    assert!(
+        widened
+            .row_copy
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|row| !row.wraps_to_next && row.written_end <= 8)
+    );
+    assert_eq!(resized.row_copy.as_ref().unwrap()[0].written_end, 6);
+    assert!(resized.row_copy.as_ref().unwrap()[0].wraps_to_next);
+
+    terminal.process(b"\x1b[?1049hALT").unwrap();
+    let alternate = terminal.viewport();
+    assert!(alternate.alternate_screen);
+    assert_eq!(alternate.scrollback_offset, 0);
+    assert_eq!(
+        alternate.row_copy.as_ref().unwrap()[0],
+        RowCopy {
+            wraps_to_next: false,
+            written_end: 3
+        }
+    );
+    terminal.process(b"\x1b[?1049l").unwrap();
+    assert!(!terminal.viewport().alternate_screen);
+    assert_eq!(terminal.viewport().row_copy, widened.row_copy);
+}

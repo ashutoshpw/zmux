@@ -17,9 +17,9 @@ resource policy, session input/queue owners or sibling work.
 
 ## Source findings
 
-`TerminalSelection.text` currently trims crossed rows then inserts a newline at
-every physical row. `Viewport` has runs and aggregate history offsets, with no row
-wrap/identity metadata. `TerminalView` clears selection on explicit history wheel,
+The accepted pre-wrap `TerminalSelection.text` trims crossed rows then inserts a
+newline at every physical row. Its `Viewport` had runs and aggregate history
+offsets, with no row wrap/identity metadata. `TerminalView` clears selection on explicit history wheel,
 navigation, offset change and resize. Selecting historical rows already displayed
 is source-supported; persistent selection while scrolling is not. Output at a fixed
 offset has no stable logical-row anchors and remains a separate risk.
@@ -82,17 +82,72 @@ The parent owns current-main publication and other active hosted workflows.
 
 ## Status
 
-Design approved; optional-engine unavailable metadata disposition coordinated.
-Regression-only real native phase is prepared; no copy/metadata repair exists yet.
-An actual native w key reaches the finite raw PTY child, which records kernel
-rows/columns and emits a known wrapped boundary-space payload. All18 accepted
-original cases and the exact alpha event precede the new intended-red case.
-Actual focus, child identity/nonce, requested grid and kernel viewport must agree
-before event/copy delivery. The actual wrapped clipboard mismatch remains pending.
+In progress. Native intended red is independently accepted at8e96b17/run38837076163;
+all18 original cases passed before the19th exact wrapped-copy mismatch. The
+production metadata/copy repair and expanded24-case fixture are implemented as
+unpublished frozen WIP, with independent production and fixture source reviews
+accepted. Focused11 real adapter tests, strict Clippy, actual session history and
+six-phase portable PTY transport pass. Actual production Swift decoder compile,
+24 native clipboard cases/shared shutdown and parent current-main integration
+remain pending; no green is inferred from source or Linux checks.
 
-Portable real owned PTY phase transport passes with actual kernel31x100, exact
-payload bytes and PID/PPID/nonce; direct owned child terminated/reaped safely.
-Receipt SHA256
-`1d9ac35e4ac0d56dab7a225625679eefe1d9b67d3b0250a65e148145daa3931e`.
-This is not AppKit/native clipboard proof. Parent exact-main selection38836229618
-passes at12d5c14; its source/artifact audit is separate from this new regression.
+The parent published-main12d5c14 run38836229618 separately passes the existing18
+visible-selection cases, with exact235-source-copy artifact review. That does not
+accept any of this new wrapped-copy WIP.
+
+
+## Accepted intended native red and prepared owner repair
+
+Native run38837076163 at diagnostic8e96b170fd5cdc2b1ff0cdf076c6a0af0fe3768d
+passes all18 original exact UTF8 cases and fails only the appended wrapped-copy
+case: expected99 X characters plus U+0020 plus EDGE; observed99 X characters plus
+U+000A plus EDGE. Actual app/activationPID6207 and childPID6211 parent/nonce match;
+focus is active/visible/key/terminal responder, kernel/requested/viewport31x100.
+All225 retained source copies match Git8e96b17; archive/source plist agree.
+Buildexit0/nativeexit1 in6.989s, no timeout. Artifact12019986394 ZIP SHA256
+`1c15d6564b5419d4c02b6e87b701bf5661fb89426bcea0860d6a6b30b621b05d`.
+Independent intended-red review SHA256
+`699e7b13b9106cf5029230bcff88f1aa70d7a4419158229146bf9c3d160930f9`.
+
+Prepared production metadata comes from the same immutable worker row walk as
+runs and preserves exact written-space extents. Native decoding rejects present
+metadata if viewport bounds, drawing/copy row counts or written extents disagree.
+Optional metadata remains unavailable explicitly. Native copy joins only actual
+wrapped boundaries; empty physical rows retain separators. Existing same-row edge
+spaces and physical triple-click bounds remain. No source repair is published yet.
+
+Focused real vt100 tests pass across widths4/7/31, written boundary spaces,
+wide-margin written extent, hard/blank rows, actual parked history, output while
+anchored, resize refresh, retained snapshot ownership and alternate separation.
+All11 adapter parsing tests and strict adapter all-target Clippy pass. The native
+runner also compiles/executes the actual production Swift Viewport decoder against
+valid/unavailable and malformed count/extent/grid-bound inputs; that new Swift
+wire check is still unexecuted until hosted validation.
+
+Prepared native green retains original18 plus the unchanged intended-red case,
+then full-edge wide cell, combining/emoji boundary, hard/blank lines, explicit
+wide-margin engine policy and actual Command-Home parked-history copy. It retains
+actual row metadata for each phase, matches existing accessibility contents to the
+captured viewport, and preserves strict byte oracles. Six-phase actual owned Linux
+PTY transport passes independently, receipt SHA256
+`9fcbf47f597c77e452a29217158ed3f973d4d67dcd106bd8f395ceeb94831db2`.
+It does not establish native geometry, metadata decoding or clipboard behavior.
+
+## Default-engine wide-margin policy gap
+
+Real tests expose vt1000.16.2's intentional policy when a wide glyph moves because
+only one empty column remains: row_wrapped=false and contents keep a hard LF.
+Public engine source documents that choice. The parent explicitly directed
+preserving it; no cursor/width heuristic manufactures a wrap and no upstream
+source or pin changes. The metadata still distinguishes the shorter written
+extent and the next row's authoritative wide-cell span. A full-width wide cell
+followed by another character does have an authoritative soft-wrap boundary.
+
+Full wide-margin logical-join parity requires a separate engine-policy decision,
+including whether an optional F04 exporter can supply true line-wrap and written
+extent metadata within its resource contract. Current optional RawFrame does not.
+Do not claim that gap, persistent selection anchors, autoscroll, wrapped-word
+expansion, rectangular selection, copy mode or mouse protocols closed here.
+
+The slice remains in progress pending independent source review and actual
+native green/shared shutdown. Parent current-main publication remains separate.
