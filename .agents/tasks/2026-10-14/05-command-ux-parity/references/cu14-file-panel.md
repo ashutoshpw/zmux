@@ -1799,7 +1799,7 @@ one tracker claim review found wrong.
   receipt, the design and the digest.
 - `docs/native-bridge.md`: earlier slices had missed three things, now documented: the
   `zmux_desktop_dispatch_acknowledged` export (round 10), the `generation` carried by a `sync_failed`
-  save failure and the bridge `ZMUX_BUSY`/`ZMUX_CAPACITY` retry meaning plus the reply-header cap, and session format version 10 for persisted file surfaces. `docs/local-control.md` was
+  save failure and the bridge `ZMUX_BUSY`/`ZMUX_CAPACITY` retry meaning plus the reply-header cap, and session format version 10 (as first written, the sentence said only sessions carrying a file surface are version 10, which was wrong; fix round 2 corrects it: every saved session is version 10). `docs/local-control.md` was
   re-read against `apps/cli/src/open.rs` and `control_policy.rs` (wire shape, 16 operands, 16 KiB
   request, per-item codes, 5 s default, exit status, mutation policy) and needed no change.
 - No dependency was added. `crates/desktop-runtime/Cargo.toml` gained a dev-dependency on `rustix`
@@ -1849,7 +1849,11 @@ zoom), Quick Look/media, PDF and image zoom/outline,
 relative links and extended Markdown, preferred external editor, `file://` and `file:LINE` operands,
 directory-to-workspace, Save As, merge/diff of a conflict, autosave and crash recovery, real file
 watching (polling can miss a same-size same-timestamp rewrite), ownership/ACL/xattr preservation,
-remote (SSH) files and non-UTF-8 paths are not delivered. The word wrap toggle is the one editor setting that
+in-place fallback writes, case-variant alias dedupe on case-insensitive volumes (two spellings of
+one path that differ only by case may open as two tabs), persisted viewport and Markdown view mode,
+network-volume semantics, remote (SSH) files and non-UTF-8 paths are not delivered. Rollback
+consequence: every session this build saves is session format 10, so a build that predates version
+10 refuses all of them, not only those with file tabs. The word wrap toggle is the one editor setting that
 is delivered, as a single global user default. The remaining S4 limitations under "Remaining
 known limitations of the native file panel" above also still hold. The Swift behaviour is covered on
 Linux only by source-structure pins and by Rust-side contract tests that decode the exact wire the
@@ -1931,3 +1935,64 @@ more than the 579 above: the new drift test); clippy `-D warnings`; `scripts/lic
 --check` ("Inventoried 84 resolved packages, 66 distinct notice texts; 3 require upstream text
 review"); `scripts/check-native-bridge`. No Swift was compiled or run; every gate listed under
 "UNAVAILABLE gates" above is still UNAVAILABLE.
+
+### Fix round 2 (S5 review, two blocking findings, both verified valid and fixed)
+
+Base of this round: `68c5cf2`.
+
+Finding 1, `docs/native-bridge.md` said persisted sessions carrying a file surface are session format
+version 10 and older readers refuse it. Verified true: `session_document()` in
+`crates/workspace-core/src/restore.rs` writes `version: SESSION_DOCUMENT_VERSION` unconditionally and
+`SESSION_DOCUMENT_VERSION` is 10 (design D10: "Capture always writes version 10"). A downgraded build
+therefore refuses every new session document, not only ones with file tabs, so the sentence hid the
+rollback and restore-loss consequence. The doc now says every saved session is version 10 whether or
+not it has a file surface, that a build predating version 10 refuses all of them, and that versions 1
+to 9 restore unchanged. The `S01` package in `closure-tracker.json` gained a matching rollback gate,
+and the "What changed" bullet and the remaining-gates paragraph above were corrected.
+
+Finding 2, design section 7 says every deferred item "stays a `remaining_gates` entry", but four were in
+neither the tracker nor this receipt. Verified true by `grep -n -i 'case-variant\|view mode\|persisted
+viewport\|in-place fallback'` over the tracker and this receipt (no gate hits: the only tracker hit
+is the CV-05 feature title "File preview modes", and the only receipt "in-place" hits are unrelated prose
+about atomic writes and an edited marker; the tracker named no real file watching limit, only the
+CV-01 remark that reload is bounded polling). Added to the tracker:
+- CU-14: case-variant alias dedupe on case-insensitive volumes; persisted viewport and Markdown view
+  mode; real file watching (FSEvents/inotify).
+- CV-01: real file watching; persisted viewport and Markdown view mode.
+- CV-05: real file watching; persisted image/PDF viewport.
+- CV-06: in-place fallback writes (a file the atomic same-directory replace cannot handle is refused
+  rather than written in place); persisted editor viewport.
+The remaining-gates paragraph above now names the same items. The pre-existing items (Save As,
+autosave and crash recovery, non-UTF-8 paths, remote files, relative links, Quick Look and so on) were
+already present and are now guarded as well.
+
+Tests (red first, each failing against the unfixed doc/tracker/receipt, passing after):
+- `the_bridge_doc_states_that_every_saved_session_is_version_10`
+  (`crates/native-bridge/tests/swift_file_contract.rs`): fails if the doc returns to "carrying a file
+  surface are session format version 10", loses the "every session ... whether or not it has a file
+  surface" and "predates version 10 refuses all of those documents" statements, or
+  `SESSION_DOCUMENT_VERSION` moves.
+- `a_session_with_no_file_surface_is_still_saved_as_version_10`
+  (`crates/workspace-core/tests/session_document.rs`): the behaviour the doc claims, a store with no
+  file surface captures version 10 and an unknown newer version is refused.
+- `the_tracker_names_every_deferred_item_of_design_section_7` (swift_file_contract.rs): per-feature
+  required phrases in the tracker, the items still present in design section 7, and the same items in
+  this receipt's remaining-gates paragraph. Documentation text only; it proves nothing about behaviour.
+Against the base the first and third failed; the second documents existing behaviour and passed
+before the fix (it is the production-owner proof behind finding 1, not a regression catch).
+
+
+Determinism: the three new tests read files and encode a store to JSON; none uses a thread, timer,
+queue or shared state. The `swift_file_contract` and `session_document` test binaries were each run
+20 times in sequence (0 failures out of 40 runs), then 3 rounds of 8 concurrent copies of each binary
+(16 processes per round, 48 runs in total, all exit 0) while 8 busy-loop processes held the CPUs.
+
+#### Checks run (fix round 2)
+
+`scripts/check` PASS, exit 0 (log `/tmp/zmux-s5fix2-check.log`, temporary): `cargo fmt --check`;
+`cargo test --workspace --locked` with 79 `test result` lines, 583 passed, 0 failed, 2 ignored (three
+more than the 580 after fix round 1: the three tests above); clippy `-D warnings`;
+`scripts/license-inventory --check` ("Inventoried 84 resolved packages, 66 distinct notice texts; 3
+require upstream text review"); `scripts/check-native-bridge`. No Swift was compiled or run; every gate
+listed under "UNAVAILABLE gates" above is still UNAVAILABLE. The 579 and 580 figures earlier in this
+section were correct when recorded and are superseded by 583 for the current tree.

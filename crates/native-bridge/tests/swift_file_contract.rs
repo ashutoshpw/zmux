@@ -2732,3 +2732,155 @@ fn the_tracker_and_receipt_say_the_word_wrap_toggle_is_delivered_while_the_swift
         "the receipt lists word wrap as undelivered although the Swift defines it: {not_delivered}"
     );
 }
+
+/// Collapses runs of whitespace (including the line breaks of wrapped Markdown) to single spaces.
+fn flatten(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Contract test for the rollback consequence of session format 10. `session_document()` writes
+/// `SESSION_DOCUMENT_VERSION` for every session (see the workspace-core test
+/// `a_session_with_no_file_surface_is_still_saved_as_version_10`), so the bridge doc must not say
+/// only sessions that carry a file surface are version 10. Fails if the doc goes back to that
+/// claim, drops the "every session" statement, or the constant moves without the doc.
+#[test]
+fn the_bridge_doc_states_that_every_saved_session_is_version_10() {
+    assert_eq!(
+        zmux_workspace_core::SESSION_DOCUMENT_VERSION,
+        10,
+        "the session format moved; update the version in docs/native-bridge.md and its rollback sentence"
+    );
+    let doc = flatten(
+        &std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/native-bridge.md"),
+        )
+        .unwrap(),
+    );
+    assert!(
+        !doc.contains("carrying a file surface are session format version 10"),
+        "docs/native-bridge.md again claims only sessions with file surfaces are version 10"
+    );
+    for required in [
+        "Every session this build saves is session format version 10, whether or not it has a file surface.",
+        "A build that predates version 10 refuses all of those documents, not only the ones with file tabs",
+        "Documents written by earlier builds (versions 1 to 9) restore unchanged.",
+    ] {
+        assert!(
+            doc.contains(required),
+            "docs/native-bridge.md lost: {required}"
+        );
+    }
+}
+
+/// Contract test between design section 7 and the tracker. The design says every deferred item
+/// "stays a `remaining_gates` entry"; each item the design lists must be named by a gate of the
+/// feature that owns it, so the tracker cannot under-report undelivered work. The check is on the
+/// stated limitation text, not on any behaviour.
+#[test]
+fn the_tracker_names_every_deferred_item_of_design_section_7() {
+    let tracker: Value = serde_json::from_str(&task_reference("closure-tracker.json"))
+        .expect("closure-tracker.json is valid JSON");
+    let gates_of = |id: &str| -> String {
+        tracker["features"]
+            .as_array()
+            .expect("features array")
+            .iter()
+            .find(|feature| feature["feature_id"] == id)
+            .unwrap_or_else(|| panic!("{id} is in the tracker"))["remaining_gates"]
+            .as_array()
+            .expect("remaining_gates")
+            .iter()
+            .map(|gate| gate.as_str().expect("gate is a string"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase()
+    };
+    // (feature, phrase that must appear in one of its gates, the design item it records)
+    let required = [
+        (
+            "CU-14",
+            "case-variant alias dedupe on case-insensitive volumes",
+            "case-variant alias dedupe",
+        ),
+        ("CU-14", "real file watching", "real file watching"),
+        (
+            "CU-14",
+            "persisted viewport and markdown view mode",
+            "persisted viewport / Markdown view mode",
+        ),
+        ("CV-01", "real file watching", "real file watching"),
+        (
+            "CV-01",
+            "persisted viewport and markdown view mode",
+            "persisted viewport / Markdown view mode",
+        ),
+        ("CV-05", "real file watching", "real file watching"),
+        (
+            "CV-05",
+            "persisted viewport of an image or pdf",
+            "persisted viewport",
+        ),
+        (
+            "CV-06",
+            "in-place fallback writes",
+            "in-place fallback writes",
+        ),
+        ("CV-06", "persisted editor viewport", "persisted viewport"),
+        ("CV-06", "save as", "Save As"),
+        (
+            "CV-06",
+            "autosave and crash recovery",
+            "autosave and crash recovery",
+        ),
+        ("CU-14", "non-utf-8 paths", "non-UTF-8 paths"),
+        (
+            "CU-14",
+            "remote (ssh) workspace files",
+            "remote (SSH) files",
+        ),
+        ("CV-01", "relative file links", "relative links"),
+        ("CV-05", "quick look", "Quick Look"),
+    ];
+    for (feature, phrase, item) in required {
+        assert!(
+            gates_of(feature).contains(phrase),
+            "{feature} remaining_gates in closure-tracker.json no longer record the deferred item \
+             `{item}` (expected a gate containing `{phrase}`)"
+        );
+    }
+    // Section 7 itself must still list the items, otherwise this test checks a stale list.
+    let design = flatten(&task_reference("cu14-file-panel-design.md")).to_lowercase();
+    for item in [
+        "case-variant alias dedupe on case-insensitive volumes",
+        "in-place fallback writes",
+        "persisted viewport/markdown view mode",
+        "real file watching",
+    ] {
+        assert!(
+            design.contains(item),
+            "design section 7 no longer lists `{item}`; update this test"
+        );
+    }
+    // The receipt's closing paragraph is the human summary of the same list.
+    let receipt = flatten(&task_reference("cu14-file-panel.md")).to_lowercase();
+    let section = receipt
+        .split("### remaining gates and limitations (not hidden)")
+        .nth(1)
+        .expect("the S5 receipt keeps its remaining gates section")
+        .split(" ### ")
+        .next()
+        .unwrap()
+        .to_string();
+    for item in [
+        "case-variant alias dedupe",
+        "in-place fallback writes",
+        "persisted viewport",
+        "markdown view mode",
+        "real file watching",
+    ] {
+        assert!(
+            section.contains(item),
+            "the receipt's remaining-gates paragraph omits `{item}`"
+        );
+    }
+}

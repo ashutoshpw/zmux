@@ -900,6 +900,27 @@ fn v9_rejects_file_content() {
     );
 }
 
+/// Capture never keys the version on content: a session with no file surface is version 10 too,
+/// so a build that predates version 10 refuses every document this build saves, not only the ones
+/// with file tabs. `docs/native-bridge.md` states this rollback consequence and is held to it by
+/// `the_bridge_doc_states_that_every_saved_session_is_version_10` in the native-bridge tests.
+#[test]
+fn a_session_with_no_file_surface_is_still_saved_as_version_10() {
+    let store = fixture();
+    assert_eq!(store.snapshot().workspaces.len(), 1);
+    let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
+    assert!(
+        !wire.to_string().contains("\"kind\":\"file\""),
+        "the fixture must not contain a file surface: {wire}"
+    );
+    assert_eq!(SESSION_DOCUMENT_VERSION, 10);
+    assert_eq!(wire["version"], SESSION_DOCUMENT_VERSION);
+    // A reader that only knows versions up to 9 refuses it, exactly as the current reader refuses 11.
+    let mut older_reader_view = wire.clone();
+    older_reader_view["version"] = json!(11);
+    assert!(decode(older_reader_view, limits()).is_err());
+}
+
 #[test]
 fn legacy_versions_still_load() {
     // Version 10 keeps every earlier reader: a v9 document without files and the
