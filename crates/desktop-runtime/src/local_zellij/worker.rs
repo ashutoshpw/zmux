@@ -179,6 +179,35 @@ impl Drop for Resource {
         }
     }
 }
+// A PTY spawn may return before exec: portable-pty closes the standard
+// library's spawn error pipe in pre_exec. Keep the physical child identity
+// separate from the configured executable admission decision.
+fn configured_cli_identity(
+    identity: ProcessIdentity,
+    launcher: &ProcessIdentity,
+    configured: &Path,
+    _deadline: Instant,
+    _cancellation: &AtomicBool,
+) -> io::Result<ProcessIdentity> {
+    if identity.parent_pid != launcher.pid
+        || identity.uid != launcher.uid
+        || identity.boot != launcher.boot
+        || identity.executable != configured
+    {
+        return Err(fail(format!(
+            "CLI is not the exact directly retained configured child: observed={identity:?}; expected_parent={}; expected_uid={}; expected_executable={}",
+            launcher.pid,
+            launcher.uid,
+            configured.display()
+        )));
+    }
+    Ok(identity)
+}
+
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod tests;
+
 struct Ready {
     record: Record,
     frontend: Option<ProcessIdentity>,
@@ -260,6 +289,12 @@ pub(crate) fn launch_client(
         cwd: None,
         size: zmux_session_runtime::default_size(),
     };
+    let launcher = process_identity(std::process::id()).map_err(|e| ClientLaunchFailure {
+        error: SessionError::Failure(format!("inspect native CLI launcher identity: {e}")),
+        cleanup: None,
+        observer: Some(observer.clone()),
+    })?;
+    let configured = validated.cli.clone();
     let engine = request.engine;
     let deadline = request.startup_deadline;
     let cancellation = request.cancellation.clone();
@@ -317,6 +352,9 @@ pub(crate) fn launch_client(
     })?;
     let admitted = (|| -> Result<Ready, SessionError> {
         let identity = process_identity(session.process_id())
+            .and_then(|identity| {
+                configured_cli_identity(identity, &launcher, &configured, deadline, &cancellation)
+            })
             .map_err(|e| SessionError::Failure(format!("inspect retained CLI identity: {e}")))?;
         identity_tx.try_send(identity).map_err(|_| {
             SessionError::Failure("observer rejected retained CLI identity handoff".into())
@@ -478,9 +516,12 @@ impl Monitor {
             || cli.executable != validated.cli
             || cli.uid != nix::unistd::geteuid().as_raw()
         {
-            return Err(fail(
-                "CLI is not the exact directly retained configured child",
-            ));
+            return Err(fail(format!(
+                "CLI is not the exact directly retained configured child: observed={cli:?}; expected_parent={}; expected_uid={}; expected_executable={}",
+                std::process::id(),
+                nix::unistd::geteuid().as_raw(),
+                validated.cli.display()
+            )));
         }
         let mut stream = loop {
             startup(&request, stopped)?;

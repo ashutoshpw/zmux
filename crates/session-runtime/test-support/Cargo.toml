@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+portable-pty.workspace = true
 nix.workspace = true
 
 [lints.rust]

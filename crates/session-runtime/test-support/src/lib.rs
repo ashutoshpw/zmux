@@ -34,3 +34,46 @@ pub fn install_no_child_wait_in_isolated_fixture() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// Reproduce portable-pty's pre-exec descriptor closure in a directly owned
+/// Child. The extra bounded gate permits an independent inherited-image sample.
+/// This does not exercise portable-pty's complete PTY spawn implementation.
+#[allow(unsafe_code)]
+pub fn spawn_with_closed_spawn_pipe_gate(
+    program: &std::path::Path,
+    release: &std::path::Path,
+) -> std::io::Result<std::process::Child> {
+    use std::{
+        ffi::CString,
+        os::unix::process::CommandExt,
+        process::{Command, Stdio},
+    };
+    let release = CString::new(release.as_os_str().as_encoded_bytes())
+        .map_err(|_| std::io::Error::other("pre-exec gate path contains NUL"))?;
+    let mut command = Command::new(program);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: paths and command are allocated before fork. The operation under
+    // investigation is the actual library function called by portable-pty's
+    // own pre_exec. Our added gate only calls async-signal-safe libc functions
+    // on preallocated data, then exec proceeds or the child exits after 5s.
+    unsafe {
+        command.pre_exec(move || {
+            portable_pty::unix::close_random_fds();
+            let pause = nix::libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 1_000_000,
+            };
+            for _ in 0..5000 {
+                if nix::libc::access(release.as_ptr(), nix::libc::F_OK) == 0 {
+                    return Ok(());
+                }
+                nix::libc::nanosleep(&pause, std::ptr::null_mut());
+            }
+            nix::libc::_exit(124);
+        });
+    }
+    command.spawn()
+}
