@@ -311,6 +311,16 @@ enum AgentInboxSmoke {
             guard submit.isEnabled else { throw failure("Reply not available before real lock contention") }
             submit.performClick(nil)
             try submitKey(in: inbox)
+            try await wait(coordinator, "real lock wait yields known refusal or explicit pending status") { _ in
+                (submit.isEnabled && operationStatus(content) == "another instance is reserving session generations; retry") ||
+                (status.isEnabled && !submit.isEnabled)
+            }
+            if status.isEnabled {
+                guard operationStatus(content).split(separator: " ").contains(where: { UUID(uuidString: String($0)) != nil }) else {
+                    throw failure("Background refresh replaced the uncertain operation recovery UUID")
+                }
+                status.performClick(nil)
+            }
             try await wait(coordinator, "known journal lock refusal retains draft without pending status") { _ in
                 operationStatus(content) == "another instance is reserving session generations; retry" &&
                 submit.isEnabled && !status.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8)

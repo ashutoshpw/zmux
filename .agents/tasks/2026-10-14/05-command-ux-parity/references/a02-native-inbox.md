@@ -441,3 +441,26 @@ Five unique control admissions, actual socket peer PID 245051, control states
 `/tmp/zmux-inbox-real-queue-probe.py`; raw receipts:
 `/tmp/zmux-inbox-queue-oxd48pdk/`. This proves actual storage/public control setup
 only; AppKit execution, capacity refusal, PNG and native shutdown remain open.
+
+## Native background read clobbers pending operation status
+
+Run [38862689598](https://github.com/ashutoshpw/zmux/actions/runs/38862689598), exact
+`1d69fa2cc1cefc6f8dc43a2e61426828532e03c8`, passes both Swift 6 slices
+(96.499 s), arm64 package (275.964 s), and the first ten actual checks again.
+Owned app PID 9569 exits 1 without timeout (19.590 s) awaiting known refusal.
+Mounted diagnostics now establish an actual presentation failure: Send disabled,
+Check Status enabled and exact later draft retained, but status text is
+`Refresh failed: another instance is reserving session generations; retry` and
+the pending operation UUID is gone. The list refresh catch unconditionally wrote
+to the mutation status channel. All 273 retained source hashes match the freeze;
+archive SHA256 `9de3eb0767d8f06da74e1fac43fb1691a33f04d7e0f5ef9a0c2c31f32c4d9309`.
+
+Parent authorized the narrow feedback ownership repair after these actual mounted
+red receipts: auxiliary list-refresh and editor-validation feedback writes only
+when no mutation is pending. Receiving queries already write only their separate
+settings label. Receipt-validation uncertainty branches also retain the original
+UUID with Check Status; origin-close invalidation remains authoritative. No timing
+or storage behavior changes. The known-refusal case now observes actual pending
+controls when present, verifies a recovery UUID and explicitly invokes the existing
+Check Status action before asserting authoritative refusal and retained draft.
+The independent public-owner accepted-pending journey remains a separate gate.
