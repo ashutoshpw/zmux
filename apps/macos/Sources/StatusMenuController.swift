@@ -359,24 +359,24 @@ extension StatusMenuController {
               processes.allSatisfy({ id, pid in coordinator.snapshot?.frames.first(where: { $0.sessionId == id })?.processId == pid }) else {
             throw BridgeFailure(message: "Menu actions replaced the application status owner or restarted an existing child")
         }
-        for window in coordinator.snapshot?.model.windows ?? [] {
-            _ = try await cli(["close-window", "--window", String(window.id)])
-        }
-        try await wait("Closed windows remained mounted") {
-            coordinator.snapshot?.model.windows.isEmpty == true && coordinator.mainWindowHosts.isEmpty
-        }
+        // Regular mode deliberately saves/quits on final-window close. Exercise
+        // the real hidden-application state here; last-close termination retains
+        // its existing shared/window lifecycle acceptance rather than assuming
+        // an unimplemented menu-bar-only mode.
+        NSApp.hide(nil)
+        try await wait("Application did not hide") { NSApp.isHidden }
         try invoke(menu, entry(menu, "zmux.status.show"))
-        try await wait("Status menu did not recreate a window after the last one closed") {
-            coordinator.snapshot?.model.windows.count == 1 && coordinator.mainWindowHost.nativeReady
-                && coordinator.mainWindowHost.window.isKeyWindow
+        try await wait("Status menu did not restore the hidden application") {
+            !NSApp.isHidden && coordinator.mainWindowHost.window.isVisible && coordinator.mainWindowHost.window.isKeyWindow
         }
-        guard coordinator.statusMenu.map(ObjectIdentifier.init) == identity, statusItem === item else {
-            throw BridgeFailure(message: "Closing and reopening windows duplicated the application status item")
+        guard coordinator.statusMenu.map(ObjectIdentifier.init) == identity, statusItem === item,
+              processes.allSatisfy({ id, pid in coordinator.snapshot?.frames.first(where: { $0.sessionId == id })?.processId == pid }) else {
+            throw BridgeFailure(message: "Application hide/show replaced the status item or restarted an existing child")
         }
         let result: [String: Bool] = ["native_status_button": true, "system_menu_opened": true,
             "workspace_context_actions": true, "captured_mutations": true, "cross_window_notification_open": true,
             "inbox_presentation": true, "minimized_window_restore": true, "keep_awake_toggle": true,
-            "single_application_owner": true, "last_window_recovery": true]
+            "single_application_owner": true, "hidden_window_recovery": true]
         try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
 

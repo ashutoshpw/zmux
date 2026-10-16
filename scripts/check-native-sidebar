@@ -127,7 +127,7 @@ def main():
         required_status = ("native_status_button", "system_menu_opened", "workspace_context_actions",
                            "captured_mutations", "cross_window_notification_open", "inbox_presentation",
                            "minimized_window_restore", "keep_awake_toggle", "single_application_owner")
-        required_status += ("last_window_recovery",)
+        required_status += ("hidden_window_recovery",)
         failed_status = [key for key in required_status if status_result.get(key) is not True]
         if failed_status:
             raise RuntimeError("Native status menu acceptance failed: " + ", ".join(failed_status))
