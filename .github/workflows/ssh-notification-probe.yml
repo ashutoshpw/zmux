@@ -1,0 +1,43 @@
+name: SSH notification lifecycle probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install Rust and private tmux fixture dependency
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          if ! command -v tmux >/dev/null 2>&1; then brew install tmux; fi
+      - name: Build diagnostic Rust ABI and CLI
+        run: cargo build --locked -p zmux-native-bridge -p zmux
+      - name: Exercise actual SSH and nested tmux disconnects
+        run: |
+          mkdir -p dist/ssh-probe
+          plain=0
+          nested=0
+          python3 -B tools/claude-notification-acceptance/run.py \
+            --library target/debug/libzmux_native_bridge.dylib --cli target/debug/zmux \
+            > dist/ssh-probe/plain.json 2> dist/ssh-probe/plain.log || plain=$?
+          python3 -B tools/claude-notification-acceptance/run.py \
+            --library target/debug/libzmux_native_bridge.dylib --cli target/debug/zmux --via-tmux \
+            > dist/ssh-probe/tmux.json 2> dist/ssh-probe/tmux.log || nested=$?
+          cat dist/ssh-probe/plain.log dist/ssh-probe/tmux.log
+          test "$plain" -eq 0 && test "$nested" -eq 0
+      - name: Retain bounded diagnostic receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ssh-notification-probe-${{ github.sha }}
+          path: dist/ssh-probe/
+          if-no-files-found: warn
+          retention-days: 7
