@@ -1,6 +1,7 @@
 //! Stable object addressing and ownership checks. Resolution uses one immutable model revision.
 use crate::{
-    Action, Axis, Direction, Navigation, PaneId, Snapshot, SurfaceId, WindowId, WorkspaceId,
+    Action, Axis, Direction, Navigation, PaneId, Snapshot, SurfaceId, WindowId, WorkspaceGroupId,
+    WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
@@ -10,6 +11,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
+    WorkspaceGroup,
     Window,
     Workspace,
     Pane,
@@ -18,6 +20,7 @@ pub enum TargetKind {
 impl fmt::Display for TargetKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::WorkspaceGroup => "workspace_group",
             Self::Window => "window",
             Self::Workspace => "workspace",
             Self::Pane => "pane",
@@ -51,6 +54,7 @@ impl TargetRef {
         if let Some((prefix, id)) = self.0.split_once(':') {
             let id = positive(id)?;
             return match prefix {
+                "workspace_group" => Ok(Selector::Id(Some(TargetKind::WorkspaceGroup), id)),
                 "window" => Ok(Selector::Id(Some(TargetKind::Window), id)),
                 "workspace" => Ok(Selector::Id(Some(TargetKind::Workspace), id)),
                 "pane" => Ok(Selector::Id(Some(TargetKind::Pane), id)),
@@ -90,7 +94,9 @@ enum Selector {
 pub enum TargetError {
     #[error("workspace model changed: expected revision {expected}, current revision {actual}")]
     StaleRevision { expected: u64, actual: u64 },
-    #[error("target must be a UUID, positive ID, workspace:N/pane:N/surface:N/tab:N, or index:N")]
+    #[error(
+        "target must be a UUID, positive ID, window:N/workspace:N/workspace_group:N/pane:N/surface:N/tab:N, or index:N"
+    )]
     InvalidTarget,
     #[error("expected a {expected} target, got {actual}")]
     WrongKind {
@@ -197,6 +203,38 @@ impl Snapshot {
         }
         Ok((owner, workspace))
     }
+    pub fn resolve_workspace_group(
+        &self,
+        handle: &TargetRef,
+        window: Option<WindowId>,
+    ) -> Result<WorkspaceGroupId, TargetError> {
+        let id = if let Selector::Index(index) = handle.selector()? {
+            let window = window.ok_or(TargetError::NoFocus(TargetKind::Window))?;
+            self.workspace_groups_in_window(window)
+                .get(usize::try_from(index - 1).unwrap_or(usize::MAX))
+                .map(|g| g.id)
+                .ok_or_else(|| TargetError::NotFound {
+                    kind: TargetKind::WorkspaceGroup,
+                    target: handle.to_string(),
+                })?
+        } else {
+            WorkspaceGroupId(
+                self.resolve_handle(handle, TargetKind::WorkspaceGroup, None, None)?
+                    .id,
+            )
+        };
+        let group = self
+            .workspace_groups
+            .iter()
+            .find(|g| g.id == id)
+            .expect("resolved live group");
+        if window.is_some_and(|id| group.window_id != id) {
+            return Err(TargetError::ScopeMismatch {
+                kind: TargetKind::WorkspaceGroup,
+            });
+        }
+        Ok(id)
+    }
     pub fn object_uuid(&self, kind: TargetKind, id: u64) -> Uuid {
         Uuid::new_v5(&self.identity_namespace, format!("{kind}:{id}").as_bytes())
     }
@@ -227,6 +265,21 @@ impl Snapshot {
                         Some(pane.id),
                     ));
                 }
+            }
+        }
+        for window in &self.windows {
+            for (index, group) in self
+                .workspace_groups_in_window(window.id)
+                .into_iter()
+                .enumerate()
+            {
+                result.push(self.identity(
+                    TargetKind::WorkspaceGroup,
+                    group.id.0,
+                    index + 1,
+                    group.workspace_ids[0],
+                    None,
+                ));
             }
         }
         result

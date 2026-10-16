@@ -135,6 +135,7 @@ fn worker(directory: &Directory) -> Worker {
         windows,
         window_result: None,
         workspace_order_result: None,
+        workspace_group_result: None,
         surface_order_result: None,
         download_result: None,
         profiles,

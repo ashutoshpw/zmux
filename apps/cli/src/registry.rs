@@ -96,6 +96,22 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "Run one supported local Zellij0.43.0 owner through an exact process-bound foreground client. Requires terminal stdin/stdout and a committed private reservation. Start is never replayed after uncertainty; attach never creates or adopts. List/status distinguish live identities from finite completion authenticated by the original retained supervisor. Explicit cleanup only retires the selected completed generation after durable consumption and frontend release. Automatic close/prune, detached start and GUI attachment are unavailable."
     ),
     command!(
+        "workspace",
+        "navigate",
+        false,
+        true,
+        "workspace group create --name NAME --from HANDLE,HANDLE [--external-id KEY | --idempotency-key KEY] | list | rename GROUP --name NAME | collapse|expand GROUP | add --group GROUP --workspace HANDLE | remove --workspace HANDLE | set-anchor --group GROUP --workspace HANDLE | move GROUP --index INTEGER | ungroup|delete GROUP [--window HANDLE] [--expect-revision N] [--json]",
+        "Original bounded existing-workspace groups. create requires --name and explicit --from HANDLE,HANDLE; it never creates an anchor shell. Stable workspace_group:N and UUID handles survive order changes. --window is a hard constraint; index:N is one-based within the selected window. Groups remain contiguous, metadata changes preserve focus and live Sessions. External identity is window scoped and retry returns the existing group before resolving stale initial members. delete and ungroup dissolve only the container; destructive close/generated-anchor cleanup, pin/color/icon, focus/new-workspace, native group presentation/navigation and full reference output parity remain unavailable. move --index uses a signed final workspace slot after removing the group block; values clamp and insertion cannot split another group. Results are JSON; --json is optional."
+    ),
+    command!(
+        "workspace-group",
+        "navigate",
+        false,
+        true,
+        "workspace-group create --name NAME --from HANDLE,HANDLE [--external-id KEY | --idempotency-key KEY] | list | rename GROUP --name NAME | collapse|expand GROUP | add --group GROUP --workspace HANDLE | remove --workspace HANDLE | set-anchor --group GROUP --workspace HANDLE | move GROUP --index INTEGER | ungroup|delete GROUP [--window HANDLE] [--expect-revision N] [--json]",
+        "Original bounded existing-workspace groups. create requires --name and explicit --from HANDLE,HANDLE; it never creates an anchor shell. Stable workspace_group:N and UUID handles survive order changes. --window is a hard constraint; index:N is one-based within the selected window. Groups remain contiguous, metadata changes preserve focus and live Sessions. External identity is window scoped and retry returns the existing group before resolving stale initial members. delete and ungroup dissolve only the container; destructive close/generated-anchor cleanup, pin/color/icon, focus/new-workspace, native group presentation/navigation and full reference output parity remain unavailable. move --index uses a signed final workspace slot after removing the group block; values clamp and insertion cannot split another group. Results are JSON; --json is optional."
+    ),
+    command!(
         "reorder-workspace",
         "navigate",
         false,
@@ -109,7 +125,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         false,
         true,
         "reorder-workspaces --order HANDLE,HANDLE,... [--window HANDLE] [--dry-run] [--expect-revision N]",
-        "Place listed workspaces first within one window, preserving the relative order of unlisted workspaces and all focus. Empty, duplicate and cross-window entries reject atomically. Dry-run is read-only. Current workspaces are ungrouped; pinned/group partition compatibility is unresolved."
+        "Place listed workspaces first within one window, preserving the relative order of unlisted workspaces and all focus. Empty, duplicate and cross-window entries reject atomically. Dry-run is read-only. Existing group blocks and anchors must remain intact; pin-tier compatibility is unresolved."
     ),
     command!(
         "move-workspace-to-window",

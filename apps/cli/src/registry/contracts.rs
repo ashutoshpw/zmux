@@ -323,6 +323,93 @@ fn definitions() -> Vec<Contract> {
     surface_order.argument_rules.push(json!({"exactly_one":["index","before","after"], "subject":"one positional or --surface; legacy [SURFACE] INDEX retained", "mutually_exclusive":["focus","no_focus"]}));
     surface_order.limitations = "Same pane only. Signed final index clamps; both self anchors are no-ops. Default focus false also applies to legacy [SURFACE] INDEX. Native focus failure leaves committed order; never replay after uncertainty. Full frozen text/error/protocol compatibility remains unverified.";
     result.push(surface_order);
+    for (verb, mut operands, operation) in [
+        ("list", vec![], "list"),
+        (
+            "create",
+            vec!["--name", "Project", "--from", "workspace:1,workspace:2"],
+            "create",
+        ),
+        (
+            "rename",
+            vec!["workspace_group:1", "--name", "Renamed"],
+            "rename",
+        ),
+        ("collapse", vec!["workspace_group:1"], "set_collapsed"),
+        ("expand", vec!["workspace_group:1"], "set_collapsed"),
+        (
+            "add",
+            vec!["--group", "workspace_group:1", "--workspace", "workspace:2"],
+            "add",
+        ),
+        ("remove", vec!["--workspace", "workspace:2"], "remove"),
+        (
+            "set-anchor",
+            vec!["--group", "workspace_group:1", "--workspace", "workspace:2"],
+            "set_anchor",
+        ),
+        ("move", vec!["workspace_group:1", "--index", "0"], "move"),
+        ("ungroup", vec!["workspace_group:1"], "ungroup"),
+        ("delete", vec!["workspace_group:1"], "ungroup"),
+    ] {
+        // Discovery must stay independent of ambient/local-tmux caller claims.
+        // These are parser probes, so an explicit window is never resolved live.
+        operands.extend(["--window", "window:1"]);
+        let mut args = vec![
+            option("window", &["--window"], ValueKind::Target),
+            option("json", &["--json"], ValueKind::Flag),
+            option(
+                "expected_model_revision",
+                &["--expect-revision"],
+                ValueKind::Integer(0, u64::MAX),
+            ),
+        ];
+        if verb == "create" {
+            args.extend([
+                option("name", &["--name"], ValueKind::Text),
+                option("members", &["--from"], ValueKind::Text),
+                option(
+                    "external_identity",
+                    &["--external-id", "--idempotency-key"],
+                    ValueKind::Text,
+                ),
+            ]);
+        } else if verb != "list" {
+            if verb != "remove" {
+                args.push(positional("group", ValueKind::Target, false));
+                args.push(option("group_option", &["--group"], ValueKind::Target));
+            }
+            if ["add", "remove", "set-anchor"].contains(&verb) {
+                args.push(option("workspace", &["--workspace"], ValueKind::Target));
+            }
+            if verb == "rename" {
+                args.push(option("name", &["--name"], ValueKind::Text));
+            }
+            if verb == "move" {
+                args.push(option("index", &["--index"], ValueKind::SignedInteger));
+            }
+        }
+        for arg in &mut args {
+            arg.required = (arg.name == "name" && ["create", "rename"].contains(&verb))
+                || (arg.name == "members" && verb == "create")
+                || (arg.name == "workspace" && ["add", "remove", "set-anchor"].contains(&verb))
+                || (arg.name == "index" && verb == "move")
+                || (arg.name == "group_option" && ["add", "set-anchor"].contains(&verb));
+        }
+        if ["add", "set-anchor"].contains(&verb) {
+            args.retain(|arg| arg.name != "group");
+        }
+        let mut c = contract(
+            &format!("workspace group {verb}"),
+            &operands,
+            args,
+            "workspace_group",
+        );
+        c.expected.push(("/request/action/operation", operation));
+        c.limitations = "Original nonempty existing-workspace groups only. workspace-group is a permanent spelling alias. No generated anchors, destructive close, pin/color/icon, group focus/new-workspace or native group presentation/navigation. Groups are contiguous; mutations preserve live children and focus. Group names are labels. External identity is window scoped. Stable UUID/ref selectors derive their live owner; index:N and list use explicit/caller window context; stale scope refuses. move --index is a signed final workspace slot after removing the whole block. All results JSON; full frozen output/error compatibility is unverified.";
+        c.argument_rules.push(json!({"create":"requires --name and --from; --external-id and --idempotency-key are mutually exclusive", "group":"one positional handle or --group where supported", "delete":"dissolve only; --close-workspaces refuses", "window":"hard constraint", "index":"one-based group selector; zero-based final workspace slot for move"}));
+        result.push(c);
+    }
     let mut single = contract(
         "reorder-workspace",
         &["workspace:1", "--index", "0"],
@@ -356,7 +443,7 @@ fn definitions() -> Vec<Contract> {
         .push(("dry_run", "/request/dry_run"));
     single.defaults = json!({"dry_run":false});
     single.expected.push(("/request/order/operation", "single"));
-    single.limitations = "Ungrouped canonical window order only. index:N targets are one-based within the selected window; final --index is zero-based and clamps. After-self advances one place, clamped. Full text/error/protocol and pin/group parity unresolved.";
+    single.limitations = "Existing group blocks/anchors remain intact. index:N targets are one-based within the selected window; final --index is zero-based and clamps. After-self advances one place, clamped. Full text/error/protocol and pin/group parity unresolved.";
     result.push(single);
     let mut bulk = contract(
         "reorder-workspaces",
@@ -377,7 +464,7 @@ fn definitions() -> Vec<Contract> {
     bulk.default_pointers.push(("dry_run", "/request/dry_run"));
     bulk.defaults = json!({"dry_run":false});
     bulk.expected.push(("/request/order/operation", "bulk"));
-    bulk.limitations = "Stable prefix order in one ungrouped window; no pin/group model. Empty/duplicate/cross-window entries reject atomically. Full output/error/protocol parity unresolved.";
+    bulk.limitations = "Stable prefix order in one window; existing group blocks/anchors remain intact. Pin tiers remain unavailable. Empty/duplicate/cross-window entries reject atomically. Full output/error/protocol parity unresolved.";
     result.push(bulk);
     let mut movement = contract(
         "move-workspace-to-window",
