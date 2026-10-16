@@ -71,6 +71,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private(set) var windowUUID: UUID?
     var nativeReady = false
     private var authorizedClose = false
+    private let workspaceMenuContexts = NSMapTable<NSMenu, WorkspaceContextTarget>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     private var bridge: NativeBridge { coordinator.bridge }
     private var browserDownloads: BrowserDownloads { coordinator.browserDownloads }
     private var notificationDelivery: NotificationDelivery { coordinator.notificationDelivery }
@@ -130,6 +131,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private let browserProfilesMenu = NSMenu(title: "Browser Profiles")
     private var browserProfilesWindow: BrowserProfilesWindowController?
     private var workspaceCount = 1
+    private var presentedUnreadCount: Int?
     private var didSetInitialTerminalFocus = false
     private var detachedContentResponder = false
     private var pendingBrowserFocus: UInt64?
@@ -461,6 +463,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         applySidebarLayout()
         window.makeKeyAndOrderFront(nil); NSApp.activate()
         try await waitUntil { $0.workspace != nil && $0.frames.first?.snapshot?.state == "running" && self.nativeReady && self.window.isKeyWindow && NSApp.isActive }
+        guard let terminal = focusedTerminal, let frame = snapshot?.frames.first else {
+            throw BridgeFailure(message: "Native terminal damage fixture has no presenter")
+        }
+        try TerminalDamageSmoke.validate(view: terminal, frame: frame)
         guard let content = window.contentView else { throw BridgeFailure(message: "Sidebar fixture has no content view") }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
         func click(_ view: NSView) throws {
@@ -614,9 +620,16 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard !sidebarCollapsed, abs(sidebarContainer.bounds.width - 224) < 1 else { throw BridgeFailure(message: "Sidebar toggle did not restore its width") }
         try unchanged(); try geometry()
         try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar.png"))
+        let windowScopingVerified = snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true
+        guard let statusMenu = coordinator.statusMenu else { throw BridgeFailure(message: "Application has no macOS status menu") }
+        try await statusMenu.validateNativeMenu(report: report.deletingLastPathComponent().appendingPathComponent("native-status-menu.json"),
+            contextMenu: { id in
+                guard let workspace = self.snapshot?.model.workspaces.first(where: { $0.id == id }) else { return nil }
+                return self.workspaceMenu(for: workspace)
+            }, cli: { try await self.nativeCLI($0, externalCaller: true) })
         let receipt: [String: Bool] = ["compact_toolbar": true, "visible_toggle": true, "groups": true, "group_menus": true,
             "collapse_preserves_terminal": true, "focus_preserved": true, "sidebar_restored": true, "notification_toggle": true,
-            "window_scoping": snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true]
+            "window_scoping": windowScopingVerified, "native_terminal_damage": true]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
     fileprivate func captureSidebarImage(_ url: URL) throws {
@@ -628,6 +641,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     func windowDidResize(_ notification: Notification) { applySidebarLayout() }
+    func windowDidMiniaturize(_ notification: Notification) { coordinator.windowMiniaturizationChanged(self, minimized: true) }
+    func windowDidDeminiaturize(_ notification: Notification) { coordinator.windowMiniaturizationChanged(self, minimized: false) }
 
     func appActive(_ active: Bool) {
         coordinator.appActive(active)
@@ -982,7 +997,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             detail = "No terminal"
         }
         mainHeader.update(title: title, detail: detail, error: isError)
-        window.title = title
+        if window.title != title { window.title = title }
         window.isDocumentEdited = focusedPane.flatMap { files[$0.selectedSurface]?.hasUnsavedChanges } ?? false
     }
 
@@ -1166,6 +1181,18 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     private func workspaceMenu(for workspace: Workspace) -> NSMenu {
         let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
+        if let snapshot, let uuid = snapshot.workspaceIdentities.first(where: { $0.workspaceId == workspace.id })?.uuid {
+            workspaceMenuContexts.setObject(WorkspaceContextTarget(namespace: snapshot.model.identityNamespace,
+                workspace: workspace.id, uuid: uuid), forKey: menu)
+        }
+        populateWorkspaceMenu(menu, workspace: workspace)
+        return menu
+    }
+
+    private func populateWorkspaceMenu(_ menu: NSMenu, workspace: Workspace) {
+        menu.removeAllItems()
         let rename = menu.addItem(withTitle: "Rename Workspace…", action: #selector(renameWorkspaceFromMenu(_:)), keyEquivalent: "")
         rename.target = self
         rename.representedObject = NSNumber(value: workspace.id)
@@ -1174,15 +1201,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             if let owner = shared.model.windows.first(where: { $0.workspaceIds.contains(workspace.id) }),
                let index = owner.workspaceIds.firstIndex(of: workspace.id),
                let windowUUID = coordinator.mainWindowHosts[MainWindowIdentity(namespace: shared.model.identityNamespace, windowId: owner.id)]?.windowUUID {
-                let arrange = NSMenu(title: "Reorder Workspace")
-                arrange.autoenablesItems = false
+                menu.addItem(.separator())
                 for (title, destination) in [("Move Up", index - 1), ("Move Down", index + 1), ("Move to Top", 0), ("Move to Bottom", owner.workspaceIds.count - 1)] {
-                    let item = arrange.addItem(withTitle: title, action: #selector(reorderWorkspaceFromMenu(_:)), keyEquivalent: "")
+                    let item = menu.addItem(withTitle: title, action: #selector(reorderWorkspaceFromMenu(_:)), keyEquivalent: "")
                     item.target = self
                     item.isEnabled = destination >= 0 && destination < owner.workspaceIds.count && destination != index
                     item.representedObject = WorkspaceOrderTarget(namespace: shared.model.identityNamespace, workspace: workspaceUUID, window: windowUUID, index: destination, revision: shared.model.revision)
                 }
-                menu.addItem(withTitle: "Reorder Workspace", action: nil, keyEquivalent: "").submenu = arrange
             }
             let move = NSMenu(title: "Move to Window")
             for (index, window) in shared.model.windows.enumerated() where !window.workspaceIds.contains(workspace.id) {
@@ -1202,7 +1227,62 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let close = menu.addItem(withTitle: "Close Workspace", action: #selector(closeWorkspaceFromMenu(_:)), keyEquivalent: "")
         close.target = self
         close.representedObject = NSNumber(value: workspace.id)
-        return menu
+        appendWorkspaceAttention(to: menu, workspace: workspace)
+        menu.addItem(.separator())
+        let copy = menu.addItem(withTitle: "Copy Workspace ID", action: #selector(copyWorkspaceID(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.copy-id")
+        copy.representedObject = workspaceMenuContexts.object(forKey: menu)
+        copy.isEnabled = copy.representedObject != nil
+    }
+
+    private func appendWorkspaceAttention(to menu: NSMenu, workspace: Workspace) {
+        guard let snapshot else { return }
+        let records = snapshot.notifications.filter { $0.identityNamespace == snapshot.model.identityNamespace && $0.workspaceId == workspace.id }
+        menu.addItem(.separator())
+        let read = menu.addItem(withTitle: "Mark Workspace as Read", action: #selector(mutateWorkspaceNotifications(_:)), keyEquivalent: "")
+        read.target = self; read.isEnabled = records.contains { !$0.read }
+        read.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.read")
+        read.representedObject = NotificationMenuMutationTarget(.init(snapshot: snapshot, workspace: workspace.id, mutation: .markRead))
+        let latest = menu.addItem(withTitle: "Clear Latest Notification", action: #selector(mutateWorkspaceNotifications(_:)), keyEquivalent: "")
+        latest.target = self; latest.isEnabled = !records.isEmpty
+        latest.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.clear-latest")
+        if let id = records.max(by: { $0.id < $1.id })?.id {
+            latest.representedObject = NotificationMenuMutationTarget(.init(snapshot: snapshot, notification: id, mutation: .clear))
+        }
+        let notifications = NSMenu(title: "Notifications")
+        notifications.autoenablesItems = false
+        for record in records.reversed() {
+            notifications.addItem(StatusMenuController.notificationItem(record, snapshot: snapshot, target: self,
+                action: #selector(openWorkspaceNotification(_:))))
+        }
+        if records.isEmpty {
+            let empty = notifications.addItem(withTitle: "No Notifications", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+        }
+        menu.addItem(withTitle: "Notifications", action: nil, keyEquivalent: "").submenu = notifications
+    }
+
+    @objc private func mutateWorkspaceNotifications(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? NotificationMenuMutationTarget else { return }
+        enqueue(.notificationMutation(target.selection))
+    }
+    @objc private func openWorkspaceNotification(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? NotificationMenuOpenTarget else { return }
+        notificationDelivery.openInbox(target.target)
+    }
+    @objc private func copyWorkspaceID(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? WorkspaceContextTarget,
+              let snapshot, snapshot.model.identityNamespace == target.namespace,
+              snapshot.model.workspaces.contains(where: { $0.id == target.workspace }),
+              snapshot.workspaceIdentities.contains(where: { $0.workspaceId == target.workspace && $0.uuid == target.uuid }) else {
+            showError("Workspace is no longer available")
+            return
+        }
+        NSPasteboard.general.clearContents()
+        if !NSPasteboard.general.setString(target.uuid.uuidString.lowercased(), forType: .string) {
+            showError("Unable to copy workspace ID")
+        }
     }
 
     @objc private func showWorkspaceOptions(_ sender: NSView) {
@@ -1517,6 +1597,17 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if let context = workspaceMenuContexts.object(forKey: menu) {
+            guard let snapshot, snapshot.model.identityNamespace == context.namespace,
+                  let workspace = snapshot.model.workspaces.first(where: { $0.id == context.workspace }) else {
+                menu.removeAllItems()
+                let item = menu.addItem(withTitle: "Workspace no longer available", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                return
+            }
+            populateWorkspaceMenu(menu, workspace: workspace)
+            return
+        }
         if menu === browserProfilesMenu {
             menu.removeAllItems()
             if let state = snapshot?.browserProfiles, !state.loading, state.error == nil {
@@ -1678,11 +1769,14 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     private func updateNotifications(_ snapshot: DesktopSnapshot) {
         let unread = snapshot.notifications.filter { !$0.read }.count
-        NSApp.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
-        notificationButton.image = NSImage(systemSymbolName: unread > 0 ? "bell.badge.fill" : "bell", accessibilityDescription: "Notifications")
-        notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
-        notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
-        notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
+        if presentedUnreadCount != unread {
+            presentedUnreadCount = unread
+            NSApp.dockTile.badgeLabel = unread > 0 ? String(unread) : nil
+            notificationButton.image = NSImage(systemSymbolName: unread > 0 ? "bell.badge.fill" : "bell", accessibilityDescription: "Notifications")
+            notificationButton.contentTintColor = unread > 0 ? .systemOrange : .secondaryLabelColor
+            notificationButton.toolTip = unread > 0 ? "\(unread) unread notifications" : "Notifications"
+            notificationButton.setAccessibilityLabel("Notifications, \(unread) unread")
+        }
         jumpToUnreadButton.isEnabled = canJumpToUnread
         guard let list = notificationList else { return }
         let key = snapshot.notifications.map { "\($0.id):\($0.read)" }.joined(separator: ",") + ":\(snapshot.model.revision):\(snapshot.notificationsDropped):\(snapshot.nativeNotifications.epoch)"
@@ -1786,8 +1880,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let initialSnapshot = snapshot, let first = initialSnapshot.workspace else {
             throw BridgeFailure(message: "No initial workspace")
         }
-        let expectedControls = Set(["New workspace", "Cloud account", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
-        let accessibleControls = Set((actionButtons + [cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
+        let expectedControls = Set(["New workspace (⌘N)", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
+        let accessibleControls = Set((actionButtons + [sidebarToggleButton, cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
         guard expectedControls.isSubset(of: accessibleControls) else {
             throw BridgeFailure(message: "Native icon controls are missing accessibility labels")
         }
@@ -2701,7 +2795,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         open.performClick(nil)
         try await waitUntil { value in
             guard let selected = value.workspace?.root.panes.first(where: { $0.id == pane })?.selected else { return false }
-            return !beforeReopen.contains(selected.id) && selected.browserProfileId == profile.id
+            return !beforeReopen.contains(selected.id) && selected.browserProfileId == profile.id && browsers[selected.id] != nil
         }
         guard let reopened = focusedPane?.selectedSurface,
               browsers[reopened]?.webView.configuration.websiteDataStore.identifier == profile.id else {
@@ -3241,16 +3335,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
                 if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
-                        try await controller.sidebarGroupingSmoke(report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
-                        try await coordinator.shutdown(); exit(0)
+                        try self.writeSidebarLifecycle(report: report, complete: false)
+                        try await controller.sidebarGroupingSmoke(report: report)
+                        let statusMenu = coordinator.statusMenu
+                        try await coordinator.shutdown()
+                        try statusMenu?.verifyRemovedAfterShutdown()
+                        try self.writeSidebarLifecycle(report: report, complete: true)
+                        exit(0)
                     } catch {
                         FileHandle.standardError.write(Data("Native sidebar smoke failed: \(error)\n".utf8))
                         do {
                             let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                             try controller.captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-failure.png"))
                         } catch { FileHandle.standardError.write(Data("Sidebar failure image unavailable: \(error)\n".utf8)) }
-                        do { try await coordinator.shutdown() } catch { FileHandle.standardError.write(Data("Sidebar cleanup failed: \(error)\n".utf8)) }
+                        do {
+                            try await coordinator.shutdown()
+                            try self.writeSidebarLifecycle(report: report, complete: true)
+                        } catch { FileHandle.standardError.write(Data("Sidebar cleanup failed: \(error)\n".utf8)) }
                         exit(1)
                     }
                 }
@@ -3359,6 +3462,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 coordinator.requestApplicationTermination()
             }
         }
+    }
+
+    private func writeSidebarLifecycle(report: URL, complete: Bool) throws {
+        guard let nonce = ProcessInfo.processInfo.environment["ZMUX_SIDEBAR_NONCE"], UUID(uuidString: nonce) != nil,
+              let source = Bundle.main.object(forInfoDictionaryKey: "ZmuxSourceSHA") as? String, source.count == 40 else {
+            throw BridgeFailure(message: "Sidebar fixture is missing its launch identity")
+        }
+        let evidence: [String: Any] = ["app_pid": ProcessInfo.processInfo.processIdentifier, "nonce": nonce,
+            "source_sha": source, "physical_cleanup_complete": complete]
+        try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
+            .write(to: report.deletingLastPathComponent().appendingPathComponent("native-sidebar-lifecycle.json"), options: .atomic)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) { coordinator?.appActive(true) }

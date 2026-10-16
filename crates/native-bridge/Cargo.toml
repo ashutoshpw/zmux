@@ -18,6 +18,8 @@ serde.workspace = true
 serde_json.workspace = true
 zmux-workspace-core.workspace = true
 zmux-desktop-runtime.workspace = true
+zmux-session-runtime.workspace = true
+zmux-terminal-adapter.workspace = true
 
 # Unsafe is confined to this reviewed foreign-call boundary; all core/runtime crates forbid it.
 [lints.rust]

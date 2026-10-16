@@ -108,6 +108,15 @@ final class WorkspaceRowView: NSControl {
     private var progressWidth: NSLayoutConstraint?
     private var progressSpacing: NSLayoutConstraint?
     private var metadata: WorkspaceMetadata?
+    private struct Presentation: Equatable {
+        let title: String
+        let subtitle: String
+        let selected: Bool
+        let running: Bool
+        let unread: Int
+        let metadata: WorkspaceMetadata?
+    }
+    private var presentation: Presentation?
 
     init(workspaceID: UInt64) {
         self.workspaceID = workspaceID
@@ -198,6 +207,11 @@ final class WorkspaceRowView: NSControl {
     override var acceptsFirstResponder: Bool { true }
 
     func update(title: String, subtitle: String, isSelected: Bool, isRunning: Bool, unread: Int = 0, metadata: WorkspaceMetadata? = nil) {
+        let normalizedMetadata = metadata.flatMap { $0.isEmpty ? nil : $0 }
+        let next = Presentation(title: title, subtitle: subtitle, selected: isSelected,
+                                running: isRunning, unread: unread, metadata: normalizedMetadata)
+        guard next != presentation else { return }
+        presentation = next
         titleLabel.stringValue = title
         subtitleLabel.stringValue = unread > 0 ? "\(unread) unread · \(subtitle)" : subtitle
         statusDot.layer?.backgroundColor = (unread > 0 ? NSColor.systemOrange : (isRunning ? ZmuxPalette.success : ZmuxPalette.inactive)).cgColor
@@ -206,7 +220,7 @@ final class WorkspaceRowView: NSControl {
         terminalIcon.contentTintColor = isSelected ? .white : .secondaryLabelColor
         titleLabel.textColor = isSelected ? .white : .labelColor
         subtitleLabel.textColor = isSelected ? NSColor.white.withAlphaComponent(0.74) : ZmuxPalette.subdued
-        updateMetadata(metadata)
+        updateMetadata(normalizedMetadata)
         metadataButton.setAccessibilityLabel("Show workspace activity for \(title)")
         let activity = self.metadata.map { value in
             "\(value.statuses.count) statuses, \(value.logs.count) log entries, \(value.todos.count) todo items" + (value.progress.map { ", \(Int($0.value * 100)) percent" } ?? "") + (value.pullRequest.map { ", PR #\($0.number)" } ?? "")
@@ -410,6 +424,7 @@ final class MainHeaderView: DraggableChromeView {
     let actions = NSStackView()
     let leadingActions = NSStackView()
     private var iconLeading: NSLayoutConstraint?
+    private var displayedError: Bool?
 
     init() {
         super.init(color: ZmuxPalette.chrome)
@@ -473,6 +488,9 @@ final class MainHeaderView: DraggableChromeView {
     }
 
     func update(title: String, detail: String, error: Bool) {
+        guard titleLabel.stringValue != title || detailLabel.stringValue != detail || displayedError != error else { return }
+        displayedError = error
+        detailLabel.isHidden = !error
         titleLabel.stringValue = title
         detailLabel.stringValue = detail
         titleLabel.toolTip = detail
@@ -718,9 +736,12 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     func updateAttention(_ unread: Int) {
         // The editor's own text is the truth for "edited"; the model bit only mirrors it.
         let edited = owner?.isFileEdited(surface.id) == true || surface.file?.dirty == true
-        titleLabel.stringValue = (unread > 0 ? "● " : "") + (edited ? "• " : "") + surface.title
+        let label = (unread > 0 ? "● " : "") + (edited ? "• " : "") + surface.title
+        let accessibility = surface.title + (edited ? ", edited" : "") + (unread > 0 ? ", \(unread) unread" : "")
+        guard titleLabel.stringValue != label || accessibilityLabel() != accessibility else { return }
+        titleLabel.stringValue = label
         titleLabel.textColor = unread > 0 ? .systemOrange : .labelColor
-        setAccessibilityLabel(surface.title + (edited ? ", edited" : "") + (unread > 0 ? ", \(unread) unread" : ""))
+        setAccessibilityLabel(accessibility)
     }
     @objc private func moveTabLeft() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: -1) }
     @objc private func moveTabRight() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: 1) }
@@ -890,6 +911,7 @@ final class WorkspaceGroupRowView: NSControl {
     private let folder = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
+    private var displayedUnread: Int?
 
     init(group: WorkspaceGroup, namespace: UUID, containsSelection: Bool) {
         self.groupID = group.id
@@ -945,6 +967,8 @@ final class WorkspaceGroupRowView: NSControl {
     }
     override func accessibilityPerformPress() -> Bool { sendAction(action, to: target) }
     func updateAttention(unread: Int) {
+        guard displayedUnread != unread else { return }
+        displayedUnread = unread
         countLabel.stringValue = unread > 0 ? "• \(unread)" : String(memberCount)
         countLabel.textColor = unread > 0 ? .systemOrange : ZmuxPalette.subdued
         countLabel.toolTip = unread > 0 ? "\(unread) unread notifications" : "\(memberCount) workspaces"

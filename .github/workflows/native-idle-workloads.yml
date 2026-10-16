@@ -8,6 +8,10 @@ on:
         type: choice
         options: ['1', '2', '3']
         default: '1'
+      sample_stacks:
+        description: Capture app CPU stacks during warmup
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,7 +40,11 @@ jobs:
       - name: Build and observe owned baseline idle phases
         env:
           WORKLOAD_REPETITIONS: ${{ inputs.repetitions }}
-        run: python3 -B tools/native-idle-workloads/run.py --repetitions "$WORKLOAD_REPETITIONS" --output "$RUNNER_TEMP/native-idle-workloads"
+          SAMPLE_STACKS: ${{ inputs.sample_stacks }}
+        run: |
+          extra=()
+          if [ "$SAMPLE_STACKS" = true ]; then extra+=(--sample-stacks); fi
+          python3 -B tools/native-idle-workloads/run.py --repetitions "$WORKLOAD_REPETITIONS" --output "$RUNNER_TEMP/native-idle-workloads" "${extra[@]}"
       - name: Retain exact sources, app and partial or complete observations
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -50,6 +58,7 @@ jobs:
             ${{ runner.temp }}/native-idle-workloads/child-*.json
             ${{ runner.temp }}/native-idle-workloads/idle-child.py
             ${{ runner.temp }}/native-idle-workloads/*.log
+            ${{ runner.temp }}/native-idle-workloads/stacks-*.txt
             ${{ runner.temp }}/native-idle-workloads/*.zip
             ${{ runner.temp }}/native-idle-workloads/source/
           include-hidden-files: true

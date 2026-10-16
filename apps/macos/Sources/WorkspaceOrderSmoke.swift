@@ -73,7 +73,7 @@ enum WorkspaceOrderSmoke {
         _ = try await cli(["reorder-workspace", String(subject), "--after", String(subject)] + scope, false)
         var advanced = original; advanced.removeFirst(); advanced.insert(subject, at: 1)
         try await settled(advanced)
-        guard let menu = rows().first(where: { $0.workspaceID == subject })?.menu?.items.first(where: { $0.title == "Reorder Workspace" })?.submenu,
+        guard let menu = rows().first(where: { $0.workspaceID == subject })?.menu,
               let item = menu.items.first(where: { $0.title == "Move to Top" }), item.isEnabled else {
             throw BridgeFailure(message: "Workspace row does not expose its real enabled reorder menu")
         }

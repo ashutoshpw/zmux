@@ -2,6 +2,7 @@
 //! It does not yet execute session effects or implement native async rendering callbacks.
 
 pub mod file_channel;
+mod native_frames;
 mod profile_leases;
 mod profile_operations;
 
@@ -59,6 +60,7 @@ enum Entry {
     Buffer(Option<Arc<Vec<u8>>>),
 }
 struct NativeDesktop {
+    frame_history: Mutex<native_frames::History>,
     profile_catalog_directory: Option<PathBuf>,
     profile_lease_directory: Option<PathBuf>,
     runtime: Arc<Desktop>,
@@ -476,6 +478,7 @@ fn create_configured_desktop_with_leases(
         })
         .transpose()?;
     registry.insert(Entry::Desktop(Arc::new(NativeDesktop {
+        frame_history: Mutex::new(Default::default()),
         profile_catalog_directory,
         profile_lease_directory,
         runtime,
@@ -913,6 +916,37 @@ pub extern "C" fn zmux_desktop_snapshot(id: u64, revision: u64) -> ZmuxResult {
         }
         let reservation = Reservation::new()?;
         reservation.publish(serde_json::to_vec(&*snapshot).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Native presentation protocol1, with bounded baseline history. Consumers merge
+/// deltas atomically; unknown revisions/namespaces receive full frames.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_poll_frames(id: u64, revision: u64) -> ZmuxResult {
+    guard(|| {
+        let desktop = native_desktop(id)?;
+        let current = desktop.runtime.snapshot().map_err(|error| match error {
+            DesktopError::Busy => BUSY,
+            _ => INTERNAL,
+        })?;
+        if current.revision == revision {
+            return Ok(0);
+        }
+        let reservation = Reservation::new()?;
+        let mut history = desktop.frame_history.try_lock().map_err(lock_status)?;
+        let previous = history
+            .iter()
+            .find(|s| s.revision == revision && s.namespace == current.model.identity_namespace);
+        let bytes = native_frames::encode(&current, previous).map_err(|_| INTERNAL)?;
+        let result = reservation.publish(bytes)?;
+        history.retain(|s| {
+            s.revision != current.revision && s.namespace == current.model.identity_namespace
+        });
+        while history.len() >= native_frames::BASELINES {
+            history.pop_front();
+        }
+        history.push_back(native_frames::Baseline::new(&current));
+        Ok(result)
     })
 }
 fn shutdown_report(

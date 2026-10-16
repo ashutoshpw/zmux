@@ -271,6 +271,18 @@ pub enum NativeNotificationEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NativeAttentionAction {
+    /// Menu actions retain their observed history boundary and desktop identity.
+    /// Reading/clearing must never consume arrivals after the menu was opened.
+    Mutate {
+        epoch: Uuid,
+        identity_namespace: Uuid,
+        through_id: u64,
+        #[serde(default)]
+        workspace_id: Option<WorkspaceId>,
+        #[serde(default)]
+        notification_id: Option<u64>,
+        mutation: NotificationMenuMutation,
+    },
     Event {
         event: NativeNotificationEvent,
     },
@@ -288,6 +300,13 @@ pub enum NativeAttentionAction {
         target: NotificationTarget,
         text: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationMenuMutation {
+    MarkRead,
+    Clear,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

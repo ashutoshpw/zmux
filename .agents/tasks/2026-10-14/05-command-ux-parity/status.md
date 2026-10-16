@@ -13,14 +13,96 @@
   Swift toolchain) and unrun, so there is no native acceptance or parity claim. No new dependency;
   THIRD_PARTY_NOTICES.md unchanged. Not pushed. See `references/cu14-file-panel.md`.
 
-- Screenshot-driven compact sidebar/group UI in progress. Shared group domain,
-  persistence and CLI integrated (0e77cac/b4aab55/e178d25/ffc635e); full scripts/check
-  passes, including strict Clippy/notices/both ABI and four group core tests.
-  Native UI now uses one32pt titlebar strip, visible expanded/collapsed toggles,
-  bell/workspace toggle, named collapsible headers and membership/context menus.
-  Dedicated manual sidebar native suite and universal artifact runner e7c4750.
-  Native compile, actual mouse/menu/sheet journey and screenshots pending on Actions;
-  no native acceptance or full-parity claim yet. See N01 compact groups reference.
+- Native status/attention slice accepted at `38bfc72`, run38912740671: both Swift
+  slices and all19 sidebar/status flags pass, including actual system menu opening,
+  captured attention mutations, inactive-workspace context actions, cross-window
+  preview opening, minimized/hidden app recovery and keep-awake release. Status
+  removal, physical cleanup, exact app PID9350 absence and owned socket removal pass.
+  Parent verified downloaded artifact12051123519, ZIP checksum314a9640...ed3f88,
+  lowercase name/source SHA and equality with the tested executable eb9b9d0e...82721a.
+  N03 records the exact receipt. Full portable checks pass at reduced concurrency;
+  broader CM/advanced menu and V01 parity gates remain open. Universal workflow
+  38912733102 remains separate from this accepted arm64 runtime scope.
+
+- Activation probe `38911884391` confirms cooperative/menu activation unhides but
+  does not gain active/key state; NSRunningApplication returns false. Launch
+  Services controls confirm the same PID and active/key state. Shared native
+  activation now uses that exact registered process with bounded/coalesced waits,
+  no new-instance/substitute request and live token/epoch guards. N03 records the
+  actual observations; the packaged hidden-app assertion remains required.
+  Full portable checks pass at reduced concurrency (`RUST_TEST_THREADS=2`), with
+  unchanged assertions/timeouts; `/tmp/zmux-status-activation-probe-check-2.log`.
+
+- Run `38909353414` at `5d1858d` fails hidden-application restoration after the
+  earlier menu/minimization/power steps. Isolate AppKit activation with the finite
+  standalone native-control activation scenario before changing production again.
+  Its actual framework observations are diagnostic, never a product acceptance
+  result. All failed runs retain actual app/socket cleanup/PID absence evidence.
+  The portable recheck hit an existing multiplexer elapsed-time bound during host
+  load1378/24CPUs; the same exact test passes isolated. An unchanged full rerun with
+  `RUST_TEST_THREADS=2` is running; neither the timeout nor assertions are relaxed.
+
+- Reassessment after native run `38907593402` at `f712e5e`: minimized restoration
+  passes, but the new close-all scenario incorrectly assumes menu-bar-only mode.
+  The existing shared contract intentionally saves/quits on final close. Keep its
+  tests/policy and verify actual app hide/Show with unchanged status/child identity
+  instead. Show now explicitly unhides. Receipt `hidden_window_recovery` replaces
+  the incorrect claim; background recovery after final close remains unfinished.
+  N03 records source evidence and why this is a fixture-contract correction.
+  Full local `scripts/check` passes (`/tmp/zmux-status-menu-hidden-window-check.log`).
+
+- Run `38906067122` at `84c13ad` passes the earlier preview point and reaches the
+  minimized-window check. Show chose the sibling that became key after minimizing
+  the target. Native minimization history now restores the most recently minimized
+  live window before a visible sibling; the fixture is retained. Actual cleanup
+  and PID absence pass on the failed run. Revalidation follows this owner repair.
+  Full local `scripts/check` passes; `/tmp/zmux-status-menu-window-restore-check.log`.
+
+- Status/native run `38903386218` at `96e13ea` passes both Swift slices and package
+  build, then catches a closed-menu refresh gap after captured clear/read actions.
+  `menuDidClose` now applies the retained snapshot without requiring a new event;
+  assertions are retained. Actual app/socket cleanup and PID absence pass on the
+  failed run; no downloadable app artifact is published. Native revalidation is
+  required after this repair. Early Show waits for a pending window-ready receipt
+  rather than creating a duplicate startup window.
+  Full `scripts/check` passes after repair; log
+  `/tmp/zmux-status-menu-refresh-check-2.log`. The preceding run terminated with
+  exit status143 (cause unconfirmed) and is not counted as passing; the unchanged verification rerun passes.
+
+- Status-menu implementation now creates the actual NSStatusItem, original
+  attention icon and shared notification previews/read/clear/open actions, restores
+  windows, exposes Cloud Account and owns an IOKit keep-awake assertion. Context
+  menus gain scoped attention controls, notification previews, UUID copying and
+  direct ordering. Native mutations preserve the captured epoch/namespace/cursor
+  and exact scope. Red regression `5b086a0`, focused green and full `scripts/check`
+  pass (`/tmp/zmux-status-menu-check.log`). Native Swift type-check/link/runtime
+  verification requires the expanded packaged sidebar/status Actions suite.
+  N02/N03 retain the unfinished advanced menu actions; full parity is not claimed.
+
+- macOS menu-bar screenshot exposes another missing native surface: no NSStatusItem
+  is constructed anywhere in the current app. N03 records icon/attention controls,
+  search/resources/power/profiling/cloud/preferences/updates and shared shutdown
+  requirements. This is implementation scope, not an OS permission/visibility
+  setting. Existing sidebar/native checks do not verify this surface.
+  Audit-document update passes `scripts/check` (workspace tests, strict Clippy,
+  notices and both C ABI suites); log `/tmp/zmux-workspace-menu-audit-check.log`.
+  No application code or new macOS artifact is delivered by this update.
+
+- Workspace context menu comparison confirms substantial unfinished behavior.
+  N02 records all 22 screenshot action families, existing conditional controls,
+  shared-owner gaps and the native acceptance matrix. The earlier audit already
+  identified many of these; compact-sidebar tests validated a subset and did not
+  satisfy the full-parity delivery criterion. No menu fix or full-parity build is
+  established by this audit. See `references/n02-workspace-context-menu.md`.
+
+- Compact sidebar/group UI accepted on macOS: source cdbb392, run38890159245
+  passes all9 interaction flags, real second-window scoping and nonce-bound app
+  physical cleanup/PID absence. Parent inspected both toggle-state screenshots,
+  ZIP integrity/source/app name and equality with the tested executable. Apple
+  Silicon artifact12042350763; SHA256 a507e380...166895. Both Swift slices pass;
+  shared core/CLI/persistence checks pass. See N01 compact groups reference.
+  This closes the requested compact chrome, visible sidebar toggle and native
+  group controls slice; full product parity remains in progress.
 
 - Hosted Linux Foundation112e55a exposed an execution-admission fixture race:
   shell redirection creates the file before writing. Regression75ddce1 reproduces
