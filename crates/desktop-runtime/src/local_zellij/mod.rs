@@ -13,7 +13,9 @@ use std::{
     time::Instant,
 };
 use uuid::Uuid;
-use zmux_remote_runtime::local_zellij::{Record, observer_protocol::FrontendReceipt};
+use zmux_remote_runtime::local_zellij::{
+    Record, completion::TerminalReceiptV1, observer_protocol::FrontendReceipt,
+};
 use zmux_session_runtime::{EngineOptions, Session, SessionError, child::ProcessIdentity};
 use zmux_workspace_core::LocalZellijIdentity;
 
@@ -88,6 +90,11 @@ pub(crate) struct LaunchRequest {
     pub environment: Vec<(String, String)>,
 }
 pub(crate) enum LaunchEvent {
+    WorkloadFinished {
+        correlation: Correlation,
+        receipt: Box<TerminalReceiptV1>,
+        deadline: Instant,
+    },
     OwnerReserved {
         correlation: Correlation,
         owner_uuid: Uuid,
@@ -101,7 +108,18 @@ pub(crate) struct CheckpointSaved {
     pub document_revision: u64,
 }
 pub(crate) type EventSender = SyncSender<LaunchEvent>;
-pub(crate) type AuthorizationReceiver = Receiver<CheckpointSaved>;
+pub(crate) struct CompletionSaved {
+    pub correlation: Correlation,
+    pub owner_generation: Uuid,
+    pub receipt_digest: String,
+    pub document_revision: u64,
+    pub io_id: u64,
+}
+pub(crate) enum Authorization {
+    Reservation(CheckpointSaved),
+    Completion(CompletionSaved),
+}
+pub(crate) type AuthorizationReceiver = Receiver<Authorization>;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Observation {
@@ -126,7 +144,7 @@ pub(crate) struct ClientReady {
     pub session: Session,
     pub observer: ObserverHandle,
     pub record: Record,
-    pub frontend: ProcessIdentity,
+    pub frontend: Option<ProcessIdentity>,
 }
 pub(crate) struct ClientLaunchFailure {
     pub error: SessionError,

@@ -60,9 +60,14 @@ struct IoOperation {
     save_revision: Option<u64>,
     authoritative: bool,
     checkpoint: Option<CheckpointOperation>,
+    completion: Option<CompletionOperation>,
 }
 struct CheckpointOperation {
     seal: crate::zellij_coordinator::CheckpointSeal,
+    document: SessionDocument,
+}
+struct CompletionOperation {
+    seal: crate::zellij_coordinator::CompletionSeal,
     document: SessionDocument,
 }
 pub(crate) struct SessionPersistence {
@@ -525,6 +530,111 @@ impl Worker {
         );
         Ok(())
     }
+    pub(crate) fn zellij_completion_admission_available(&self) -> bool {
+        !self.session_transition_pending()
+            && !self
+                .model
+                .snapshot()
+                .closed_items
+                .iter()
+                .any(|item| item.restoring)
+            && self
+                .persistence
+                .as_ref()
+                .is_none_or(|p| p.checkpoint_inflight.is_none())
+    }
+    pub(crate) fn zellij_workload_finished(
+        &mut self,
+        pending: crate::zellij_coordinator::PendingCompletion,
+    ) -> Result<(), DesktopError> {
+        use crate::zellij_coordinator::{CheckpointSeal, CompletionSeal};
+        use std::sync::atomic::Ordering;
+        let p = self.persistence.as_ref().ok_or_else(|| {
+            failure("completed local Zellij history requires session persistence")
+        })?;
+        if !p.snapshot.autosave_enabled || !self.zellij_completion_admission_available() {
+            return Err(failure("completed workload persistence is unavailable"));
+        }
+        let id = pending.correlation.operation_id;
+        let job = self
+            .zellij_consumer(id)
+            .ok_or_else(|| failure("completed workload consumer disappeared"))?;
+        if job.correlation != pending.correlation
+            || !self.zellij_job_target_matches(job)
+            || job.cancel.load(Ordering::Acquire)
+            || Instant::now() >= pending.deadline
+            || self.shared.stop.load(Ordering::Acquire)
+        {
+            return Err(failure(
+                "completed workload target or authorization expired",
+            ));
+        }
+        let identity = job
+            .identity
+            .clone()
+            .ok_or_else(|| failure("completed workload has no bound identity"))?;
+        let history = zmux_workspace_core::LocalZellijCompletion {
+            receipt: pending.receipt.clone(),
+            viewport: pending.viewport,
+        };
+        let candidate = self
+            .model
+            .prepare_local_zellij_completion(job.surface, job.session, &identity, history)
+            .map_err(failure)?;
+        self.profiles.validate_model(&candidate.snapshot())?;
+        self.validate_todo_candidate(&candidate)?;
+        if !self.checkpoint_pending_safe(&candidate, None) {
+            return Err(failure(
+                "completed workload checkpoint includes provisional launches",
+            ));
+        }
+        let captured = self.capture_session_metadata(candidate.clone());
+        let document = captured.session_document().map_err(failure)?;
+        crate::persistence::validate_document_size(&document).map_err(failure)?;
+        let revision = captured.snapshot().revision;
+        let mut seal = CompletionSeal {
+            target: CheckpointSeal {
+                correlation: job.correlation.clone(),
+                session: job.session,
+                surface: job.surface,
+                launch_id: job.launch_id,
+                identity,
+                revision,
+                io_id: 0,
+            },
+            deadline: pending.deadline,
+            generation: pending.receipt.binding.owner_generation,
+            digest: pending.receipt.digest().map_err(failure)?,
+        };
+        let p = self.persistence.as_mut().expect("admitted persistence");
+        let receipt = p.receipt("local_zellij_completion")?;
+        let io_id = match p.io.submit_save(p.path.clone(), document.clone(), true) {
+            Ok(id) => id.0,
+            Err(error) => {
+                p.finish(Some(receipt), Err(error.to_string()));
+                return Err(failure(error));
+            }
+        };
+        seal.target.io_id = io_id;
+        self.model = candidate;
+        p.committed = Some((revision, document.clone()));
+        p.checkpoint_inflight = Some(io_id);
+        p.checkpoint_lineage = true;
+        p.pending.insert(
+            io_id,
+            IoOperation {
+                receipt: Some(receipt),
+                save_revision: Some(revision),
+                authoritative: true,
+                completion: Some(CompletionOperation { seal, document }),
+                ..Default::default()
+            },
+        );
+        self.zellij_consumer_mut(id)
+            .expect("validated consumer")
+            .checkpoint = Some(io_id);
+        Ok(())
+    }
     pub(crate) fn session_command(&mut self, action: SessionCommand) -> Result<(), DesktopError> {
         if self.persistence.is_none() {
             return Err(failure("session persistence is disabled for this desktop"));
@@ -633,6 +743,11 @@ impl Worker {
                             op.checkpoint
                                 .as_ref()
                                 .map(|checkpoint| checkpoint.seal.correlation.operation_id)
+                                .or_else(|| {
+                                    op.completion.as_ref().map(|checkpoint| {
+                                        checkpoint.seal.target.correlation.operation_id
+                                    })
+                                })
                         })
                         .collect();
                     for id in failed {
@@ -660,7 +775,7 @@ impl Worker {
             let Some(op) = op else {
                 continue;
             };
-            if op.checkpoint.is_some()
+            if (op.checkpoint.is_some() || op.completion.is_some())
                 && !matches!(&completion.result, Ok(PersistenceOutcome::Saved) | Err(_))
             {
                 self.load_failed(
@@ -701,18 +816,33 @@ impl Worker {
                     p.latch(format!("reserve durable identifiers: {error}"));
                 }
                 Ok(PersistenceOutcome::Saved) => {
-                    let p = self.persistence.as_mut().expect("enabled");
-                    p.finish(op.receipt, Ok(op.save_revision.unwrap_or(0)));
-                    if op.authoritative {
-                        p.snapshot.last_saved_revision = op.save_revision;
-                        p.autosave_inflight = false;
+                    let (reservation, completed) = {
+                        let p = self.persistence.as_mut().expect("enabled");
+                        p.finish(op.receipt, Ok(op.save_revision.unwrap_or(0)));
+                        if op.authoritative {
+                            p.snapshot.last_saved_revision = op.save_revision;
+                            p.autosave_inflight = false;
+                        }
+                        if p.checkpoint_inflight == Some(completion.operation_id.0) {
+                            p.checkpoint_inflight = None;
+                            if let Some(checkpoint) = op.checkpoint {
+                                p.saved_document = Some(checkpoint.document);
+                                (Some(checkpoint.seal), None)
+                            } else if let Some(checkpoint) = op.completion {
+                                p.saved_document = Some(checkpoint.document);
+                                (None, Some(checkpoint.seal))
+                            } else {
+                                (None, None)
+                            }
+                        } else {
+                            (None, None)
+                        }
+                    };
+                    if let Some(seal) = reservation {
+                        self.authorize_zellij_checkpoint(seal);
                     }
-                    if let Some(checkpoint) = op.checkpoint
-                        && p.checkpoint_inflight == Some(completion.operation_id.0)
-                    {
-                        p.checkpoint_inflight = None;
-                        p.saved_document = Some(checkpoint.document);
-                        self.authorize_zellij_checkpoint(checkpoint.seal);
+                    if let Some(seal) = completed {
+                        self.authorize_zellij_completion(seal);
                     }
                 }
                 Ok(PersistenceOutcome::Loaded(loaded)) => {
@@ -846,6 +976,12 @@ impl Worker {
         dirty
     }
     fn load_failed(&mut self, op: IoOperation, error: String) {
+        if let Some(completion) = &op.completion {
+            self.fail_zellij(
+                completion.seal.target.correlation.operation_id,
+                format!("completed workload checkpoint failed: {error}"),
+            );
+        }
         if let Some(checkpoint) = &op.checkpoint {
             self.fail_zellij(
                 checkpoint.seal.correlation.operation_id,
@@ -862,7 +998,7 @@ impl Worker {
         if op.authoritative {
             p.autosave_inflight = false;
         }
-        if op.checkpoint.is_some() {
+        if op.checkpoint.is_some() || op.completion.is_some() {
             p.checkpoint_inflight = None;
         }
         if op.startup {

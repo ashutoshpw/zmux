@@ -17,6 +17,7 @@ nix = { workspace = true, features = ["user", "socket", "fs", "term"] }
 socket2.workspace = true
 signal-hook.workspace = true
 sha2.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 zmux-session-runtime.workspace = true
 
 [lints]

@@ -172,7 +172,7 @@ fn pending_start(
 ) -> (
     local_zellij::Correlation,
     Uuid,
-    mpsc::Receiver<local_zellij::CheckpointSaved>,
+    mpsc::Receiver<local_zellij::Authorization>,
 ) {
     let pane = worker.model.snapshot().workspaces[0].focused_pane;
     let ticket = worker.model.reserve_local_zellij_surface(pane).unwrap();
@@ -220,6 +220,8 @@ fn pending_start(
             checkpoint: None,
             focus: true,
             authorization,
+            completion_deadline: None,
+            completion_digest: None,
         },
     );
     worker.local_zellij.receipts.push(Receipt {
@@ -237,6 +239,9 @@ fn pending_start(
         namespace_cleaned: false,
         session_joined: false,
         frontend_exit_code: None,
+        workload_exit: None,
+        completion_saved_revision: None,
+        receipt_digest: None,
     });
     (correlation, Uuid::new_v4(), rx)
 }
@@ -304,7 +309,10 @@ fn checkpoint_actual_saved_is_required_and_newer_canonical_edits_survive() {
         .replace_workspace_todos(workspace, vec![todo.clone()])
         .unwrap();
     saved(&mut worker);
-    let accepted = authorization.try_recv().unwrap();
+    let local_zellij::Authorization::Reservation(accepted) = authorization.try_recv().unwrap()
+    else {
+        panic!("expected reservation authorization")
+    };
     assert_eq!(accepted.correlation, correlation);
     assert_eq!(accepted.owner_uuid, owner);
     let document: SessionDocument =
@@ -572,6 +580,9 @@ fn attach_and_start_setup_refusal_publish_no_surface_and_burn_without_leaking_ti
             namespace_cleaned: false,
             session_joined: false,
             frontend_exit_code: None,
+            workload_exit: None,
+            completion_saved_revision: None,
+            receipt_digest: None,
         });
     }
     let topology = serde_json::to_value(worker.model.snapshot().workspaces).unwrap();
@@ -655,5 +666,440 @@ fn reopening_zellij_cannot_bypass_retained_launch_capacity_or_consume_closed_his
     );
     assert!(worker.local_zellij.jobs.is_empty());
     assert!(worker.launch_workers.is_empty());
+    close_writer(&mut worker);
+}
+fn completion_receipt(
+    owner: Uuid,
+) -> zmux_remote_runtime::local_zellij::completion::TerminalReceiptV1 {
+    use zmux_remote_runtime::local_zellij::completion::{
+        CommittedBinding, DOMAIN, TerminalReceiptV1, WorkloadExit,
+    };
+    let identity = |pid, parent_pid, image: &str| zmux_session_runtime::child::ProcessIdentity {
+        pid,
+        parent_pid,
+        uid: 1000,
+        start: [u64::from(pid), 0],
+        boot: Uuid::from_u128(99).to_string(),
+        executable: image.into(),
+    };
+    // Synthetic terminal facts test S01's matching Saved contract, not live
+    // authentication. The actual supervisor/CLI regression owns that proof.
+    let binding = CommittedBinding {
+        version: 1,
+        owner_uuid: owner,
+        owner_generation: Uuid::new_v4(),
+        namespace: serde_json::from_value(serde_json::json!({"root":[1,11],"socket":[1,12]}))
+            .unwrap(),
+        completion_socket: (1, 13),
+        server: identity(101, 1, "/opt/zellij"),
+        supervisor: identity(102, 101, "/opt/zmux"),
+        workload: identity(103, 102, "/bin/sh"),
+    };
+    let binding_digest = binding.digest().unwrap();
+    TerminalReceiptV1 {
+        version: 1,
+        domain: DOMAIN.into(),
+        binding,
+        binding_digest,
+        terminal_sequence: 1,
+        workload_exit: WorkloadExit::Exited(7),
+        child_reaped: true,
+    }
+}
+fn active_completion(
+    worker: &mut Worker,
+) -> (
+    crate::zellij_coordinator::PendingCompletion,
+    mpsc::Receiver<local_zellij::Authorization>,
+) {
+    let (correlation, owner, authorization) = pending_start(worker);
+    worker
+        .zellij_owner_reserved(correlation.clone(), owner)
+        .unwrap();
+    saved(worker);
+    assert!(matches!(
+        authorization.try_recv().unwrap(),
+        local_zellij::Authorization::Reservation(_)
+    ));
+    let receipt = completion_receipt(owner);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut job = worker.local_zellij.jobs.remove(&1).unwrap();
+    worker
+        .launch_certificates
+        .remove(&(job.session, job.launch_id));
+    worker.pending_launches -= 1;
+    // Correlation-only lifecycle control: completion may occur long after the
+    // already connected owner's original startup clock has expired.
+    job.deadline = Instant::now() - Duration::from_secs(1);
+    worker.local_zellij.active.insert(1, job);
+    (
+        crate::zellij_coordinator::PendingCompletion {
+            correlation,
+            receipt,
+            deadline,
+            viewport: None,
+        },
+        authorization,
+    )
+}
+fn observe_completion(
+    worker: &mut Worker,
+    pending: crate::zellij_coordinator::PendingCompletion,
+) -> crate::zellij_coordinator::PendingCompletion {
+    let id = pending.correlation.operation_id;
+    worker
+        .observe_zellij_completion(pending.correlation, pending.receipt, pending.deadline)
+        .unwrap();
+    worker.local_zellij.pending_completions.remove(&id).unwrap()
+}
+#[test]
+fn completed_history_authorizes_only_its_actual_saved_and_outlives_startup_clock() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let (pending, authorization) = active_completion(&mut worker);
+    let expected = pending.receipt.clone();
+    let pending = observe_completion(&mut worker, pending);
+    worker.zellij_workload_finished(pending).unwrap();
+    assert!(
+        authorization.try_recv().is_err(),
+        "queued completion is not actual Saved"
+    );
+    saved(&mut worker);
+    let local_zellij::Authorization::Completion(ack) = authorization.try_recv().unwrap() else {
+        panic!("expected completion Saved")
+    };
+    assert_eq!(ack.owner_generation, expected.binding.owner_generation);
+    assert_eq!(ack.receipt_digest, expected.digest().unwrap());
+    assert!(ack.io_id > 0);
+    assert_eq!(
+        worker.local_zellij.receipts[0].completion_saved_revision,
+        Some(ack.document_revision)
+    );
+    let document: SessionDocument =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    let wire = serde_json::to_value(document).unwrap();
+    let content = &wire["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"];
+    assert_eq!(content["kind"], "completed_local_zellij_terminal");
+    assert_eq!(
+        content["history"]["receipt"],
+        serde_json::to_value(expected).unwrap()
+    );
+    close_writer(&mut worker);
+}
+#[test]
+fn completed_history_queue_refusal_installs_nothing_and_write_failure_never_authorizes() {
+    for refused in [true, false] {
+        let directory = Directory::new();
+        let mut worker = worker(&directory);
+        let (pending, authorization) = active_completion(&mut worker);
+        let pending = observe_completion(&mut worker, pending);
+        let before = worker.model.snapshot();
+        if refused {
+            close_writer(&mut worker);
+            assert!(worker.zellij_workload_finished(pending).is_err());
+            assert_eq!(worker.model.snapshot(), before);
+        } else {
+            // The real writer accepts this Save but cannot replace a directory.
+            fs::remove_file(directory.0.join("session.json")).unwrap();
+            fs::create_dir(directory.0.join("session.json")).unwrap();
+            worker.zellij_workload_finished(pending).unwrap();
+            saved(&mut worker);
+            assert!(
+                !worker
+                    .persistence
+                    .as_ref()
+                    .unwrap()
+                    .snapshot
+                    .autosave_enabled
+            );
+            let surface = worker.local_zellij.active[&1].surface;
+            assert!(
+                worker
+                    .model
+                    .snapshot()
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|pane| &pane.surfaces)
+                    .find(|s| s.id == surface)
+                    .unwrap()
+                    .local_zellij_completion
+                    .is_some()
+            );
+            assert!(
+                worker.local_zellij.active[&1]
+                    .cancel
+                    .load(Ordering::Acquire)
+            );
+            flush_shutdown(&mut worker);
+            assert!(directory.0.join("session.json").is_dir());
+        }
+        assert!(authorization.try_recv().is_err());
+        assert!(
+            worker.local_zellij.receipts[0]
+                .completion_saved_revision
+                .is_none()
+        );
+    }
+}
+#[test]
+fn completed_history_shutdown_or_changed_slot_denies_even_actual_late_saved() {
+    for shutdown in [false, true] {
+        let directory = Directory::new();
+        let mut worker = worker(&directory);
+        let (pending, authorization) = active_completion(&mut worker);
+        let pending = observe_completion(&mut worker, pending);
+        worker.zellij_workload_finished(pending).unwrap();
+        if shutdown {
+            flush_shutdown(&mut worker);
+        } else {
+            let session = worker.local_zellij.active[&1].session;
+            worker.slots.get_mut(&session).unwrap().launch_id += 1;
+            saved(&mut worker);
+            close_writer(&mut worker);
+        }
+        assert!(authorization.try_recv().is_err());
+        assert!(
+            worker.local_zellij.receipts[0]
+                .completion_saved_revision
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn completed_fact_blocks_all_new_input_before_saved_while_the_real_pty_is_live() {
+    use attention::{NotificationContent, NotificationReplyOutcome};
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let (pending, authorization) = active_completion(&mut worker);
+    let job = &worker.local_zellij.active[&1];
+    let session_id = job.session;
+    let surface = job.surface;
+    // A real PTY independently records delivered bytes. The completion fact
+    // remains synthetic: the supervisor/CLI tests own live authentication.
+    let session = Session::spawn(zmux_session_runtime::Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), r#"stty -echo; printf 'FENCE_READY\n'; while IFS= read -r line; do printf 'DELIVERED:%s\n' "$line"; done"#.into()],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    }).unwrap();
+    worker.slots.get_mut(&session_id).unwrap().session = Some(session);
+    let wait_for = |worker: &Worker, marker: &str| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(snapshot) = worker.live_session(session_id).unwrap().snapshot()
+                && snapshot.viewport.contents.contains(marker)
+            {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "PTY did not deliver {marker}");
+            thread::sleep(Duration::from_millis(2));
+        }
+    };
+    wait_for(&worker, "FENCE_READY");
+    worker
+        .execute_command(Command::Input {
+            session_id,
+            text: "BEFORE\n".into(),
+        })
+        .unwrap();
+    wait_for(&worker, "DELIVERED:BEFORE");
+    // Claiming an ordinary valid reply reaches this same live PTY before fencing.
+    let notify = |worker: &mut Worker| {
+        let id = worker
+            .attention
+            .notify_owned(
+                &worker.model.snapshot(),
+                surface,
+                "test",
+                &NotificationContent {
+                    title: "completion fence".into(),
+                    reply: true,
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        worker
+            .attention
+            .items
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .target
+            .clone()
+            .unwrap()
+    };
+    let target = notify(&mut worker);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    worker
+        .admit_reply(
+            target,
+            "REPLY_BEFORE".into(),
+            Some(Instant::now() + Duration::from_secs(1)),
+            &mut Some(sender),
+        )
+        .unwrap();
+    let reply_deadline = Instant::now() + Duration::from_secs(5);
+    let execution = loop {
+        worker.poll_replies();
+        if let Ok(execution) = receiver.try_recv() {
+            break execution;
+        }
+        assert!(Instant::now() < reply_deadline);
+        thread::sleep(Duration::from_millis(2));
+    };
+    execution.result.unwrap();
+    assert_eq!(
+        execution.notification_reply.unwrap().outcome,
+        NotificationReplyOutcome::Complete
+    );
+    let visible = wait_for(&worker, "DELIVERED:REPLY_BEFORE");
+    worker.slots.get_mut(&session_id).unwrap().cached = Some(visible);
+    worker
+        .observe_zellij_completion(pending.correlation, pending.receipt, pending.deadline)
+        .unwrap();
+    assert!(
+        authorization.try_recv().is_err(),
+        "no completion Saved has occurred"
+    );
+    assert!(
+        worker.local_zellij.receipts[0]
+            .completion_saved_revision
+            .is_none()
+    );
+    let mut commands = vec![
+        Command::Input {
+            session_id,
+            text: "BLOCKED_INPUT\n".into(),
+        },
+        Command::Paste {
+            session_id,
+            text: "BLOCKED_PASTE\n".into(),
+        },
+        Command::Key {
+            session_id,
+            event: serde_json::from_value(serde_json::json!({"key":"enter"})).unwrap(),
+        },
+        Command::Wheel {
+            session_id,
+            event: zmux_terminal_adapter::Wheel {
+                lines: 1,
+                row: 0,
+                col: 0,
+                modifiers: 0,
+                history: false,
+            },
+        },
+    ];
+    for operation in [
+        targets::TargetOperation::SendText {
+            text: "BLOCKED_SEND\n".into(),
+        },
+        targets::TargetOperation::PasteText {
+            text: "BLOCKED_TARGET_PASTE\n".into(),
+        },
+    ] {
+        commands.push(Command::Targeted {
+            request: targets::TargetRequest {
+                scope: zmux_workspace_core::targets::TargetScope {
+                    surface: Some(surface.0.to_string().parse().unwrap()),
+                    ..Default::default()
+                },
+                operation,
+                ..Default::default()
+            },
+        });
+    }
+    commands.push(Command::Transfer {
+        action: transfers::TransferCommand::PasteFiles {
+            surface_id: surface,
+            expected_session_id: Some(session_id),
+            paths: vec![PathBuf::from("/tmp/BLOCKED_PATH")],
+        },
+    });
+    commands.push(Command::Targeted {
+        request: targets::TargetRequest {
+            scope: zmux_workspace_core::targets::TargetScope {
+                surface: Some(surface.0.to_string().parse().unwrap()),
+                ..Default::default()
+            },
+            operation: targets::TargetOperation::PasteFiles {
+                paths: vec![PathBuf::from("/tmp/BLOCKED_TARGET_PATH")],
+            },
+            ..Default::default()
+        },
+    });
+    for command in commands {
+        let error = worker.execute_command(command).unwrap_err().to_string();
+        assert!(
+            error.contains("workload has completed"),
+            "wrong denial: {error}"
+        );
+    }
+    worker.notification_reply = None;
+    let target = notify(&mut worker);
+    let (sender, _receiver) = mpsc::sync_channel(1);
+    worker
+        .admit_reply(
+            target,
+            "BLOCKED_REPLY".into(),
+            Some(Instant::now() + Duration::from_secs(1)),
+            &mut Some(sender),
+        )
+        .unwrap();
+    let reply = worker.notification_reply.as_ref().unwrap();
+    assert_eq!(reply.outcome, NotificationReplyOutcome::NotWritten);
+    assert_eq!(reply.bytes_written, 0);
+    assert!(
+        reply
+            .reason
+            .as_ref()
+            .unwrap()
+            .contains("workload has completed")
+    );
+    // Read-only history is still usable. A direct fixture barrier then proves no
+    // denied command's bytes arrived before it in the actual Session FIFO.
+    worker
+        .execute_command(Command::Scroll {
+            session_id,
+            lines: 0,
+        })
+        .unwrap();
+    worker
+        .live_session(session_id)
+        .unwrap()
+        .send_input(b"BARRIER\n")
+        .unwrap();
+    let snapshot = wait_for(&worker, "DELIVERED:BARRIER");
+    assert!(!snapshot.viewport.contents.contains("BLOCKED"));
+    // A later cleanup screen must not replace the viewport frozen with the
+    // completion event, even when another checkpoint delays its Save admission.
+    worker.slots.get_mut(&session_id).unwrap().cached = Some(snapshot);
+    let pending = worker.local_zellij.pending_completions.remove(&1).unwrap();
+    worker.zellij_workload_finished(pending).unwrap();
+    saved(&mut worker);
+    let document: serde_json::Value =
+        serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
+    let contents =
+        document["workspaces"][0]["root"]["pane"]["surfaces"][1]["content"]["history"]["viewport"]
+            ["contents"]
+            .as_str()
+            .unwrap();
+    assert!(contents.contains("DELIVERED:REPLY_BEFORE"));
+    assert!(
+        !contents.contains("BARRIER"),
+        "later screen replaced captured workload history"
+    );
+    worker
+        .slots
+        .get_mut(&session_id)
+        .unwrap()
+        .session
+        .as_mut()
+        .unwrap()
+        .shutdown(Duration::from_secs(5))
+        .unwrap();
     close_writer(&mut worker);
 }

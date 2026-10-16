@@ -29,6 +29,7 @@ enum State {
     Authorized,
     Bound,
     Connected,
+    CompletionAuthorized,
     Finished,
 }
 
@@ -52,7 +53,7 @@ impl Observer {
             serde_json::from_slice(&files::read_private(&path, FRAME_LIMIT)?)
                 .map_err(|error| fail(format!("invalid observer descriptor: {error}")))?;
         descriptor.context.validate()?;
-        if descriptor.version != 1
+        if !matches!(descriptor.version, 1 | 2)
             || descriptor.nonce.len() != 64
             || !descriptor
                 .nonce
@@ -123,7 +124,7 @@ impl Observer {
         }
         let sequence = self.next()?;
         let bytes = serde_json::to_vec(&Frame {
-            version: 1,
+            version: self.descriptor.version,
             context: self.descriptor.context.clone(),
             nonce: self.descriptor.nonce.clone(),
             sequence,
@@ -181,13 +182,15 @@ impl Observer {
             ))
         })?;
         if broker::peer(&self.stream)? != self.descriptor.launcher
-            || ack.version != 1
+            || ack.version != self.descriptor.version
             || ack.context != self.descriptor.context
             || ack.nonce != self.descriptor.nonce
             || ack.sequence != self.next()?
             || ack.event != "reservation_committed"
             || ack.owner_uuid != owner_uuid
             || ack.document_revision == 0
+            || ack.owner_generation.is_some()
+            || ack.receipt_digest.is_some()
         {
             return Err(fail(
                 "observer reservation acknowledgment correlation rejected",
@@ -239,6 +242,70 @@ impl Observer {
         self.state = State::Connected;
         Ok(())
     }
+    pub(super) fn version(&self) -> u8 {
+        self.descriptor.version
+    }
+    pub(super) fn launcher(&self) -> ProcessIdentity {
+        self.descriptor.launcher.clone()
+    }
+    pub(super) fn context(&self) -> super::observer_protocol::Context {
+        self.descriptor.context.clone()
+    }
+    pub(super) fn completed(
+        &mut self,
+        receipt: &super::completion::TerminalReceiptV1,
+        deadline: Instant,
+        mut tick: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<u64> {
+        if self.descriptor.version != 2 || !matches!(self.state, State::Bound | State::Connected) {
+            return Err(fail("completion requires observer v2 bound state"));
+        }
+        self.emit(
+            Event::WorkloadFinished {
+                owner_uuid: receipt.binding.owner_uuid,
+                receipt: receipt.clone(),
+            },
+            Some(deadline),
+            &mut tick,
+        )?;
+        let mut length = [0; 4];
+        transfer(
+            &mut self.stream,
+            &mut length,
+            false,
+            Some(deadline),
+            &mut tick,
+        )?;
+        let length = u32::from_le_bytes(length) as usize;
+        if !(1..=FRAME_LIMIT).contains(&length) {
+            return Err(fail("completion acknowledgment exceeds bound"));
+        }
+        let mut bytes = vec![0; length];
+        transfer(
+            &mut self.stream,
+            &mut bytes,
+            false,
+            Some(deadline),
+            &mut tick,
+        )?;
+        let ack: Acknowledgment = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        if broker::peer(&self.stream)? != self.descriptor.launcher
+            || ack.version != 2
+            || ack.context != self.descriptor.context
+            || ack.nonce != self.descriptor.nonce
+            || ack.sequence != self.next()?
+            || ack.event != "completion_committed"
+            || ack.owner_uuid != receipt.binding.owner_uuid
+            || ack.owner_generation != Some(receipt.binding.owner_generation)
+            || ack.receipt_digest.as_ref() != Some(&receipt.digest()?)
+            || ack.document_revision == 0
+        {
+            return Err(fail("completion acknowledgment correlation rejected"));
+        }
+        self.sequence = ack.sequence;
+        self.state = State::CompletionAuthorized;
+        Ok(ack.document_revision)
+    }
     pub(super) fn poll(&mut self) -> io::Result<()> {
         let mut byte = [0];
         match self.stream.read(&mut byte) {
@@ -256,7 +323,10 @@ impl Observer {
         owner_uuid: Uuid,
         receipt: FrontendReceipt,
     ) -> io::Result<()> {
-        if !matches!(self.state, State::Bound | State::Connected) {
+        if !matches!(
+            self.state,
+            State::Bound | State::Connected | State::CompletionAuthorized
+        ) {
             return Err(fail("observer finished transition rejected"));
         }
         // Cleanup is already physically complete. Do not renew or add to the

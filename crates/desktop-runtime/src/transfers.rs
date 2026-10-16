@@ -88,10 +88,7 @@ impl Worker {
                     .slots
                     .get(&session_id)
                     .ok_or(DesktopError::TerminalUnavailable)?;
-                let session = slot
-                    .session
-                    .as_ref()
-                    .ok_or(DesktopError::TerminalUnavailable)?;
+                let session = self.writable_session(session_id)?;
                 if surface.remote.is_none() {
                     let text = paths
                         .iter()
@@ -164,7 +161,8 @@ impl Worker {
     pub(super) fn poll_transfers(&mut self) -> bool {
         let model = self.model.snapshot();
         let mut changed = false;
-        for slot in &mut self.transfers {
+        let mut transfers = std::mem::take(&mut self.transfers);
+        for slot in &mut transfers {
             let source_released = slot.job.is_finished();
             if source_released != slot.snapshot.source_released {
                 slot.snapshot.source_released = source_released;
@@ -211,10 +209,7 @@ impl Worker {
                         .collect::<Vec<_>>()
                         .join(" ");
                     let result = self
-                        .slots
-                        .get(&slot.snapshot.session_id)
-                        .and_then(|s| s.session.as_ref())
-                        .ok_or(DesktopError::TerminalUnavailable)
+                        .writable_session(slot.snapshot.session_id)
                         .and_then(|session| paste_paths(session, &text));
                     match result {
                         Ok(()) => slot.snapshot.delivery = "inserted".into(),
@@ -233,6 +228,7 @@ impl Worker {
                 _ => {}
             }
         }
+        self.transfers = transfers;
         changed
     }
     pub(super) fn transfer_snapshots(&self) -> Vec<TransferSnapshot> {

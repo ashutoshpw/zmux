@@ -2,7 +2,10 @@
 //! remains on the existing S01 and foreground launch workers.
 use crate::{
     Completion, DesktopError, SessionError, SessionId, Slot, Worker,
-    local_zellij::{self, CheckpointSaved, Correlation, LaunchEvent, LaunchOperation},
+    local_zellij::{
+        self, Authorization, CheckpointSaved, CompletionSaved, Correlation, LaunchEvent,
+        LaunchOperation,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,6 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 use uuid::Uuid;
+use zmux_remote_runtime::local_zellij::completion::{TerminalReceiptV1, WorkloadExit};
 use zmux_workspace_core::{
     LocalZellijIdentity, LocalZellijReservation, PaneId, SurfaceId, targets::TargetKind,
 };
@@ -66,6 +70,9 @@ pub struct Receipt {
     pub namespace_cleaned: bool,
     pub session_joined: bool,
     pub frontend_exit_code: Option<u32>,
+    pub workload_exit: Option<WorkloadExit>,
+    pub completion_saved_revision: Option<u64>,
+    pub receipt_digest: Option<String>,
 }
 pub(crate) enum LaunchKind {
     Ordinary,
@@ -92,7 +99,9 @@ pub(crate) struct Job {
     pub installed: bool,
     pub checkpoint: Option<u64>,
     pub focus: bool,
-    pub(crate) authorization: SyncSender<CheckpointSaved>,
+    pub completion_deadline: Option<Instant>,
+    pub completion_digest: Option<String>,
+    pub(crate) authorization: SyncSender<Authorization>,
 }
 #[derive(Clone)]
 pub(crate) struct CheckpointSeal {
@@ -103,6 +112,19 @@ pub(crate) struct CheckpointSeal {
     pub identity: LocalZellijIdentity,
     pub revision: u64,
     pub io_id: u64,
+}
+#[derive(Clone)]
+pub(crate) struct CompletionSeal {
+    pub target: CheckpointSeal,
+    pub deadline: Instant,
+    pub generation: Uuid,
+    pub digest: String,
+}
+pub(crate) struct PendingCompletion {
+    pub correlation: Correlation,
+    pub receipt: TerminalReceiptV1,
+    pub deadline: Instant,
+    pub viewport: Option<zmux_workspace_core::LocalZellijViewport>,
 }
 #[derive(Clone)]
 pub(crate) struct ZellijTag {
@@ -120,6 +142,9 @@ pub(crate) struct Runtime {
     pub configuration: Option<local_zellij::Configuration>,
     pub epoch: Uuid,
     pub jobs: HashMap<u64, Job>,
+    pub active: HashMap<u64, Job>,
+    pub pending_completions: HashMap<u64, PendingCompletion>,
+    input_fences: HashMap<SessionId, u64>,
     pub receipts: Vec<Receipt>,
     next: u64,
     events_tx: SyncSender<LaunchEvent>,
@@ -134,6 +159,9 @@ impl Runtime {
             epoch: Uuid::new_v4(),
             configuration,
             jobs: HashMap::new(),
+            active: HashMap::new(),
+            pending_completions: HashMap::new(),
+            input_fences: HashMap::new(),
             receipts: Vec::new(),
             next: 1,
             events_tx,
@@ -146,12 +174,45 @@ impl Runtime {
         self.receipts.iter_mut().find(|r| r.operation_id == id)
     }
     pub(crate) fn cancel_all(&self) {
-        for job in self.jobs.values() {
+        for job in self.jobs.values().chain(self.active.values()) {
             job.cancel.store(true, Ordering::Release);
         }
     }
 }
 impl Worker {
+    pub(crate) fn zellij_consumer(&self, id: u64) -> Option<&Job> {
+        self.local_zellij
+            .jobs
+            .get(&id)
+            .or_else(|| self.local_zellij.active.get(&id))
+    }
+    pub(crate) fn zellij_consumer_mut(&mut self, id: u64) -> Option<&mut Job> {
+        if self.local_zellij.jobs.contains_key(&id) {
+            self.local_zellij.jobs.get_mut(&id)
+        } else {
+            self.local_zellij.active.get_mut(&id)
+        }
+    }
+    pub(crate) fn zellij_input_fenced(&self, session: SessionId) -> bool {
+        self.local_zellij
+            .input_fences
+            .get(&session)
+            .is_some_and(|generation| {
+                self.slots
+                    .get(&session)
+                    .is_some_and(|slot| slot.launch_id == *generation)
+            })
+            || self
+                .model
+                .snapshot()
+                .workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .flat_map(|p| &p.surfaces)
+                .any(|surface| {
+                    surface.session_id == Some(session) && surface.local_zellij_completion.is_some()
+                })
+    }
     pub(crate) fn zellij_profile(
         &self,
         id: Uuid,
@@ -453,7 +514,7 @@ impl Worker {
                                 tag: completion_tag,
                                 observer: Some(ready.observer),
                                 owner_uuid: Some(ready.record.id),
-                                frontend_pid: Some(ready.frontend.pid),
+                                frontend_pid: ready.frontend.map(|frontend| frontend.pid),
                             },
                         ),
                         Err(failure) => (
@@ -525,6 +586,8 @@ impl Worker {
                 checkpoint: None,
                 focus,
                 authorization,
+                completion_deadline: None,
+                completion_digest: None,
             },
         );
         self.local_zellij.receipts.push(Receipt {
@@ -542,6 +605,9 @@ impl Worker {
             namespace_cleaned: false,
             session_joined: false,
             frontend_exit_code: None,
+            workload_exit: None,
+            completion_saved_revision: None,
+            receipt_digest: None,
         });
         Ok(id)
     }
@@ -559,11 +625,37 @@ impl Worker {
                         self.fail_zellij(correlation.operation_id, error.to_string());
                     }
                 }
+                Ok(LaunchEvent::WorkloadFinished {
+                    correlation,
+                    receipt,
+                    deadline,
+                }) => {
+                    dirty = true;
+                    if let Err(error) =
+                        self.observe_zellij_completion(correlation.clone(), *receipt, deadline)
+                    {
+                        self.fail_zellij(correlation.operation_id, error.to_string());
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.local_zellij.cancel_all();
                     break;
                 }
+            }
+        }
+        if self.zellij_completion_admission_available() {
+            let id = self.local_zellij.pending_completions.keys().copied().min();
+            if let Some(id) = id {
+                let pending = self
+                    .local_zellij
+                    .pending_completions
+                    .remove(&id)
+                    .expect("selected pending completion");
+                if let Err(error) = self.zellij_workload_finished(pending) {
+                    self.fail_zellij(id, error.to_string());
+                }
+                dirty = true;
             }
         }
         let invalid: Vec<_> = self
@@ -594,8 +686,90 @@ impl Worker {
             );
             dirty = true;
         }
+        let expired: Vec<_> = self
+            .local_zellij
+            .jobs
+            .iter()
+            .chain(self.local_zellij.active.iter())
+            .filter(|(id, job)| {
+                job.completion_deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+                    && self.local_zellij.receipts.iter().any(|receipt| {
+                        receipt.operation_id == **id
+                            && receipt.completion_saved_revision.is_none()
+                            && receipt.state != "canceling"
+                    })
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            self.local_zellij.pending_completions.remove(&id);
+            self.fail_zellij(
+                id,
+                "completed workload acknowledgment deadline expired".into(),
+            );
+            dirty = true;
+        }
         dirty |= self.poll_zellij_observations();
         dirty
+    }
+    /// Install the authenticated terminal fact's input fence before admitting its
+    /// persistence transaction. The native consumer owns live authentication.
+    pub(crate) fn observe_zellij_completion(
+        &mut self,
+        correlation: Correlation,
+        receipt: TerminalReceiptV1,
+        deadline: Instant,
+    ) -> Result<(), DesktopError> {
+        let id = correlation.operation_id;
+        let valid = self.zellij_consumer(id).is_some_and(|job| {
+            job.correlation == correlation
+                && !job.cancel.load(Ordering::Acquire)
+                && self.zellij_job_target_matches(job)
+        });
+        if !valid {
+            return Err(failure("completed workload target changed"));
+        }
+        let digest = receipt
+            .digest()
+            .map_err(|error| failure(error.to_string()))?;
+        let job = self.zellij_consumer_mut(id).expect("matched consumer");
+        if let Some(existing) = &job.completion_digest {
+            return if existing == &digest {
+                Ok(())
+            } else {
+                Err(failure("conflicting completed workload receipt"))
+            };
+        }
+        job.completion_digest = Some(digest.clone());
+        job.completion_deadline = Some(deadline);
+        let session = job.session;
+        let generation = job.launch_id;
+        self.local_zellij.input_fences.insert(session, generation);
+        // Freeze the last visible workload screen before ACK-driven frontend
+        // detach can replace it with cleanup/terminal-restoration output.
+        let viewport = self
+            .slots
+            .get(&session)
+            .and_then(|slot| slot.cached.as_ref())
+            .map(|snapshot| {
+                zmux_workspace_core::LocalZellijViewport::capture(&snapshot.viewport.contents)
+            });
+        if let Some(operation) = self.local_zellij.receipt_mut(id) {
+            operation.workload_exit = Some(receipt.workload_exit);
+            operation.receipt_digest = Some(digest);
+            operation.state = "completion_pending".into();
+        }
+        self.local_zellij.pending_completions.insert(
+            id,
+            PendingCompletion {
+                correlation,
+                receipt,
+                deadline,
+                viewport,
+            },
+        );
+        Ok(())
     }
     pub(crate) fn poll_zellij_observations(&mut self) -> bool {
         let observations: Vec<_> = self
@@ -658,6 +832,40 @@ impl Worker {
     ) -> Option<ZellijTag> {
         self.local_zellij.tags.get(&(session, launch_id)).cloned()
     }
+    pub(crate) fn poll_completed_zellij_sessions(&mut self) -> bool {
+        let completed: Vec<_> = self
+            .model
+            .snapshot()
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .filter(|surface| surface.local_zellij_completion.is_some())
+            .filter_map(|surface| surface.session_id)
+            .collect();
+        let mut dirty = false;
+        for id in completed {
+            if let Some(slot) = self.slots.get_mut(&id)
+                && slot.session.as_ref().is_some_and(|session| {
+                    session.is_finished()
+                        || session.snapshot().is_ok_and(|snapshot| {
+                            matches!(
+                                snapshot.state,
+                                zmux_session_runtime::State::Exited
+                                    | zmux_session_runtime::State::Failed
+                                    | zmux_session_runtime::State::Closed
+                            )
+                        })
+                })
+            {
+                let generation = slot.launch_id;
+                let session = slot.session.take().expect("finished session");
+                self.retire_owned(session, id, generation);
+                dirty = true;
+            }
+        }
+        dirty
+    }
     pub(crate) fn zellij_session_joined(
         &mut self,
         tag: &ZellijTag,
@@ -671,6 +879,37 @@ impl Worker {
             .is_some_and(|current| current.correlation == tag.correlation)
         {
             return;
+        }
+        self.local_zellij
+            .active
+            .remove(&tag.correlation.operation_id);
+        self.local_zellij
+            .pending_completions
+            .remove(&tag.correlation.operation_id);
+        if self.local_zellij.input_fences.get(&tag.session) == Some(&tag.launch_id) {
+            self.local_zellij.input_fences.remove(&tag.session);
+        }
+        if self
+            .slots
+            .get(&tag.session)
+            .is_some_and(|slot| slot.launch_id == tag.launch_id)
+            && self
+                .model
+                .snapshot()
+                .workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .flat_map(|p| &p.surfaces)
+                .any(|surface| {
+                    surface.session_id == Some(tag.session)
+                        && surface.local_zellij_completion.is_some()
+                })
+        {
+            if let Err(error) = self.model.finish_local_zellij_completion(tag.session) {
+                self.cleanup_error = Some(error.to_string());
+            }
+            self.slots.remove(&tag.session);
+            self.refresh_checkpoint_baseline();
         }
         let observed = self
             .local_zellij
@@ -714,15 +953,28 @@ impl Worker {
                 self.cleanup_error = receipt.error.clone();
                 return;
             };
+            let completed = match &final_receipt.owner_outcome {
+                Some(zmux_remote_runtime::local_zellij::observer_protocol::OwnerOutcome::WorkloadCompleted(terminal)) => {
+                    terminal.digest().is_ok_and(|digest| receipt.receipt_digest.as_ref() == Some(&digest))
+                        && receipt.workload_exit == Some(terminal.workload_exit) && receipt.completion_saved_revision.is_some()
+                        && terminal.workload_exit.mapped().is_ok_and(|mapped| exit_code == Some(mapped as u32))
+                }
+                _ => false,
+            };
+            let preserved = !matches!(&final_receipt.owner_outcome, Some(zmux_remote_runtime::local_zellij::observer_protocol::OwnerOutcome::WorkloadCompleted(_)))
+                && final_receipt.original_owner_preserved && exit_code == Some(0);
             let complete = observation.monitor_joined
                 && observation.namespace_cleaned
-                && exit_code == Some(0)
                 && final_receipt.workers_joined
-                && final_receipt.original_owner_preserved
                 && final_receipt.transport.errors.is_empty()
-                && receipt.error.is_none();
+                && receipt.error.is_none()
+                && (completed || preserved);
             receipt.state = if complete {
-                "frontend_joined"
+                if completed {
+                    "workload_completed"
+                } else {
+                    "frontend_joined"
+                }
             } else {
                 "cleanup_failed"
             }
@@ -736,7 +988,7 @@ impl Worker {
         }
     }
     pub(crate) fn fail_zellij(&mut self, id: u64, error: String) {
-        if let Some(job) = self.local_zellij.jobs.get(&id) {
+        if let Some(job) = self.zellij_consumer(id) {
             job.cancel.store(true, Ordering::Release);
         }
         if let Some(receipt) = self.local_zellij.receipt_mut(id) {
@@ -793,11 +1045,13 @@ impl Worker {
             .get_mut(&id)
             .expect("checked operation");
         job.checkpoint = None;
-        match job.authorization.try_send(CheckpointSaved {
-            correlation: seal.correlation,
-            owner_uuid: seal.identity.owner_uuid,
-            document_revision: seal.revision,
-        }) {
+        match job
+            .authorization
+            .try_send(Authorization::Reservation(CheckpointSaved {
+                correlation: seal.correlation,
+                owner_uuid: seal.identity.owner_uuid,
+                document_revision: seal.revision,
+            })) {
             Ok(()) => {
                 if let Some(receipt) = self.local_zellij.receipt_mut(id) {
                     receipt.state = "reservation_committed".into();
@@ -848,12 +1102,12 @@ impl Worker {
         if !matched {
             return;
         }
-        let job = self
+        let mut job = self
             .local_zellij
             .jobs
             .remove(&metadata.tag.correlation.operation_id)
             .expect("matched job");
-        if let Some(ticket) = job.reservation
+        if let Some(ticket) = job.reservation.take()
             && ticket.identity_namespace() == self.model.snapshot().identity_namespace
             && let Err(error) = self.model.cancel_local_zellij_reservation(ticket)
         {
@@ -869,12 +1123,16 @@ impl Worker {
             .local_zellij
             .receipt_mut(metadata.tag.correlation.operation_id)
         {
-            receipt.state = if error.is_none() {
-                "transport_connected"
-            } else {
-                "failed"
+            if error.is_some() {
+                receipt.state = "failed".into();
+            } else if receipt.workload_exit.is_none() {
+                receipt.state = if metadata.frontend_pid.is_some() {
+                    "transport_connected"
+                } else {
+                    "completion_pending"
+                }
+                .into();
             }
-            .into();
             receipt.error = error.clone();
             receipt.frontend_pid = metadata.frontend_pid;
             receipt.owner_uuid = metadata.owner_uuid.or(receipt.owner_uuid);
@@ -884,6 +1142,72 @@ impl Worker {
         }
         if let Some(error) = error {
             self.last_error = Some(error);
+        } else {
+            self.local_zellij
+                .active
+                .insert(metadata.tag.correlation.operation_id, job);
+        }
+    }
+    pub(crate) fn authorize_zellij_completion(&mut self, seal: CompletionSeal) {
+        let id = seal.target.correlation.operation_id;
+        let valid = !self.shared.stop.load(Ordering::Acquire)
+            && Instant::now() < seal.deadline
+            && self.zellij_consumer(id).is_some_and(|job| {
+                job.correlation == seal.target.correlation
+                    && job.session == seal.target.session
+                    && job.surface == seal.target.surface
+                    && job.launch_id == seal.target.launch_id
+                    && job.checkpoint == Some(seal.target.io_id)
+                    && job.completion_digest.as_ref() == Some(&seal.digest)
+                    && job.completion_deadline == Some(seal.deadline)
+                    && !job.cancel.load(Ordering::Acquire)
+                    && self.zellij_job_target_matches(job)
+            })
+            && self
+                .model
+                .snapshot()
+                .workspaces
+                .iter()
+                .flat_map(|w| w.root.panes())
+                .flat_map(|p| &p.surfaces)
+                .find(|surface| surface.id == seal.target.surface)
+                .and_then(|surface| surface.local_zellij_completion.as_ref())
+                .is_some_and(|history| {
+                    history.receipt.binding.owner_generation == seal.generation
+                        && history
+                            .receipt
+                            .digest()
+                            .is_ok_and(|digest| digest == seal.digest)
+                });
+        if !valid {
+            self.fail_zellij(
+                id,
+                "completed workload Saved arrived after authorization was revoked".into(),
+            );
+            return;
+        }
+        let job = self.zellij_consumer_mut(id).expect("validated consumer");
+        job.checkpoint = None;
+        let result = job
+            .authorization
+            .try_send(Authorization::Completion(CompletionSaved {
+                correlation: seal.target.correlation,
+                owner_generation: seal.generation,
+                receipt_digest: seal.digest,
+                document_revision: seal.target.revision,
+                io_id: seal.target.io_id,
+            }));
+        match result {
+            Ok(()) => {
+                if let Some(receipt) = self.local_zellij.receipt_mut(id) {
+                    receipt.state = "workload_completed".into();
+                    receipt.completion_saved_revision = Some(seal.target.revision);
+                }
+            }
+            Err(error) => self.fail_zellij(
+                id,
+                format!("completed workload Saved authorization unavailable: {error}"),
+            ),
         }
     }
 }

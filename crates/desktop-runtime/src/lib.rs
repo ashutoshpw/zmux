@@ -1105,6 +1105,7 @@ impl Worker {
             if !self.profiles.snapshot.loading {
                 dirty |= self.poll_sessions();
             }
+            dirty |= self.poll_completed_zellij_sessions();
             dirty |= self.attention.reconcile(&self.model.snapshot());
             dirty |= self.poll_transfers();
             dirty |= self.poll_replies();
@@ -1464,26 +1465,32 @@ impl Worker {
                 }
                 result
             }
-            Command::Wheel { session_id, event } => self.live_session(session_id).and_then(|s| {
-                s.wheel(event)
-                    .map_err(|e| DesktopError::Failure(e.to_string()))
-            }),
+            Command::Wheel { session_id, event } => {
+                self.writable_session(session_id).and_then(|s| {
+                    s.wheel(event)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))
+                })
+            }
             Command::Scroll { session_id, lines } => self.live_session(session_id).and_then(|s| {
                 s.scroll(lines)
                     .map_err(|e| DesktopError::Failure(e.to_string()))
             }),
-            Command::Input { session_id, text } => self.live_session(session_id).and_then(|s| {
-                s.send_input(text.as_bytes())
-                    .map_err(|e| DesktopError::Failure(e.to_string()))
-            }),
-            Command::Key { session_id, event } => self.live_session(session_id).and_then(|s| {
+            Command::Input { session_id, text } => {
+                self.writable_session(session_id).and_then(|s| {
+                    s.send_input(text.as_bytes())
+                        .map_err(|e| DesktopError::Failure(e.to_string()))
+                })
+            }
+            Command::Key { session_id, event } => self.writable_session(session_id).and_then(|s| {
                 s.send_key(event)
                     .map_err(|e| DesktopError::Failure(e.to_string()))
             }),
-            Command::Paste { session_id, text } => self.live_session(session_id).and_then(|s| {
-                s.send_paste(&text)
-                    .map_err(|e| DesktopError::Failure(e.to_string()))
-            }),
+            Command::Paste { session_id, text } => {
+                self.writable_session(session_id).and_then(|s| {
+                    s.send_paste(&text)
+                        .map_err(|e| DesktopError::Failure(e.to_string()))
+                })
+            }
             Command::Resize {
                 session_id,
                 rows,
@@ -1496,6 +1503,14 @@ impl Worker {
                 None => Err(DesktopError::Failure("terminal no longer exists".into())),
             },
         }
+    }
+    fn writable_session(&self, id: SessionId) -> Result<&Session, DesktopError> {
+        if self.zellij_input_fenced(id) {
+            return Err(DesktopError::Failure(
+                "workload has completed; new terminal input is not accepted".into(),
+            ));
+        }
+        self.live_session(id)
     }
     fn live_session(&self, id: SessionId) -> Result<&Session, DesktopError> {
         self.slots
@@ -1630,11 +1645,7 @@ impl Worker {
                     .find(|s| s.id == target.surface)
                     .and_then(|s| s.session_id)
                     .ok_or(DesktopError::NotTerminal)?;
-                let session = self
-                    .slots
-                    .get(&session_id)
-                    .and_then(|s| s.session.as_ref())
-                    .ok_or(DesktopError::TerminalUnavailable)?;
+                let session = self.writable_session(session_id)?;
                 if paste {
                     session.send_paste(&text)
                 } else {

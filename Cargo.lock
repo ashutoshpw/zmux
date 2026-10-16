@@ -793,6 +793,7 @@ version = "0.1.0"
 dependencies = [
  "filedescriptor",
  "nix",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
