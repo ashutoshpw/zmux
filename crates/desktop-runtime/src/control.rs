@@ -859,6 +859,9 @@ fn dispatch(
                     _ => list_surfaces(&snapshot, target.pane),
                 }
             }
+            TargetOperation::OpenItems { .. } => {
+                open_items(desktop, admission, request.request_id, target_request)
+            }
             _ => mutate(
                 desktop,
                 admission,
@@ -921,6 +924,14 @@ fn dispatch(
                 "settled_request_horizon":256,"delivery":"at_least_once",
                 "consumer_identity":"local_capability_not_authenticated_provider",
                 "provider_hooks":false,"wake":false,"native_inbox":false,
+            },
+            "file_panel": {
+                "max_file_surfaces": crate::MAX_FILE_SURFACES,
+                "max_open_items": crate::files::MAX_OPEN_ITEMS,
+                "max_text_bytes": crate::file_io::MAX_TEXT_BYTES,
+                "max_preview_bytes": crate::file_io::MAX_PREVIEW_BYTES,
+                "poll_interval_ms": desktop.files_config().poll_interval.as_millis() as u64,
+                "open_probe_timeout_ms": desktop.files_config().probe_timeout.as_millis() as u64,
             },
             "browser_automation": {
                 "native_host_required": true,
@@ -1070,6 +1081,58 @@ fn current_snapshot(desktop: &Desktop) -> Result<Arc<Snapshot>, (&'static str, S
     }
 }
 
+/// `open` (design D16). Admission already refused read-only sockets, so no file is touched for
+/// them. A stale revision fails the whole request before any probe; the executor checks it again
+/// when it resolves the target, which is the check that decides.
+fn open_items(
+    desktop: &Desktop,
+    admission: &ControlAdmission,
+    request_id: u64,
+    request: TargetRequest,
+) -> Result<Value, (&'static str, String)> {
+    let TargetRequest {
+        scope,
+        caller,
+        expected_model_revision,
+        operation,
+    } = request;
+    let TargetOperation::OpenItems {
+        items,
+        focus,
+        force_mode,
+    } = operation
+    else {
+        return Err(("invalid_request", "not an open request".into()));
+    };
+    if let Some(expected) = expected_model_revision {
+        let model = current_snapshot(desktop)?.model.revision;
+        if expected != model {
+            let error = zmux_workspace_core::targets::TargetError::StaleRevision {
+                expected,
+                actual: model,
+            };
+            return Err((error.code(), error.to_string()));
+        }
+    }
+    let plans = desktop
+        .probe_open_items(&items, force_mode)
+        .map_err(|failure| ("invalid_request", failure.message))?;
+    mutate(
+        desktop,
+        admission,
+        request_id,
+        Command::OpenFiles {
+            batch: crate::files::OpenBatch {
+                focus,
+                scope,
+                caller,
+                expected_model_revision,
+                items: plans,
+            },
+        },
+    )
+}
+
 fn mutate(
     desktop: &Desktop,
     admission: &ControlAdmission,
@@ -1193,7 +1256,8 @@ fn mutate(
             }
         }
     }
-    Ok(json!({
+    let open_result = execution.open_result.clone();
+    let mut receipt = json!({
         "created_uploads": execution.created_uploads,
         "uploads": execution.snapshot.uploads,
         "created_workspaces": execution.created_workspaces.iter().filter_map(|id| execution.snapshot.model.workspaces.iter().find(|w| w.id == *id)).map(|w| {
@@ -1213,7 +1277,12 @@ fn mutate(
         "revision": execution.snapshot.revision,
         "focused_workspace": workspace.map(|item| item.id),
         "focused_pane": workspace.map(|item| item.focused_pane),
-    }))
+    });
+    if let Some(open) = open_result {
+        receipt["ok"] = open["ok"].clone();
+        receipt["items"] = open["items"].clone();
+    }
+    Ok(receipt)
 }
 
 fn object_receipt(

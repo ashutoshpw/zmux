@@ -28,6 +28,7 @@ pub use navigation::{Direction, FocusHistoryDirection, MAX_FOCUS_HISTORY, Naviga
 use surfaces::PendingRestore;
 pub use surfaces::{
     ClosedContent, ClosedItem, FileMode, FileSurface, MAX_FILE_PATH_BYTES, Surface, SurfaceKind,
+    validate_browser_url,
 };
 
 pub const MAX_WORKSPACES: usize = 32;

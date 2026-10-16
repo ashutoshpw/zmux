@@ -250,12 +250,7 @@ bridge tests is handled by serialising those tests (the registry intentionally u
 
 ### Deviations from the design, with reasons
 
-- Control-socket route not built in this slice: no `TargetOperation::OpenItems`, no
-  `control.rs` branch, no `capabilities.file_panel`, no `list-pane-surfaces` change. The slice
-  scope named desktop-runtime files, the bridge and the C checks; the CLI/socket wiring belongs
-  with S3. The same probe -> executor pipeline is available in process as `Desktop::file_open`
-  and through the bridge `open` op, and `Command::OpenFiles` is `#[serde(skip)]`, so nothing new is
-  reachable from the socket yet.
+- The control-socket route was first deferred to S3 and is now built in S2 (second fix round, finding 3 below); the original deferral is withdrawn.
 - `state_version` is replaced by value comparison: `FileService::poll` builds the `FilesSnapshot`
   and compares it with the last published one (stall age quantised to whole seconds). It cannot
   miss a bump and keeps the idle case silent; behaviour matches D6a.
@@ -309,3 +304,77 @@ bridge tests is handled by serialising those tests (the registry intentionally u
 Red/green: with the `files.rs` source fix reverted, the three detach tests fail (27 pass, 3 fail);
 restored, all 30 `tests/files.rs` tests pass, repeatedly. Full `scripts/check` result recorded in
 the fix commit message. Swift/macOS gates remain UNAVAILABLE as above.
+
+### S2 second fix round (review findings, verified one by one)
+
+Fix commits follow the first fix round (`af761de`). Every finding was reproduced or confirmed in
+the code before changing it; none was rejected.
+
+1. Terminal open (blocking, `file_io.rs`). Confirmed: `RealFs::open_leaf` opened a node before
+   inspecting it and without `O_NOCTTY`. Now `open_leaf` first runs `fstatat(NOFOLLOW)` and refuses
+   anything that is not a regular file, directory or symlink with `not_regular_file` before
+   `openat` (design D13 step 1; a directory still reaches the caller's `is_directory`, a symlink
+   still reaches `O_NOFOLLOW` and `path_changed`), and the open flags are the named constant
+   `LEAF_OPEN_FLAGS` including `NOCTTY`. Tests: `opening_a_terminal_never_acquires_a_controlling_terminal`
+   (Linux: a real pty master/slave pair; the child is the test binary started under `setsid -w`, a
+   session leader without a controlling terminal, which opens the slave through `RealFs::open_leaf`
+   three times and then asserts `/dev/tty` still cannot be opened; `ctty_child_probe` is that child
+   half and is a no-op unless launched by the parent) and
+   `the_leaf_open_flags_forbid_a_controlling_terminal_symlinks_and_blocking`. Mutation: removing
+   both the stat check and `NOCTTY` fails the child test and the flag test; removing only `NOCTTY`
+   fails the flag test. `rustix` gains the `pty` feature as a dev-dependency only.
+2. Swallowed unlink failure (blocking, `file_io.rs`). Confirmed. The last-moment conflict branch
+   now keeps the `conflict` detail but returns the message of `cleanup`, which names a temporary
+   that could not be removed, like every other cleanup path. Test:
+   `a_conflict_found_at_the_last_moment_still_reports_a_temporary_it_could_not_remove` (modified and
+   deleted variants, `Faulty` backend gained an `unlink` failure). Mutation: restoring the
+   `let _ =` fails it.
+3. Control route owned by no slice (blocking). Confirmed against design section 6 and the receipt.
+   Built now: `TargetOperation::OpenItems { items, focus, force_mode }` with `OpenItem`,
+   `OpenItemKind` (`path|url`) and `OpenForceMode` (`markdown`); `control.rs` `open_items`:
+   `gate.admit` has already refused read-only sockets (`is_read` is false), an early
+   `expected_model_revision` check, `Desktop::probe_open_items` (file items on the worker under the
+   shared probe deadline, URL items classified lexically: only `http(s)`, `unsupported_scheme`,
+   `invalid_url`, paths only for `markdown`), then `Command::OpenFiles` (`#[serde(skip)]`, now
+   carrying scope, caller and `expected_model_revision`). The executor resolves the target and the
+   revision once (`prepare_target`, extracted from `targeted`, plus `scope.resolve`) before any
+   item, appends tabs to the resolved pane in operand order, dedupes files desktop-wide, and
+   applies the first-success focus rule across files and URLs. `mutate` merges `ok`/`items` into
+   the standard receipt (`created_surfaces`, `focused_surface`, ...). A raw `OpenItems` through
+   `Command::Targeted` is rejected with "open requires the control-socket probe path".
+   `capabilities.file_panel` reports the limits in force (`Desktop::files_config`).
+   `list-pane-surfaces` already carried `"file"` and `current` already reports `kind: file` with a
+   null session since S1; both are now pinned by a socket test. `workspace-core` exports
+   `validate_browser_url` so URL items use the one browser URL rule. Tests (real `ControlServer`,
+   `tests/files.rs`): `a_mixed_batch_over_the_socket_returns_exact_ordered_item_results`,
+   `reopening_dedupes_and_focus_false_keeps_the_selection`,
+   `the_seventeenth_file_and_a_forced_mode_are_item_results_over_the_socket`,
+   `a_read_only_socket_is_denied_before_any_file_is_touched` (zero backend calls),
+   `a_stale_revision_is_a_whole_request_error_that_changes_nothing`,
+   `the_executor_rechecks_the_revision_and_target_before_any_item_runs`,
+   `a_gated_probe_times_out_per_item_over_the_socket_while_urls_still_open`,
+   `open_items_validates_its_request_and_the_executor_path_refuses_it_raw`,
+   `new_tabs_go_to_the_resolved_pane_and_inspection_reports_file_surfaces`,
+   `capabilities_advertise_the_file_panel_limits_actually_in_force`. Mutations: skipping
+   `prepare_target` fails the executor recheck test; removing the early socket check fails the
+   stale-revision test.
+   Deviations: a Desktop-wide browser cap hit is the new item code `browser_capacity` (added to the
+   design's code list); `tab_capacity` stays unreachable by test (8 + 4 + 16 < 32). The CLI side
+   (`apps/cli`, `docs/local-control.md`) remains S3.
+4. Attach bypassing the dirty guard (blocking, `files.rs`). Confirmed. Attaching again as the
+   bound host re-reads and re-baselines exactly like a reload, so `attach` now refuses with `dirty`
+   (before any read) when that host's tab is dirty; unsaved text is dropped only by `reload` with
+   `discard`. A different host is still `host_conflict`, an unbound entry attaches normally.
+   Test: `attaching_again_as_the_bound_host_obeys_the_dirty_rule_and_never_loses_an_update`
+   (refused, no read, generation unchanged, the old generation's save reports the external edit as a
+   conflict, `reload(discard)` then re-attach works). Mutation: disabling the guard fails it.
+5. Unpinned fencing (blocking). Confirmed by both mutations. Tests:
+   `a_session_restore_rotates_the_epoch_and_fences_every_earlier_view` (export, close all, restore;
+   the epoch changes, the old epoch and old owner get `stale_owner` for attach, reload, save,
+   observe and detach, the file is untouched, a new-epoch attach works) and
+   `the_registry_is_never_older_than_a_published_snapshot` (30 rounds of open then immediate attach,
+   close then immediate stale owner and no entry). Mutations: commenting out `files.reset()` fails
+   the first; commenting out `files.reconcile` in `publish` fails the second (and two older tests).
+
+Swift, macOS and hosted gates remain UNAVAILABLE as above. Full `scripts/check` result is recorded
+in the fix commit messages.

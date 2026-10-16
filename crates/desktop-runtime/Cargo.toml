@@ -25,6 +25,7 @@ zmux-remote-runtime.workspace = true
 
 [dev-dependencies]
 zmux-session-test-support = { path = "../session-runtime/test-support" }
+rustix = { version = "=1.1.5", features = ["pty"] }
 
 [lints]
 workspace = true

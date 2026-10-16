@@ -103,6 +103,7 @@ impl FileBackend for Faulty {
         RealFs.rename(dir, from, to)
     }
     fn unlink(&self, dir: &File, name: &str) -> Result<(), FileError> {
+        self.check("unlink")?;
         RealFs.unlink(dir, name)
     }
     fn sync_dir(&self, dir: &File) -> Result<(), FileError> {
@@ -676,4 +677,133 @@ fn backend_trait_objects_can_be_shared() {
     let dir = Dir::new();
     let path = dir.file("shared.txt", b"x");
     assert!(load(backend.as_ref(), &path, FileMode::Text).is_ok());
+}
+
+#[test]
+fn a_conflict_found_at_the_last_moment_still_reports_a_temporary_it_could_not_remove() {
+    let dir = Dir::new();
+    let path = dir.file("leak.txt", b"base");
+    let expected = sha256_hex(b"base");
+    let during = path.clone();
+    let failure = save(
+        &Faulty::new("unlink"),
+        &path,
+        b"mine",
+        false,
+        &expected,
+        false,
+        &|| {
+            std::fs::write(&during, b"racing writer").unwrap();
+            true
+        },
+    )
+    .unwrap_err();
+    // The conflict detail survives, and the leaked temporary is named, never swallowed.
+    assert_eq!(failure.error.code, "conflict");
+    assert_eq!(failure.conflict.as_ref().unwrap().kind, "modified");
+    let leftovers = dir.leftovers();
+    assert_eq!(
+        leftovers.len(),
+        1,
+        "the failing unlink leaves the temporary"
+    );
+    assert!(
+        failure.error.message.contains(&leftovers[0])
+            && failure.error.message.contains("could not be removed"),
+        "message must report the leak: {}",
+        failure.error.message
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"racing writer");
+
+    // The deleted-at-the-last-moment variant takes the same branch.
+    let dir = Dir::new();
+    let path = dir.file("gone.txt", b"base");
+    let during = path.clone();
+    let failure = save(
+        &Faulty::new("unlink"),
+        &path,
+        b"mine",
+        false,
+        &expected,
+        false,
+        &|| {
+            std::fs::remove_file(&during).unwrap();
+            true
+        },
+    )
+    .unwrap_err();
+    assert_eq!(failure.conflict.as_ref().unwrap().kind, "deleted");
+    assert!(failure.error.message.contains("could not be removed"));
+}
+
+#[test]
+fn the_leaf_open_flags_forbid_a_controlling_terminal_symlinks_and_blocking() {
+    for flag in [
+        OFlags::NOCTTY,
+        OFlags::NOFOLLOW,
+        OFlags::NONBLOCK,
+        OFlags::CLOEXEC,
+        OFlags::RDONLY,
+    ] {
+        assert!(LEAF_OPEN_FLAGS.contains(flag), "missing {flag:?}");
+    }
+    assert!(!LEAF_OPEN_FLAGS.intersects(OFlags::WRONLY | OFlags::RDWR | OFlags::CREATE));
+}
+
+const CTTY_SLAVE_ENV: &str = "ZMUX_FILE_IO_CTTY_SLAVE";
+
+/// Child half of `opening_a_terminal_never_acquires_a_controlling_terminal`. It does nothing
+/// unless the parent test launched it (new session, no controlling terminal) with a slave path.
+#[test]
+fn ctty_child_probe() {
+    let Ok(slave) = std::env::var(CTTY_SLAVE_ENV) else {
+        return;
+    };
+    let controlling_terminal = || std::fs::OpenOptions::new().read(true).open("/dev/tty");
+    assert!(
+        controlling_terminal().is_err(),
+        "the child must start without a controlling terminal"
+    );
+    let slave = PathBuf::from(slave);
+    let directory = RealFs.open_dir(slave.parent().unwrap()).unwrap();
+    for _ in 0..3 {
+        // `observe`, `load` and `save` all share this open, and the poller repeats it.
+        let error = RealFs
+            .open_leaf(&directory, slave.file_name().unwrap())
+            .expect_err("a terminal is never opened");
+        assert_eq!(error.code, "not_regular_file");
+    }
+    assert!(
+        controlling_terminal().is_err(),
+        "opening a pty slave must not hand the process a controlling terminal"
+    );
+    println!("ctty-child-verified");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn opening_a_terminal_never_acquires_a_controlling_terminal() {
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+    grantpt(&master).unwrap();
+    unlockpt(&master).unwrap();
+    let slave = ptsname(&master, Vec::new()).unwrap();
+    let slave = slave.to_str().unwrap().to_owned();
+    // `setsid -w` runs the child as a session leader with no controlling terminal, the state
+    // in which an unguarded open of a terminal would adopt it.
+    let output = std::process::Command::new("setsid")
+        .arg("-w")
+        .arg(std::env::current_exe().unwrap())
+        .args(["ctty_child_probe", "--nocapture", "--test-threads=1"])
+        .env(CTTY_SLAVE_ENV, &slave)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("util-linux `setsid` is required for this test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("ctty-child-verified"),
+        "child failed: {stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    drop(master);
 }

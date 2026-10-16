@@ -12,6 +12,7 @@ use crate::{
         self, Conflict, FileBackend, FileError, Fingerprint, MAX_TEXT_BYTES, Observation, Probe,
         RealFs,
     },
+    targets::TargetRequest,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -27,7 +28,8 @@ use std::{
 };
 use uuid::Uuid;
 use zmux_workspace_core::{
-    Action, FileMode, MAX_SURFACES_PER_PANE, Snapshot as Model, SurfaceId, targets::TargetKind,
+    Action, FileMode, MAX_SURFACES_PER_PANE, PaneId, Snapshot as Model, SurfaceId, SurfaceKind,
+    targets::{CallerContext, TargetKind, TargetScope},
 };
 
 /// Pending worker jobs. One more may be running. Overload is an explicit `busy`.
@@ -169,10 +171,30 @@ pub enum FileHostEvent {
     Observed { owner: FileOwner, dirty: bool },
     Detach { owner: FileOwner },
 }
-/// The probed operands of one `open`, applied by the executor strictly in order.
+/// One operand of an `open` after the off-executor lexical and filesystem checks.
+pub enum OpenPlan {
+    File {
+        operand: String,
+        probe: Result<Probe, FileFailure>,
+    },
+    Url {
+        url: String,
+    },
+    /// Refused before any probe (unsupported scheme, malformed URL, wrong kind for the command).
+    Invalid {
+        kind: &'static str,
+        operand: String,
+        failure: FileFailure,
+    },
+}
+/// The probed operands of one `open`, applied by the executor strictly in order. The target is
+/// resolved once, against one model revision, before the first item changes anything.
 pub struct OpenBatch {
     pub focus: bool,
-    pub items: Vec<(String, Result<Probe, FileFailure>)>,
+    pub scope: TargetScope,
+    pub caller: CallerContext,
+    pub expected_model_revision: Option<u64>,
+    pub items: Vec<OpenPlan>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -654,6 +676,15 @@ impl FileService {
                     return Err(FileFailure::new(
                         "host_conflict",
                         "another view is already attached to this file tab",
+                    ));
+                }
+                // Attaching again as the bound host re-reads and re-baselines exactly like a
+                // reload, so it obeys the same dirty rule: unsaved text is only dropped by an
+                // explicit `reload` with `discard`.
+                Some(entry) if entry.host == Some(host) && entry.model_dirty => {
+                    return Err(FileFailure::new(
+                        "dirty",
+                        "the tab has unsaved changes; reload with discard to drop them",
                     ));
                 }
                 Some(_) => {}
@@ -1428,36 +1459,63 @@ impl Worker {
         }
     }
 
-    pub(crate) fn open_files(&mut self, batch: OpenBatch) {
+    /// Apply a probed `open`. Whole-request failures (stale revision, unresolved target) are
+    /// returned before any item runs; everything else is a per-item result.
+    pub(crate) fn open_files(&mut self, batch: OpenBatch) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        let mut request = TargetRequest {
+            scope: batch.scope,
+            caller: batch.caller,
+            expected_model_revision: batch.expected_model_revision,
+            operation: Default::default(),
+        };
+        crate::prepare_target(&model, &mut request)?;
+        let pane = request.scope.resolve(&model, &request.caller)?.pane;
         let mut focus = batch.focus;
         let mut ok = true;
         let mut items = Vec::new();
-        for (index, (operand, probe)) in batch.items.into_iter().enumerate() {
-            let item = match probe {
-                Ok(probe) => self.open_one(index, &probe, &mut focus),
-                Err(failure) => Err((operand, failure.code, failure.message)),
+        for (index, plan) in batch.items.into_iter().enumerate() {
+            let item = match plan {
+                OpenPlan::File {
+                    probe: Ok(probe), ..
+                } => self.open_file(index, &probe, pane, &mut focus),
+                OpenPlan::File {
+                    operand,
+                    probe: Err(failure),
+                } => Err(ItemError::new(
+                    "file",
+                    operand,
+                    failure.code,
+                    failure.message,
+                )),
+                OpenPlan::Url { url } => self.open_url(index, &url, pane, &mut focus),
+                OpenPlan::Invalid {
+                    kind,
+                    operand,
+                    failure,
+                } => Err(ItemError::new(kind, operand, failure.code, failure.message)),
             };
             items.push(match item {
                 Ok(value) => value,
-                Err((path, code, message)) => {
+                Err(error) => {
                     ok = false;
-                    serde_json::json!({
-                        "index": index, "kind": "file", "ok": false, "path": path,
-                        "error": {"code": code, "message": message},
-                    })
+                    error.into_json(index)
                 }
             });
         }
         self.open_result = Some(serde_json::json!({"ok": ok, "items": items}));
+        Ok(())
     }
 
-    fn open_one(
+    fn open_file(
         &mut self,
         index: usize,
         probe: &Probe,
+        pane: PaneId,
         focus: &mut bool,
-    ) -> Result<serde_json::Value, (String, String, String)> {
-        let fail = |code: &str, message: String| (probe.path.clone(), code.to_owned(), message);
+    ) -> Result<serde_json::Value, ItemError> {
+        let fail =
+            |code: &str, message: String| ItemError::new("file", probe.path.clone(), code, message);
         let model = self.model.snapshot();
         let locate = |model: &Model| {
             model.workspaces.iter().find_map(|workspace| {
@@ -1465,23 +1523,19 @@ impl Worker {
                     pane.surfaces
                         .iter()
                         .find(|s| s.file.as_ref().is_some_and(|f| f.path == probe.path))
-                        .map(|s| (workspace.id, pane.id, s.id, s.file.as_ref().map(|f| f.mode)))
+                        .map(|s| (s.id, s.file.as_ref().map(|f| f.mode)))
                 })
             })
         };
         let deduplicated = locate(&model);
-        if let Some((_, _, surface_id, _)) = deduplicated {
+        if let Some((surface_id, _)) = deduplicated {
             if *focus {
                 self.action(Action::SelectSurface { surface_id })
                     .map_err(|error| fail("rejected", error.to_string()))?;
             }
         } else {
-            let files = model
-                .workspaces
-                .iter()
-                .flat_map(|w| w.root.panes())
-                .flat_map(|p| &p.surfaces)
-                .filter(|s| s.file.is_some())
+            let files = surfaces(&model)
+                .filter(|(_, _, s)| s.file.is_some())
                 .count();
             if files >= crate::MAX_FILE_SURFACES {
                 return Err(fail(
@@ -1492,24 +1546,9 @@ impl Worker {
                     ),
                 ));
             }
-            let workspace = model
-                .focused_workspace
-                .and_then(|id| model.workspaces.iter().find(|w| w.id == id))
-                .ok_or_else(|| fail("rejected", "there is no focused workspace".into()))?;
-            let pane = workspace
-                .root
-                .panes()
-                .into_iter()
-                .find(|p| p.id == workspace.focused_pane)
-                .ok_or_else(|| fail("rejected", "the focused pane no longer exists".into()))?;
-            if pane.surfaces.len() >= MAX_SURFACES_PER_PANE {
-                return Err(fail(
-                    "tab_capacity",
-                    format!("the pane already has {MAX_SURFACES_PER_PANE} tabs"),
-                ));
-            }
+            check_pane_room(&model, pane).map_err(|(code, message)| fail(code, message))?;
             self.action(Action::CreateFile {
-                pane_id: pane.id,
+                pane_id: pane,
                 path: probe.path.clone(),
                 mode: probe.mode,
                 focus: *focus,
@@ -1518,22 +1557,174 @@ impl Worker {
         }
         *focus = false;
         let model = self.model.snapshot();
-        let (workspace_id, pane_id, surface_id, mode) = locate(&model)
+        let (surface_id, mode) = locate(&model)
             .ok_or_else(|| fail("rejected", "the file tab disappeared while opening".into()))?;
         Ok(serde_json::json!({
             "index": index, "kind": "file", "ok": true, "path": probe.path,
             "mode": mode.unwrap_or(probe.mode),
             "deduplicated": deduplicated.is_some(),
-            "surface": {
-                "workspace_id": workspace_id,
-                "workspace_uuid": model.object_uuid(TargetKind::Workspace, workspace_id.0),
-                "pane_id": pane_id,
-                "pane_uuid": model.object_uuid(TargetKind::Pane, pane_id.0),
-                "surface_id": surface_id,
-                "surface_uuid": model.object_uuid(TargetKind::Surface, surface_id.0),
-            },
+            "surface": surface_receipt(&model, surface_id),
         }))
     }
+
+    fn open_url(
+        &mut self,
+        index: usize,
+        url: &str,
+        pane: PaneId,
+        focus: &mut bool,
+    ) -> Result<serde_json::Value, ItemError> {
+        let fail =
+            |code: &str, message: String| ItemError::new("url", url.to_owned(), code, message);
+        let model = self.model.snapshot();
+        let browsers = surfaces(&model)
+            .filter(|(_, _, s)| s.kind == SurfaceKind::Browser)
+            .count();
+        if browsers >= crate::MAX_BROWSERS {
+            return Err(fail(
+                "browser_capacity",
+                format!(
+                    "at most {} browser tabs can be open; close one first",
+                    crate::MAX_BROWSERS
+                ),
+            ));
+        }
+        check_pane_room(&model, pane).map_err(|(code, message)| fail(code, message))?;
+        let before: HashSet<_> = surfaces(&model).map(|(_, _, s)| s.id).collect();
+        self.action(Action::CreateBrowser {
+            profile_id: None,
+            pane_id: pane,
+            url: url.to_owned(),
+            focus: *focus,
+        })
+        .map_err(|error| fail("rejected", error.to_string()))?;
+        *focus = false;
+        let model = self.model.snapshot();
+        let created = surfaces(&model)
+            .map(|(_, _, s)| s.id)
+            .find(|id| !before.contains(id))
+            .ok_or_else(|| {
+                fail(
+                    "rejected",
+                    "the browser tab disappeared while opening".into(),
+                )
+            })?;
+        Ok(serde_json::json!({
+            "index": index, "kind": "url", "ok": true, "url": url,
+            "surface": surface_receipt(&model, created),
+        }))
+    }
+}
+
+/// Lexical classification of a URL operand (design D3). Only `http` and `https` open as browser
+/// tabs; every other `scheme://` form is refused, and `file://` is not a way to name a file.
+pub fn classify_url(value: &str, force: Option<FileMode>) -> Result<(), FileFailure> {
+    if force.is_some() {
+        return Err(FileFailure::new(
+            "invalid_operand",
+            "this command opens paths only; use `zmux open` for web addresses",
+        ));
+    }
+    let lower = value.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(if value.contains("://") {
+            FileFailure::new(
+                "unsupported_scheme",
+                "only http:// and https:// addresses open as tabs; name a file by its path",
+            )
+        } else {
+            FileFailure::new(
+                "invalid_url",
+                "a web address must start with http:// or https://",
+            )
+        });
+    }
+    zmux_workspace_core::validate_browser_url(value)
+        .map_err(|error| FileFailure::new("invalid_url", error.to_string()))
+}
+
+/// A per-item failure: data in the result, never a whole-request error.
+struct ItemError {
+    kind: &'static str,
+    operand: String,
+    code: String,
+    message: String,
+}
+impl ItemError {
+    fn new(
+        kind: &'static str,
+        operand: String,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            operand,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+    fn into_json(self, index: usize) -> serde_json::Value {
+        let key = if self.kind == "url" { "url" } else { "path" };
+        serde_json::json!({
+            "index": index, "kind": self.kind, "ok": false, key: self.operand,
+            "error": {"code": self.code, "message": self.message},
+        })
+    }
+}
+fn surfaces(
+    model: &Model,
+) -> impl Iterator<
+    Item = (
+        zmux_workspace_core::WorkspaceId,
+        PaneId,
+        &zmux_workspace_core::Surface,
+    ),
+> {
+    model.workspaces.iter().flat_map(|workspace| {
+        workspace.root.panes().into_iter().flat_map(move |pane| {
+            pane.surfaces
+                .iter()
+                .map(move |s| (workspace.id, pane.id, s))
+        })
+    })
+}
+fn check_pane_room(model: &Model, pane: PaneId) -> Result<(), (&'static str, String)> {
+    let tabs = model
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .find(|p| p.id == pane)
+        .map(|p| p.surfaces.len())
+        .ok_or(("rejected", "the target pane no longer exists".to_owned()))?;
+    if tabs >= MAX_SURFACES_PER_PANE {
+        return Err((
+            "tab_capacity",
+            format!("the pane already has {MAX_SURFACES_PER_PANE} tabs"),
+        ));
+    }
+    Ok(())
+}
+fn surface_receipt(model: &Model, surface: SurfaceId) -> serde_json::Value {
+    let (workspace, pane, _) = surfaces(model)
+        .find(|(_, _, s)| s.id == surface)
+        .expect("a receipt is built for a live surface");
+    let window = model
+        .windows
+        .iter()
+        .find(|window| window.workspace_ids.contains(&workspace))
+        .expect("canonical workspace owner")
+        .id;
+    serde_json::json!({
+        "window_id": window,
+        "window_uuid": model.object_uuid(TargetKind::Window, window.0),
+        "workspace_id": workspace,
+        "workspace_uuid": model.object_uuid(TargetKind::Workspace, workspace.0),
+        "pane_id": pane,
+        "pane_uuid": model.object_uuid(TargetKind::Pane, pane.0),
+        "surface_id": surface,
+        "surface_uuid": model.object_uuid(TargetKind::Surface, surface.0),
+    })
 }
 
 #[cfg(test)]

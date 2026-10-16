@@ -766,7 +766,7 @@ The standard mutation receipt (`created_surfaces`, `focused_surface`, `focused_*
 appears on file items. Item `error.code` is drawn from: `invalid_operand`, `unsupported_scheme`,
 `invalid_url`, `not_found`, `permission_denied`, `is_directory`, `not_regular_file`, `too_large`,
 `binary_file`, `invalid_utf8`, `content_mismatch`, `path_not_utf8`, `io_error`, `probe_timeout`,
-`file_worker_unavailable`, `busy`, `file_capacity`, `tab_capacity`. Whole-request failures
+`file_worker_unavailable`, `busy`, `file_capacity`, `browser_capacity`, `tab_capacity`. Whole-request failures
 (`stale_revision`, `invalid_target`, `unauthorized`, `read_only`, `request_too_large`, ...) are
 ordinary control errors with no `items`. Message text never contains file content.
 
