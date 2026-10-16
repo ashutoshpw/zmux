@@ -2,6 +2,90 @@
 
 Updated: 2026-10-15. This is a partial A01 slice; the package remains open.
 
+## A01d workspace todo implementation (2026-10-16; native acceptance pending)
+
+This slice implements `todo add/list/check/uncheck/start/rm/clear` through the
+existing scoped metadata action owner and native activity inspector. The frozen
+public help at cmux `3ba653b9e5afb11d0bc578031142950d6136697e`,
+`CLI/CMUXCLI+WorkspaceTodo.swift:350-390`, documents a caller-scoped checklist,
+50-item bound, positive one-based positions or UUID item handles, three states
+(`pending`, `in-progress`, `completed`) and origins (`user`, `agent`). Only that
+public grammar and existing authored audits inform this original MIT design;
+no reference implementation, tests or assets are imported or translated.
+
+The shared metadata record gains an ordered `todos` array of `{id,text,state,origin}`.
+The owner generates UUIDs when adding and retains insertion order and identity
+through state changes, removal of other entries and workspace moves. A positive
+one-based selector identifies the current array position at the serialized owner;
+a UUID is the stable handle and is always scoped to the target workspace. Missing
+or foreign item handles fail without mutation. `check`, `uncheck` and `start` set
+completed, pending and in-progress respectively, including idempotent repeats.
+Add defaults to pending/user (a local choice; frozen help does not promise defaults).
+Clear removes only todos; other metadata and focus remain untouched.
+
+Add accepts exactly one text operand plus optional `--state`/`--origin`. Text must
+contain nonwhitespace content, fit the existing 2048-byte UTF-8 text limit and obey
+its control-character rules. Every workspace admits at most 50 items and shares
+the existing conservative 512 KiB encoded process metadata budget. Failed count,
+byte, text, enum or selector validation is atomic; no foreign workspace is evicted.
+All item selectors and enums are validated again at the wire owner, independently
+of CLI parsing. No network/process work or new executor is needed.
+
+Every command accepts `--workspace`, `--window`, `--expect-revision` and explicit
+`--json` (JSON is already the default), with flags
+before/after operands and `--` for literal text. Explicit workspace or a proven
+caller workspace/surface/managed-tmux claim is required at both CLI and wire owner;
+window-only and mutable foreground selection are insufficient. The public help
+says caller-scoped but does not explicitly specify behavior without a caller;
+rejecting that case is a conservative local choice and remains a compatibility gap.
+Reuse existing
+target resolution, ownership checks and metadata responses. List is allowed by
+read-only control policy; every mutation is denied. Existing PR/status behavior
+and targeting semantics remain unchanged. Catalog/help describe these local
+parser contracts, and CMD-179 through CMD-185 remain compatibility-unverified.
+JSON returns the shared metadata including ordered todos; their array positions
+are one-based CLI selectors, and IDs remain preferred for later mutations.
+
+Native Models decode the same ordered records and enums. The existing activity
+inspector renders one-based positions, IDs, state, origin and text; row activity
+accessibility includes todo counts. Updates reuse the existing selection/scroll
+mapping and never open an inspector, select a workspace or replace a responder.
+Coordinate metadata-smoke App wiring separately from the runtime startup owner.
+The native fixture should exercise actual CLI/socket actions in a background
+workspace and the real already-open inspector, with foreground/responder retained.
+
+Test boundary: extend real CLI/Unix-socket and desktop owner integration suites,
+not parser-only snapshots or a fake todo store. One CLI lifecycle covers order,
+stable IDs, index/UUID state changes, scoped clear, no focus and read-only list
+versus mutation. Direct wire cases independently guard text/enums/unknown fields,
+foreign IDs, count/aggregate bounds, stale revision and atomic rejection. Include
+workspace-move identity and close/namespace pruning at the existing owner boundary.
+The new lifecycle must first fail on the public CLI's unsupported `todo` command;
+record identical focused red/green commands. Native Swift6 typing and packaged
+inspector execution remain actual macOS gates; portable tests do not replace them.
+
+Persistence across save/restore, editing/reordering/replacing/opening todo panes,
+automation and frozen text/schema compatibility are outside this bounded slice.
+Todos share the existing transient metadata lifetime; the broader workspace.todo
+restore acceptance remains open and must not be marked complete.
+
+Portable implementation evidence: the real CLI lifecycle first failed with
+`unknown command todo` in `/tmp/zmux-a01d-todo-baseline-red.log`. Repaired CLI
+lifecycle and direct wire capacity/validation cases pass in
+`/tmp/zmux-a01d-todo-wire-green.log`; all six owner metadata tests pass in
+`/tmp/zmux-a01d-todo-owner-green.log`, including actual acknowledged destination
+window movement and close/restore namespace pruning. Initial fixture attempts
+hit the unrelated eight-terminal dev bound and native window admission rule;
+these were corrected at the real fixture boundaries, without altering owners.
+Final `scripts/check` passes 300 Rust tests, formatting, strict workspace Clippy,
+notice inventory and the actual C ABI harness in
+`/tmp/zmux-a01d-todo-full-check.log`. Offline catalog validation and help pass.
+The actual packaged receipt gate rejects
+missing/false `workspace_todo_metadata` and accepts true; that gate exercise does
+not stand in for producing a native receipt. No native Swift compile, typecheck,
+inspector execution or localization runtime audit is claimed on this Linux host.
+Native strings follow the app's current English literal presentation convention.
+
 ## A01c manual pull-request metadata
 
 `pr <canonical-GitHub-pull-URL|positive-number>` and `pr clear` use the shared

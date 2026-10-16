@@ -6,6 +6,7 @@ use uuid::Uuid;
 use zmux_workspace_core::{Snapshot, WorkspaceId};
 
 pub const MAX_STATUS_ENTRIES: usize = 64;
+pub const MAX_TODO_ENTRIES: usize = 50;
 pub const MAX_LOG_ENTRIES: usize = 256;
 pub const MAX_TEXT_BYTES: usize = 2048;
 pub const MAX_NAME_BYTES: usize = 128;
@@ -18,6 +19,22 @@ pub const MAX_RETAINED_BYTES: usize = 512 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MetadataAction {
+    AddTodo {
+        text: String,
+        #[serde(default)]
+        state: TodoState,
+        #[serde(default)]
+        origin: TodoOrigin,
+    },
+    ListTodos {},
+    SetTodoState {
+        item: TodoSelector,
+        state: TodoState,
+    },
+    RemoveTodo {
+        item: TodoSelector,
+    },
+    ClearTodos {},
     SetPullRequest {
         pull_request: PullRequest,
     },
@@ -54,6 +71,65 @@ pub enum MetadataAction {
         #[serde(default)]
         limit: Option<usize>,
     },
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TodoState {
+    #[default]
+    Pending,
+    InProgress,
+    Completed,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoOrigin {
+    #[default]
+    User,
+    Agent,
+}
+/// Item positions are one-based and resolved only at the serialized owner.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TodoSelector {
+    Id { id: Uuid },
+    Index { index: u64 },
+}
+impl std::str::FromStr for TodoSelector {
+    type Err = MetadataError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Ok(id) = Uuid::parse_str(value) {
+            return Ok(Self::Id { id });
+        }
+        if !value.is_empty()
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && let Ok(index) = value.parse::<u64>()
+            && index > 0
+        {
+            return Ok(Self::Index { index });
+        }
+        Err(MetadataError::Invalid(
+            "todo item must be a UUID or positive one-based index",
+        ))
+    }
+}
+impl TodoSelector {
+    fn position(&self, items: &[TodoEntry]) -> Result<usize, MetadataError> {
+        match self {
+            Self::Id { id } => items.iter().position(|item| item.id == *id),
+            Self::Index { index } => index
+                .checked_sub(1)
+                .and_then(|index| usize::try_from(index).ok())
+                .filter(|index| *index < items.len()),
+        }
+        .ok_or(MetadataError::TodoNotFound)
+    }
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct TodoEntry {
+    pub id: Uuid,
+    pub text: String,
+    pub state: TodoState,
+    pub origin: TodoOrigin,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -164,6 +240,7 @@ pub struct WorkspaceMetadata {
     pub workspace_id: WorkspaceId,
     pub workspace_uuid: Uuid,
     pub pull_request: Option<PullRequest>,
+    pub todos: Vec<TodoEntry>,
     pub statuses: Vec<StatusEntry>,
     pub progress: Option<Progress>,
     /// Oldest to newest. A list limit retains the newest N in this same order.
@@ -175,9 +252,14 @@ impl WorkspaceMetadata {
     // fixed framing allowances include IDs, counters, enum strings and numbers.
     fn encoded_bound(&self) -> usize {
         192 + self
-            .pull_request
-            .as_ref()
-            .map_or(0, |pr| 128 + 2 * pr.url.len())
+            .todos
+            .iter()
+            .map(|item| 192 + 2 * item.text.len())
+            .sum::<usize>()
+            + self
+                .pull_request
+                .as_ref()
+                .map_or(0, |pr| 128 + 2 * pr.url.len())
             + self
                 .statuses
                 .iter()
@@ -201,6 +283,7 @@ impl WorkspaceMetadata {
     }
     fn is_empty(&self) -> bool {
         self.pull_request.is_none()
+            && self.todos.is_empty()
             && self.statuses.is_empty()
             && self.progress.is_none()
             && self.logs.is_empty()
@@ -210,6 +293,7 @@ impl WorkspaceMetadata {
             workspace_id,
             workspace_uuid,
             pull_request: None,
+            todos: Vec::new(),
             statuses: Vec::new(),
             progress: None,
             logs: Vec::new(),
@@ -223,6 +307,10 @@ pub enum MetadataError {
     Invalid(&'static str),
     #[error("workspace status capacity reached; clear an entry before adding a new key")]
     StatusCapacity,
+    #[error("workspace todo capacity reached; remove an item before adding another")]
+    TodoCapacity,
+    #[error("todo item does not exist in the target workspace")]
+    TodoNotFound,
     #[error("process-wide metadata byte capacity reached; clear metadata before adding more data")]
     ByteCapacity,
 }
@@ -230,14 +318,50 @@ impl MetadataError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Invalid(_) => "invalid_metadata",
-            Self::StatusCapacity | Self::ByteCapacity => "metadata_capacity",
+            Self::StatusCapacity | Self::TodoCapacity | Self::ByteCapacity => "metadata_capacity",
+            Self::TodoNotFound => "todo_not_found",
         }
     }
 }
 impl MetadataAction {
+    pub fn is_read(&self) -> bool {
+        matches!(
+            self,
+            Self::ListStatus | Self::ListLog { .. } | Self::ListTodos {}
+        )
+    }
+    pub fn is_todo(&self) -> bool {
+        matches!(
+            self,
+            Self::AddTodo { .. }
+                | Self::ListTodos {}
+                | Self::SetTodoState { .. }
+                | Self::RemoveTodo { .. }
+                | Self::ClearTodos {}
+        )
+    }
     /// The owner validates wire requests too; CLI validation is only early feedback.
     pub fn validate(&self) -> Result<(), MetadataError> {
         match self {
+            Self::AddTodo { text: value, .. } => {
+                text(value)?;
+                if value.trim().is_empty() {
+                    return Err(MetadataError::Invalid(
+                        "todo text must contain nonwhitespace content",
+                    ));
+                }
+            }
+            Self::SetTodoState {
+                item: TodoSelector::Index { index: 0 },
+                ..
+            }
+            | Self::RemoveTodo {
+                item: TodoSelector::Index { index: 0 },
+            } => {
+                return Err(MetadataError::Invalid(
+                    "todo index must be positive and one-based",
+                ));
+            }
             Self::SetPullRequest { pull_request } => pull_request.validate()?,
             Self::SetStatus {
                 key,
@@ -347,10 +471,7 @@ impl MetadataStore {
         action: MetadataAction,
     ) -> Result<WorkspaceMetadata, MetadataError> {
         action.validate()?;
-        let read = matches!(
-            action,
-            MetadataAction::ListStatus | MetadataAction::ListLog { .. }
-        );
+        let read = action.is_read();
         let limit = if let MetadataAction::ListLog { limit } = &action {
             *limit
         } else {
@@ -363,6 +484,33 @@ impl MetadataStore {
             .unwrap_or_else(|| WorkspaceMetadata::empty(workspace, workspace_uuid));
         let mut sequence = self.sequence;
         match action {
+            MetadataAction::AddTodo {
+                text,
+                state: todo_state,
+                origin,
+            } => {
+                if state.todos.len() >= MAX_TODO_ENTRIES {
+                    return Err(MetadataError::TodoCapacity);
+                }
+                state.todos.push(TodoEntry {
+                    id: Uuid::new_v4(),
+                    text,
+                    state: todo_state,
+                    origin,
+                });
+            }
+            MetadataAction::SetTodoState {
+                item,
+                state: todo_state,
+            } => {
+                let position = item.position(&state.todos)?;
+                state.todos[position].state = todo_state;
+            }
+            MetadataAction::RemoveTodo { item } => {
+                let position = item.position(&state.todos)?;
+                state.todos.remove(position);
+            }
+            MetadataAction::ClearTodos {} => state.todos.clear(),
             MetadataAction::SetPullRequest { pull_request } => {
                 state.pull_request = Some(pull_request)
             }
@@ -420,7 +568,9 @@ impl MetadataStore {
                 state.logs.clear();
                 state.logs_dropped = 0;
             }
-            MetadataAction::ListStatus | MetadataAction::ListLog { .. } => (),
+            MetadataAction::ListStatus
+            | MetadataAction::ListLog { .. }
+            | MetadataAction::ListTodos {} => (),
         }
         if !read {
             let previous = self

@@ -88,6 +88,7 @@ pub(crate) fn current(snapshot: &Snapshot, limit: usize) -> Result<Value, (&'sta
                 "metadata": {
                     "pull_request": metadata.and_then(|m| m.pull_request.as_ref()),
                     "status_entries": metadata.map_or(0, |m| m.statuses.len()),
+                    "todo_entries": metadata.map_or(0, |m| m.todos.len()),
                     "progress_value": metadata.and_then(|m| m.progress.as_ref()).map(|p| p.value),
                     "retained_logs": metadata.map_or(0, |m| m.logs.len()),
                     "logs_dropped": metadata.map_or(0, |m| m.logs_dropped),

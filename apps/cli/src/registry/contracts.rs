@@ -155,6 +155,63 @@ fn definitions() -> Vec<Contract> {
         c.limitations = "Explicit workspace or proven caller required; pin workspace/window UUIDs across lookup. Set verifies canonical GitHub PR against local Git origin or its gh-verified fork parent and a local terminal worktree. Bare numbers use the parent for forks. Clear only removes the manual link, without Git/gh. Parser probe describes preflight, not tool execution. TTY/unique-worktree target inference, auto-refresh and full historical compatibility remain unresolved.";
         result.push(c);
     }
+    for (name, operand, action) in [
+        ("todo add", Some("example"), "add_todo"),
+        ("todo list", None, "list_todos"),
+        ("todo check", Some("1"), "set_todo_state"),
+        ("todo uncheck", Some("1"), "set_todo_state"),
+        ("todo start", Some("1"), "set_todo_state"),
+        ("todo rm", Some("1"), "remove_todo"),
+        ("todo clear", None, "clear_todos"),
+    ] {
+        let mut operands = Vec::new();
+        let mut arguments = target_arguments();
+        arguments.retain(|argument| !matches!(argument.name, "pane" | "surface"));
+        if let Some(operand) = operand {
+            operands.push(operand);
+            arguments.insert(
+                0,
+                positional(
+                    if name == "todo add" {
+                        "text"
+                    } else {
+                        "item_uuid_or_one_based_position"
+                    },
+                    ValueKind::Text,
+                    true,
+                ),
+            );
+        }
+        arguments.push(option("json", &["--json"], ValueKind::Flag));
+        if name == "todo add" {
+            arguments.push(option(
+                "state",
+                &["--state"],
+                ValueKind::Choice(&["pending", "in-progress", "completed"]),
+            ));
+            arguments.push(option(
+                "origin",
+                &["--origin"],
+                ValueKind::Choice(&["user", "agent"]),
+            ));
+        }
+        operands.extend(["--workspace", "1"]);
+        let mut c = contract(name, &operands, arguments, "targeted");
+        c.expected
+            .push(("/request/operation/operation", "metadata"));
+        c.expected
+            .push(("/request/operation/action/action", action));
+        c.defaults =
+            json!({"implicit_focus_target": false, "max_items": 50, "lifetime": "transient"});
+        if name == "todo add" {
+            c.default_pointers
+                .push(("state", "/request/operation/action/state"));
+            c.default_pointers
+                .push(("origin", "/request/operation/action/origin"));
+        }
+        c.limitations = "Ordered shared metadata records; item UUID or current one-based position resolved within the target workspace. Explicit workspace/proven caller required; no focus fallback. List is read-only. Mutations preserve other metadata. Public caller default does not explicitly specify absent-caller behavior, so local rejection remains a compatibility gap. Persistence, edit/set/reorder/open and historical text/schema/default compatibility remain unresolved.";
+        result.push(c);
+    }
     let mut current = contract(
         "current",
         &[],

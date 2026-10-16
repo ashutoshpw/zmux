@@ -1260,50 +1260,50 @@
       "inventory_id": "CMD-179",
       "reference_command": "todo add",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo add"
     },
     {
       "inventory_id": "CMD-180",
       "reference_command": "todo list",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo list"
     },
     {
       "inventory_id": "CMD-181",
       "reference_command": "todo check",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo check"
     },
     {
       "inventory_id": "CMD-182",
       "reference_command": "todo uncheck",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo uncheck"
     },
     {
       "inventory_id": "CMD-183",
       "reference_command": "todo start",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo start"
     },
     {
       "inventory_id": "CMD-184",
       "reference_command": "todo rm",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo rm"
     },
     {
       "inventory_id": "CMD-185",
       "reference_command": "todo clear",
       "review_owner": "audit-agents-remote.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "todo clear"
     },
     {
       "inventory_id": "CMD-186",
