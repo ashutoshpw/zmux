@@ -242,7 +242,7 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
             attribution.stringValue = "No messages on this page."
             controls(); return
         }
-        if body.string != message.body { body.string = message.body }
+        if !body.string.utf8.elementsEqual(message.body.utf8) { body.string = message.body }
         attribution.stringValue = "\(message.sender.name) → \(message.recipient.workspaceName)\n\(message.status)\(message.failureLabel.map { " · " + $0 } ?? "") · \(message.id.uuidString.lowercased())"
         if renderedReplyKey != key {
             renderedReplyKey = key; reply.string = drafts.value(key).body
@@ -264,7 +264,7 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
         guard activeOrigin, pending == nil, let message, let key = draftKey,
               message.sender.surfaceId != nil, !reply.string.isEmpty, reply.string.utf8.count <= 4096 else { return }
         // Capture text/revision/parent once; button and Command-Return enter here.
-        if drafts.value(key).body != reply.string { drafts.set(key, body: reply.string) }
+        if !drafts.value(key).body.utf8.elementsEqual(reply.string.utf8) { drafts.set(key, body: reply.string) }
         let draft = drafts.value(key)
         begin(Pending(request: request(.reply(message.id, draft.body)), kind: .reply(message, key, draft)))
     }
@@ -364,11 +364,11 @@ final class AgentInboxWindowController: NSWindowController, NSWindowDelegate, NS
         case .reply(let parent, let key, let draft):
             guard result.durability == "saved", let saved = result.message, saved.requestId == operation.request.requestId,
                   saved.replyTo == parent.id, saved.threadId == parent.threadId, saved.recipient.surfaceId == parent.sender.surfaceId,
-                  saved.body == draft.body else {
+                  saved.body.utf8.elementsEqual(draft.body.utf8) else {
                 uncertain = true; feedback.stringValue = "The saved reply could not be verified. Check Status."; controls(); return
             }
             drafts.clear(key, ifRevision: draft.revision)
-            if draftKey == key, drafts.value(key).body.isEmpty, reply.string == draft.body { reply.string = "" }
+            if draftKey == key, drafts.value(key).body.isEmpty, reply.string.utf8.elementsEqual(draft.body.utf8) { reply.string = "" }
             feedback.stringValue = "Saved · \(saved.status)"
         case .read:
             guard result.messages != nil else { uncertain = true; feedback.stringValue = "Read result unconfirmed. Check Status."; return }

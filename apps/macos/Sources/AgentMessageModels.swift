@@ -40,7 +40,7 @@ struct AgentMessage: Decodable, Sendable, Identifiable {
         }
     }
     var status: String {
-        if state == "queued", deliveryAttempts?.last?.outcome == "delivery_unknown", retryAuthorized != true {
+        if state == "queued", deliveryAttempts?.last?.outcome == "delivery_unknown" {
             return "Queued · Submission unconfirmed"
         }
         return state.prefix(1).uppercased() + String(state.dropFirst())
