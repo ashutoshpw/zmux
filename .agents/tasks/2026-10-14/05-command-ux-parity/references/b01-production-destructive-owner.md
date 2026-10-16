@@ -444,3 +444,36 @@ already committed in5ff0028 before this repair, but could not execute its native
 Linux. Name validation is now scoped to add/rename; clear/delete reach the same Rust
 admission used by the manager. No native effect/ABI changed. The hosted fixture must still
 establish actual compilation and manager behavior; source reasoning is not native red proof.
+
+First focused hosted attempt38857634808 on425fd59 passed both Swift source slices,
+strict concurrency/warnings-as-errors and both C helpers. Its11 browser CLI cases passed,
+including destructive admission/reconciliation. It stopped before package or native launch
+because this branch's older base lacked main22550c1's Darwin socket fixture repair:
+all5 existing execution-admission cases read inherited nonblocking accepted streams and
+failed WouldBlock35. Raw logs are retained at
+`/tmp/zmux-b01-native-38857634808-complete.log` and
+`/tmp/zmux-b01-native-38857634808-failed.log`; artifact12028415276. All29 uploaded
+changed compilation-source files matched the frozen hashes/lengths exactly.
+
+Only the existing3-line `apps/cli/tests/execution_admission.rs` repair from
+22550c1db7a26df12b462405c072538652860a44 is applied here: set the accepted fixture
+stream blocking before its existing bounded3-second frame timeouts. Its concurrent R03
+and status documentation is not imported. No production retry or assertion was changed.
+The focused5-case command passes locally; macOS verification remains the next run's gate.
+
+Second attempt38858200891 on c6c1da0 passed both native slices, the repaired5 admission
+cases and all6 lease cases. It exposed this slice's socket fixture path under the long
+Darwin TMPDIR: `profile_operations` could not bind its generated control.sock because
+the path exceeded SUN_LEN, before package/native launch. The subsequent mutex-poison
+failure was caused by that first fixture panic. Logs
+`/tmp/zmux-b01-native-38858200891-complete.log` and
+`/tmp/zmux-b01-native-38858200891-failed.log`; artifact12027918724.
+
+The generated Unix-only profile test fixture now uses canonical `/tmp` and the same
+random UUID/private directory instead of appending a socket path to arbitrary TMPDIR.
+No production path/timeout/retry changed. The existing3-case focused command was run
+against c6c1da0 with a deliberately long generated TMPDIR and failed its actual bind
+for the intended reason; the same command/environment passes after this fixture repair.
+Red/green logs are `/tmp/zmux-b01-profile-socket-longtmp-red-20261016.log` and
+`/tmp/zmux-b01-profile-socket-longtmp-green-20261016.log`. The failing behavioral tests
+were already committed before the repair; no source-grep assertions were introduced.
