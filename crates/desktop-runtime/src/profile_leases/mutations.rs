@@ -471,6 +471,24 @@ impl Registry {
         self.mutations.remove(&token.intent);
         Ok(())
     }
+    pub(super) fn recover_intent_terminal(
+        &self,
+        profile: Uuid,
+        intent: Uuid,
+    ) -> Result<IntentStatus, LeaseError> {
+        if self.mutations.values().any(|v| v.token.profile == profile) {
+            return Err(LeaseError::Busy);
+        }
+        let record = read(&self.directory, profile)?
+            .filter(|v| v.intent == intent && v.phase.terminal())
+            .ok_or(LeaseError::StaleToken)?;
+        recover_terminal(&self.directory, profile)?;
+        let status = self.intent_status(profile, intent)?;
+        if status.record != record || status.physical_cleanup_pending {
+            return Err(LeaseError::UnsafeIntent);
+        }
+        Ok(status)
+    }
     pub(super) fn intent_status(
         &self,
         profile: Uuid,
@@ -495,12 +513,28 @@ impl Registry {
         });
         let original_owner_available = owner.is_some();
         let consistent = owner.is_none_or(|v| v.record == record);
+        let terminal_cleanup_pending = if record.phase.terminal() && !original_owner_available {
+            let lock = crate::persistence::private_file(
+                &self.directory,
+                std::ffi::OsStr::new(&lock_name(profile)),
+                QUARANTINE_SENTINEL.len(),
+                "browser profile lease",
+            )
+            .map_err(|_| LeaseError::UnsafeIntent)?;
+            inspect_lock(&self.directory, &lock, &lock_name(profile), true)?;
+            lock.metadata()
+                .map_err(|e| LeaseError::Io(e.to_string()))?
+                .len()
+                != 0
+        } else {
+            false
+        };
         Ok(IntentStatus {
             outcome_unknown: !record.phase.terminal() || !consistent,
             recovery_required: (!record.phase.terminal() && !original_owner_available)
                 || !consistent,
             retry_native: false,
-            physical_cleanup_pending: original_owner_available,
+            physical_cleanup_pending: original_owner_available || terminal_cleanup_pending,
             original_owner_available,
             record,
         })

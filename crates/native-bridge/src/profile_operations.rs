@@ -59,6 +59,32 @@ fn context(controller: Uuid) -> Result<Arc<NativeProfileOperations>, LeaseError>
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 enum Command {
+    DrainReconciliations {
+        controller: Uuid,
+    },
+    RecoverTerminal {
+        controller: Uuid,
+        profile: Uuid,
+        intent: Uuid,
+    },
+    RequestReconcile {
+        controller: Uuid,
+        profile: Uuid,
+        intent: Uuid,
+    },
+    ReconcileStatus {
+        controller: Uuid,
+        id: Uuid,
+    },
+    Reconcile {
+        token: MutationToken,
+        result: NativeMutationOutcome,
+    },
+    Reconciled {
+        controller: Uuid,
+        id: Uuid,
+        error: Option<String>,
+    },
     Drain {
         controller: Uuid,
     },
@@ -88,9 +114,79 @@ enum Command {
 }
 fn execute(command: Command) -> Result<Value, LeaseError> {
     match command {
-        Command::Drain { controller } => {
-            context(controller)?.drain().map(|v| json!({"requests": v}))
+        Command::DrainReconciliations { controller } => context(controller)?
+            .drain_reconciliations()
+            .map(|v| json!({"reconciliations": v})),
+        Command::RecoverTerminal {
+            controller,
+            profile,
+            intent,
+        } => context(controller)?
+            .service
+            .recover_terminal(profile, intent)
+            .map(|v| json!(v)),
+        Command::RequestReconcile {
+            controller,
+            profile,
+            intent,
+        } => context(controller)?
+            .request_reconcile(profile, intent)
+            .map(|v| json!(v)),
+        Command::ReconcileStatus { controller, id } => context(controller)?
+            .reconciliation_status(id)
+            .map(|v| json!(v)),
+        Command::Reconciled {
+            controller,
+            id,
+            error,
+        } => context(controller)?
+            .finish_reconciliation(id, error)
+            .map(|()| json!({})),
+        Command::Reconcile { token, result } => {
+            let owner = context(token.controller)?;
+            let status = owner.service.intent_status(token.profile, token.intent)?;
+            if status.record.service_epoch != token.service_epoch
+                || status.record.controller != token.controller
+            {
+                return Err(LeaseError::StaleToken);
+            }
+            let allowed = match &result {
+                NativeMutationOutcome::Completed => matches!(
+                    status.record.phase,
+                    MutationPhase::RemoveCompleted
+                        | MutationPhase::CatalogCommitting
+                        | MutationPhase::Completed
+                ),
+                NativeMutationOutcome::RemovalFailed { .. } => matches!(
+                    status.record.phase,
+                    MutationPhase::RemoveDispatched | MutationPhase::FailedPartial
+                ),
+                NativeMutationOutcome::AbortedBeforeClear { .. } => false,
+            };
+            if !allowed {
+                return Err(LeaseError::OutcomeUnknown);
+            }
+            if !status.record.phase.terminal() || status.physical_cleanup_pending {
+                owner.service.mutation_finish(token, result)?;
+            }
+            let status = owner.service.intent_status(token.profile, token.intent)?;
+            if !status.record.phase.terminal()
+                || status.outcome_unknown
+                || status.physical_cleanup_pending
+            {
+                return Err(LeaseError::OutcomeUnknown);
+            }
+            let outcome = if status.record.phase == MutationPhase::Completed {
+                Ok(())
+            } else {
+                Err(status.record.error.clone().unwrap_or_else(|| {
+                    format!("original operation {}", status.record.phase.code())
+                }))
+            };
+            owner.complete_if_pending(token.intent, outcome)?;
+            Ok(json!(status))
         }
+        Command::Drain { controller } => context(controller)?.drain_batch(),
         Command::Begin {
             controller,
             intent,

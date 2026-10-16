@@ -89,3 +89,10 @@ pub fn wait(
         thread::sleep(Duration::from_millis(2));
     }
 }
+
+// Command/PTY spawning can inherit any thread's flock descriptor until exec.
+// Isolate host test cases, while preserving each case's real subprocess owners.
+static PROCESS_FIXTURES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub fn process_fixture_isolation() -> std::sync::MutexGuard<'static, ()> {
+    PROCESS_FIXTURES.lock().unwrap()
+}

@@ -117,6 +117,7 @@ fn lease_child() {
 
 #[test]
 fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_inode() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     let mut fixture = Fixture::new();
     let service = LeaseService::start(fixture.lease_root()).unwrap();
     let shared = service
@@ -270,6 +271,7 @@ fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_ino
 
 #[test]
 fn lease_open_refuses_aliases_unsafe_inodes_and_unknown_profile_without_replacement() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     for kind in ["symlink", "hardlink", "public", "nonempty"] {
         let fixture = Fixture::new();
         fs::create_dir(fixture.lease_root()).unwrap();
@@ -353,6 +355,7 @@ fn mutation(
 
 #[test]
 fn construction_permits_and_foreign_store_prevent_writer_without_losing_local_share() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     let fixture = Fixture::new();
     let service = LeaseService::start(fixture.lease_root()).unwrap();
     let owner = owner();
@@ -440,6 +443,7 @@ fn super_owner() -> LeaseOwner {
 
 #[test]
 fn exact_native_phases_precede_catalog_commit_and_terminal_sentinel_release() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     for kind in [MutationKind::Clear, MutationKind::Delete] {
         let fixture = Fixture::new();
         let service = LeaseService::start(fixture.lease_root()).unwrap();
@@ -612,6 +616,7 @@ fn mutation_child() {
 
 #[test]
 fn dispatched_operation_survives_process_death_and_quarantines_only_original_uuid() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     let fixture = Fixture::new();
     let intent = Uuid::new_v4();
     let mut process = Command::new(std::env::current_exe().unwrap())
@@ -672,6 +677,7 @@ fn dispatched_operation_survives_process_death_and_quarantines_only_original_uui
 
 #[test]
 fn known_partial_failure_restores_shared_ownership_and_catalog_retry_never_replays_native() {
+    let _process_isolation = profile_fixture::process_fixture_isolation();
     let fixture = Fixture::new();
     let service = LeaseService::start(fixture.lease_root()).unwrap();
     let owner = owner();

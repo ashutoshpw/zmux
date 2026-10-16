@@ -28,10 +28,35 @@ enum BrowserProfileNativeClient {
         var phase: String?
         var result: Outcome?
         var message: String?
+        var profile: UUID?
+        var id: UUID?
+        var error: String?
     }
     struct Outcome: Encodable, Sendable { let outcome: String; var message: String? }
     struct Empty: Decodable, Sendable {}
-    struct Batch: Decodable, Sendable { let requests: [BrowserProfileMutationRequest] }
+    struct RecoveryBatch: Decodable, Sendable { let reconciliations: [Reconciliation] }
+    struct Batch: Decodable, Sendable { let requests: [BrowserProfileMutationRequest]; let reconciliations: [Reconciliation] }
+    struct Reconciliation: Decodable, Sendable {
+        let id: UUID
+        let profile: UUID
+        let intent: UUID
+        let state: String
+        let error: String?
+        let originalPhase: String?
+    }
+    struct IntentStatus: Decodable, Sendable {
+        struct Record: Decodable, Sendable {
+            let serviceEpoch: UUID
+            let controller: UUID
+            let profile: UUID
+            let intent: UUID
+            let phase: String
+            let error: String?
+        }
+        let record: Record
+        let outcomeUnknown: Bool
+        let physicalCleanupPending: Bool
+    }
     struct Began: Decodable, Sendable { let token: BrowserProfileMutationToken; let fallback: BrowserProfileLeaseToken? }
     private struct Failure: Decodable, Sendable { let message: String }
     private struct Response<Value: Decodable & Sendable>: Decodable, Sendable {
@@ -97,12 +122,18 @@ final class BrowserProfileStores {
         let profile: UUID
         init(_ view: WKWebView, profile: UUID) { self.view = view; self.profile = profile }
     }
+    private enum RemovalResult { case succeeded; case failed(String) }
     private final class Job {
         let request: BrowserProfileMutationRequest
         var store: WKWebsiteDataStore?
         var stores: [BrowserProfileLeaseToken]
         var token: BrowserProfileMutationToken?
         var task: Task<Void, Never>?
+        var running = true
+        var reconciling = false
+        var cleared = false
+        var callerRetired = false
+        var removal: RemovalResult?
         init(request: BrowserProfileMutationRequest, store: WKWebsiteDataStore?, stores: [BrowserProfileLeaseToken]) {
             self.request = request; self.store = store; self.stores = stores
         }
@@ -115,6 +146,7 @@ final class BrowserProfileStores {
     private var failures: [UInt64: ConstructionOwner] = [:]
     private var views: [WeakView] = []
     private var jobs: [UUID: Job] = [:]
+    private var recoveryTasks: [UUID: Task<Void, Never>] = [:]
     private var dispatchUnknown = false
     private var acknowledgments = 0
     init(bridge: NativeBridge) { self.bridge = bridge }
@@ -190,7 +222,6 @@ final class BrowserProfileStores {
     }
     func poll(downloadsBusy: @MainActor (UUID) -> Bool, modelBusy: @MainActor (UUID) -> Bool,
               reportError: @escaping @MainActor (String) -> Void) async throws {
-        guard !dispatchUnknown else { return }
         let controller = await bridge.profileController()
         let batch: BrowserProfileNativeClient.Batch
         do { batch = try await BrowserProfileNativeClient.call(.init(operation: "drain", controller: controller), as: BrowserProfileNativeClient.Batch.self) }
@@ -198,6 +229,7 @@ final class BrowserProfileStores {
             if (error as? BrowserProfileNativeFailure)?.outcomeUnknown != false { dispatchUnknown = true }
             throw error
         }
+        dispatchReconciliations(batch.reconciliations, controller: controller, reportError: reportError)
         for request in batch.requests {
             guard request.controller == controller, jobs[request.intent] == nil, jobs.count < 8 else {
                 dispatchUnknown = true
@@ -208,15 +240,36 @@ final class BrowserProfileStores {
                 _ = try await BrowserProfileNativeClient.call(.init(operation: "reject", controller: controller, intent: request.intent, message: "Browser profile is busy in a view, constructor, download or conversion; close it explicitly before retrying."), as: BrowserProfileNativeClient.Empty.self)
                 continue
             }
-            let tokens = entries[request.profile].map { [$0.token] } ?? retainedTokens[request.profile] ?? []
-            let job = Job(request: request, store: entries[request.profile]?.store, stores: tokens)
+            let job = reserveJob(request)
             jobs[request.intent] = job
             // The exact job is reserved before any await/authorization. This
             // effect task is created once; status and late callbacks never create another.
             job.task = Task { [self, job] in await run(job, reportError: reportError) }
         }
     }
+    private func reserveJob(_ request: BrowserProfileMutationRequest) -> Job {
+        // Return before the effect task can run. No caller-side cache-entry
+        // reference may survive into the clear/remove sequence.
+        let tokens = entries[request.profile].map { [$0.token] } ?? retainedTokens[request.profile] ?? []
+        return Job(request: request, store: entries[request.profile]?.store, stores: tokens)
+    }
+    func pollReconciliations(reportError: @escaping @MainActor (String) -> Void) async throws {
+        let controller = await bridge.profileController()
+        let batch = try await BrowserProfileNativeClient.call(.init(operation: "drain_reconciliations", controller: controller), as: BrowserProfileNativeClient.RecoveryBatch.self)
+        dispatchReconciliations(batch.reconciliations, controller: controller, reportError: reportError)
+    }
+    private func dispatchReconciliations(_ receipts: [BrowserProfileNativeClient.Reconciliation], controller: UUID, reportError: @escaping @MainActor (String) -> Void) {
+        for receipt in receipts {
+            if recoveryTasks[receipt.id] != nil { continue }
+            guard recoveryTasks.count < 8 else { reportError("Profile reconciliation capacity reached; original receipt retained."); return }
+            recoveryTasks[receipt.id] = Task { [self] in
+                defer { recoveryTasks.removeValue(forKey: receipt.id) }
+                await reconcile(receipt, controller: controller, reportError: reportError)
+            }
+        }
+    }
     private func run(_ job: Job, reportError: @escaping @MainActor (String) -> Void) async {
+        defer { job.running = false }
         do {
             let began = try await BrowserProfileNativeClient.call(.init(operation: "begin", controller: job.request.controller, intent: job.request.intent, stores: job.stores), as: BrowserProfileNativeClient.Began.self)
             guard began.token.controller == job.request.controller, began.token.intent == job.request.intent, began.token.profile == job.request.profile else { throw BrowserProfileNativeFailure(message: "Mismatched native profile writer token", outcomeUnknown: true) }
@@ -225,14 +278,18 @@ final class BrowserProfileStores {
             if job.store == nil { job.store = WKWebsiteDataStore(forIdentifier: job.request.profile) }
             try await BrowserProfileNativeClient.advance(began.token, "clear_dispatched")
             try await clearExactStore(job)
+            job.cleared = true
             try await BrowserProfileNativeClient.advance(began.token, "clear_completed")
             retireCallerStore(job)
+            job.callerRetired = true
             try await BrowserProfileNativeClient.advance(began.token, "remove_dispatched")
             let removalError = await removeUUID(job.request.profile)
             if let removalError {
+                job.removal = .failed(removalError)
                 try await BrowserProfileNativeClient.finish(began.token, .init(outcome: "removal_failed", message: removalError))
                 retainedTokens[job.request.profile] = job.stores
             } else {
+                job.removal = .succeeded
                 try await BrowserProfileNativeClient.advance(began.token, "remove_completed")
                 try await BrowserProfileNativeClient.finish(began.token, .init(outcome: "completed"))
                 retainedTokens.removeValue(forKey: job.request.profile)
@@ -243,9 +300,63 @@ final class BrowserProfileStores {
                 do {
                     _ = try await BrowserProfileNativeClient.call(.init(operation: "reject", controller: job.request.controller, intent: job.request.intent, message: String(failure.message.prefix(512))), as: BrowserProfileNativeClient.Empty.self)
                     jobs.removeValue(forKey: job.request.intent)
+                    reportError("Profile \(job.request.kind) was refused before native dispatch: \(failure.message)")
+                    return
                 } catch { reportError("Profile preflight acknowledgment unknown: \(error.localizedDescription)") }
             }
             reportError("Profile \(job.request.kind) intent \(job.request.intent), UUID \(job.request.profile) requires status/recovery; no native effect was replayed: \(error.localizedDescription)")
+        }
+    }
+    /// Explicit original-intent reconciliation. The only callable effects here
+    /// are receipt acknowledgment, catalog commit and physical lock cleanup.
+    /// It never creates a store/view or calls WebKit clear/UUID removal.
+    private func reconcile(_ receipt: BrowserProfileNativeClient.Reconciliation, controller: UUID,
+                           reportError: @escaping @MainActor (String) -> Void) async {
+        do {
+            if let job = jobs[receipt.intent] {
+                guard job.request.profile == receipt.profile, job.request.controller == controller,
+                      let token = job.token, !job.running, !job.reconciling,
+                      job.cleared, job.callerRetired, job.store == nil, let removal = job.removal else {
+                    throw BridgeFailure(message: "Original native callback/caller-retirement proof is unavailable; reconciliation is unsupported and quarantine remains.")
+                }
+                job.reconciling = true
+                defer { job.reconciling = false }
+                let outcome: BrowserProfileNativeClient.Outcome
+                switch removal {
+                case .succeeded:
+                    let status = try await BrowserProfileNativeClient.call(.init(operation: "status", controller: controller, intent: receipt.intent, profile: receipt.profile), as: BrowserProfileNativeClient.IntentStatus.self)
+                    if status.record.phase == "remove_dispatched" {
+                        // Re-acknowledge this job's captured original callback.
+                        // This is not another native removal authorization.
+                        try await BrowserProfileNativeClient.advance(token, "remove_completed")
+                    }
+                    outcome = .init(outcome: "completed")
+                case .failed(let message): outcome = .init(outcome: "removal_failed", message: message)
+                }
+                let status = try await BrowserProfileNativeClient.call(.init(operation: "reconcile", token: token, result: outcome), as: BrowserProfileNativeClient.IntentStatus.self)
+                guard status.record.serviceEpoch == token.serviceEpoch, status.record.controller == token.controller,
+                      status.record.profile == token.profile, status.record.intent == token.intent,
+                      ["completed", "failed_partial"].contains(status.record.phase),
+                      !status.outcomeUnknown, !status.physicalCleanupPending else {
+                    throw BridgeFailure(message: "Original profile terminal/physical cleanup proof is unavailable; job remains retained.")
+                }
+                if status.record.phase == "failed_partial" { retainedTokens[receipt.profile] = job.stores }
+                else { retainedTokens.removeValue(forKey: receipt.profile) }
+                jobs.removeValue(forKey: receipt.intent)
+            } else {
+                var status = try await BrowserProfileNativeClient.call(.init(operation: "status", controller: controller, intent: receipt.intent, profile: receipt.profile), as: BrowserProfileNativeClient.IntentStatus.self)
+                if ["completed", "failed_partial", "failed_before_clear"].contains(status.record.phase), !status.outcomeUnknown, status.physicalCleanupPending {
+                    status = try await BrowserProfileNativeClient.call(.init(operation: "recover_terminal", controller: controller, intent: receipt.intent, profile: receipt.profile), as: BrowserProfileNativeClient.IntentStatus.self)
+                }
+                guard ["completed", "failed_partial", "failed_before_clear"].contains(status.record.phase), !status.outcomeUnknown, !status.physicalCleanupPending else {
+                    throw BridgeFailure(message: "No original native job/callback evidence is available; unresolved restart reconciliation is unsupported and quarantine remains.")
+                }
+            }
+            _ = try await BrowserProfileNativeClient.call(.init(operation: "reconciled", controller: controller, id: receipt.id), as: BrowserProfileNativeClient.Empty.self)
+        } catch {
+            do { _ = try await BrowserProfileNativeClient.call(.init(operation: "reconciled", controller: controller, id: receipt.id, error: String(error.localizedDescription.prefix(512))), as: BrowserProfileNativeClient.Empty.self) }
+            catch { reportError("Profile reconciliation receipt \(receipt.id) remains unknown: \(error.localizedDescription)") }
+            reportError("Original profile reconciliation \(receipt.intent) did not replay native effects: \(error.localizedDescription)")
         }
     }
     private func clearExactStore(_ job: Job) async throws {
@@ -286,5 +397,5 @@ final class BrowserProfileStores {
             } catch { reportError("Unused profile construction permit retained for surface \(construction.owner.surface): \(error.localizedDescription)") }
         }
     }
-    var cleanupComplete: Bool { jobs.isEmpty && pending.isEmpty && prepared.isEmpty && acknowledgments == 0 && !dispatchUnknown }
+    var cleanupComplete: Bool { jobs.isEmpty && recoveryTasks.isEmpty && pending.isEmpty && prepared.isEmpty && acknowledgments == 0 && !dispatchUnknown }
 }
