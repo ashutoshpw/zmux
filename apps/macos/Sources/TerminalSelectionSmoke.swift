@@ -288,6 +288,27 @@ enum TerminalSelectionSmoke {
                         window: window, result: &result, report: report) {
             try drag(view, window: window, from: (0, 0), to: (1, 4), count: 1, viewport: parked)
         }
+        let word = try await beginCopyPhase(key: "b", code: 11, marker: "WORD_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        let wholeWord = "word" + String(repeating: "x", count: word.size.cols + 4)
+        for (name, row, column) in [("wrapped_word_first_row", 0, 2), ("wrapped_word_second_row", 1, 2)] {
+            try await check(name, expected: wholeWord, window: window, result: &result, report: report) {
+                try click(view, window: window, row: row, col: column, count: 2, viewport: word)
+            }
+        }
+        for (name, start, end) in [
+            ("wrapped_word_drag_forward", (0, 2), (1, 10)),
+            ("wrapped_word_drag_reverse", (1, 10), (0, 2))
+        ] {
+            try await check(name, expected: wholeWord + " end", window: window, result: &result, report: report) {
+                try drag(view, window: window, from: start, to: end, count: 2, viewport: word)
+            }
+        }
+        for (row, expected) in [(2, "hardleft"), (3, "hardright")] {
+            try await check("word_hard_boundary_\(row)", expected: expected, window: window, result: &result, report: report) {
+                try click(view, window: window, row: row, col: 2, count: 2, viewport: word)
+            }
+        }
         result.state = "completed_cases"
         try await save(result, to: report)
         try await coordinator.shutdown()
