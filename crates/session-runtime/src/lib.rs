@@ -5,6 +5,7 @@
 compile_error!("The initial Zmux PTY prototype supports Linux and macOS only");
 
 pub mod child;
+pub mod shell_integration;
 mod terminal;
 
 use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, POLLOUT, poll, pollfd};

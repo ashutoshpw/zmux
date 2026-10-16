@@ -27,6 +27,105 @@ use zmux_workspace_core::Action;
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
 #[test]
+fn plain_claude_completion_reaches_background_attention_while_provider_is_alive() {
+    let fixture = Fixture::new();
+    let provider = fixture.0.join("claude");
+    // This provider fixture consumes the real session-injected plugin contract.
+    // It never calls Claude's API or reads an operator's settings/transcripts.
+    fs::write(&provider, r##"#!/usr/bin/python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+assert args[-3:] == ['--settings', '{"user_setting":true}', 'literal $HOME ; text'], args
+plugins = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == '--plugin-dir']
+pathlib.Path('observed-plugin').write_text(plugins[0] if plugins else '')
+for directory in plugins:
+    hooks = json.loads((pathlib.Path(directory)/'hooks/hooks.json').read_text())['hooks']
+    for entry in hooks.get('Stop', []):
+        for hook in entry['hooks']:
+            subprocess.run(hook['command'], shell=True, input=b'{"hook_event_name":"Stop","session_id":"fixture"}', check=True, timeout=3)
+print('PROVIDER_STOPPED_BUT_ALIVE', flush=True)
+sys.stdin.readline()
+"##).unwrap();
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+    let rc = fixture.0.join("bashrc");
+    fs::write(
+        &rc,
+        format!(
+            "export PATH=\"{}:$PATH\"\nPS1=\nTMOUT=20\nprintf 'SHELL_BOOT_READY\\n'\n",
+            fixture.0.display()
+        ),
+    )
+    .unwrap();
+    let desktop = Desktop::new(Shell {
+        program: "/bin/bash".into(),
+        args: vec![
+            "--noprofile".into(),
+            "--rcfile".into(),
+            rc.to_str().unwrap().into(),
+            "-i".into(),
+        ],
+        cwd: Some(fixture.0.clone()),
+    })
+    .unwrap();
+    let ready = wait(&desktop, |s| {
+        s.frames.iter().any(|f| {
+            f.snapshot
+                .as_ref()
+                .is_some_and(|s| s.viewport.contents.contains("SHELL_BOOT_READY"))
+        })
+    });
+    let session = ready.frames[0].session_id;
+    execute(
+        &desktop,
+        1,
+        Command::Attention {
+            action: AttentionCommand::AppActive { active: false },
+        },
+    );
+    desktop
+        .native_notification_event(NativeNotificationEvent::Authorization {
+            epoch: ready.native_notifications.epoch,
+            generation: 1,
+            state: NotificationAuthorization::Authorized,
+        })
+        .unwrap();
+    execute(
+        &desktop,
+        2,
+        Command::Input {
+            session_id: session,
+            text: "claude --settings '{\"user_setting\":true}' 'literal $HOME ; text'\n".into(),
+        },
+    );
+    let completed = wait(&desktop, |s| !s.notifications.is_empty());
+    assert_eq!(completed.notifications.len(), 1);
+    assert_eq!(completed.notifications[0].title, "Claude");
+    assert_eq!(completed.notifications[0].body, "Claude finished its turn");
+    assert!(!completed.notifications[0].read);
+    assert_eq!(completed.native_notifications.desired.len(), 1);
+    let alive = wait(&desktop, |s| {
+        s.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("PROVIDER_STOPPED_BUT_ALIVE")
+    });
+    assert_eq!(
+        alive.frames[0].snapshot.as_ref().unwrap().state,
+        zmux_session_runtime::State::Running
+    );
+    assert_eq!(alive.frames[0].session_id, session);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let plugin = fs::read_to_string(fixture.0.join("observed-plugin")).unwrap();
+    assert!(
+        !PathBuf::from(plugin).exists(),
+        "Local hook files survived session shutdown"
+    );
+}
+
+#[test]
 fn native_menu_mutations_capture_scope_cursor_and_epoch_without_changing_focus() {
     let fixture = Fixture::new();
     let desktop = fixture.desktop();

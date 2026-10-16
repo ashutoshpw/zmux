@@ -94,6 +94,13 @@ pub(crate) fn spawn_with_policy(
     policy: zmux_session_runtime::ShutdownPolicy,
     resource: impl Send + 'static,
 ) -> Result<zmux_session_runtime::Session, zmux_session_runtime::SessionError> {
+    let (launch, integration) =
+        zmux_session_runtime::shell_integration::prepare(launch).map_err(|error| {
+            zmux_session_runtime::SessionError::Failure(format!(
+                "prepare shell integration: {error}"
+            ))
+        })?;
+    let resource = (resource, integration);
     match engine {
         Some(engine) => zmux_session_runtime::Session::spawn_with_engine(
             launch,
