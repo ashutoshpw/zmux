@@ -855,3 +855,14 @@ entrypoint, strict Clippy, notices and both C ABI gates. Final log:
 fixture still carrying the new field, then the next run passed tests but requested
 an equivalent collapsed conditional in Clippy; both were repaired. Public CLI,
 shared group selector/request delivery and native presentation remain pending.
+
+The distinct public CLI/socket regression now compiles and fails at the real
+`workspace group create` command because no workspace namespace dispatcher exists.
+Command: `cargo test --locked -p zmux --test windows workspace_group_cli_uses_real_owner -- --nocapture`;
+log `/tmp/zmux-t03-groups-cli-red.log`. It uses the actual socket, bounded native
+window acknowledgement owner and running PTY children, not a mock group model.
+It will verify canonical/hyphenated spellings, stable UUIDs, exact external-key
+retries, hard window/caller scope, stale revision refusal, read-only listing and
+non-destructive delete. No AppKit execution is claimed by its trusted boundary
+acknowledgements. Source discovery will advertise only implemented forms and
+keep unsupported destructive/generated-anchor/native behavior explicit.
