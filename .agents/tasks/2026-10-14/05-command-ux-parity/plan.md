@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [A02 durable agent messages](references/a02-agent-messages.md) — queued messages, replies, independent sender attribution and bounded consumer leases; isolated Rust/CLI implementation underway.
+
 - [Native browser event dispositions](references/b02-browser-event-disposition.md) — exact retired owners and immutable late terminal receipts across runtime/ABI/Swift.
 
 - [Frontend input readiness](references/r03-input-readiness.md) — read-only two-condition client readiness and authenticated bounded channel proposal; independent of workload execution admission.

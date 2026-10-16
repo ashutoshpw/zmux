@@ -5,6 +5,32 @@
 
 ## Active implementation
 
+- Main `scripts/check` exposed intermittent terminal-capacity rejection in the
+  40-generation native close-before-open-ack test. Its admission predicate waited
+  for success after a valid rejection, ignoring asynchronous terminal retirement.
+  Focused and whole-window reruns passed unchanged; the test now explicitly retries
+  only that bounded capacity rejection with fresh request IDs, preserving all 40
+  accepted lifecycle generations and rejecting other errors. Full `scripts/check`
+  passes, including strict Clippy, notices and both foreign ABI checks.
+
+- Main `4afb224` is pushed; Foundation run `38848268839` passes. Full macOS run
+  `38848268523` remains in progress. The native window fixture now expects saved
+  schema 7; its remaining lifecycle assertions are unchanged.
+- V2 history run `38847303782` attempt 2 passes both five-stage native history
+  scenarios and actual Models decoder. All 261 retained source files match Git;
+  archive integrity verified. Receipt `be6af63b2bef7217c2c861edd82c0dc793cdac3465bd50f144c37e2ab2ad147d`.
+  This accepts saved-history presentation only, not live Darwin runtime admission.
+- Darwin V2 test repair is underway in isolation: preserve actual process lifetime
+  while allowing Python launcher re-exec, bound closed-socket EOF and owned cleanup.
+- A02a design reviewed and isolated Rust/CLI implementation authorized. First gate
+  is actual durable queued-message restart with recipient terminal input untouched;
+  provider handoff, native inbox and full body-size parity remain separate work.
+- Input-readiness dependency v2 source reviewed; isolated build and actual frontend
+  controls authorized. Transport connection alone must never admit user input.
+- Browser profile caller-retention diagnostic `38848628624` runs at `421b797`.
+  It changes caller store lifetime only; strict fresh-reader cookie checks remain.
+  Production clear/delete and cookie persistence acceptance are still open.
+
 - Corrected selection `38847301845` at `e9484ab` passes actual decoder and 24 native
   UTF-8 clipboard cases. All 255 retained source hashes and archive integrity verified;
   receipt `564de5478f093c81fe129858d8e640c774105c13408c1b0f131ae0d40aea74bf`.

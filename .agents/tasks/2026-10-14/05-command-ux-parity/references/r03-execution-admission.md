@@ -287,3 +287,18 @@ input-admission transition, correlated to this frontend/launch generation, plus
 an immediate one-shot input regression. A pinned-dependency change would require
 its own reviewed producer/package/platform evidence. This design neither enables
 native Start/Attach nor closes that gate.
+
+## Native saved-history acceptance — 2026-10-16
+
+Run `38847303782` attempt 2 at `a2ac7a5` passed the actual Models decoder
+(5 positive variants, 8 exit boundaries and 36 malformed contracts) and both
+legacy V1 and V2 exec-failed AppKit history scenarios. Each preserves exact copy,
+read-only input, selection/scroll/focus across a cross-window move and source close.
+All 261 retained source hashes were checked against the exact Git objects; archive
+integrity passed. Receipt SHA256
+`be6af63b2bef7217c2c861edd82c0dc793cdac3465bd50f144c37e2ab2ad147d`.
+
+The first attempt lost downloadable evidence to GitHub artifact-service timeouts;
+the second supplies retained evidence. This fixture establishes native presentation
+of generated saved documents, not live supervisor authentication or actual Darwin
+execution-admission acceptance. The separate runtime package gate remains open.
