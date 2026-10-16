@@ -41,7 +41,12 @@ mkdir "$zmux_private_root/plugin" "$zmux_private_root/plugin/.claude-plugin" \
 mkfifo "$zmux_private_root/attention" || exit 70
 exec 7>/dev/tty || exit 70
 (
-    trap - 0 HUP TERM
+    # SSH hangs up the owning process group. This reader's read builtin is
+    # interruptible even when Darwin's outer shell defers its foreground trap.
+    # Both owners remove only their shared, exact private lease files.
+    trap 'zmux_shell_cleanup' 0
+    trap 'exit 129' HUP
+    trap 'exit 143' TERM
     while IFS= read -r zmux_attention_event; do
         case "$zmux_attention_event" in
             stop) printf '\033]777;notify;Claude;Claude finished its turn\007' >&7 ;;
@@ -51,36 +56,26 @@ exec 7>/dev/tty || exit 70
     done <"$zmux_private_root/attention"
 ) &
 exec 8>"$zmux_private_root/attention"
-# Waiting for a foreground external command defers traps on Darwin's POSIX Bash.
-# The shell wait builtin is interruptible, so HUP cleans the private lease even
-# when the interactive child or its foreground provider has not exited yet.
-# Preserve real stdin and default interactive signal handling in the child.
-exec 9<&0
-(
-trap - 0 HUP TERM INT QUIT
 case "${zmux_shell##*/}" in
     bash)
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        exec "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@"
+        "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@" 7>&- 8>&-
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}
         ZMUX_USER_ZDOTDIR_SET=${ZDOTDIR+x}
         export ZMUX_USER_ZDOTDIR ZMUX_USER_ZDOTDIR_SET
-        ZDOTDIR=$zmux_private_root exec "$zmux_shell" "$@"
+        ZDOTDIR=$zmux_private_root "$zmux_shell" "$@" 7>&- 8>&-
         ;;
     fish)
-        exec "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@"
+        "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@" 7>&- 8>&-
         ;;
     sh|dash)
         ZMUX_USER_ENV=${ENV-}
         export ZMUX_USER_ENV
-        ENV=$zmux_private_root/env exec "$zmux_shell" "$@"
+        ENV=$zmux_private_root/env "$zmux_shell" "$@" 7>&- 8>&-
         ;;
 esac
-) <&9 7>&- 8>&- 9>&- &
-zmux_shell_child=$!
-wait "$zmux_shell_child"
 exit $?

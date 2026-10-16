@@ -4,6 +4,26 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Actions38938019009 catches Bash3.2 Ctrl-C recovery failure in the intermediate
+  async-child wait repair before packaging. Reassessed with a private GNU Bash3.2
+  compatibility build under /tmp (diagnosis only; no imported code/dependency).
+  It reproduces inherited ignored SIGINT (`/tmp/zmux-bash32-owner-repro.log`).
+- Revised lifecycle approach restores ordinary foreground interactive-shell launch.
+  The already-blocked FIFO relay owns exact cleanup on SSH process-group HUP/TERM
+  and normal EXIT. Real group-HUP regression fails on the prior foreground owner
+  in Bash3.2 (`/tmp/zmux-bash32-group-hup-red.log`) and passes with relay cleanup,
+  including Ctrl-C/input (`/tmp/zmux-bash32-group-hup-green.log`). Platform default
+  Bash/sh startup and lifecycle cases also pass. Failure diagnostics now identify
+  the stage and bounded controlled-PTY output. Full portable recheck passes
+  (`/tmp/zmux-relay-hangup-final-check.log`). Release plain and nested SSH pass.
+- Additional diagnostic substitutes only the remote bootstrap interpreter with
+  the private GNU Bash3.2 build in a controlled Linux release library. Real key
+  authenticated SSH and nested tmux pass notification routing and disconnect
+  cleanup there (`/tmp/zmux-bash32-ssh-diagnostic-{plain,tmux}.log`). Source restored
+  in finally; this mixed diagnostic library is not a product. Ordinary product
+  release rebuild and plain/nested SSH tests also pass after exact source restoration
+  (`/tmp/zmux-relay-hangup-product-{release,ssh,tmux}.log`). Actual Darwin package
+  gates remain required before artifact handoff.
 - Actions38935487196 at8167545 passes current native repaint, sidebar, grouping,
   status-menu and hidden-app recovery assertions with correlated physical cleanup.
   Packaged plain SSH delivers the expected exact-surface notification, but remote

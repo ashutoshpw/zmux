@@ -202,10 +202,15 @@ process runner is shared for ssh -G configuration resolution on the launch worke
 (5s, 64KiB per stream, private group cleanup), without blocking terminal_spec/UI.
 Config probe failure retains ordinary SSH behavior and reports integration disabled.
 
-Darwin POSIX Bash requires an interruptible shell `wait` builtin for prompt HUP
-cleanup: a synchronous external-shell invocation defers its trap until that child
-exits. The original stdin is explicitly supplied to the async child, relay FDs
-are closed there, and INT/QUIT defaults restored before exec. A real-PTY regression
-selects Bash POSIX owner semantics on Linux/macOS and retains the Rust lease outside
-the worker, so only actual shell cleanup can pass. It also exercises ordinary Ctrl-C
-and input. macOS packaged cleanup remains gated by the same10s assertion.
+Darwin POSIX Bash defers the outer HUP trap while its foreground shell is running.
+The existing blocked FIFO reader now also owns exact-file cleanup traps for group
+HUP/TERM/EXIT. Its read builtin is interruptible, so the authenticated SSH group
+hangup removes hooks promptly without changing interactive shell signal handling.
+A real-PTY regression retains the Rust lease outside the worker, exercises Ctrl-C,
+and delivers group HUP while the foreground shell remains alive. A private GNU
+Bash3.2 compatibility build reproduces the old deferred-cleanup failure and passes
+the repair; no GNU source/binary is shipped or added as an app dependency. The
+optional test-only ZMUX_TEST_BASH path selects an independently installed Bash;
+CI tests use the actual platform /bin/bash. macOS packaged cleanup still requires
+the same10s assertion. The intermediate async interactive-child approach was
+rejected after Bash3.2 reproduced inherited ignored SIGINT; it is not retained.
