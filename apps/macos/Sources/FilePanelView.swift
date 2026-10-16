@@ -98,6 +98,10 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private var baseline = ""
     private(set) var isDirty = false
     private var suppressEdits = false
+    /// True while a reload or an attach is in flight. Its reply replaces the whole buffer, so the
+    /// editor is read-only for that time: text typed meanwhile would otherwise be overwritten with
+    /// no sign. Saving is not part of this; it compares the buffer against what it wrote.
+    private var editingSuspended = false
     private var lastModelDirty = false
     private var observeTask: Task<Void, Never>?
     private var observeLoopID = 0
@@ -561,6 +565,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private func prepareAttach() -> FileHostRequest? {
         guard !busy, !closed, let epoch = latestEpoch else { return nil }
         busy = true
+        suspendEditing()
         phase = .attaching
         if !isLoaded { showLoading("Opening " + title + "…") }
         return FileHostRequest.attach(epoch: epoch, surface: surfaceID, host: hostID)
@@ -569,6 +574,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private func finishAttach(_ request: FileHostRequest) async {
         let result = await send(request)
         busy = false
+        resumeEditing()
         if closed {
             // The tab closed while the attach was in flight; release the binding it created.
             if case .success(let reply) = result, let token = reply.header.owner { owner?.filePanelDetach(token) }
@@ -646,8 +652,8 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         suppressEdits = false
         baseline = text
         setDirty(false)
-        editor.isEditable = writable
         isLoaded = true
+        refreshEditable()
         applyWrapSettings()
         if mode == .markdown { applyMarkdownMode() } else { present(editorScroll) }
         refreshHeader()
@@ -778,14 +784,17 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         // waits for the next external change or an explicit Reload instead of looping.
         if automatic { autoReloadedDiskGeneration = latestDiskGeneration }
         busy = true
+        suspendEditing()
         refreshHeader()
         let result = await send(.reload(token, discard: discard))
         busy = false
+        resumeEditing()
         guard !closed else { return }
         switch result {
         case .success(let reply):
             if automatic && hasUnsavedChanges {
-                // The person started typing while the reload ran: keep their text. The Rust
+                // The person typed after this automatic reload was scheduled but before it began
+                // (editing is read-only once it runs, see `suspendEditing`): keep their text. The Rust
                 // baseline moved on, so remember that the buffer no longer matches it; Save
                 // will ask before overwriting what changed on disk.
                 generation = reply.header.generation ?? generation
@@ -911,6 +920,22 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         case .alertThirdButtonReturn: return .overwrite
         default: return .cancel
         }
+    }
+
+    // MARK: - Editing gate
+
+    private func suspendEditing() {
+        editingSuspended = true
+        refreshEditable()
+    }
+
+    private func resumeEditing() {
+        editingSuspended = false
+        refreshEditable()
+    }
+
+    private func refreshEditable() {
+        editor.isEditable = isLoaded && writable && !editingSuspended
     }
 
     // MARK: - Dirty tracking

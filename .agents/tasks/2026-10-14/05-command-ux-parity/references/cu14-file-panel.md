@@ -1134,9 +1134,49 @@ Deviations and limits:
 - A reload that ends in a failed re-attach leaves a dirty panel stale on purpose; the person retries
   from the banner or the menu. There is no automatic retry, to keep the text from being replaced.
 - Between a clean panel's automatic re-attach starting and its reply, typing is still replaced by the
-  reply (pre-existing, not changed here).
+  reply (pre-existing, not changed here). SUPERSEDED by fix round 3: the editor is read-only while an
+  attach or reload is in flight, so this no longer holds.
 - The `lsof` descriptor check and the new smoke steps are UNAVAILABLE here: no Swift toolchain, so
   `scripts/check-macos-sources`, `scripts/build-macos-dev`, `scripts/check-macos-app`, the
   `file_panel` stage and the hosted macOS workflows are not run and not recorded as passed. Swift
   names used without a compiler that CI should confirm: `Process`/`Pipe` in a detached task,
   `NSButton.performClick(nil)`, and the `@discardableResult` placement on `enqueueFile`.
+
+### Fix round 3 (S4 review finding, one blocking, valid and fixed)
+
+Base of the round: `6e3c021`. Swift still cannot be compiled or run here.
+
+| # | Finding | Verified | Fix |
+| --- | --- | --- | --- |
+| 1 | Text typed while a manual Reload from Disk or a re-attach is in flight is overwritten by the reply. Only the automatic reload was protected. | Yes, by reading: `reloadFromDisk()` on a clean panel skips the confirmation and `performReload(discard: true, automatic: false)` awaits `send(.reload)`; the editor stayed editable and `busy` did not block typing; `apply` then ran `applyText`, which replaced the buffer and called `setDirty(false)` with no check. `finishAttach` (epoch re-attach, `retry()`, `reattach()`) did the same. The receipt had admitted only the re-attach case. | The editor is read-only for the whole time a reload or attach can replace the buffer. `FilePanelView` gains `editingSuspended`, `suspendEditing()`, `resumeEditing()` and `refreshEditable()` (`isLoaded && writable && !editingSuspended`, the only place besides the initial setup that assigns `editor.isEditable`). `prepareAttach` suspends in the same step that sets `busy`; `finishAttach` resumes right after the reply; `performReload` suspends before `send(.reload)` and resumes after it; `applyText` goes through `refreshEditable`. There is no suspension point between the clean check in `reloadFromDisk` and `performReload` (same main-actor turn), so no window is left before the gate closes. The automatic-reload guard (`automatic && hasUnsavedChanges`) stays for text typed between scheduling and starting the automatic reload. Save is deliberately not gated: it compares the buffer with what it wrote (`sameBytes`) and keeps edits made during the write. |
+
+Test added (Linux-runnable; it reads the Swift source and does not prove the Swift works):
+`crates/native-bridge/tests/swift_file_contract.rs`
+`the_buffer_is_read_only_while_a_reload_or_attach_reply_can_replace_it`: only `refreshEditable`
+assigns the editor's editable state and it includes the suspension flag, `applyText` uses it,
+`prepareAttach` suspends together with `busy = true`, `finishAttach` resumes after `busy = false` and
+before `apply`, `performReload` suspends before and resumes after the awaited request, and a clean
+`reloadFromDisk` reaches `performReload` without another suspension point. Mutation evidence (fix
+reverted in a copy, test run, sources restored and checked with `cmp`): removing the suspension in
+`performReload`, removing it in `prepareAttach`, and `applyText` assigning `isEditable = writable`
+again each made the new test FAIL (12 passed, 1 failed).
+
+Checks run: `scripts/check` PASS, exit 0 (fmt, `cargo test --workspace --locked`: 79 test binaries,
+560 passed, 0 failed, 2 ignored, which is the previous 559 plus the 1 new test; clippy
+`-D warnings`; license inventory; `scripts/check-native-bridge`). Determinism of the changed binary
+(`swift_file_contract`, 13 tests): 20 serial runs, 0 failures; then 5 rounds of 8 concurrent copies
+(40 runs) beside 24 busy-loop CPU hogs on a 24-core machine, 0 failures, every log carrying the
+13-passed line. (A first attempt at the concurrent runs used a faulty wait loop in my driver script
+and was discarded; the 40 runs reported here are from the rerun.) The new test only reads source
+files and uses no threads, timers or sleeps.
+
+Deviations and limits:
+
+- Typing is blocked, not buffered, during a reload or attach (up to the 2 s file-service timeout, or
+  longer while the worker is stalled; the header shows "Working…"). Keystrokes in that time are lost
+  rather than replayed; no existing text is lost.
+- No smoke step was added: the in-app smoke cannot run here, and a behaviour check of a window this
+  narrow needs a stalled worker the harness does not provide.
+- UNAVAILABLE as before: `scripts/check-macos-sources` (a Swift 6 type check of this edit),
+  `scripts/build-macos-dev`, `scripts/check-macos-app`, the `file_panel` smoke stage and the hosted
+  macOS workflows. None is recorded as passed.
