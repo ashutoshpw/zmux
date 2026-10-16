@@ -59,7 +59,7 @@ jobs:
         run: |
           mkdir -p dist/ActivationProbe.app/Contents/MacOS
           sdk=$(xcrun --sdk macosx --show-sdk-path)
-          rg -n 'activate|yieldActivation' "$sdk/System/Library/Frameworks/AppKit.framework/Headers/NSRunningApplication.h" "$sdk/System/Library/Frameworks/AppKit.framework/Headers/NSApplication.h"
+          /usr/bin/grep -nE 'activate|yieldActivation' "$sdk/System/Library/Frameworks/AppKit.framework/Headers/NSRunningApplication.h" "$sdk/System/Library/Frameworks/AppKit.framework/Headers/NSApplication.h"
           xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors -framework AppKit tools/native-activation-probe/main.swift -o dist/ActivationProbe.app/Contents/MacOS/ActivationProbe
           python3 - <<'PY'
           import os, plistlib
