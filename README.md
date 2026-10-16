@@ -54,9 +54,20 @@ hold Shift to request history navigation instead.
 BEL, OSC 9, OSC 777 and `zmux notify` feed the Notifications inbox and unread badges,
 including the Dock badge. Selecting a surface or reactivating its window acknowledges
 that focused surface's existing attention. Opening an inbox entry acknowledges that exact
-notification. Ordinary terminal output alone does not generate attention. OS notification
-banners, agent completion hooks and full command parity remain in development.
+notification. Ordinary terminal output alone does not generate attention. macOS banners
+depend on notification permission and system Focus settings. Full command parity remains
+in development.
 See the [CLI parity repair plan](.agents/tasks/2026-10-14/05-command-ux-parity/references/scroll-attention-repair.md).
+
+Interactive zmux shells automatically add a session-only Claude notification plugin,
+locally and through managed `zmux ssh` connections. Turn completion and permission
+attention feed the originating terminal's inbox. Enable system notifications from
+the menu bar to allow macOS banners; denied permission still retains inbox attention.
+User Claude settings and startup files are not edited. Set
+`ZMUX_CLAUDE_INTEGRATION_DISABLED=1` to bypass the provider wrapper, or
+`ZMUX_SHELL_INTEGRATION_DISABLED=1` before launching zmux to disable shell integration.
+The separate `zmux hooks claude` commands manage opt-in agent messaging, not this
+automatic attention plugin. Explicit SSH remote commands retain their original argv.
 
 ## Cloud
 

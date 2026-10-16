@@ -108,6 +108,12 @@ impl ManagedConnection {
             "-tt".into(),
         ];
         args.extend(original.args);
+        if self.descriptor.command().is_none()
+            && std::env::var_os("ZMUX_SHELL_INTEGRATION_DISABLED").as_deref()
+                != Some(std::ffi::OsStr::new("1"))
+        {
+            args.push(zmux_session_runtime::shell_integration::remote_command());
+        }
         ProcessSpec {
             program: SSH_PROGRAM.into(),
             args,

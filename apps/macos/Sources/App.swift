@@ -1684,8 +1684,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let initialSnapshot = snapshot, let first = initialSnapshot.workspace else {
             throw BridgeFailure(message: "No initial workspace")
         }
-        let expectedControls = Set(["New workspace", "Cloud account", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
-        let accessibleControls = Set((actionButtons + [cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
+        let expectedControls = Set(["New workspace", "Split right", "Split down", "New terminal tab (⌘T)", "Toggle sidebar (⌘B)", "Cloud settings"])
+        let accessibleControls = Set((actionButtons + [newWorkspaceButton, sidebarToggleButton, cloudFooter.settingsButton]).compactMap { $0.accessibilityLabel() })
         guard expectedControls.isSubset(of: accessibleControls) else {
             throw BridgeFailure(message: "Native icon controls are missing accessibility labels")
         }
