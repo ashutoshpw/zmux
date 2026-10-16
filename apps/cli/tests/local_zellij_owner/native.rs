@@ -513,3 +513,93 @@ fn actual_native_start_refuses_without_persistence_and_writer_failure_never_star
         );
     }
 }
+
+#[test]
+fn actual_bound_finite_completion_saves_exact_workload_status_and_joins_frontend() {
+    // The actual selected shell remains live until one real input line arrives,
+    // so this protects bound finite completion, not the separate fast-exit race.
+    for code in [0, 7] {
+        let fixture = Fixture::new();
+        let state = fixture.root.join("desktop");
+        fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
+        let profile = uuid::Uuid::new_v4();
+        let desktop = native_desktop(&fixture, profile, uuid::Uuid::new_v4(), Some(state.clone()));
+        let initial = wait(&desktop, |s| {
+            !s.persistence.startup_pending
+                && s.pending_launches == 0
+                && !s.model.workspaces.is_empty()
+        });
+        send(
+            &desktop,
+            20,
+            DesktopCommand::LocalZellij {
+                request: ZellijRequest::Start {
+                    profile_id: profile,
+                    pane_id: initial.model.workspaces[0].focused_pane,
+                    name: "bound-finite".into(),
+                    cwd: fixture.root.clone(),
+                    command: Some(format!(
+                        "printf 'R03_FINITE_READY\\n'; IFS= read -r finite_input; [ \"$finite_input\" = 'finish-once' ] || exit 99; exit {code}"
+                    )),
+                    focus: true,
+                },
+            },
+        );
+        let running = wait(&desktop, |s| {
+            s.local_zellij_operations
+                .iter()
+                .any(|r| r.state == "transport_connected")
+                && s.control_frames.iter().any(|f| {
+                    f.snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.viewport.contents.contains("R03_FINITE_READY"))
+                })
+        });
+        let owner = running
+            .local_zellij_operations
+            .last()
+            .unwrap()
+            .owner_uuid
+            .unwrap();
+        let (_, session) = terminal(&running, owner);
+        let record: Record = serde_json::from_value(fixture.records().unwrap()[0].clone()).unwrap();
+        record.verify_live().unwrap();
+        send(
+            &desktop,
+            21,
+            DesktopCommand::Input {
+                session_id: session,
+                text: "finish-once\r".into(),
+            },
+        );
+        let completed = wait(&desktop, |s| {
+            s.local_zellij_operations.iter().any(|r| r.session_joined)
+        });
+        let operation = completed.local_zellij_operations.last().unwrap();
+        let value = serde_json::to_value(operation).unwrap();
+        assert_eq!(
+            value.get("workload_exit"),
+            Some(&serde_json::json!({"kind":"exited","value":code})),
+            "actual bound finite workload lacks its authenticated terminal receipt: {value}"
+        );
+        assert!(
+            value
+                .get("completion_saved_revision")
+                .and_then(Value::as_u64)
+                .is_some_and(|r| r > 0),
+            "finite completion was not actually Saved: {value}"
+        );
+        assert!(
+            operation.final_frame_received
+                && operation.monitor_joined
+                && operation.namespace_cleaned
+                && operation.error.is_none(),
+            "{value}"
+        );
+        desktop.shutdown(Duration::from_secs(5)).unwrap();
+        eprintln!(
+            "R03 bound finite receipt: {}",
+            serde_json::json!({"workload_exit":code,"owner_uuid":owner,"actual_input_once":true,"actual_saved_completion":true,"physical_frontend_joined":true,"fast_prebound_exit_covered":false})
+        );
+    }
+}
