@@ -816,7 +816,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         if !(mode?.isEditableText ?? false) { return "“" + title + "” is a preview and cannot be saved." }
         if !writable { return "“" + title + "” is read-only; it cannot be saved." }
         if busy { return "Another file operation is still running; try again in a moment." }
-        if ownerToken == nil { return "“" + title + "” is not attached to the file service; reload it first." }
+        if ownerToken == nil || staleOwner { return "“" + title + "” is not attached to the file service; reload it first (unsaved text is kept until then; Copy Text keeps it)." }
         return "There are no changes to save."
     }
 

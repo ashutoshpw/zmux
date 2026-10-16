@@ -228,6 +228,40 @@ struct FileEditorModelProbe {
         _ = sync.reloadReplied(automatic: true, hasUnsavedChanges: true, generation: 6)
         expect(report(&sync, "in_sync", 5, unsaved: true) == .none, "kept edits over a newer disk keep their banner")
 
+        // An error or recovery banner is never replaced by the disk-state banner on the next
+        // snapshot, even though the disk stays changed, deleted or unreadable. Only an empty
+        // banner, another disk banner or an informational notice yields.
+        let kept: [FileBanner] = [
+            .message("Could not save: permission denied (permission_denied)"),
+            .saveUnknown(7), .saveUnknown(0),
+            .ownerLost("This view is no longer attached to the file service (stale_view)."),
+            .loadFailed("Reload failed: busy"),
+            .savedUnsynced("sync_failed"),
+        ]
+        for banner in kept {
+            expect(!banner.yieldsToExternal, "\(banner) is an error or recovery banner and does not yield to a disk banner")
+            for (state, generation) in [("changed", UInt64(9)), ("deleted", 9), ("unreadable", 9)] {
+                var ranked = loaded("a")
+                ranked.textEdited("b")
+                ranked.setBanner(banner)
+                expect(report(&ranked, state, generation, unsaved: true, code: "io") == .none, "a \(state) report does not replace \(banner)")
+                expect(ranked.banner == banner, "\(banner) is still showing after a \(state) report")
+                // Repeated snapshots keep it, and dismissing it lets the disk state through.
+                expect(report(&ranked, state, generation, unsaved: true, code: "io") == .none, "a second \(state) report still keeps \(banner)")
+                ranked.setBanner(.none)
+                expect(report(&ranked, state, generation, unsaved: true, code: "io") != .none, "once \(banner) is gone the \(state) state is announced")
+            }
+        }
+        for banner in [FileBanner.none, .changedOnDisk(3), .deletedOnDisk, .unreadable("io"), .dirtyUnconfirmed, .saveResolved] {
+            expect(banner.yieldsToExternal, "\(banner) yields to a disk banner")
+        }
+        var pendingSave = loaded("a")
+        pendingSave.textEdited("b")
+        pendingSave.setBanner(.saveUnknown(7))
+        _ = report(&pendingSave, "changed", 9, unsaved: true)
+        expect(pendingSave.saveOutcomeBanner(lastOperation: 7, state: "completed", code: nil) == .saveResolved,
+               "a pending-save notice survives disk reports so its outcome can still resolve it")
+
         // A lost save acknowledgement resolves through a later snapshot.
         var unknown = loaded("a")
         unknown.setBanner(.saveUnknown(7))
