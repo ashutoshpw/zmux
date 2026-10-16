@@ -123,7 +123,7 @@ pub struct PersistenceCompletion {
 
 enum Request {
     Profiles {
-        name: Option<String>,
+        command: Option<crate::profiles::ProfileCommand>,
     },
     Load {
         path: PathBuf,
@@ -179,9 +179,8 @@ impl PersistenceWorker {
                         Err(PersistenceError::Cancelled)
                     } else {
                         match request.request {
-                            Request::Profiles { name } => {
-                                profile_catalog(&state_path, name).map(PersistenceOutcome::Profiles)
-                            }
+                            Request::Profiles { command } => profile_catalog(&state_path, command)
+                                .map(PersistenceOutcome::Profiles),
                             Request::Load { path } => {
                                 load(&state_path, &path, limits).map(PersistenceOutcome::Loaded)
                             }
@@ -233,8 +232,19 @@ impl PersistenceWorker {
         })
     }
     pub fn submit_profiles(&self, name: Option<String>) -> Result<OperationId, PersistenceError> {
-        self.submit(Request::Profiles { name })
+        self.submit(Request::Profiles {
+            command: name.map(|name| crate::profiles::ProfileCommand::Add { name }),
+        })
     }
+    pub fn submit_profile_command(
+        &self,
+        command: crate::profiles::ProfileCommand,
+    ) -> Result<OperationId, PersistenceError> {
+        self.submit(Request::Profiles {
+            command: Some(command),
+        })
+    }
+
     pub fn submit_load(&self, path: PathBuf) -> Result<OperationId, PersistenceError> {
         self.submit(Request::Load { path })
     }
@@ -789,7 +799,7 @@ fn atomic_write(
 
 fn profile_catalog(
     state: &Path,
-    name: Option<String>,
+    command: Option<crate::profiles::ProfileCommand>,
 ) -> Result<crate::profiles::Catalog, PersistenceError> {
     use crate::profiles::{CATALOG_NAME, Catalog, MAX_PROFILE_BYTES};
     let directory = state_directory(state)?;
@@ -816,10 +826,14 @@ fn profile_catalog(
     catalog
         .validate()
         .map_err(PersistenceError::InvalidDocument)?;
-    if let Some(name) = name {
-        catalog
-            .add(name)
-            .map_err(PersistenceError::InvalidDocument)?;
+    if let Some(command) = command {
+        match command {
+            crate::profiles::ProfileCommand::Add { name } => catalog.add(name),
+            crate::profiles::ProfileCommand::Rename { profile, name } => {
+                catalog.rename(&profile, name)
+            }
+        }
+        .map_err(PersistenceError::InvalidDocument)?;
         let bytes = serialize_bounded(&catalog, MAX_PROFILE_BYTES, "browser profile catalog")?;
         atomic_write(&directory, OsStr::new(CATALOG_NAME), &bytes, true)?;
     }

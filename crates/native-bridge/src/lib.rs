@@ -554,17 +554,51 @@ pub unsafe extern "C" fn zmux_desktop_profile_add(
         let bytes = unsafe { std::slice::from_raw_parts(name, length) };
         let name = std::str::from_utf8(bytes).map_err(|_| INVALID_ARGUMENT)?;
         let desktop = desktop(id)?;
-        let reservation = Reservation::new()?;
-        let reply = match desktop.native_profile_add(name.into()) {
-            Ok(receipt) => json!({"ok": true, "receipt": receipt}),
-            Err(error) => json!({
-                "ok": false,
-                "error": {"message": error.error.to_string()},
-                "outcome_unknown": error.outcome_unknown,
-            }),
-        };
-        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+        profile_admission(
+            &desktop,
+            zmux_desktop_runtime::profiles::ProfileCommand::Add { name: name.into() },
+        )
     })
+}
+
+/// Admit one strict catalog command through the shared profile mutation owner.
+///
+/// # Safety
+/// Request storage remains readable for length bytes; call off the UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_profile_command(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if request.is_null() || length == 0 || length > 2048 {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: caller retains this checked bounded readable storage.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let action =
+            serde_json::from_slice::<zmux_desktop_runtime::profiles::ProfileCommand>(bytes)
+                .map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        profile_admission(&desktop, action)
+    })
+}
+
+fn profile_admission(
+    desktop: &Desktop,
+    action: zmux_desktop_runtime::profiles::ProfileCommand,
+) -> Result<u64, i32> {
+    let reservation = Reservation::new()?;
+    let reply = match desktop.native_profile_command(action) {
+        Ok(receipt) => json!({"ok": true, "receipt": receipt}),
+        Err(error) => json!({
+            "ok": false,
+            "error": {"message": error.error.to_string()},
+            "outcome_unknown": error.outcome_unknown,
+        }),
+    };
+    reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
 }
 
 /// Trusted native window completion/key observations, excluded from generic dispatch.

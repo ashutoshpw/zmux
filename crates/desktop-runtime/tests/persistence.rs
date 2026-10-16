@@ -720,6 +720,19 @@ fn browser_profile_catalog_is_durable_locked_bounded_and_preserves_other_writers
         .result,
         Err(PersistenceError::LedgerBusy)
     ));
+    assert!(matches!(
+        wait(
+            &second,
+            second
+                .submit_profile_command(zmux_desktop_runtime::profiles::ProfileCommand::Rename {
+                    profile: a.id.to_string(),
+                    name: "Office".into()
+                })
+                .unwrap()
+        )
+        .result,
+        Err(PersistenceError::LedgerBusy)
+    ));
     drop(lock);
     assert_eq!(fs::read(&path).unwrap(), before);
     for name in [
@@ -748,6 +761,27 @@ fn browser_profile_catalog_is_durable_locked_bounded_and_preserves_other_writers
         .is_err()
     );
     assert_eq!(fs::read(&path).unwrap(), full);
+    // A stale worker must rename against the latest locked catalog even at capacity,
+    // retaining profiles written by the other worker and the original UUID.
+    let renamed = wait(
+        &second,
+        second
+            .submit_profile_command(zmux_desktop_runtime::profiles::ProfileCommand::Rename {
+                profile: a.id.to_string(),
+                name: "Office".into(),
+            })
+            .unwrap(),
+    )
+    .result
+    .unwrap();
+    let PersistenceOutcome::Profiles(renamed) = renamed else {
+        panic!("unexpected rename completion")
+    };
+    assert_eq!(renamed.profiles.len(), 32);
+    assert_eq!(renamed.profiles[0].id, a.id);
+    assert_eq!(renamed.profiles[0].name, "Office");
+    assert_eq!(renamed.profiles[1..], profiles(&first, None).profiles[1..]);
+    let a = renamed.profiles[0].clone();
     close(first);
     close(second);
     let reopened = directory.worker();

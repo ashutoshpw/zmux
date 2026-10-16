@@ -1,4 +1,4 @@
-//! Installation-local, append-only browser profile metadata. WebKit owns website
+//! Installation-local browser profile metadata with immutable identities. WebKit owns website
 //! data. All filesystem operations run through PersistenceWorker, never the executor.
 use crate::{
     DesktopError,
@@ -64,6 +64,26 @@ impl Catalog {
         }
         Ok(())
     }
+    pub fn rename(&mut self, selector: &str, name: String) -> Result<Profile, String> {
+        validate_name(&name)?;
+        let index = self
+            .profiles
+            .iter()
+            .position(|profile| {
+                profile.name == selector || Uuid::parse_str(selector).ok() == Some(profile.id)
+            })
+            .ok_or("unknown browser profile")?;
+        if self
+            .profiles
+            .iter()
+            .enumerate()
+            .any(|(other, profile)| other != index && profile.name == name)
+        {
+            return Err("browser profile name already exists".into());
+        }
+        self.profiles[index].name = name;
+        Ok(self.profiles[index].clone())
+    }
     pub fn add(&mut self, name: String) -> Result<Profile, String> {
         validate_name(&name)?;
         if self.profiles.len() >= MAX_PROFILES {
@@ -84,6 +104,7 @@ impl Catalog {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProfileCommand {
     Add { name: String },
+    Rename { profile: String, name: String },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ProfileReceipt {
@@ -147,8 +168,20 @@ impl ProfileRuntime {
             .io
             .as_ref()
             .ok_or_else(|| failure("browser profiles require durable runtime state"))?;
-        let ProfileCommand::Add { name } = command;
-        validate_name(&name).map_err(failure)?;
+        let name = match &command {
+            ProfileCommand::Add { name } => name,
+            ProfileCommand::Rename { profile, name } => {
+                if profile.is_empty()
+                    || profile.len() > 128
+                    || profile.chars().any(char::is_control)
+                {
+                    return Err(failure("invalid browser profile selector"));
+                }
+                name
+            }
+        };
+        validate_name(name).map_err(failure)?;
+        let name = name.clone();
         if self.snapshot.operations.len() == 16 {
             let index = self
                 .snapshot
@@ -162,7 +195,7 @@ impl ProfileRuntime {
         let next = id
             .checked_add(1)
             .ok_or_else(|| failure("browser profile operation IDs exhausted"))?;
-        let operation = io.submit_profiles(Some(name.clone())).map_err(failure)?;
+        let operation = io.submit_profile_command(command).map_err(failure)?;
         self.next_id = next;
         self.pending.insert(operation.0, (id, Some(name)));
         self.snapshot.operations.push(ProfileReceipt {
@@ -272,7 +305,7 @@ impl ProfileRuntime {
         for op in &mut self.snapshot.operations {
             if op.state == "pending" {
                 op.state = "failed".into();
-                op.error=Some("desktop shutdown; durable profile metadata outcome may be unknown; creation was not replayed".into());
+                op.error=Some("desktop shutdown; durable profile metadata outcome may be unknown; operation was not replayed".into());
             }
         }
         self.pending.clear();

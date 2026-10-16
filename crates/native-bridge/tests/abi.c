@@ -277,6 +277,11 @@ static void persistent_desktop_uses_requested_directory(void) {
         assert(zmux_core_destroy(buffer.value) == ZMUX_OK);
     }
     assert(zmux_desktop_profile_add(desktop.value, profile_name, sizeof profile_name - 1).status == ZMUX_CAPACITY);
+    const uint8_t rename_command[] = "{\"operation\":\"rename\",\"profile\":\"Native ABI Profile\",\"name\":\"Renamed ABI Profile\"}";
+    assert(zmux_desktop_profile_command(desktop.value, NULL, 1).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_profile_command(desktop.value, rename_command, 2049).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_profile_command(desktop.value, (const uint8_t *)"{}", 2).status == ZMUX_INVALID_ARGUMENT);
+    assert(zmux_desktop_profile_command(desktop.value, rename_command, sizeof rename_command - 1).status == ZMUX_CAPACITY);
     for (size_t index = 0; index < 16; index++) { assert(zmux_buffer_release(held[index]) == ZMUX_OK); }
     char *before = desktop_snapshot(desktop.value);
     assert(strstr(before, "Native ABI Profile") == NULL);
@@ -326,6 +331,35 @@ static void persistent_desktop_uses_requested_directory(void) {
     assert(strstr(invalid_receipt, "\"ok\":false") != NULL);
     assert(strstr(invalid_receipt, "\"outcome_unknown\":false") != NULL);
     free(invalid_receipt);
+    // The strict command transport reaches the same durable owner as UTF-8 Add.
+    char *identity_snapshot = desktop_snapshot(desktop.value);
+    const char *identity = strstr(identity_snapshot, "\"profiles\":[{\"id\":\"");
+    assert(identity != NULL);
+    char profile_uuid[37];
+    memcpy(profile_uuid, identity + strlen("\"profiles\":[{\"id\":\""), 36);
+    profile_uuid[36] = '\0';
+    free(identity_snapshot);
+    ZmuxResult renamed = zmux_desktop_profile_command(desktop.value, rename_command, sizeof rename_command - 1);
+    assert(renamed.status == ZMUX_OK);
+    char *rename_receipt = consume(renamed.value);
+    assert(strstr(rename_receipt, "\"ok\":true") != NULL);
+    operation = strstr(rename_receipt, "\"operation_id\":");
+    assert(operation != NULL);
+    operation_id = strtoull(operation + strlen("\"operation_id\":"), NULL, 10);
+    free(rename_receipt);
+    completed = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        char expected[256];
+        snprintf(expected, sizeof expected, "\"profile\":{\"id\":\"%s\",\"name\":\"Renamed ABI Profile\"},\"error\":null}", profile_uuid);
+        char expected_operation[64];
+        snprintf(expected_operation, sizeof expected_operation, "\"operation_id\":%llu", operation_id);
+        completed = strstr(text, epoch_value) != NULL && strstr(text, expected_operation) != NULL && strstr(text, expected) != NULL;
+        free(text);
+        if (completed) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(completed);
     assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
     char path[4096];
     snprintf(path, sizeof path, "%s/session.json", directory);
