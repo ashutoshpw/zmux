@@ -28,9 +28,17 @@ private struct SelectionWrapPhase: Codable, Sendable {
     let nonce: String
     let rows: Int
     let columns: Int
+    let phase: String?
     enum CodingKeys: String, CodingKey {
-        case pid, parentPID = "parent_pid", nonce, rows, columns
+        case pid, parentPID = "parent_pid", nonce, rows, columns, phase
     }
+}
+
+private struct SelectionCopyRows: Codable, Sendable {
+    let phase: String
+    let scrollbackOffset: Int
+    let wrapsToNext: [Bool]
+    let writtenEnds: [Int]
 }
 
 private struct SelectionNativeReport: Codable, Sendable {
@@ -58,6 +66,9 @@ private struct SelectionNativeReport: Codable, Sendable {
     let activationFailure: String?
     var cellGeometry: SelectionCellGeometry?
     var wrapPhase: SelectionWrapPhase?
+    var additionalPhases: [SelectionWrapPhase]
+    var parkedOffset: Int?
+    var copyRows: [SelectionCopyRows]
     var state: String
     var publicWordReferences: [SelectionWordReference]
     var cases: [SelectionNativeCase]
@@ -132,7 +143,7 @@ enum TerminalSelectionSmoke {
             keyWindow: window.isKeyWindow && NSApp.keyWindow === window,
             terminalFirstResponder: window.firstResponder === view,
             activationRequestProcessID: activationRequestProcessID, activationFailure: activationFailure,
-            cellGeometry: nil, wrapPhase: nil, state: "running", publicWordReferences: [], cases: [])
+            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], parkedOffset: nil, copyRows: [], state: "running", publicWordReferences: [], cases: [])
         // Public system behavior is recorded separately from the independently
         // specified regression literal below. Punctuation is not guessed.
         let reference = NSTextView(frame: .zero)
@@ -224,17 +235,58 @@ enum TerminalSelectionSmoke {
         }
         result.state = "completed_visible_cases"
         try await save(result, to: report)
-        let wrapped: Viewport
-        do {
-            wrapped = try await beginWrapPhase(coordinator: coordinator, view: view, window: window, result: &result)
-        } catch {
-            result.state = "prerequisite_failed"
-            try await save(result, to: report)
-            throw error
-        }
+        let wrapped = try await beginCopyPhase(key: "w", code: 13, marker: "WRAP_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
         try await check("wrapped_boundary_written_space", expected: String(repeating: "X", count: wrapped.size.cols - 1) + " EDGE",
                         window: window, result: &result, report: report) {
             try drag(view, window: window, from: (0, 0), to: (1, 4), count: 1, viewport: wrapped)
+        }
+        for (name, key, code, marker, prefixAdjustment, expectedSuffix) in [
+            ("wrapped_wide_cell", "v", UInt16(9), "WIDE_READY_", 2, "界Z"),
+            ("wide_margin_engine_hard_boundary", "m", UInt16(46), "MARGIN_READY_", 1, "\n界Z"),
+            ("wrapped_combining_emoji", "u", UInt16(32), "UNICODE_READY_", 1, "e\u{301}🙂Z")
+        ] {
+            let phase = try await beginCopyPhase(key: key, code: code, marker: marker,
+                coordinator: coordinator, view: view, window: window, result: &result, report: report)
+            // With a full wide cell at the old edge, Z starts row1. The
+            // other two payloads place Z after a wide cell on row1.
+            let end = key == "v" ? 1 : 3
+            try await check(name, expected: String(repeating: "X", count: phase.size.cols - prefixAdjustment) + expectedSuffix,
+                            window: window, result: &result, report: report) {
+                try drag(view, window: window, from: (0, 0), to: (1, end), count: 1, viewport: phase)
+            }
+        }
+        let hard = try await beginCopyPhase(key: "h", code: 4, marker: "HARD_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        try await check("hard_newline_and_blank_row", expected: "HARD_A\n\nHARD_B", window: window, result: &result, report: report) {
+            try drag(view, window: window, from: (0, 0), to: (2, 6), count: 1, viewport: hard)
+        }
+        _ = try await beginCopyPhase(key: "p", code: 35, marker: "PARK_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        try sendKey("\u{f729}", code: 115, modifiers: [.command], window: window)
+        let historyDeadline = ContinuousClock.now + .seconds(5)
+        var parked: Viewport?
+        while ContinuousClock.now < historyDeadline {
+            if let frame = coordinator.snapshot?.frames.first(where: { $0.sessionId == result.sessionID }),
+               frame.processId == result.childPID, let viewport = frame.snapshot?.viewport,
+               viewport.scrollbackOffset > 0, viewport.contents.hasPrefix("X"),
+               viewport.contents.contains("EDGE"), view.requestedSize == (viewport.size.rows, viewport.size.cols),
+               (view.accessibilityValue() as? String) == viewport.contents {
+                parked = viewport
+                break
+            }
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        guard let parked else {
+            result.state = "prerequisite_failed"
+            try await save(result, to: report)
+            throw failure("Actual native history navigation did not expose the wrapped rows")
+        }
+        result.parkedOffset = parked.scrollbackOffset
+        try observeRows(parked, phase: "parked", result: &result)
+        try await check("wrapped_parked_history", expected: String(repeating: "X", count: parked.size.cols - 1) + " EDGE",
+                        window: window, result: &result, report: report) {
+            try drag(view, window: window, from: (0, 0), to: (1, 4), count: 1, viewport: parked)
         }
         result.state = "completed_cases"
         try await save(result, to: report)
@@ -243,50 +295,77 @@ enum TerminalSelectionSmoke {
         try await save(result, to: report)
     }
 
-    private static func beginWrapPhase(coordinator: ApplicationCoordinator, view: TerminalView, window: NSWindow,
-                                       result: inout SelectionNativeReport) async throws -> Viewport {
+    private static func beginCopyPhase(key: String, code: UInt16, marker: String,
+                                       coordinator: ApplicationCoordinator, view: TerminalView, window: NSWindow,
+                                       result: inout SelectionNativeReport, report: URL) async throws -> Viewport {
+        do {
+            return try await captureCopyPhase(key: key, code: code, marker: marker,
+                coordinator: coordinator, view: view, window: window, result: &result)
+        } catch {
+            result.state = "prerequisite_failed"
+            try await save(result, to: report)
+            throw error
+        }
+    }
+
+    private static func captureCopyPhase(key: String, code: UInt16, marker: String,
+                                         coordinator: ApplicationCoordinator, view: TerminalView, window: NSWindow,
+                                         result: inout SelectionNativeReport) async throws -> Viewport {
         guard NSApp.isActive, window.isKeyWindow, NSApp.keyWindow === window, window.firstResponder === view,
               let root = ProcessInfo.processInfo.environment["ZMUX_SELECTION_ROOT"] else {
             throw failure("Actual focus or private child phase root unavailable before wrapped-copy fixture")
         }
         // This is an actual native text key routed through the production input
         // lane. The finite PTY child observes it before emitting its next phase.
-        for type in [NSEvent.EventType.keyDown, .keyUp] {
-            guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
-                characters: "w", charactersIgnoringModifiers: "w", isARepeat: false, keyCode: 13) else {
-                throw failure("Cannot construct actual native phase key")
-            }
-            window.sendEvent(event)
-        }
+        try sendKey(key, code: code, modifiers: [], window: window)
         let deadline = ContinuousClock.now + .seconds(10)
         var captured: Viewport?
         while ContinuousClock.now < deadline {
             if let frame = coordinator.snapshot?.frames.first(where: { $0.sessionId == result.sessionID }),
                frame.processId == result.childPID, frame.snapshot?.state == "running",
                let viewport = frame.snapshot?.viewport,
-               viewport.contents.contains("WRAP_READY_" + result.nonce),
-               view.requestedSize == (viewport.size.rows, viewport.size.cols) {
+               viewport.contents.contains(marker + result.nonce),
+               view.requestedSize == (viewport.size.rows, viewport.size.cols),
+               (view.accessibilityValue() as? String) == viewport.contents {
                 captured = viewport
                 break
             }
             try await Task.sleep(for: .milliseconds(32))
         }
         guard let viewport = captured else { throw failure("Actual wrapped PTY phase did not reach the mounted viewport") }
-        let url = URL(fileURLWithPath: root).appendingPathComponent("wrap-child.json")
+        let registration = key == "w" ? "wrap-child.json" : "copy-child-" + key + ".json"
+        let url = URL(fileURLWithPath: root).appendingPathComponent(registration)
         let phase = try await Task.detached {
             let data = try Data(contentsOf: url)
             guard data.count <= 4096 else { throw BridgeFailure(message: "Wrapped child phase exceeds byte bound") }
             return try JSONDecoder().decode(SelectionWrapPhase.self, from: data)
         }.value
-        result.wrapPhase = phase
-        guard UInt32(exactly: phase.pid) == result.childPID, phase.parentPID == getpid(), phase.nonce == result.nonce,
+        if key == "w" { result.wrapPhase = phase } else { result.additionalPhases.append(phase) }
+        guard phase.phase == key, UInt32(exactly: phase.pid) == result.childPID, phase.parentPID == getpid(), phase.nonce == result.nonce,
               phase.rows == viewport.size.rows, phase.columns == viewport.size.cols,
               viewport.size.rows >= 8, viewport.size.cols >= 64, viewport.size.cols <= 240,
               NSApp.isActive, window.isVisible, window.isKeyWindow, NSApp.keyWindow === window, window.firstResponder === view else {
             throw failure("Actual child identity, kernel/viewport width or native focus differs before wrapped-copy case")
         }
+        try observeRows(viewport, phase: key, result: &result)
         return viewport
+    }
+
+    private static func observeRows(_ viewport: Viewport, phase: String, result: inout SelectionNativeReport) throws {
+        guard let metadata = viewport.rowCopy else { throw failure("Default fixture engine did not publish copy metadata") }
+        result.copyRows.append(SelectionCopyRows(phase: phase, scrollbackOffset: viewport.scrollbackOffset,
+            wrapsToNext: metadata.map(\.wrapsToNext), writtenEnds: metadata.map(\.writtenEnd)))
+    }
+
+    private static func sendKey(_ key: String, code: UInt16, modifiers: NSEvent.ModifierFlags, window: NSWindow) throws {
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            guard let event = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: key, charactersIgnoringModifiers: key, isARepeat: false, keyCode: code) else {
+                throw failure("Cannot construct actual native phase/navigation key")
+            }
+            window.sendEvent(event)
+        }
     }
 
     private static func activateOwnedApplication() async throws -> Int32 {
@@ -381,6 +460,7 @@ enum TerminalSelectionSmoke {
         try copy(window: window)
         let observed = NSPasteboard.general.string(forType: .string)
         result.cases.append(SelectionNativeCase(name: name, expected: expected, observed: observed))
+        try await save(result, to: report)
         if observed?.utf8.elementsEqual(expected.utf8) != true {
             result.state = "failed"
             try await save(result, to: report)

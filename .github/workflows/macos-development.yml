@@ -100,6 +100,7 @@ jobs:
             dist/native-smoke.json
             dist/native-windows.json
             dist/native-resources.json
+            dist/native-failure-process.json
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png
             dist/zmux-browser-smoke.png
@@ -146,6 +147,7 @@ jobs:
             ${{ runner.temp }}/native-terminal-selection/native-selection.json
             ${{ runner.temp }}/native-terminal-selection/child.json
             ${{ runner.temp }}/native-terminal-selection/wrap-child.json
+            ${{ runner.temp }}/native-terminal-selection/copy-child-*.json
             ${{ runner.temp }}/native-terminal-selection/selection-child.py
             ${{ runner.temp }}/native-terminal-selection/*.log
             ${{ runner.temp }}/native-terminal-selection/*.zip

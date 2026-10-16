@@ -68,20 +68,31 @@ final class TerminalSelection {
 
     func text(viewport: Viewport) -> String? {
         guard let range, !range.isEmpty else { return nil }
-        var lines: [String] = []
+        var pieces: [String] = []
         for row in range.lower.row...range.upper.row {
             let lower = row == range.lower.row ? range.lower.column : 0
             let upper = row == range.upper.row ? range.upper.column : viewport.size.cols
+            // Metadata is validated against this viewport during decoding. Empty
+            // physical rows retain hard separators even if marked as wrapped.
+            var joinsNext = false
+            var copyUpper = upper
+            if row < range.upper.row, let metadata = viewport.rowCopy,
+               metadata[row].wrapsToNext, metadata[row].writtenEnd > 0, metadata[row + 1].writtenEnd > 0 {
+                joinsNext = true
+                copyUpper = min(upper, metadata[row].writtenEnd)
+            }
             var text = cells(row, viewport: viewport).cells
-                .filter { $0.lower < upper && $0.upper > lower }.map(\.text).joined()
-            // Whole rows and physical row breaks omit right-edge grid padding.
-            // An explicit partial single-row selection preserves edge spaces.
-            if upper == viewport.size.cols && (lower == 0 || range.lower.row != range.upper.row) {
+                .filter { $0.lower < copyUpper && $0.upper > lower }.map(\.text).joined()
+            // Preserve written spaces at a soft boundary. Whole hard rows and
+            // physical breaks omit padding; explicit partial same-row edge
+            // spaces remain copyable, as before.
+            if !joinsNext && upper == viewport.size.cols && (lower == 0 || range.lower.row != range.upper.row) {
                 while text.last == " " { text.removeLast() }
             }
-            lines.append(text)
+            pieces.append(text)
+            if row < range.upper.row { pieces.append(joinsNext ? "" : "\n") }
         }
-        return lines.joined(separator: "\n")
+        return pieces.joined()
     }
 
     private func expanded(_ point: TerminalSelectionPoint, viewport: Viewport) -> TerminalSelectionRange {
