@@ -44,8 +44,10 @@ AppKit routing/coordinate/selection risk rather than duplicating encoding tables
 
 ## Status
 
-Read-only discovery complete; isolated worktree `feat/terminal-pointer` created
-from46422ef. Implementation and behavioral red/green evidence remain pending.
+Rust protocol/worker core committed as `1b6c0cd` after red regression `c53e150`;
+parent verification passed 388 tests, strict Clippy, notices and C ABI checks.
+Native fixture-only cohort now passes portable `scripts/check` and selection
+input/AST validation; actual packaged native red and native repair remain pending.
 
 ## Worker dispatch delivered
 
@@ -67,3 +69,13 @@ but Clippy requested an equivalent collapsed if in fixture polling; repaired.
 Independent session-storage review found no scoped protocol/lifecycle blocker.
 Native event wiring, published tracking hints and actual AppKit acceptance remain
 pending. This worker slice alone does not enable native mouse interaction.
+
+## Native regression design
+
+The existing selection fixture gains a final `t` phase after all copy cases. The
+actual raw child enables 1002+1006 and captures input until native Ctrl-X. Mounted
+AppKit down/same-cell drag/moved drag/up must yield independently specified SGR
+bytes; Shift-down followed by unshifted drag/up must copy `pointer` without adding
+application bytes. Exact child PID/parent/nonce/size and raw capture are retained
+separately. No tracking metadata or native pointer repair is included in this red
+fixture cohort; the expected red is an empty capture from missing native routing.
