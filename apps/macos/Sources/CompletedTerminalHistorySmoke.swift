@@ -26,6 +26,7 @@ enum CompletedTerminalHistorySmoke {
         var destinationWindow: UInt64?
         var activationPID: Int32?
         var checks: [String] = []
+        var statusLabels: [String] = []
         var copies: [Copy] = []
         var positions: [Position] = []
         var failure: String?
@@ -51,6 +52,15 @@ enum CompletedTerminalHistorySmoke {
                 guard data.count <= 16_384, let value = String(data: data, encoding: .utf8),
                       value.components(separatedBy: "\n").count >= 40 else {
                     throw BridgeFailure(message: "Completed-history oracle must be bounded multiline UTF-8")
+                }
+                return value
+            }.value
+            let expectedLabels: [String] = try await Task.detached {
+                let data = try Data(contentsOf: report.appendingPathExtension("expected-status.json"))
+                guard data.count <= 2048 else { throw BridgeFailure(message: "History status oracle exceeds its bound") }
+                let value = try JSONDecoder().decode([String].self, from: data)
+                guard (2...3).contains(value.count), value.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
+                    throw BridgeFailure(message: "History status oracle has invalid labels")
                 }
                 return value
             }.value
@@ -92,9 +102,10 @@ enum CompletedTerminalHistorySmoke {
                 throw failure("Saved-output presentation is not exact selectable read-only text")
             }
             let renderedLabels = labels(in: view)
-            guard renderedLabels.contains("Process exited with status 7"), renderedLabels.contains("Saved output · truncated") else {
+            guard renderedLabels == expectedLabels else {
                 throw failure("Restored exit and truncation status did not render")
             }
+            evidence.statusLabels = renderedLabels
             try menu("a", code: 0, window: source.window, output: output)
             guard output.selectedRange() == NSRange(location: 0, length: (expected as NSString).length) else {
                 throw failure("Actual Select All menu did not select exact saved output")
