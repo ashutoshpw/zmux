@@ -15,16 +15,21 @@ mapping uses public AppKit/CoreGraphics key events and standard ANSI virtual-key
 positions: printable ASCII, Enter/Return, Tab, Escape, Backspace/Delete, arrow/
 Home/End/Page keys, Space aliases, F1-F20, NumpadEnter and Shift/Control/Alt/Meta
 left/right names (with Option/Command aliases). A literal uppercase or shifted
-symbol keeps its explicit Unicode characters with currently held flags; it does
-not implicitly hold Shift. Held Shift transforms ordinary letter/digit/punctuation
-characters using the explicit ANSI mapping. Unimplemented known native names,
+symbol contributes implicit Shift to both native phases so its keyup retains the
+same character. Physical KeyA/Digit1 tokens do not imply Shift. Held explicit or
+literal-key modifiers transform ordinary letter/digit/punctuation characters using
+the explicit ANSI mapping. The fixed physical US/ANSI layout assumption is
+unchanged; dynamic layouts, IME and opaque Unicode compatibility are separate. Unimplemented known native names,
 including lock/Insert/PrintScreen/Pause/ContextMenu/Clear/Fn, other Numpad keys and
 F21-F35, fail native_key_unavailable. Full reference mapping parity remains open.
 
 The exact BrowserView owns at most 64 held keys and serializes admitted keyboard
 operations until their observation ends. A press prepares both native halves
 before emitting either. Down/up preserve host-local modifier state; repeated down
-is marked as repeat, and press on an already held code fails explicitly. All
+is marked as repeat only for the same character mapping; remapping a held physical
+code fails before delivery. Press on an already held code also fails explicitly.
+A physical alias on keyup releases the original held mapping and its implicit
+modifier contribution; subsequent base keys cannot inherit that released Shift. All
 prepared events pass a current owner/process/readiness and absolute deadline
 check immediately before mutation begins; rejection sends no native event. All
 native delivery goes straight to its WKWebView subclass without changing app/tab
@@ -124,6 +129,44 @@ post-default timing. Strict Swift typing and the same packaged native regression
 remain required before keyboard acceptance.
 
 # B02a browser automation bridge
+
+## Literal shifted native keyup regression
+
+Run38827930379 at a85dc43 reached a generic trusted-sequence mismatch after universal
+build. Its retained log omitted the action and actual phases, so it did not establish
+a particular key failure. Diagnostic-only28b72ce added bounded redacted production
+phase/modifier/equality details and controlled fixture keys/events/owner flags,
+without changing the observer comparison, delivery, timing, state or assertions.
+Required portable checks passed300Rust tests and both async JS bodies parsed.
+A current local DOM run remained unavailable: both installed Chromium executables
+stalled before any fixture GET/output, with the original timeout retained. The prior
+148-case DOM result remains prior evidence, not a current rerun.
+
+Diagnostic run38829898297 at exact28b72cedaee235009aae2ab2041bb441b0b8b351
+compiled and executed the packaged app. Case6 `press !` inserted `ab!` and delivered
+trusted `keydown:!` followed by trusted `keyup:1`, both Shift=false. The observer
+correctly rejected index1 because it expected `keyup:!`; type/modifiers/trust all
+matched. Host, generation3, unowned generation1, active app, unrelated key window,
+responder and detached hosting were retained. The initial acknowledged snapshot,
+canceled default, suppressed acknowledgment/refusal/reload and Backspace/caret cases
+preceded this failure. The secondary direct-launch sidebar failure had key=false
+and is separate. Artifact12017321930 archive SHA256
+`94262c29e3831b9e09d9009f1724a63bd315bc7ce9708635e82672b735b9a2a1`;
+retained regression receipt `/tmp/zmux-native-38829898297-keyboard-regression.json`,
+SHA256 `266008908990e81e8b0df4e0458a1f367ca82769dcc4c34c82f162002a505712`.
+
+The source repair represents literal uppercase/symbol Shift explicitly on both
+native phases; a held literal keeps that contribution until its matching physical
+release. It preserves the original held mapping for alias keyup and refuses changing
+a held key's character mapping. No input is replayed and no mismatched base keyup
+is tolerated. The native fixture now requires exact shifted symbol phases and
+native defaults, then a base key with Shift off. It distinguishes literal A from
+physical KeyA, same-key repeat from remapping refusal, standalone literal up,
+physical alias release, implicit held Shift across another press, and explicit
+Shift retained across a literal press then separately released. The previous
+false-Shift literal expectation is replaced by the required native Shift flags;
+key, phase, trust, default, observer acknowledgment and focus assertions stay exact.
+This source and its actual native green remain required before keyboard acceptance.
 
 ## B02g type, select and pixel scroll (2026-10-15)
 

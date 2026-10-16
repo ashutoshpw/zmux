@@ -8,7 +8,7 @@ enum BrowserKeyboardSmoke {
         struct Target: Decodable { let surfaceId: UInt64 }
         let createdSurfaces: [Target]
     }
-    private struct Event: Codable { let type, key: String; let trusted, shift: Bool }
+    private struct Event: Codable { let type, key: String; let trusted, shift, repeated: Bool }
     private struct Observation: Codable {
         let value: String
         let checked: Bool
@@ -71,7 +71,7 @@ enum BrowserKeyboardSmoke {
                 globalThis.zmuxKeyObservers?.abort();globalThis.zmuxKeyObservers=new AbortController();
                 document.body.innerHTML='<form id="form"><input id="entry" value="ab"><button type="submit">Submit</button></form><input id="box" type="checkbox">';
                 globalThis.zmuxKeyEvents=[];globalThis.zmuxSubmits=0;
-                for(const type of ['keydown','keyup'])document.addEventListener(type,event=>zmuxKeyEvents.push({type:event.type,key:event.key,trusted:event.isTrusted,shift:event.shiftKey}),{capture:true,signal:zmuxKeyObservers.signal});
+                for(const type of ['keydown','keyup'])document.addEventListener(type,event=>zmuxKeyEvents.push({type:event.type,key:event.key,trusted:event.isTrusted,shift:event.shiftKey,repeated:event.repeat}),{capture:true,signal:zmuxKeyObservers.signal});
                 document.getElementById('form').addEventListener('submit',event=>{zmuxSubmits++;event.preventDefault()});
                 document.getElementById('entry').addEventListener('input',()=>{document.title='keyboard-'+document.getElementById('entry').value});
                 document.getElementById(FOCUS).focus();document.getElementById('entry').setSelectionRange(2,2);null
@@ -83,9 +83,22 @@ enum BrowserKeyboardSmoke {
             @MainActor func observe() async throws -> Observation {
                 try decode(Envelope<Observation>.self, await cli(["browser", "eval", "({value:document.getElementById('entry').value,checked:document.getElementById('box').checked,submits:zmuxSubmits,start:document.getElementById('entry').selectionStart,end:document.getElementById('entry').selectionEnd,events:zmuxKeyEvents})"] + target, false)).value
             }
+            var actionCase = 0
             @MainActor func action(_ operation: String, _ token: String, synthetic: Bool = false, after: Bool = false, snapshotTitle: String? = nil) async throws {
+                actionCase += 1
                 let generation = view.documentGeneration
-                let reply = try decode(Reply.self, await cli(["browser", operation, "--key", token] + target + (after ? ["--snapshot-after"] : []), false))
+                let unownedGeneration = events.unownedKeyGeneration
+                let reply: Reply
+                do {
+                    reply = try decode(Reply.self, await cli(["browser", operation, "--key", token] + target + (after ? ["--snapshot-after"] : []), false))
+                } catch {
+                    // These keys and DOM events belong only to the generated fixture;
+                    // production mismatch messages redact printable user key content.
+                    let observed: String
+                    do { observed = String(decoding: try JSONEncoder().encode(try await observe()), as: UTF8.self) }
+                    catch { observed = "Fixture observation unavailable: " + error.localizedDescription }
+                    throw BridgeFailure(message: "Keyboard fixture case=\(actionCase), operation=\(operation), key=\(token), snapshotAfter=\(after), hostRetained=\(view.hostID == host), generationBefore=\(generation), generationAfter=\(view.documentGeneration), unownedBefore=\(unownedGeneration), unownedAfter=\(events.unownedKeyGeneration), appActive=\(NSApp.isActive), keyWindowRetained=\(NSApp.keyWindow === keyWindow), responderRetained=\(keyWindow?.firstResponder === responder), detached=\(view.webView.window == nil); callback=\(error.localizedDescription); fixtureObservation=\(String(observed.prefix(4096)))")
+                }
                 guard reply.value.dispatched, reply.value.input == (synthetic ? "synthetic" : "native"),
                       !synthetic || reply.value.nativeDefaults == false,
                       synthetic || reply.value.nativeEventObserved == true,
@@ -144,7 +157,44 @@ enum BrowserKeyboardSmoke {
             try await setup()
             try await action("press", "!")
             try await action("press", "+")
-            _ = try await check({ $0.value == "ab!+" && $0.events.map(\.key) == ["!", "!", "+", "+"] && $0.events.allSatisfy { $0.trusted && !$0.shift } }, "Literal symbols lost key/default or explicitly held-modifier semantics")
+            _ = try await check({ $0.value == "ab!+" && $0.events.map { $0.type + ":" + $0.key } == ["keydown:!", "keyup:!", "keydown:+", "keyup:+"] && $0.events.allSatisfy { $0.trusted && $0.shift } }, "Literal symbols lost native shifted key phases/defaults")
+            try await action("press", "Digit1")
+            _ = try await check({ $0.value == "ab!+1" && $0.events.suffix(2).allSatisfy { $0.trusted && !$0.shift && $0.key == "1" } }, "Literal press leaked implicit Shift into a subsequent physical key")
+            try await setup()
+            try await action("press", "A")
+            try await action("press", "KeyA")
+            _ = try await check({ $0.value == "abAa" && $0.events.map(\.key) == ["A", "A", "a", "a"] && $0.events.prefix(2).allSatisfy { $0.trusted && $0.shift } && $0.events.suffix(2).allSatisfy { $0.trusted && !$0.shift } }, "Literal uppercase and physical KeyA lost distinct native semantics")
+            try await setup()
+            try await action("keydown", "!")
+            try await action("keydown", "!")
+            let remapped = String(decoding: try await cli(["browser", "keydown", "1"] + target, true), as: UTF8.self)
+            guard remapped.contains("native_input_failed"), remapped.contains("Release this held physical key") else {
+                throw BridgeFailure(message: "Held-key remapping failed for an unrelated reason: " + remapped)
+            }
+            try await action("press", "KeyX")
+            try await action("keyup", "Digit1")
+            try await action("press", "KeyX")
+            _ = try await check({ value in
+                value.value == "ab!!Xx" && value.events.map { $0.type + ":" + $0.key } == ["keydown:!", "keydown:!", "keydown:X", "keyup:X", "keyup:!", "keydown:x", "keyup:x"]
+                    && !value.events[0].repeated && value.events[1].repeated
+                    && value.events.prefix(5).allSatisfy { $0.trusted && $0.shift }
+                    && value.events.suffix(2).allSatisfy { $0.trusted && !$0.shift }
+            }, "Repeated held literal, remapping refusal or physical alias release leaked native state")
+            try await setup()
+            try await action("keyup", "!")
+            try await action("press", "KeyX")
+            _ = try await check({ $0.value == "abx" && $0.events.map { $0.type + ":" + $0.key } == ["keyup:!", "keydown:x", "keyup:x"] && $0.events[0].trusted && $0.events[0].shift && $0.events.suffix(2).allSatisfy { $0.trusted && !$0.shift } }, "Standalone literal keyup inserted text or retained implicit Shift")
+            try await setup()
+            try await action("keydown", "Shift")
+            try await action("press", "!")
+            try await action("press", "KeyA")
+            try await action("keyup", "Shift")
+            try await action("press", "KeyA")
+            _ = try await check({ value in
+                value.value == "ab!Aa" && value.events.map { $0.type + ":" + $0.key } == ["keydown:Shift", "keydown:!", "keyup:!", "keydown:A", "keyup:A", "keyup:Shift", "keydown:a", "keyup:a"]
+                    && value.events.prefix(5).allSatisfy { $0.trusted && $0.shift }
+                    && value.events.suffix(3).allSatisfy { $0.trusted && !$0.shift }
+            }, "Literal press consumed explicit held Shift or retained it after separate release")
             try await setup("box")
             try await action("key", " ")
             _ = try await check({ $0.checked && $0.events.allSatisfy(\.trusted) }, "Literal Space failed native checkbox default")
@@ -223,6 +273,7 @@ enum BrowserKeyboardSmoke {
             }
             _ = try await cli(["close-surface", "--surface", String(next)], false)
             freshID = nil
+            FileHandle.standardError.write(Data("Native browser keyboard: acknowledged snapshots/defaults, exact trusted phases, literal/physical Shift lifetime, repeat/remapping/alias release, containment and host reset passed\n".utf8))
         } catch {
             if let freshID {
                 do { _ = try await cli(["close-surface", "--surface", String(freshID)], false) }
