@@ -114,3 +114,33 @@ route and literalalpha case. Public system word observations can be recorded
 independently before a failed focus guard; clicks and Copy still require actual
 focus. No forced activation, fake focus, changed production view or relaxed oracle
 is part of this fixture repair.
+
+
+## LaunchServices admission reassessment
+
+Run38831911526 at1f3d492 again compiles the actual ARM app but executes zero
+selection cases: active=false, visible=true, key=false, terminal responder=true
+before/after the bounded native activation wait. All224 retained source copies
+match Git1f3d492. Artifact12018405335 ZIP SHA256
+`b0e657ece83e5e92924fd7ac1bb1e2ddbe9de5f776dbdfe4dcd477c07e7f9c95`;
+source/observation review SHA256
+`0d7724335c5c95b4724b868150011a925cfde52082bfc9165d9f30751ed12f18`.
+The six actual public word probes selected alpha.beta, two spaces, value_name,
+slash, equals and CJK respectively. These observations do not establish terminal
+selection behavior, and the focus failure is not the intended regression red.
+
+Reuse the original MIT browser-keyboard probe's exact-self LaunchServices
+activation pattern: verify current PID, exact bundle URL and unique running bundle
+identifier; disallow new instances and running-application substitution; require
+returned PID to equal the directly owned process. Retain returned PID and any
+activation failure in the partial report, then require the same observed
+active/visible/key/responder conditions before unchanged literalalpha events and
+menu Copy. The existing outer45s process-group bound still bounds the request.
+No runner ownership, production TerminalView, event oracle or menu path changes.
+
+Unexpected-new-instance arguments are `--cli --help`, not empty arguments:
+AppStartup.prepare strips `--cli` and forwards `--help` to the bundled CLI before
+AppKit/Rust/Desktop/storage startup; CLI help is offline. Thus an unexpected
+instance cannot run the selection fixture, write its report or open a persistent
+Desktop. Its returned PID fails admission and is never adopted or signalled.
+Native activation remains a hosted gate until the exact frozen source executes.
