@@ -614,6 +614,31 @@ fn save_validates_the_body() {
 }
 
 #[test]
+fn a_preserved_bom_counts_against_the_save_cap_so_the_file_stays_readable() {
+    let dir = Dir::new();
+    let mut original = vec![0xEF, 0xBB, 0xBF];
+    original.extend(vec![b'a'; MAX_TEXT_BYTES - 3]);
+    let path = dir.file("bom.txt", &original);
+    let loaded = load(&RealFs, &path, FileMode::Text).unwrap();
+    assert!(loaded.bom);
+    // The body alone fits, but BOM + body would be three bytes over what `load` accepts.
+    let body = vec![b'b'; MAX_TEXT_BYTES];
+    let refused = save(&RealFs, &path, &body, true, &loaded.sha256, false, &|| true).unwrap_err();
+    assert_eq!(refused.error.code, "too_large");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "nothing was written"
+    );
+    // The largest body that keeps the whole file within the cap saves and reads back.
+    let fits = vec![b'b'; MAX_TEXT_BYTES - 3];
+    assert!(save(&RealFs, &path, &fits, true, &loaded.sha256, false, &|| true).is_ok());
+    let reread = load(&RealFs, &path, FileMode::Text).unwrap();
+    assert!(reread.bom);
+    assert_eq!(reread.bytes.len(), MAX_TEXT_BYTES);
+}
+
+#[test]
 fn fingerprints_ignore_nothing_cheap_but_content_hash_ignores_touch() {
     let dir = Dir::new();
     let path = dir.file("fp.txt", b"same");

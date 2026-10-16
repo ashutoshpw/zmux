@@ -253,6 +253,8 @@ struct Entry {
     missing_polls: u8,
     next_poll: Instant,
     in_flight: Option<u64>,
+    /// Bumped by every detach so an operation admitted before it can tell its view went away.
+    detaches: u64,
     last_op: Option<OpReceipt>,
 }
 impl Entry {
@@ -274,6 +276,7 @@ impl Entry {
             missing_polls: 0,
             next_poll: now,
             in_flight: None,
+            detaches: 0,
             last_op: None,
         }
     }
@@ -329,6 +332,8 @@ enum Job {
         op_id: u64,
         kind: LoadKind,
         host: Uuid,
+        /// The entry's `detaches` when the job was admitted.
+        detaches: u64,
         reply: SyncSender<Reply>,
     },
     Save {
@@ -653,11 +658,13 @@ impl FileService {
                 }
                 Some(_) => {}
             }
+            let detaches = state.entries[&surface_id.0].detaches;
             self.enqueue(&mut state, surface_id.0, "attach", |op_id| Job::Load {
                 surface: surface_id.0,
                 op_id,
                 kind: LoadKind::Attach,
                 host,
+                detaches,
                 reply: sender,
             })?
         };
@@ -675,12 +682,14 @@ impl FileService {
                     "the tab has unsaved changes; reload with discard to drop them",
                 ));
             }
+            let detaches = state.entries[&owner.surface_id.0].detaches;
             self.enqueue(&mut state, owner.surface_id.0, "reload", |op_id| {
                 Job::Load {
                     surface: owner.surface_id.0,
                     op_id,
                     kind: LoadKind::Reload,
                     host: owner.host_id,
+                    detaches,
                     reply: sender,
                 }
             })?
@@ -729,10 +738,18 @@ impl FileService {
                     "images and PDFs are read-only previews",
                 ));
             }
-            if entry.baseline.is_none() {
+            let Some(baseline) = entry.baseline.as_ref() else {
                 return Err(FileFailure::new(
                     "stale_owner",
                     "the tab has no loaded content; reattach first",
+                ));
+            };
+            if file_io::saved_size(body.len(), baseline.bom) > MAX_TEXT_BYTES {
+                return Err(FileFailure::new(
+                    "too_large",
+                    format!(
+                        "the saved file, including its byte order mark, would exceed the {MAX_TEXT_BYTES} byte limit"
+                    ),
                 ));
             }
             if entry.generation != base_generation {
@@ -770,6 +787,7 @@ impl FileService {
             .get_mut(&owner.surface_id.0)
             .expect("owner check found the entry");
         entry.host = None;
+        entry.detaches += 1;
         entry.baseline = None;
         entry.state = EntryState::Unattached;
         entry.error_code = None;
@@ -921,8 +939,9 @@ impl Inner {
                 op_id,
                 kind,
                 host,
+                detaches,
                 reply,
-            } => self.load(surface, op_id, &kind, host, &reply),
+            } => self.load(surface, op_id, &kind, host, detaches, &reply),
             Job::Save {
                 surface,
                 op_id,
@@ -945,6 +964,7 @@ impl Inner {
         op_id: u64,
         kind: &LoadKind,
         host: Uuid,
+        detaches: u64,
         reply: &SyncSender<Reply>,
     ) {
         let target = {
@@ -987,6 +1007,25 @@ impl Inner {
             LoadKind::Attach => "attach",
             LoadKind::Reload => "reload",
         };
+        if entry.detaches != detaches {
+            // The view released the tab while this ran: adopting the result would re-bind a
+            // host that no longer exists and block every later attach.
+            entry.last_op = Some(OpReceipt {
+                op_id,
+                kind: kind_name,
+                state: OpState::Failed,
+                code: Some("stale_owner".into()),
+            });
+            Self::answer(
+                reply,
+                Err(FileFailure::new(
+                    "stale_owner",
+                    "the view detached while the operation ran; its result was discarded",
+                )
+                .with_op(op_id)),
+            );
+            return;
+        }
         match result {
             Ok(loaded) => {
                 entry.host = Some(host);
@@ -1056,6 +1095,21 @@ impl Inner {
                 })
         };
         let Some((path, expected, bom)) = target else {
+            // The tab may still exist (its view detached while the save was queued): release
+            // the one-op-in-flight marker and record the refusal, or the tab stays busy forever.
+            if let Some(entry) = locked(&self.state)
+                .entries
+                .get_mut(&surface)
+                .filter(|entry| entry.in_flight == Some(op_id))
+            {
+                entry.in_flight = None;
+                entry.last_op = Some(OpReceipt {
+                    op_id,
+                    kind: "save",
+                    state: OpState::Failed,
+                    code: Some("stale_owner".into()),
+                });
+            }
             Self::answer(
                 reply,
                 Err(

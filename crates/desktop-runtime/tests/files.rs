@@ -744,6 +744,115 @@ fn a_save_queued_behind_a_closed_surface_never_writes() {
 }
 
 #[test]
+fn a_reload_that_outlives_a_detach_never_rebinds_the_old_view() {
+    let fx = Fixture::new();
+    let surface = fx.open("r.txt", b"reload");
+    let (owner, _) = fx.attach(surface);
+    fx.control.arm("read");
+    thread::scope(|scope| {
+        let reload = scope.spawn(|| fx.desktop.file_reload(&owner, false));
+        fx.control.wait_blocked(1);
+        fx.desktop.file_detach(&owner).unwrap();
+        fx.control.release();
+        assert_eq!(failure(reload.join().unwrap()).code, "stale_owner");
+    });
+    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] != "pending");
+    assert_eq!(entry["attached"], false, "{entry}");
+    assert_eq!(entry["last_op"]["state"], "failed");
+    assert_eq!(entry["last_op"]["code"], "stale_owner");
+    // A new view can attach and the old owner stays fenced.
+    assert!(fx.attach_as(surface, Uuid::new_v4()).is_ok());
+    assert_eq!(
+        failure(fx.desktop.file_reload(&owner, false)).code,
+        "stale_owner"
+    );
+}
+
+#[test]
+fn a_timed_out_reload_finishing_after_detach_does_not_rebind_the_old_view() {
+    let fx = Fixture::with(|c| c.read_timeout = Duration::from_millis(100));
+    let surface = fx.open("t.txt", b"timeout");
+    let (owner, _) = fx.attach(surface);
+    fx.control.arm("read");
+    assert_eq!(
+        failure(fx.desktop.file_reload(&owner, false)).code,
+        "timeout"
+    );
+    fx.desktop.file_detach(&owner).unwrap();
+    fx.control.release();
+    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] != "pending");
+    assert_eq!(entry["attached"], false, "{entry}");
+    assert!(fx.attach_as(surface, Uuid::new_v4()).is_ok());
+}
+
+#[test]
+fn a_save_queued_behind_work_then_detached_releases_the_tab_and_never_writes() {
+    let fx = Fixture::new();
+    let busy = fx.open("busy.txt", b"busy");
+    let (busy_owner, _) = fx.attach(busy);
+    let surface = fx.open("s.txt", b"original");
+    let (owner, content) = fx.attach(surface);
+    fx.control.arm("read");
+    thread::scope(|scope| {
+        // The worker is parked inside another tab's reload while the save waits its turn.
+        let blocker = scope.spawn(|| fx.desktop.file_reload(&busy_owner, false));
+        fx.control.wait_blocked(1);
+        let save = scope.spawn(|| {
+            fx.desktop
+                .file_save(&owner, content.generation, false, b"late".to_vec())
+        });
+        fx.wait_entry(surface, |e| e["last_op"]["state"] == "pending");
+        fx.desktop.file_detach(&owner).unwrap();
+        fx.control.release();
+        assert_eq!(failure(save.join().unwrap()).code, "stale_owner");
+        assert!(blocker.join().unwrap().is_ok());
+    });
+    assert_eq!(std::fs::read(fx.dir.join("s.txt")).unwrap(), b"original");
+    assert_eq!(fx.control.count("rename"), 0);
+    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] != "pending");
+    assert_eq!(entry["last_op"]["code"], "stale_owner");
+    // The tab is not wedged: a fresh attach is not `busy`.
+    assert!(fx.attach_as(surface, Uuid::new_v4()).is_ok());
+}
+
+#[test]
+fn a_preserved_bom_counts_against_the_save_cap_end_to_end() {
+    use zmux_desktop_runtime::file_io::MAX_TEXT_BYTES;
+    let fx = Fixture::new();
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend(vec![b'a'; MAX_TEXT_BYTES - 3]);
+    let surface = fx.open("bom.txt", &bytes);
+    let (owner, content) = fx.attach(surface);
+    assert!(content.bom);
+    let refused = failure(fx.desktop.file_save(
+        &owner,
+        content.generation,
+        false,
+        vec![b'b'; MAX_TEXT_BYTES],
+    ));
+    assert_eq!(refused.code, "too_large");
+    assert_eq!(std::fs::read(fx.dir.join("bom.txt")).unwrap(), bytes);
+    // The largest fitting save succeeds, and the tab reads and saves it again without a conflict.
+    let receipt = fx
+        .desktop
+        .file_save(
+            &owner,
+            content.generation,
+            false,
+            vec![b'b'; MAX_TEXT_BYTES - 3],
+        )
+        .unwrap();
+    let reloaded = fx.desktop.file_reload(&owner, false).unwrap();
+    assert_eq!(reloaded.size as usize, MAX_TEXT_BYTES);
+    assert_eq!(reloaded.sha256, receipt.sha256);
+    assert!(
+        fx.desktop
+            .file_save(&owner, reloaded.generation, false, b"small".to_vec())
+            .is_ok()
+    );
+}
+
+#[test]
 fn a_second_operation_on_the_same_surface_is_busy() {
     let fx = Fixture::new();
     let surface = fx.open("b.txt", b"busy");
@@ -924,6 +1033,72 @@ fn dirty_is_set_only_by_the_trusted_host_event_and_cleared_on_detach() {
         failure(fx.desktop.file_save(&image_owner, 1, true, b"x".to_vec())).code,
         "invalid_request"
     );
+}
+
+#[test]
+fn retried_observe_after_stale_owner_is_not_applied() {
+    let fx = Fixture::new();
+    let surface = fx.open("stale.txt", b"x");
+    let (old, _) = fx.attach(surface);
+    fx.desktop.file_observe(&old, true).unwrap();
+    assert!(file_surface(&fx.snapshot(), surface).unwrap().dirty);
+
+    // Detach clears the bit; the old view's retried observe must not set it again.
+    fx.desktop.file_detach(&old).unwrap();
+    assert!(!file_surface(&fx.snapshot(), surface).unwrap().dirty);
+    let revision = fx.snapshot().revision;
+    for _ in 0..3 {
+        assert_eq!(
+            failure(fx.desktop.file_observe(&old, true)).code,
+            "stale_owner"
+        );
+    }
+    assert!(!file_surface(&fx.snapshot(), surface).unwrap().dirty);
+    assert_eq!(
+        fx.snapshot().revision,
+        revision,
+        "refused retries change nothing"
+    );
+
+    // A different view's bit is neither set nor cleared by the old owner's retries.
+    let (fresh, _) = fx.attach(surface);
+    fx.desktop.file_observe(&fresh, true).unwrap();
+    assert_eq!(
+        failure(fx.desktop.file_observe(&old, false)).code,
+        "stale_owner"
+    );
+    assert!(
+        file_surface(&fx.snapshot(), surface).unwrap().dirty,
+        "a stale observe(false) must not clear another view's dirty bit"
+    );
+
+    // Epoch and namespace forgeries are refused the same way.
+    for forged in [
+        FileOwner {
+            epoch: Uuid::new_v4(),
+            ..fresh.clone()
+        },
+        FileOwner {
+            identity_namespace: Uuid::new_v4(),
+            ..fresh.clone()
+        },
+    ] {
+        assert_eq!(
+            failure(fx.desktop.file_observe(&forged, false)).code,
+            "stale_owner"
+        );
+    }
+    assert!(file_surface(&fx.snapshot(), surface).unwrap().dirty);
+
+    // After the tab is closed every retry is stale, not unknown, and nothing reappears.
+    fx.desktop.file_observe(&fresh, false).unwrap();
+    fx.close(surface);
+    fx.wait_entry_gone(surface);
+    assert_eq!(
+        failure(fx.desktop.file_observe(&fresh, true)).code,
+        "stale_owner"
+    );
+    assert!(file_surface(&fx.snapshot(), surface).is_none());
 }
 
 #[test]
