@@ -52,6 +52,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 
 ## References
 
+- [Atomic readiness admission and native bundle](references/r03-input-readiness-atomic-admission-plan.md) — approved isolated opt-in package/admission/bridge integration sequence; no observer4 activation alone.
+
 - [Dependency readiness reporter](references/r03-input-readiness-dependency.md) — isolated authorized MIT dependency patch; schema/source-footprint review precedes build.
 
 - [Frontend input readiness](references/r03-input-readiness.md) — read-only two-condition client readiness and authenticated bounded channel proposal; independent of workload execution admission.
