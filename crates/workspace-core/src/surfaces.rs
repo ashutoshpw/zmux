@@ -552,15 +552,6 @@ impl WorkspaceStore {
         if source == destination && limit == 0 {
             return Ok(());
         }
-        let workspace = &self.state.workspaces[wi];
-        if !workspace.todos.is_empty()
-            && workspace.root.panes().len() == 1
-            && workspace.root.panes()[0].surfaces.len() == 1
-        {
-            return Err(ActionError::InvalidOperation(
-                "cannot move the last surface from a workspace with todos; move the workspace or clear its checklist first".into(),
-            ));
-        }
         let surface = self.state.workspaces[wi]
             .root
             .pane_mut(source)
