@@ -574,13 +574,27 @@ enum TerminalSelectionSmoke {
             location = view.convert(NSPoint(x: grid.minX + (CGFloat(cell.1) + 0.5) * grid.width,
                 y: grid.minY + (CGFloat(cell.0) + 0.5) * grid.height), to: nil)
         } else { location = try point(view, row: cell.0, col: cell.1, viewport: viewport) }
-        guard let event = NSEvent.mouseEvent(with: type, location: location,
+        guard let original = NSEvent.mouseEvent(with: type, location: location,
             modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1) else {
             throw failure("Cannot construct actual native pointer event")
         }
-        if [.otherMouseDown, .otherMouseDragged, .otherMouseUp].contains(type), event.buttonNumber != 2 {
-            throw failure("Public native fixture did not construct middle-button identity")
+        var event = original
+        if [NSEvent.EventType.otherMouseDown, .otherMouseDragged, .otherMouseUp].contains(type) {
+            // AppKit's convenience initializer defaults the button number to
+            // zero, even for otherMouseDown. Set the public Core Graphics field
+            // and prove the windowed event survived the public round trip.
+            guard let cg = original.cgEvent else { throw failure("Public middle-button fixture has no Core Graphics event") }
+            cg.setIntegerValueField(.mouseEventButtonNumber, value: 2)
+            let converted = NSEvent(cgEvent: cg)
+            let candidate = original.buttonNumber == 2 ? original : converted
+            guard let middle = candidate, middle.type == type, middle.buttonNumber == 2,
+                  middle.windowNumber == window.windowNumber,
+                  abs(middle.locationInWindow.x - location.x) < 0.01,
+                  abs(middle.locationInWindow.y - location.y) < 0.01 else {
+                throw failure("Public middle-button fixture did not retain type, button, window and coordinates: originalButton=\(original.buttonNumber), convertedButton=\(converted?.buttonNumber ?? -1), convertedWindow=\(converted?.windowNumber ?? -1), expectedWindow=\(window.windowNumber), convertedPoint=\(String(describing: converted?.locationInWindow)), expectedPoint=\(location)")
+            }
+            event = middle
         }
         window.sendEvent(event)
     }
