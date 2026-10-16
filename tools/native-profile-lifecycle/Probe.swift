@@ -33,6 +33,7 @@ private struct Report: Codable, Sendable {
     let profileB: UUID
     let phase: String
     let scenario: String
+    let termination: String
     var preparerPID: Int32?
     var state = "starting"
     var stage = "startup"
@@ -77,11 +78,16 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         self.fixture = fixture
         self.preparation = preparation
         report = Report(sourceSHA: Bundle.main.object(forInfoDictionaryKey: "ProbeSourceSHA") as? String ?? "",
-            appPID: getpid(), bundleID: Bundle.main.bundleIdentifier ?? "", nonce: nonce, profileA: a, profileB: b, phase: phase, scenario: scenario)
+            appPID: getpid(), bundleID: Bundle.main.bundleIdentifier ?? "", nonce: nonce, profileA: a, profileB: b,
+            phase: phase, scenario: scenario, termination: "nsapplication_terminate")
         super.init()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { await run() }
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        let line = "ZMUX_APPKIT_TERMINATION {\"event\":\"application_will_terminate\",\"appPID\":\(getpid()),\"phase\":\"\(report.phase)\"}\n"
+        FileHandle.standardError.write(Data(line.utf8))
     }
     private func save() async throws {
         let value = report
@@ -273,6 +279,7 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
         }.value
         guard prepared.phase == "prepare", prepared.state == "prepared", prepared.stage == "prepared_for_fresh_process",
               prepared.scenario == report.scenario,
+              prepared.termination == report.termination,
               prepared.sourceSHA == report.sourceSHA, prepared.bundleID == report.bundleID, prepared.nonce == report.nonce,
               prepared.profileA == report.profileA, prepared.profileB == report.profileB, prepared.appPID != getpid(),
               prepared.separateBRetained,
@@ -324,7 +331,8 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             window.orderFront(nil)
             if report.phase == "reopen" {
                 try await runFreshProcess()
-                exit(0)
+                NSApp.terminate(nil)
+                return
             }
             (aStore, aView) = makeView(profile: report.profileA, x: 0)
             (bStore, bView) = makeView(profile: report.profileB, x: 640)
@@ -345,7 +353,8 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
                 report.state = "prepared"
                 report.stage = "prepared_for_fresh_process"
                 try await save()
-                exit(0)
+                NSApp.terminate(nil)
+                return
             }
             let held = try await remove(report.profileA, phase: "mounted_a_remove")
             guard held.errorDomain != nil else { throw ProbeFailure(description: "Public removal unexpectedly succeeded with mounted A") }
@@ -370,7 +379,7 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             report.state = "prepared"
             report.stage = "prepared_for_fresh_process"
             try await save()
-            exit(0)
+            NSApp.terminate(nil)
         } catch {
             report.state = "failed"
             report.failure = String(String(describing: error).prefix(2048))
