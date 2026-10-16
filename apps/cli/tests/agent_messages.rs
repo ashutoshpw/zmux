@@ -594,8 +594,17 @@ int main(int argc,char **argv){
         // Every interpolated path comes from this UUID-named fixture or Cargo's
         // executable path; proper single-quote escaping also covers spaces/apostrophes.
         let quote = |path: &Path| format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"));
+        // Darwin's normal temporary root is already long. Exercise that public
+        // runtime constraint on Linux too, without changing process-global env.
+        let runtime_tmp = root.0.join("runtime-temporary-directory-with-a-long-path");
+        fs::create_dir(&runtime_tmp).unwrap();
+        let temporary_environment = if scenario == "permission" {
+            format!("export TMPDIR={}\n", quote(&runtime_tmp))
+        } else {
+            String::new()
+        };
         let script = format!(
-            "export FIXTURE_CLI={}\nexport FIXTURE_CAPTURE={}\nexport FIXTURE_BARRIER={}\nexport FIXTURE_HOLD={}\nexport ZMUX_SOCKET_PASSWORD=fixture-only\nexport ZMUX_SURFACE_ID=fixture-wrong-ambient\n{} --socket {} hooks claude run --directory {} --surface {}{}\nprintf '%s' $? > wrapper-status\n",
+            "{temporary_environment}export FIXTURE_CLI={}\nexport FIXTURE_CAPTURE={}\nexport FIXTURE_BARRIER={}\nexport FIXTURE_HOLD={}\nexport ZMUX_SOCKET_PASSWORD=fixture-only\nexport ZMUX_SURFACE_ID=fixture-wrong-ambient\n{} --socket {} hooks claude run --directory {} --surface {}{}\nprintf '%s' $? > wrapper-status\n",
             quote(Path::new(cli)),
             quote(&root.0.join("hook-output")),
             quote(&root.0.join("phase")),
@@ -618,7 +627,13 @@ int main(int argc,char **argv){
             while !root.0.join(name).exists() {
                 assert!(
                     Instant::now() < deadline,
-                    "synthetic provider barrier missing: {name}"
+                    "synthetic provider barrier missing: {name}; wrapper status={:?}; terminal={:?}",
+                    fs::read_to_string(root.0.join("wrapper-status")),
+                    desktop_snapshot::read(&app.desktop)
+                        .frames
+                        .iter()
+                        .filter_map(|f| f.snapshot.as_ref().map(|s| &s.viewport.contents))
+                        .collect::<Vec<_>>()
                 );
                 thread::sleep(Duration::from_millis(10));
             }
