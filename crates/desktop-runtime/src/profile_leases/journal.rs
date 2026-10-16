@@ -53,16 +53,16 @@ impl MutationPhase {
             (
                 Self::Reserved,
                 Self::ClearDispatched | Self::FailedBeforeClear
-            ) | (
-                Self::ClearDispatched,
-                Self::ClearCompleted | Self::FailedBeforeClear
-            ) | (
-                Self::ClearCompleted,
-                Self::RemoveDispatched | Self::FailedPartial
-            ) | (
-                Self::RemoveDispatched,
-                Self::RemoveCompleted | Self::FailedPartial
-            ) | (Self::RemoveCompleted, Self::CatalogCommitting)
+            ) | (Self::ClearDispatched, Self::ClearCompleted)
+                | (
+                    Self::ClearCompleted,
+                    Self::RemoveDispatched | Self::FailedPartial
+                )
+                | (
+                    Self::RemoveDispatched,
+                    Self::RemoveCompleted | Self::FailedPartial
+                )
+                | (Self::RemoveCompleted, Self::CatalogCommitting)
                 | (Self::CatalogCommitting, Self::Completed)
         )
     }

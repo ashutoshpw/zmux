@@ -6,6 +6,7 @@ import AppKit
 final class BrowserProfilesWindowController: NSWindowController {
     private let createProfile: @MainActor (String) async throws -> BrowserProfileReceipt
     private let renameProfile: @MainActor (UUID, String) async throws -> BrowserProfileReceipt
+    private let changeData: @MainActor (UUID, Bool) async throws -> BrowserProfileReceipt
     private let openProfile: @MainActor (UUID) throws -> Void
     private let profiles = NSPopUpButton(frame: .zero, pullsDown: false)
     private let name = NSTextField(string: "")
@@ -13,6 +14,8 @@ final class BrowserProfilesWindowController: NSWindowController {
     private let message = NSTextField(wrappingLabelWithString: "")
     private let createButton = NSButton(title: "Create Profile", target: nil, action: nil)
     private let renameButton = NSButton(title: "Rename Profile", target: nil, action: nil)
+    private let clearButton = NSButton(title: "Clear Website Data…", target: nil, action: nil)
+    private let deleteButton = NSButton(title: "Delete Profile…", target: nil, action: nil)
     private let openButton = NSButton(title: "Open Profile", target: nil, action: nil)
     private var state: BrowserProfileState?
     private var selectedID: UUID?
@@ -24,11 +27,13 @@ final class BrowserProfilesWindowController: NSWindowController {
 
     init(create: @escaping @MainActor (String) async throws -> BrowserProfileReceipt,
          rename: @escaping @MainActor (UUID, String) async throws -> BrowserProfileReceipt,
+         changeData: @escaping @MainActor (UUID, Bool) async throws -> BrowserProfileReceipt,
          open: @escaping @MainActor (UUID) throws -> Void) {
+        self.changeData = changeData
         createProfile = create
         openProfile = open
         renameProfile = rename
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 500),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 580),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Browser Profiles"
         window.isReleasedWhenClosed = false
@@ -80,6 +85,10 @@ final class BrowserProfilesWindowController: NSWindowController {
         renameButton.action = #selector(renameSelected(_:))
         renameButton.bezelStyle = .rounded
         stack.addArrangedSubview(renameButton)
+        clearButton.target = self; clearButton.action = #selector(clearSelected(_:)); clearButton.bezelStyle = .rounded
+        deleteButton.target = self; deleteButton.action = #selector(deleteSelected(_:)); deleteButton.bezelStyle = .rounded
+        stack.addArrangedSubview(clearButton)
+        stack.addArrangedSubview(deleteButton)
         let separator = NSBox()
         separator.boxType = .separator
         stack.addArrangedSubview(separator)
@@ -127,6 +136,8 @@ final class BrowserProfilesWindowController: NSWindowController {
         openButton.isEnabled = available && selectedID != nil && !creating
         renameName.isEnabled = available && selectedID != nil && !creating
         renameButton.isEnabled = renameName.isEnabled
+        clearButton.isEnabled = renameName.isEnabled
+        deleteButton.isEnabled = renameName.isEnabled
         name.isEnabled = available && !creating && (state?.profiles.count ?? 32) < 32
         createButton.isEnabled = name.isEnabled
         if creating { return }
@@ -161,11 +172,23 @@ final class BrowserProfilesWindowController: NSWindowController {
               state?.profiles.contains(where: { $0.id == selectedID }) == true else { return }
         mutate(name: renameName.stringValue, renaming: selectedID)
     }
-    private func mutate(name submittedName: String, renaming profileID: UUID?) {
+    @objc private func clearSelected(_ sender: NSButton) { confirmDataChange(delete: false) }
+    @objc private func deleteSelected(_ sender: NSButton) { confirmDataChange(delete: true) }
+    private func confirmDataChange(delete: Bool) {
+        guard available, !creating, let selectedID, let profile = state?.profiles.first(where: { $0.id == selectedID }) else { return }
+        let alert = NSAlert()
+        alert.messageText = delete ? "Delete profile “\(profile.name)”?" : "Clear website data for “\(profile.name)”?"
+        alert.informativeText = "All cookies and website data for UUID \(profile.id) will be removed. Close its tabs and downloads first. " + (delete ? "Its profile entry will also be removed." : "Its name and UUID will remain.")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: delete ? "Delete Profile" : "Clear Website Data")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { mutate(name: "", renaming: profile.id, destructive: delete) }
+    }
+    private func mutate(name submittedName: String, renaming profileID: UUID?, destructive: Bool? = nil) {
         // Rust owns validation, including UTF-8 bounds and duplicate names.
         creating = true
         feedback = nil
-        message.stringValue = profileID == nil ? "Creating profile…" : "Renaming profile…"
+        message.stringValue = destructive.map { $0 ? "Deleting profile…" : "Clearing website data…" } ?? (profileID == nil ? "Creating profile…" : "Renaming profile…")
         render()
         let deadline = ContinuousClock.now + .seconds(20)
         operation = Task { [weak self] in
@@ -173,7 +196,8 @@ final class BrowserProfilesWindowController: NSWindowController {
             defer { self.creating = false; self.operation = nil; self.render() }
             do {
                 let admission: BrowserProfileReceipt
-                if let profileID { admission = try await self.renameProfile(profileID, submittedName) }
+                if let destructive, let profileID { admission = try await self.changeData(profileID, destructive) }
+                else if let profileID { admission = try await self.renameProfile(profileID, submittedName) }
                 else { admission = try await self.createProfile(submittedName) }
                 while ContinuousClock.now < deadline {
                     try Task.checkCancellation()
@@ -186,13 +210,13 @@ final class BrowserProfilesWindowController: NSWindowController {
                         switch receipt.state {
                         case "completed":
                             guard let profile = receipt.profile,
-                                  self.state?.profiles.contains(where: { $0.id == profile.id }) == true else {
+                                  self.state?.profiles.contains(where: { $0.id == profile.id }) == (destructive != true) else {
                                 throw BridgeFailure(message: "The completed profile is unavailable. Check the profile list before trying again.")
                             }
-                            self.selectedID = profile.id
+                            self.selectedID = destructive == true ? nil : profile.id
                             if profileID == nil { self.name.stringValue = "" }
                             else { self.renameName.stringValue = "" }
-                            self.feedback = profileID == nil ? "Profile created." : "Profile renamed."
+                            self.feedback = destructive.map { $0 ? "Profile deleted." : "Website data cleared." } ?? (profileID == nil ? "Profile created." : "Profile renamed.")
                             return
                         case "failed":
                             throw BridgeFailure(message: receipt.error ?? "Profile change failed.")
@@ -203,7 +227,7 @@ final class BrowserProfilesWindowController: NSWindowController {
                     }
                     try await Task.sleep(for: .milliseconds(50))
                 }
-                throw BridgeFailure(message: "Profile change timed out. Check the profile list before trying again; the operation was not replayed.")
+                throw BridgeFailure(message: admission.intent.map { "Profile intent \($0) remains pending for UUID \(admission.profile?.id.uuidString ?? "unknown"). Query its original status; do not retry or reopen it." } ?? "Profile change timed out. Check the profile list before trying again; the operation was not replayed.")
             } catch {
                 self.feedback = error.localizedDescription
             }

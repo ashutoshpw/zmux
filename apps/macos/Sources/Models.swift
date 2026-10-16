@@ -300,6 +300,7 @@ struct WorkspaceMetadata: Decodable, Sendable, Equatable {
 }
 struct BrowserProfile: Decodable, Sendable, Equatable { let id: UUID; let name: String }
 struct BrowserProfileReceipt: Decodable, Sendable {
+    let intent: UUID?
     let epoch: UUID
     let operationId: UInt64
     let state: String
