@@ -131,3 +131,12 @@ pass; no app artifact is published. `menuDidClose` now applies coalesced snapsho
 changes immediately, including when the Desktop becomes quiet after clearing.
 The same fixture remains unchanged. Early Show actions also wait for a pending
 window's native-ready receipt; they must not create a duplicate startup window.
+
+Run `38906067122` at `84c13ad` passes the repaired preview lookup and exact
+cross-window opening/inbox steps, then catches minimized-window restoration:
+minimizing the target transfers key focus to its sibling, so choosing the current
+key window restores the wrong one. The native coordinator now retains bounded
+minimization history and restores the most recently minimized live host first.
+AppKit delegate callbacks reconcile this presentation state; close/restore/shutdown
+remove stale identities. The same minimized-window and last-window assertions
+remain required. Failed-run physical app/socket cleanup and PID absence pass.

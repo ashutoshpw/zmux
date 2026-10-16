@@ -59,6 +59,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     lazy var notificationDelivery = makeNotificationDelivery()
     private(set) var statusMenu: StatusMenuController?
     private var pendingStatusNotifications: Bool?
+    private var minimizedWindowHistory: [MainWindowIdentity] = []
     private func makeNotificationDelivery() -> NotificationDelivery {
         NotificationDelivery(
             sendEvent: { [weak self] event in
@@ -248,6 +249,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         statusMenu?.remove()
         statusMenu = nil
         pendingStatusNotifications = nil
+        minimizedWindowHistory.removeAll()
         continuation.finish()
         commandTask?.cancel()
         pollingTask?.cancel()
@@ -390,7 +392,13 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
 
     func showFromStatusMenu(notifications: Bool = false) {
         guard shutdownTask == nil else { return }
-        guard let host = mainWindowHosts.values.first(where: { $0 === mainWindowHost && $0.nativeReady })
+        // Minimizing changes the key window. Preserve the user's window choice
+        // instead of allowing that automatic focus transfer to select a sibling.
+        let minimized = minimizedWindowHistory.reversed().compactMap { mainWindowHosts[$0] }
+            .first(where: { $0.nativeReady && $0.window.isMiniaturized })
+            ?? mainWindowHosts.values.first(where: { $0.nativeReady && $0.window.isMiniaturized })
+        guard let host = minimized
+                ?? mainWindowHosts.values.first(where: { $0 === mainWindowHost && $0.nativeReady })
                 ?? mainWindowHosts.values.first(where: { $0.nativeReady }) else {
             if pendingStatusNotifications == nil {
                 pendingStatusNotifications = notifications
@@ -408,6 +416,12 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         if notifications { host.showNotifications() }
     }
 
+    func windowMiniaturizationChanged(_ host: MainWindowHost, minimized: Bool) {
+        guard shutdownTask == nil, let identity = host.identity, mainWindowHosts[identity] === host else { return }
+        minimizedWindowHistory.removeAll { $0 == identity }
+        if minimized { minimizedWindowHistory.append(identity) }
+    }
+
     private func reconcile(_ snapshot: DesktopSnapshot) throws {
         guard shutdownTask == nil else { return }
         // Validate canonical ownership before touching native registries. The
@@ -415,6 +429,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         if self.snapshot == nil { WindowLifecycleSmoke.trace("first snapshot windows=\(snapshot.model.windows.count) requests=\(snapshot.windowRequests.count)") }
         let projections = try MainWindowProjection.all(snapshot)
         if windowEpoch != snapshot.windowEpoch {
+            minimizedWindowHistory.removeAll()
             for task in windowTasks.values { task.cancel() }
             windowTasks.removeAll()
             for host in mainWindowHosts.values { host.closeAuthorized() }
@@ -427,6 +442,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             windowEpoch = snapshot.windowEpoch
         }
         self.snapshot = snapshot
+        let liveWindows = Set(snapshot.model.windows.map { MainWindowIdentity(namespace: snapshot.model.identityNamespace, windowId: $0.id) })
+        minimizedWindowHistory.removeAll { !liveWindows.contains($0) }
         statusMenu?.update(snapshot)
         try splitLayouts.reconcile(snapshot)
         let retainedHistories = Set(snapshot.model.workspaces.flatMap { $0.root.panes }

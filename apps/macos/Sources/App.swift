@@ -560,6 +560,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     func windowDidResize(_ notification: Notification) { applySidebarLayout() }
+    func windowDidMiniaturize(_ notification: Notification) { coordinator.windowMiniaturizationChanged(self, minimized: true) }
+    func windowDidDeminiaturize(_ notification: Notification) { coordinator.windowMiniaturizationChanged(self, minimized: false) }
 
     func appActive(_ active: Bool) {
         coordinator.appActive(active)

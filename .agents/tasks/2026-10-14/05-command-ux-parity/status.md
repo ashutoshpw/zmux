@@ -5,6 +5,13 @@
 
 ## Active implementation
 
+- Run `38906067122` at `84c13ad` passes the earlier preview point and reaches the
+  minimized-window check. Show chose the sibling that became key after minimizing
+  the target. Native minimization history now restores the most recently minimized
+  live window before a visible sibling; the fixture is retained. Actual cleanup
+  and PID absence pass on the failed run. Revalidation follows this owner repair.
+  Full local `scripts/check` passes; `/tmp/zmux-status-menu-window-restore-check.log`.
+
 - Status/native run `38903386218` at `96e13ea` passes both Swift slices and package
   build, then catches a closed-menu refresh gap after captured clear/read actions.
   `menuDidClose` now applies the retained snapshot without requiring a new event;
@@ -14,7 +21,7 @@
   rather than creating a duplicate startup window.
   Full `scripts/check` passes after repair; log
   `/tmp/zmux-status-menu-refresh-check-2.log`. The preceding run terminated with
-  signal143 and is not counted as passing; the unchanged verification rerun passes.
+  exit status143 (cause unconfirmed) and is not counted as passing; the unchanged verification rerun passes.
 
 - Status-menu implementation now creates the actual NSStatusItem, original
   attention icon and shared notification previews/read/clear/open actions, restores
