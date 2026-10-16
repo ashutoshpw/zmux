@@ -1,6 +1,8 @@
 //! Owner-side wire validation, bounded retention and workspace lifecycle contracts.
 #[path = "support/desktop_snapshot.rs"]
 mod desktop_snapshot;
+#[path = "support/window_host.rs"]
+mod window_host;
 use std::{
     sync::Arc,
     thread,
@@ -282,6 +284,106 @@ fn wire_targets_reject_scope_mismatch_and_stale_revision_and_close_prunes_owned_
 }
 
 #[test]
+fn todo_identity_moves_with_its_workspace_and_close_releases_owned_records() {
+    use zmux_desktop_runtime::metadata::{TodoOrigin, TodoState};
+    use zmux_desktop_runtime::windows::{
+        NativeWindowEvent, WindowAction, WindowHostToken, WindowKind, WindowRequest,
+    };
+    let mut app = App::new();
+    app.wait(|snapshot| !snapshot.window_requests.is_empty());
+    window_host::observe_key(&app.desktop);
+    app.wait(|snapshot| !snapshot.window_hosts.is_empty());
+    let owner = desktop_snapshot::read(&app.desktop).model.workspaces[0].id;
+    let added = app.metadata(
+        owner,
+        MetadataAction::AddTodo {
+            text: "retain this identity".into(),
+            state: TodoState::InProgress,
+            origin: TodoOrigin::Agent,
+        },
+    );
+    assert!(added.last_error.is_none());
+    let record = serde_json::to_value(&added.workspace_metadata).unwrap();
+    let foreground = app.send(Command::Action {
+        action: Action::CreateWorkspace {
+            name: "foreground".into(),
+        },
+    });
+    let windows = app.send(Command::Windows {
+        request: WindowRequest {
+            scope: Default::default(),
+            caller: Default::default(),
+            expected_model_revision: None,
+            action: WindowAction::New { focus: false },
+        },
+    });
+    assert!(windows.last_error.is_none(), "{:?}", windows.last_error);
+    let destination = windows.model.windows.last().unwrap().id;
+    let admission = windows
+        .window_requests
+        .iter()
+        .find(|request| request.window_id == destination && request.kind == WindowKind::Open)
+        .unwrap();
+    app.desktop
+        .native_window_event(NativeWindowEvent::Complete {
+            token: WindowHostToken {
+                epoch: admission.epoch,
+                identity_namespace: admission.identity_namespace,
+                window_id: destination,
+                host_id: uuid::Uuid::new_v4(),
+            },
+            operation_id: admission.operation_id,
+        })
+        .unwrap();
+    app.wait(|snapshot| {
+        snapshot
+            .window_hosts
+            .iter()
+            .any(|host| host.window_id == destination)
+    });
+    let moved = app.send(Command::Action {
+        action: Action::MoveWorkspaceToWindow {
+            workspace_id: owner,
+            destination_window_id: destination,
+            index: None,
+            focus: false,
+        },
+    });
+    assert!(moved.last_error.is_none(), "{:?}", moved.last_error);
+    assert!(
+        moved
+            .model
+            .windows
+            .iter()
+            .find(|window| window.id == destination)
+            .unwrap()
+            .workspace_ids
+            .contains(&owner)
+    );
+    assert_eq!(
+        moved.model.focused_workspace,
+        foreground.model.focused_workspace
+    );
+    assert_eq!(
+        serde_json::to_value(&moved.workspace_metadata).unwrap(),
+        record
+    );
+    let closed = app.send(Command::Action {
+        action: Action::CloseWorkspace {
+            workspace_id: owner,
+        },
+    });
+    assert!(closed.last_error.is_none());
+    assert!(closed.workspace_metadata.is_empty());
+    let replacement = app.send(Command::Action {
+        action: Action::CreateWorkspace {
+            name: "replacement".into(),
+        },
+    });
+    assert!(replacement.workspace_metadata.is_empty());
+}
+
+#[test]
 fn close_then_restore_does_not_resurrect_transient_metadata() {
     use std::{fs, os::unix::fs::PermissionsExt};
     use zmux_desktop_runtime::sessions::{OperationState, SessionCommand};
@@ -326,6 +428,14 @@ fn close_then_restore_does_not_resurrect_transient_metadata() {
         let namespace = initial.model.identity_namespace;
         let w = initial.model.workspaces[0].id;
         a.metadata(w, status("ephemeral".into(), "do not restore", 0));
+        a.metadata(
+            w,
+            MetadataAction::AddTodo {
+                text: "transient checklist must not restore".into(),
+                state: Default::default(),
+                origin: Default::default(),
+            },
+        );
         a.send(Command::Action {
             action: Action::CloseWorkspace { workspace_id: w },
         });

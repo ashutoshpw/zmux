@@ -1531,8 +1531,20 @@ impl Worker {
                 )
             }
             TargetOperation::Metadata { action } => {
-                let workspace =
-                    targets::metadata_workspace(&model, &request.scope, &request.caller)?;
+                let mut caller = request.caller;
+                if action.is_todo()
+                    && request.scope.workspace.is_none()
+                    && request.scope.pane.is_none()
+                    && request.scope.surface.is_none()
+                {
+                    caller = caller.bind_local_tmux(&model)?;
+                    if caller.workspace.is_none() && caller.surface.is_none() {
+                        return Err(metadata::MetadataError::Invalid(
+                            "todo requires an explicit workspace or live caller; foreground focus is not a todo target",
+                        ).into());
+                    }
+                }
+                let workspace = targets::metadata_workspace(&model, &request.scope, &caller)?;
                 self.metadata.reconcile(&model);
                 self.metadata_result = Some(self.metadata.apply(
                     workspace,

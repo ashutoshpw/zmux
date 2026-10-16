@@ -250,16 +250,14 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
             request.action,
             crate::downloads::DownloadAction::Cancel { .. }
         ),
-        ControlCommand::Targeted { request } => matches!(
-            request.operation,
-            TargetOperation::ReadScreen
-                | TargetOperation::ListPanes
-                | TargetOperation::ListPaneSurfaces
-                | TargetOperation::Metadata {
-                    action: crate::metadata::MetadataAction::ListStatus
-                        | crate::metadata::MetadataAction::ListLog { .. }
-                }
-        ),
+        ControlCommand::Targeted { request } => {
+            matches!(
+                request.operation,
+                TargetOperation::ReadScreen
+                    | TargetOperation::ListPanes
+                    | TargetOperation::ListPaneSurfaces
+            ) || matches!(&request.operation, TargetOperation::Metadata { action } if action.is_read())
+        }
         ControlCommand::LocalTmux { .. }
         | ControlCommand::BrowserProfiles { .. }
         | ControlCommand::Session { .. }

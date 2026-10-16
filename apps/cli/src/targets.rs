@@ -20,7 +20,8 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     }
     if matches!(
         command,
-        "set-status"
+        "todo"
+            | "set-status"
             | "clear-status"
             | "list-status"
             | "set-progress"
@@ -588,6 +589,16 @@ fn request(
     } else {
         caller(&scope)?
     };
+    if matches!(&operation, TargetOperation::Metadata { action } if action.is_todo())
+        && scope.workspace.is_none()
+        && scope.pane.is_none()
+        && scope.surface.is_none()
+        && caller.workspace.is_none()
+        && caller.surface.is_none()
+        && caller.local_tmux.is_none()
+    {
+        return Err(CliError("todo requires --workspace or a live caller workspace/surface; foreground focus is not a todo target".into()));
+    }
     Ok(Parsed::App(ControlCommand::Targeted {
         request: TargetRequest {
             scope,
@@ -885,7 +896,7 @@ fn parse_direction(values: &[String]) -> Result<Direction, CliError> {
 }
 
 fn parse_metadata(command: &str, args: &[String]) -> Result<Parsed, CliError> {
-    use zmux_desktop_runtime::metadata::{LogLevel, MetadataAction};
+    use zmux_desktop_runtime::metadata::{LogLevel, MetadataAction, TodoOrigin, TodoState};
     let mut scope = TargetScope::default();
     let mut revision = None;
     let mut options = std::collections::BTreeMap::new();
@@ -907,10 +918,16 @@ fn parse_metadata(command: &str, args: &[String]) -> Result<Parsed, CliError> {
                 "--label" => command == "set-progress",
                 "--level" | "--source" => command == "log",
                 "--limit" => command == "list-log",
+                "--state" | "--origin" | "--json" => command == "todo",
                 _ => false,
             };
             if !accepted {
                 return Err(CliError(format!("unknown {command} option {flag}")));
+            }
+            if flag == "--json" && command == "todo" {
+                options.insert(flag, String::new());
+                cursor += 1;
+                continue;
             }
             let value = option_value(args, cursor, flag)?.to_owned();
             if flag == "--window" {
@@ -931,7 +948,62 @@ fn parse_metadata(command: &str, args: &[String]) -> Result<Parsed, CliError> {
             cursor += 1;
         }
     }
+    if command == "todo"
+        && values.first().map(String::as_str) != Some("add")
+        && (options.contains_key("--state") || options.contains_key("--origin"))
+    {
+        return Err(CliError(
+            "--state and --origin are only accepted by todo add".into(),
+        ));
+    }
     let action = match (command, values.as_slice()) {
+        ("todo", [verb, text]) if verb == "add" => MetadataAction::AddTodo {
+            text: text.clone(),
+            state: match options
+                .get("--state")
+                .map(String::as_str)
+                .unwrap_or("pending")
+            {
+                "pending" => TodoState::Pending,
+                "in-progress" => TodoState::InProgress,
+                "completed" => TodoState::Completed,
+                _ => {
+                    return Err(CliError(
+                        "todo state must be pending, in-progress or completed".into(),
+                    ));
+                }
+            },
+            origin: match options
+                .get("--origin")
+                .map(String::as_str)
+                .unwrap_or("user")
+            {
+                "user" => TodoOrigin::User,
+                "agent" => TodoOrigin::Agent,
+                _ => return Err(CliError("todo origin must be user or agent".into())),
+            },
+        },
+        ("todo", [verb]) if verb == "list" => MetadataAction::ListTodos {},
+        ("todo", [verb]) if verb == "clear" => MetadataAction::ClearTodos {},
+        ("todo", [verb, item]) if matches!(verb.as_str(), "check" | "uncheck" | "start") => {
+            MetadataAction::SetTodoState {
+                item: item.parse().map_err(
+                    |error: zmux_desktop_runtime::metadata::MetadataError| {
+                        CliError(error.to_string())
+                    },
+                )?,
+                state: match verb.as_str() {
+                    "check" => TodoState::Completed,
+                    "uncheck" => TodoState::Pending,
+                    _ => TodoState::InProgress,
+                },
+            }
+        }
+        ("todo", [verb, item]) if verb == "rm" => MetadataAction::RemoveTodo {
+            item: item.parse().map_err(
+                |error: zmux_desktop_runtime::metadata::MetadataError| CliError(error.to_string()),
+            )?,
+        },
         ("set-status", [key, value]) => MetadataAction::SetStatus {
             key: key.clone(),
             value: value.clone(),

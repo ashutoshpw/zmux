@@ -1578,6 +1578,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "notification_reply_pty": true,
             "workspace_metadata": true,
             "workspace_pull_request_metadata": true,
+            "workspace_todo_metadata": true,
             "remote_file_url_symlink": true,
             "remote_file_url_directory_refusal": true,
             "browser_cli_automation": true,
@@ -1813,6 +1814,37 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
               clearDocument.substring(with: clearSelection) == literal,
               window.firstResponder === metadataResponder else {
             throw BridgeFailure(message: "PR clear changed other metadata/selected text or left stale native projection")
+        }
+        let todoText = "Native todo <b>literal</b>"
+        let todoData = try await nativeCLI(["todo", "add", todoText, "--state", "in-progress", "--origin", "agent"] + target, externalCaller: true)
+        guard let todoResponse = try JSONSerialization.jsonObject(with: todoData) as? [String: Any],
+              let todoItems = todoResponse["todos"] as? [[String: Any]],
+              let todoID = todoItems.first?["id"] as? String, let todoUUID = UUID(uuidString: todoID) else {
+            throw BridgeFailure(message: "Public todo add omitted the shared item identity")
+        }
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.todos.first?.id == todoUUID }
+        guard details.string.contains(todoText), details.string.contains("1. in-progress · agent · " + todoID.lowercased()),
+              row.accessibilityLabel()?.contains("1 todo items") == true,
+              snapshot?.model.focusedWorkspace == foregroundWorkspace, window.firstResponder === metadataResponder else {
+            throw BridgeFailure(message: "Shared todo metadata did not reach the real row/inspector or changed focus")
+        }
+        _ = try await nativeCLI(["todo", "check", todoID] + target, externalCaller: true)
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.todos.first?.state == .completed }
+        guard details.string.contains("1. completed · agent · " + todoID.lowercased()) else {
+            throw BridgeFailure(message: "Todo completion did not update the open native inspector")
+        }
+        _ = try await nativeCLI(["todo", "clear"] + target, externalCaller: true)
+        try await waitUntil { $0.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })?.todos.isEmpty == true }
+        let todoSelection = details.selectedRange()
+        let todoDocument = details.string as NSString
+        guard let todoRetained = snapshot?.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID }),
+              todoRetained.statuses.count == 2, todoRetained.logs.count == 2, todoRetained.progress?.value == 0.42,
+              details.string.contains("No todo items"), !details.string.contains(todoText),
+              todoSelection.location <= todoDocument.length,
+              todoSelection.length <= todoDocument.length - todoSelection.location,
+              todoDocument.substring(with: todoSelection) == literal,
+              snapshot?.model.focusedWorkspace == foregroundWorkspace, window.firstResponder === metadataResponder else {
+            throw BridgeFailure(message: "Todo clear changed other metadata, selection, focus or retained stale inspector content")
         }
         _ = try await nativeCLI(["clear-status", "build"] + target, externalCaller: true)
         _ = try await nativeCLI(["clear-status", "notes"] + target, externalCaller: true)

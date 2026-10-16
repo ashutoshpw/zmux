@@ -81,6 +81,33 @@ impl App {
         }
         c
     }
+    fn wire(&self, command: Value) -> Value {
+        use std::{
+            io::{Read, Write},
+            os::unix::net::UnixStream,
+        };
+        let mut stream = UnixStream::connect(&self.socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let request =
+            serde_json::to_vec(&serde_json::json!({"version":2,"request_id":97,"command":command}))
+                .unwrap();
+        stream
+            .write_all(&(request.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&request).unwrap();
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let length = u32::from_be_bytes(length) as usize;
+        assert!(length <= zmux_desktop_runtime::control::MAX_CONTROL_RESPONSE_BYTES);
+        let mut bytes = vec![0; length];
+        stream.read_exact(&mut bytes).unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
     fn call(&self, args: &[&str], caller: Option<(&str, &str)>) -> Value {
         let o = self.output(args, caller);
         assert!(
@@ -103,6 +130,254 @@ impl Drop for App {
 }
 fn id(v: &Value, key: &str) -> String {
     v[key].as_u64().unwrap().to_string()
+}
+
+#[test]
+fn workspace_todo_cli_lifecycle_keeps_stable_scoped_items_without_focus_changes() {
+    use zmux_desktop_runtime::control_policy::{ControlAccess, ControlPolicy};
+    let app = App::new();
+    let owner = app.run(&["new-workspace", "todo owner"]);
+    let workspace = id(&owner, "focused_workspace");
+    let surface = id(&owner, "focused_surface");
+    let foreground = app.run(&["new-workspace", "foreground"]);
+    app.run(&[
+        "set-status",
+        "build",
+        "preserved",
+        "--workspace",
+        &workspace,
+    ]);
+    let first = app.call(
+        &["todo", "add", "write regression"],
+        Some((&workspace, &surface)),
+    );
+    let first_id = first["todos"][0]["id"].as_str().unwrap().to_owned();
+    assert!(uuid::Uuid::parse_str(&first_id).is_ok());
+    assert_eq!(first["todos"][0]["state"], "pending");
+    assert_eq!(first["todos"][0]["origin"], "user");
+    let second = app.run(&[
+        "todo",
+        "--workspace",
+        &workspace,
+        "add",
+        "review change",
+        "--state",
+        "in-progress",
+        "--origin",
+        "agent",
+    ]);
+    let second_id = second["todos"][1]["id"].as_str().unwrap().to_owned();
+    assert_ne!(first_id, second_id);
+    let completed = app.run(&["todo", "check", "1", "--workspace", &workspace]);
+    assert_eq!(completed["todos"][0]["id"], first_id);
+    assert_eq!(completed["todos"][0]["state"], "completed");
+    let repeated = app.run(&["todo", "check", &first_id, "--workspace", &workspace]);
+    assert_eq!(repeated["todos"], completed["todos"]);
+    let pending = app.run(&["todo", "uncheck", &first_id, "--workspace", &workspace]);
+    assert_eq!(pending["todos"][0]["state"], "pending");
+    let started = app.run(&["todo", "start", "1", "--workspace", &workspace]);
+    assert_eq!(started["todos"][0]["state"], "in-progress");
+    let removed = app.run(&["todo", "rm", &first_id, "--workspace", &workspace]);
+    assert_eq!(removed["todos"].as_array().unwrap().len(), 1);
+    assert_eq!(removed["todos"][0]["id"], second_id);
+    let after_reindex = app.run(&["todo", "check", "1", "--workspace", &workspace]);
+    assert_eq!(after_reindex["todos"][0]["id"], second_id);
+    assert_eq!(after_reindex["todos"][0]["state"], "completed");
+    for arguments in [
+        vec!["todo", "list"],
+        vec!["todo", "list", "--window", "1"],
+        vec![
+            "todo",
+            "rm",
+            &second_id,
+            "--workspace",
+            &id(&foreground, "focused_workspace"),
+        ],
+    ] {
+        let rejected = app.output(&arguments, None);
+        assert!(!rejected.status.success(), "{arguments:?}");
+    }
+    for arguments in [
+        vec![
+            "todo",
+            "add",
+            "bad",
+            "--state",
+            "invalid",
+            "--workspace",
+            &workspace,
+        ],
+        vec![
+            "todo",
+            "add",
+            "bad",
+            "--origin",
+            "invalid",
+            "--workspace",
+            &workspace,
+        ],
+        vec![
+            "todo",
+            "list",
+            "--state",
+            "pending",
+            "--workspace",
+            &workspace,
+        ],
+        vec!["todo", "rm", "0", "--workspace", &workspace],
+        vec!["todo", "rm", "invalid", "--workspace", &workspace],
+        vec![
+            "todo",
+            "list",
+            "--json",
+            "--json",
+            "--workspace",
+            &workspace,
+        ],
+    ] {
+        assert!(
+            !app.output(&arguments, None).status.success(),
+            "{arguments:?}"
+        );
+    }
+    app.server
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let listed = app.run(&["todo", "list", "--json", "--workspace", &workspace]);
+    assert_eq!(listed["todos"], after_reindex["todos"]);
+    for arguments in [
+        vec!["todo", "add", "denied", "--workspace", &workspace],
+        vec!["todo", "check", "1", "--workspace", &workspace],
+        vec!["todo", "uncheck", "1", "--workspace", &workspace],
+        vec!["todo", "start", "1", "--workspace", &workspace],
+        vec!["todo", "rm", "1", "--workspace", &workspace],
+        vec!["todo", "clear", "--workspace", &workspace],
+    ] {
+        let denied = app.output(&arguments, None);
+        assert!(!denied.status.success(), "{arguments:?}");
+        assert!(String::from_utf8_lossy(&denied.stderr).contains("read-only"));
+    }
+    app.server
+        .set_policy(ControlPolicy::same_user(ControlAccess::Full))
+        .unwrap();
+    let cleared = app.run(&["todo", "clear", "--workspace", &workspace]);
+    assert!(cleared["todos"].as_array().unwrap().is_empty());
+    assert_eq!(cleared["statuses"][0]["value"], "preserved");
+    assert_eq!(
+        app.run(&["list-workspaces"])["focused_workspace"],
+        foreground["focused_workspace"]
+    );
+}
+
+#[test]
+fn workspace_todo_wire_validates_scopes_items_and_shared_capacity_atomically() {
+    use serde_json::json;
+    use zmux_desktop_runtime::metadata::{MAX_RETAINED_BYTES, MAX_TEXT_BYTES, MAX_TODO_ENTRIES};
+    let app = App::new();
+    let first = app.run(&["new-workspace", "first checklist"]);
+    let first_id = id(&first, "focused_workspace");
+    let second = app.run(&["new-workspace", "second checklist"]);
+    let second_id = id(&second, "focused_workspace");
+    let command = |workspace: &str, action: Value| {
+        json!({"method":"targeted","request":{
+            "scope":{"workspace":workspace},"operation":{"operation":"metadata","action":action}
+        }})
+    };
+    let add = json!({"action":"add_todo","text":"\\".repeat(MAX_TEXT_BYTES)});
+    for _ in 0..MAX_TODO_ENTRIES {
+        let accepted = app.wire(command(&first_id, add.clone()));
+        assert_eq!(accepted["ok"], true, "{accepted}");
+    }
+    let full = app.run(&["todo", "list", "--workspace", &first_id]);
+    assert_eq!(full["todos"].as_array().unwrap().len(), MAX_TODO_ENTRIES);
+    for action in [
+        add.clone(),
+        json!({"action":"add_todo","text":" "}),
+        json!({"action":"add_todo","text":"x".repeat(MAX_TEXT_BYTES+1)}),
+        json!({"action":"add_todo","text":"invalid\u{0007}"}),
+        json!({"action":"add_todo","text":"valid","state":"unknown"}),
+        json!({"action":"add_todo","text":"valid","origin":"unknown"}),
+        json!({"action":"add_todo","text":"valid","extra":true}),
+        json!({"action":"clear_todos","extra":true}),
+        json!({"action":"list_todos","extra":true}),
+        json!({"action":"set_todo_state","item":{"index":0},"state":"completed"}),
+        json!({"action":"remove_todo","item":{"index":51}}),
+        json!({"action":"remove_todo","item":{"index":1,"extra":true}}),
+        json!({"action":"remove_todo","item":{"id":uuid::Uuid::new_v4()}}),
+    ] {
+        let rejected = app.wire(command(&first_id, action.clone()));
+        assert_eq!(rejected["ok"], false, "{action}: {rejected}");
+        assert_eq!(
+            app.run(&["todo", "list", "--workspace", &first_id])["todos"],
+            full["todos"]
+        );
+    }
+    for action in [
+        json!({"action":"list_todos"}),
+        json!({"action":"clear_todos"}),
+    ] {
+        let mut request = command(&first_id, action);
+        request["request"]["scope"] = json!({});
+        let rejected = app.wire(request);
+        assert_eq!(rejected["ok"], false);
+        assert_eq!(rejected["error"]["code"], "invalid_metadata");
+    }
+    let foreign = app.wire(command(
+        &second_id,
+        json!({"action":"add_todo","text":"second owner"}),
+    ));
+    assert_eq!(foreign["ok"], true);
+    let foreign_item = foreign["result"]["todos"][0]["id"].clone();
+    let rejected = app.wire(command(
+        &first_id,
+        json!({"action":"set_todo_state","item":{"id":foreign_item},"state":"completed"}),
+    ));
+    assert_eq!(rejected["error"]["code"], "todo_not_found");
+    let mut stale = command(&first_id, json!({"action":"clear_todos"}));
+    stale["request"]["expected_model_revision"] = json!(u64::MAX);
+    assert_eq!(app.wire(stale)["error"]["code"], "stale_revision");
+    let mut byte_rejected = None;
+    let third_id = id(
+        &app.run(&["new-workspace", "aggregate checklist"]),
+        "focused_workspace",
+    );
+    for index in 0..MAX_TODO_ENTRIES * 2 {
+        let workspace = if index < MAX_TODO_ENTRIES - 1 {
+            second_id.clone()
+        } else {
+            third_id.clone()
+        };
+        let before = app.run(&["todo", "list", "--workspace", &workspace]);
+        let result = app.wire(command(&workspace, add.clone()));
+        let snapshot = desktop_snapshot::read(&app.desktop);
+        assert!(
+            serde_json::to_vec(&snapshot.workspace_metadata)
+                .unwrap()
+                .len()
+                <= MAX_RETAINED_BYTES
+        );
+        if result["ok"] == false {
+            assert_eq!(result["error"]["code"], "metadata_capacity");
+            assert_eq!(
+                app.run(&["todo", "list", "--workspace", &workspace])["todos"],
+                before["todos"]
+            );
+            byte_rejected = Some(workspace);
+            break;
+        }
+    }
+    let blocked_workspace =
+        byte_rejected.expect("all workspaces must share one finite metadata budget");
+    assert_eq!(
+        app.run(&["todo", "list", "--workspace", &first_id])["todos"],
+        full["todos"]
+    );
+    app.run(&["todo", "clear", "--workspace", &first_id]);
+    let recovered = app.wire(command(&blocked_workspace, add));
+    assert_eq!(
+        recovered["ok"], true,
+        "clearing another checklist must release aggregate capacity: {recovered}"
+    );
 }
 
 struct GitFixture {

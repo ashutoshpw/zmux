@@ -136,6 +136,14 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "Attach-only compatibility spelling of local-tmux attach. Default attachment uses the authenticated app socket; --headless requires terminal stdin/stdout. Other lifecycle verbs use local-tmux."
     ),
     command!(
+        "todo",
+        "automation",
+        true,
+        true,
+        "todo add TEXT [--state pending|in-progress|completed] [--origin user|agent] [--workspace TARGET]\n       zmux todo list [--workspace TARGET]\n       zmux todo <check|uncheck|start|rm> <INDEX|UUID> [--workspace TARGET]\n       zmux todo clear [--workspace TARGET]",
+        "Manage the target workspace's checklist only when the user asks. Add defaults to pending/user. At most 50 items with nonblank text of at most 2048 bytes; all workspace metadata shares a conservative 512 KiB encoded budget. JSON includes ordered todos with stable UUIDs; INDEX is their current one-based array position, resolved atomically at the owner. check/uncheck/start set completed/pending/in-progress; repeated state changes succeed. Unknown or foreign items fail. Clear removes only todos. Requires explicit workspace or proven caller; never borrows foreground focus. List works on read-only sockets; mutations require write access. Todos are transient in this app process; restore, edit, set, reorder, open and frozen output/schema compatibility are unavailable."
+    ),
+    command!(
         "pr",
         "automation",
         true,
@@ -675,6 +683,7 @@ const GLOBAL: &str = "Options:\n  --socket <PATH>      Select an absolute Unix s
 const TARGETS: &str = "Targets:\n  UUID, positive legacy ID, window:N/workspace:N/pane:N/surface:N, or tab:N.\n  index:N selects a one-based position; reorder/move INDEX is zero-based.\n  Selector options constrain ownership where accepted; consult command usage.\n  --tab aliases --surface. Workspace navigation accepts --window and --workspace.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Place selector options before positional arguments; -- preserves literal text.\n  new-split, focus-direction and tab-action also allow options after their verb.\n  --window constrains an object's actual owner, including an inherited caller;\n  it never silently retargets an object to another window's selection. Explicit\n  workspace/pane/surface selectors override inherited object defaults.\n  ZMUX_WINDOW_ID is a hint only; malformed/stale hints are ignored. Workspace metadata\n  uses ZMUX_WORKSPACE_ID with caller surface ownership checked, and allows\n  options after values; consult its command help. For other target commands,\n  ZMUX_SURFACE_ID (or ZMUX_TAB_ID), then ZMUX_WORKSPACE_ID, then focus applies.\n  Those surface callers follow tab moves. Closed/stale targets fail.\n  UUIDs remain stable within the live model; reopened terminals receive new UUIDs.\n";
 const METADATA_TARGETS: &str = "Workspace metadata targets:\n  --window is a hard ownership constraint for the resolved workspace.\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  --expect-revision <N> checks an observed model_revision before the operation.\n  Explicit --workspace overrides inherited caller defaults. Otherwise,\n  ZMUX_WORKSPACE_ID selects the workspace, and any ZMUX_SURFACE_ID\n  (or ZMUX_TAB_ID) must belong to it. A moved or mismatched caller fails.\n  Without a caller workspace, the caller surface or current focus applies.\n  Closed/stale targets fail. Pane/surface selector flags are unavailable.\n  Options may appear before or after values; -- preserves literal text.\n";
 const PR_TARGETS: &str = "PR targets:\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  Otherwise a live ZMUX_WORKSPACE_ID and/or ZMUX_SURFACE_ID (ZMUX_TAB_ID)\n  or managed tmux caller must prove the owner. No foreground-focus fallback.\n  --window constrains ownership; --expect-revision checks the observed model.\n  Options may precede or follow the single value. Resolved workspace/window\n  UUIDs remain pinned through lookup; failures preserve the previous link.\n";
+const TODO_TARGETS: &str = "Todo targets:\n  --workspace accepts a workspace UUID, positive ID, workspace:N or index:N.\n  Otherwise a live caller workspace/surface or managed tmux caller must prove ownership.\n  No foreground-focus fallback; --window alone cannot select a workspace.\n  --window constrains ownership; --expect-revision checks the observed model revision.\n  Options may precede or follow operands; -- preserves literal text.\n  Item UUIDs are stable within the live workspace; positive item positions are one-based.\n  --json is accepted explicitly; results use JSON by default.\n";
 fn metadata_command(name: &str) -> bool {
     matches!(
         name,
@@ -729,7 +738,9 @@ pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
         }
         if spec.targeted {
             out.push('\n');
-            out.push_str(if spec.name == "pr" {
+            out.push_str(if spec.name == "todo" {
+                TODO_TARGETS
+            } else if spec.name == "pr" {
                 PR_TARGETS
             } else if metadata_command(spec.name) {
                 METADATA_TARGETS

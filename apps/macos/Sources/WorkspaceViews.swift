@@ -209,7 +209,7 @@ final class WorkspaceRowView: NSControl {
         updateMetadata(metadata)
         metadataButton.setAccessibilityLabel("Show workspace activity for \(title)")
         let activity = self.metadata.map { value in
-            "\(value.statuses.count) statuses, \(value.logs.count) log entries" + (value.progress.map { ", \(Int($0.value * 100)) percent" } ?? "") + (value.pullRequest.map { ", PR #\($0.number)" } ?? "")
+            "\(value.statuses.count) statuses, \(value.logs.count) log entries, \(value.todos.count) todo items" + (value.progress.map { ", \(Int($0.value * 100)) percent" } ?? "") + (value.pullRequest.map { ", PR #\($0.number)" } ?? "")
         } ?? ""
         setAccessibilityLabel("\(title), \(subtitle)" + (activity.isEmpty ? "" : ", " + activity))
         setAccessibilityValue(self.metadata == nil ? "" : metadataLabel.stringValue + ", " + progressLabel.stringValue)
@@ -226,13 +226,13 @@ final class WorkspaceRowView: NSControl {
         for view in [metadataIcon, metadataLabel, progressLabel, metadataButton] { view.isHidden = value == nil }
         guard let value else { progress.isHidden = true; return }
         let first = value.statuses.first
-        let symbol = first?.icon ?? (value.pullRequest == nil ? (value.progress == nil ? "text.bubble" : "circle.dotted") : "arrow.triangle.pull")
+        let symbol = first?.icon ?? (value.pullRequest == nil ? (value.progress == nil ? (value.todos.isEmpty ? "text.bubble" : "checklist") : "circle.dotted") : "arrow.triangle.pull")
         metadataIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             ?? NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
         let color = first?.color.flatMap { hexColor($0) } ?? NSColor.secondaryLabelColor
         metadataIcon.contentTintColor = color
         metadataLabel.textColor = color
-        metadataLabel.stringValue = first.map { "\($0.key): \($0.value)" } ?? (value.pullRequest.map { "PR #\($0.number)" } ?? (value.progress == nil ? "Workspace log" : "Task progress"))
+        metadataLabel.stringValue = first.map { "\($0.key): \($0.value)" } ?? (value.pullRequest.map { "PR #\($0.number)" } ?? (value.progress == nil ? (value.todos.isEmpty ? "Workspace log" : "\(value.todos.count) todo items") : "Task progress"))
         metadataLabel.toolTip = metadataLabel.stringValue
         metadataButton.toolTip = "Show all workspace activity" + (value.pullRequest.map { " · " + $0.url } ?? "")
         progress.isHidden = value.progress == nil
@@ -244,6 +244,7 @@ final class WorkspaceRowView: NSControl {
             progressLabel.stringValue = "\(percent)%" + (task.label.map { " · " + $0 } ?? "")
             progress.setAccessibilityLabel(task.label ?? "Workspace progress")
         } else { progressLabel.stringValue = "\(value.logs.count) log entries" + (value.logsDropped > 0 ? " · \(value.logsDropped) older omitted" : "") }
+        if !value.todos.isEmpty { progressLabel.stringValue += " · \(value.todos.filter { $0.state == .completed }.count)/\(value.todos.count) todos completed" }
         if let pullRequest = value.pullRequest {
             if first != nil || value.progress != nil { progressLabel.stringValue += " · PR #\(pullRequest.number)" }
             progressLabel.toolTip = pullRequest.url
@@ -364,6 +365,11 @@ final class WorkspaceMetadataViewController: NSViewController {
         if let task = metadata.progress {
             lines.append("\(Int(task.value * 100))%" + (task.label.map { " · " + $0 } ?? ""))
         } else { lines.append("No progress") }
+        lines += ["", "TODOS · \(metadata.todos.count)"]
+        if metadata.todos.isEmpty { lines.append("No todo items") }
+        for (index, item) in metadata.todos.enumerated() {
+            lines += ["\(index + 1). \(item.state.rawValue) · \(item.origin.rawValue) · \(item.id.uuidString.lowercased())", item.text, ""]
+        }
         lines += ["", "LOGS · \(metadata.logs.count) retained · \(metadata.logsDropped) older entries omitted"]
         if metadata.logs.isEmpty { lines.append("No log entries") }
         for log in metadata.logs {

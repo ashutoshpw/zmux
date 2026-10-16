@@ -121,18 +121,27 @@ struct WorkspaceLog: Decodable, Sendable, Equatable {
     let level: Level
     let source: String?
 }
+struct WorkspaceTodo: Decodable, Sendable, Equatable {
+    enum State: String, Decodable, Sendable, Equatable { case pending, inProgress = "in-progress", completed }
+    enum Origin: String, Decodable, Sendable, Equatable { case user, agent }
+    let id: UUID
+    let text: String
+    let state: State
+    let origin: Origin
+}
 struct WorkspaceMetadata: Decodable, Sendable, Equatable {
     let workspaceId: UInt64
     let pullRequest: WorkspacePullRequest?
+    let todos: [WorkspaceTodo]
     let statuses: [WorkspaceStatus]
     let progress: WorkspaceProgress?
     let logs: [WorkspaceLog]
     let logsDropped: UInt64
 
     static func empty(_ workspaceId: UInt64) -> Self {
-        Self(workspaceId: workspaceId, pullRequest: nil, statuses: [], progress: nil, logs: [], logsDropped: 0)
+        Self(workspaceId: workspaceId, pullRequest: nil, todos: [], statuses: [], progress: nil, logs: [], logsDropped: 0)
     }
-    var isEmpty: Bool { pullRequest == nil && statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
+    var isEmpty: Bool { pullRequest == nil && todos.isEmpty && statuses.isEmpty && progress == nil && logs.isEmpty && logsDropped == 0 }
 }
 struct BrowserProfile: Decodable, Sendable, Equatable { let id: UUID; let name: String }
 struct BrowserProfileReceipt: Decodable, Sendable {
