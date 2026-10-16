@@ -385,3 +385,48 @@ log `/tmp/zmux-b01-reconciliation-frozen-source-check-20261016.log`, including a
 recovery cases,6 lease cases, actual compiling public ingress regression, all workspace
 checks and the foreign C reconciliation harness. Swift helper/UI source remains a separate
 uncompiled macOS gate; these portable results do not establish physical native acceptance.
+
+## Focused production native acceptance source
+
+The accepted recovery freeze remains unchanged at64b4a9e, manifest
+`/tmp/zmux-b01-production-recovery-freeze-20261016T053434Z/manifest.json`, SHA256
+`556d8dc08333727b2ea7ce827b38a2fc4aa09223f4adf0a3a09119ca89cc9ffa`.
+The next slice adds `BrowserProfileAcceptance.swift`, the isolated
+`check-native-profile-operations` runner and the existing dispatch workflow's
+`profile-operations` suite. It must pass both Swift source slices before a universal
+package or real native run. Parent reviews the frozen source before dispatch.
+
+The strongest new boundary is the packaged app plus bundled public CLI and actual
+AppKit manager controls/confirmation sheets. Its independent oracles are cookie and
+localStorage observations in new real WebKit views, private catalog UUID/name membership,
+durable original-intent status, persisted restored surfaces and independent-process
+flock exclusion. No completion, store, native effect or callback is fabricated. Existing
+portable workers/C ABI coverage cannot observe WebKit caller lifetimes, physical removal,
+real manager routing or data visible after an original app PID exits. The launch flag
+only selects this generated private-catalog journey; it changes no production owner.
+
+One runner owns three successive original packaged-executable child PIDs. Prepare
+generates A/B/C, refuses mounted A/hidden C and an actual download conversion, cancels
+the actual Save sheet, closes A, observes a live independent shared inode owner block
+clear, then clears A via CLI/C through manager confirmation. Cancellation must preserve
+C's data/catalog. New A/C data written after clear must survive explicit CLI/manager
+original-intent reconciliation, detecting native effect replay. Further production
+clears leave empty A/C and untouched B for persistence/restore.
+
+Only after successful shared shutdown and actual original-child normal exit/wait/reap,
+plus exclusive zero-sentinel proof for each generated lifetime inode, does a fresh reader
+restore the saved A/B/C surfaces without reseeding. It verifies A/C empty, B intact and
+terminal status/reconciliation after restart; deletes C by CLI/A through real manager
+confirmation; queries/reconciles original intents without membership; and shuts down.
+A third fresh process verifies A/C membership and model surfaces absent, deleted original
+status/reconciliation available and B intact. Only then does public deletion clean B.
+Failure/timeout retains the generated profile/logs, never launches another diagnostic app
+and never deletes unknown website storage or signals the user's running application.
+
+Download coverage deliberately means actual WKDownload conversion, refusal while the
+live tab/model guard also exists, actual Save Cancel and physical cleanup. It does not
+isolate a download/conversion-only refusal or claim Save acceptance/TCC authorization.
+Missing callbacks, interrupted nonterminal native recovery and deterministic constructor
+racing restore remain separate unexercised gates. Ordinary terminal reconciliation is
+exercised, not a lost-callback claim. Native compilation/execution is still pending at
+this source-freeze stage.
