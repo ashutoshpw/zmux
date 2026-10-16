@@ -78,7 +78,7 @@ pub unsafe extern "C" fn zmux_desktop_profile_lease(
                 None => Ok(None),
             },
             Command::ReleaseUnconstructed { token } if id == 0 => match PROCESS_LEASES.get() {
-                Some(Ok(leases)) => leases.service.release(token).map(|()| None),
+                Some(Ok(leases)) => leases.service.release_unconstructed(token).map(|()| None),
                 Some(Err(error)) => Err(LeaseError::Io(error.clone())),
                 None => Err(LeaseError::StaleToken),
             },

@@ -9,12 +9,26 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
+use thiserror::Error;
 use uuid::Uuid;
 use zmux_workspace_core::{RestoreLimits, Snapshot};
 
 pub const MAX_PROFILES: usize = 32;
 pub const MAX_PROFILE_BYTES: usize = 16 * 1024;
 pub const CATALOG_NAME: &str = "browser-profiles.json";
+
+#[derive(Debug, Error)]
+pub enum ProfileError {
+    #[error("native browser profile owner is unavailable; no website data or catalog was changed")]
+    NativeUnavailable,
+}
+impl ProfileError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NativeUnavailable => "native_profile_owner_unavailable",
+        }
+    }
+}
 fn failure(value: impl ToString) -> DesktopError {
     DesktopError::Failure(value.to_string())
 }
@@ -105,6 +119,8 @@ impl Catalog {
 pub enum ProfileCommand {
     Add { name: String },
     Rename { profile: String, name: String },
+    Clear { profile: String },
+    Delete { profile: String },
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct ProfileReceipt {
@@ -164,6 +180,10 @@ impl ProfileRuntime {
         if let Some(error) = &self.snapshot.error {
             return Err(failure(error));
         }
+        if let ProfileCommand::Clear { profile } | ProfileCommand::Delete { profile } = &command {
+            self.resolve(profile)?;
+            return Err(ProfileError::NativeUnavailable.into());
+        }
         let io = self
             .io
             .as_ref()
@@ -178,6 +198,9 @@ impl ProfileRuntime {
                     return Err(failure("invalid browser profile selector"));
                 }
                 name
+            }
+            ProfileCommand::Clear { .. } | ProfileCommand::Delete { .. } => {
+                return Err(ProfileError::NativeUnavailable.into());
             }
         };
         validate_name(name).map_err(failure)?;

@@ -11,7 +11,10 @@ use std::{
 use uuid::Uuid;
 use zmux_desktop_runtime::{
     persistence::{OperationId, PersistenceError, PersistenceOutcome, PersistenceWorker},
-    profile_leases::{LeaseError, LeaseMode, LeaseOwner, LeaseService},
+    profile_leases::{
+        LeaseError, LeaseMode, LeaseOwner, LeaseService, MutationRequest,
+        journal::{MutationKind, MutationPhase, QUARANTINE_SENTINEL},
+    },
 };
 use zmux_workspace_core::{Action, RestoreLimits, SessionDocument, WorkspaceStore};
 
@@ -179,6 +182,7 @@ fn lease_child() {
             LeaseMode::Shared,
         )
         .unwrap();
+    service.constructed(token).unwrap();
     println!("PROFILE_LEASE_READY");
     std::io::stdout().flush().unwrap();
     std::io::stdin().read_exact(&mut [0]).unwrap();
@@ -258,6 +262,14 @@ fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_ino
     // aliases on the default case-insensitive macOS filesystem.
     for path in [
         fixture.path(),
+        fixture.lease_root().join(format!(
+            "browser-profile-{}.admission.lock",
+            fixture.profiles[0]
+        )),
+        fixture.lease_root().join(format!(
+            "browser-profile-{}.intent.json",
+            fixture.profiles[0]
+        )),
         fixture.lease_root().join(
             fixture
                 .path()
@@ -394,5 +406,422 @@ fn lease_open_refuses_aliases_unsafe_inodes_and_unknown_profile_without_replacem
             .lease_root()
             .join(format!("browser-profile-{unknown}.lock"))
             .exists()
+    );
+}
+
+fn mutation(
+    fixture: &Fixture,
+    controller: Uuid,
+    stores: Vec<zmux_desktop_runtime::profile_leases::LeaseToken>,
+    kind: MutationKind,
+) -> MutationRequest {
+    MutationRequest {
+        catalog: fixture.state(),
+        controller,
+        intent: Uuid::new_v4(),
+        profile: fixture.profiles[0],
+        kind,
+        local_stores: stores,
+    }
+}
+
+#[test]
+fn construction_permits_and_foreign_store_prevent_writer_without_losing_local_share() {
+    let fixture = Fixture::new();
+    let service = LeaseService::start(fixture.lease_root()).unwrap();
+    let owner = owner();
+    let shared = service
+        .acquire(
+            fixture.state(),
+            owner,
+            fixture.profiles[0],
+            LeaseMode::Shared,
+        )
+        .unwrap();
+    assert!(matches!(
+        service.mutation_start(mutation(
+            &fixture,
+            owner.epoch,
+            vec![shared],
+            MutationKind::Clear
+        )),
+        Err(LeaseError::Busy)
+    ));
+    service.constructed(shared).unwrap();
+    let construction = service
+        .reuse(fixture.state(), shared, Uuid::new_v4())
+        .unwrap();
+    assert!(matches!(
+        service.mutation_start(mutation(
+            &fixture,
+            owner.epoch,
+            vec![shared],
+            MutationKind::Clear
+        )),
+        Err(LeaseError::Busy)
+    ));
+    let mut forged = construction;
+    forged.lease.owner.store = Uuid::new_v4();
+    assert!(matches!(
+        service.construction_done(forged),
+        Err(LeaseError::StaleToken)
+    ));
+    assert!(matches!(service.release(shared), Err(LeaseError::Busy)));
+    service.construction_done(construction).unwrap();
+    let mut child = ChildLease::start(fixture.state(), fixture.lease_root(), fixture.profiles[0]);
+    let request = mutation(&fixture, owner.epoch, vec![shared], MutationKind::Clear);
+    let intent = request.intent;
+    assert!(matches!(
+        service.mutation_start(request),
+        Err(LeaseError::Busy)
+    ));
+    assert_eq!(
+        service
+            .intent_status(fixture.profiles[0], intent)
+            .unwrap()
+            .record
+            .phase,
+        MutationPhase::FailedBeforeClear
+    );
+    // The foreign process is gone; only the restored original local share now
+    // prevents another independent service from acquiring lifetime exclusive.
+    child.crash();
+    let competitor = LeaseService::start(fixture.lease_root()).unwrap();
+    assert!(matches!(
+        competitor.acquire(
+            fixture.state(),
+            super_owner(),
+            fixture.profiles[0],
+            LeaseMode::Exclusive
+        ),
+        Err(LeaseError::Busy)
+    ));
+    assert_eq!(service.status(owner).unwrap(), Some(shared));
+    service.release(shared).unwrap();
+    let exclusive = competitor
+        .acquire(
+            fixture.state(),
+            super_owner(),
+            fixture.profiles[0],
+            LeaseMode::Exclusive,
+        )
+        .unwrap();
+    competitor.release(exclusive).unwrap();
+}
+fn super_owner() -> LeaseOwner {
+    owner()
+}
+
+#[test]
+fn exact_native_phases_precede_catalog_commit_and_terminal_sentinel_release() {
+    for kind in [MutationKind::Clear, MutationKind::Delete] {
+        let fixture = Fixture::new();
+        let service = LeaseService::start(fixture.lease_root()).unwrap();
+        let owner = owner();
+        let shared = service
+            .acquire(
+                fixture.state(),
+                owner,
+                fixture.profiles[0],
+                LeaseMode::Shared,
+            )
+            .unwrap();
+        service.constructed(shared).unwrap();
+        let path = fixture
+            .state()
+            .join(zmux_desktop_runtime::profiles::CATALOG_NAME);
+        let before = fs::read(&path).unwrap();
+        let identity = fs::metadata(fixture.path()).unwrap().ino();
+        let token = service
+            .mutation_start(mutation(&fixture, owner.epoch, vec![shared], kind))
+            .unwrap();
+        assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
+        assert!(matches!(
+            service.acquire(
+                fixture.state(),
+                super_owner(),
+                fixture.profiles[0],
+                LeaseMode::Shared
+            ),
+            Err(LeaseError::Busy)
+        ));
+        let other = service
+            .acquire(
+                fixture.state(),
+                super_owner(),
+                fixture.profiles[1],
+                LeaseMode::Shared,
+            )
+            .unwrap();
+        service.release(other).unwrap();
+        let mut forged = token;
+        forged.controller = Uuid::new_v4();
+        assert!(matches!(
+            service.mutation_advance(forged, MutationPhase::ClearDispatched),
+            Err(LeaseError::StaleToken)
+        ));
+        assert!(matches!(
+            service.mutation_advance(token, MutationPhase::RemoveCompleted),
+            Err(LeaseError::StaleToken)
+        ));
+        assert!(matches!(
+            service.mutation_finish(token, None),
+            Err(LeaseError::StaleToken)
+        ));
+        for phase in [
+            MutationPhase::ClearDispatched,
+            MutationPhase::ClearCompleted,
+            MutationPhase::RemoveDispatched,
+            MutationPhase::RemoveCompleted,
+        ] {
+            service.mutation_advance(token, phase).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), before);
+            assert_eq!(
+                service
+                    .intent_status(token.profile, token.intent)
+                    .unwrap()
+                    .record
+                    .phase,
+                phase
+            );
+        }
+        let worker = fixture.worker.as_ref().unwrap();
+        wait(
+            worker,
+            worker
+                .submit_profile_command(zmux_desktop_runtime::profiles::ProfileCommand::Rename {
+                    profile: fixture.profiles[1].to_string(),
+                    name: "Concurrent rename".into(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        service.mutation_finish(token, None).unwrap();
+        let catalog: zmux_desktop_runtime::profiles::Catalog =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            catalog
+                .profiles
+                .iter()
+                .find(|p| p.id == fixture.profiles[1])
+                .unwrap()
+                .name,
+            "Concurrent rename"
+        );
+        assert_eq!(
+            catalog.profiles.iter().any(|p| p.id == fixture.profiles[0]),
+            kind == MutationKind::Clear
+        );
+        if kind == MutationKind::Clear {
+            assert_eq!(
+                catalog
+                    .profiles
+                    .iter()
+                    .find(|p| p.id == fixture.profiles[0])
+                    .unwrap()
+                    .name,
+                "Work"
+            );
+        }
+        assert!(fs::read(fixture.path()).unwrap().is_empty());
+        assert_eq!(fs::metadata(fixture.path()).unwrap().ino(), identity);
+        let status = service.intent_status(token.profile, token.intent).unwrap();
+        assert_eq!(status.record.phase, MutationPhase::Completed);
+        assert!(!status.outcome_unknown && !status.retry_native);
+        assert!(matches!(
+            service.release(shared),
+            Err(LeaseError::StaleToken)
+        ));
+    }
+}
+
+#[test]
+#[ignore = "real subprocess fixture invoked only by the crash quarantine test"]
+fn mutation_child() {
+    thread::spawn(|| {
+        thread::sleep(Duration::from_secs(10));
+        std::process::exit(3);
+    });
+    let service = LeaseService::start(PathBuf::from(
+        std::env::var_os("ZMUX_LEASE_CHILD_ROOT").unwrap(),
+    ))
+    .unwrap();
+    let token = service
+        .mutation_start(MutationRequest {
+            catalog: PathBuf::from(std::env::var_os("ZMUX_LEASE_CHILD_STATE").unwrap()),
+            controller: Uuid::new_v4(),
+            intent: std::env::var("ZMUX_MUTATION_INTENT")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            profile: std::env::var("ZMUX_LEASE_CHILD_PROFILE")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            kind: MutationKind::Delete,
+            local_stores: vec![],
+        })
+        .unwrap();
+    service
+        .mutation_advance(token, MutationPhase::ClearDispatched)
+        .unwrap();
+    println!("PROFILE_MUTATION_READY");
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_exact(&mut [0]).unwrap();
+}
+
+#[test]
+fn dispatched_operation_survives_process_death_and_quarantines_only_original_uuid() {
+    let fixture = Fixture::new();
+    let intent = Uuid::new_v4();
+    let mut process = Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "mutation_child", "--nocapture"])
+        .env("ZMUX_LEASE_CHILD_ROOT", fixture.lease_root())
+        .env("ZMUX_LEASE_CHILD_STATE", fixture.state())
+        .env("ZMUX_LEASE_CHILD_PROFILE", fixture.profiles[0].to_string())
+        .env("ZMUX_MUTATION_INTENT", intent.to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let output = process.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        for line in BufReader::new(output).lines() {
+            if line.unwrap().contains("PROFILE_MUTATION_READY") {
+                sender.send(()).unwrap();
+                return;
+            }
+        }
+    });
+    let mut child = ChildLease(process);
+    receiver
+        .recv_timeout(Duration::from_secs(4))
+        .expect("writer did not durably dispatch");
+    let inode = fs::metadata(fixture.path()).unwrap().ino();
+    child.crash();
+    let service = LeaseService::start(fixture.lease_root()).unwrap();
+    let status = service.intent_status(fixture.profiles[0], intent).unwrap();
+    assert_eq!(status.record.phase, MutationPhase::ClearDispatched);
+    assert!(
+        status.outcome_unknown
+            && status.recovery_required
+            && !status.original_owner_available
+            && !status.retry_native
+    );
+    assert!(
+        matches!(service.acquire(fixture.state(), owner(), fixture.profiles[0], LeaseMode::Shared), Err(LeaseError::Quarantined { intent: original, .. }) if original == intent)
+    );
+    assert!(matches!(
+        service.intent_status(fixture.profiles[0], Uuid::new_v4()),
+        Err(LeaseError::StaleToken)
+    ));
+    assert_eq!(fs::metadata(fixture.path()).unwrap().ino(), inode);
+    assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
+    let other = service
+        .acquire(
+            fixture.state(),
+            owner(),
+            fixture.profiles[1],
+            LeaseMode::Shared,
+        )
+        .unwrap();
+    service.release(other).unwrap();
+}
+
+#[test]
+fn known_partial_failure_restores_shared_ownership_and_catalog_retry_never_replays_native() {
+    let fixture = Fixture::new();
+    let service = LeaseService::start(fixture.lease_root()).unwrap();
+    let owner = owner();
+    let shared = service
+        .acquire(
+            fixture.state(),
+            owner,
+            fixture.profiles[0],
+            LeaseMode::Shared,
+        )
+        .unwrap();
+    service.constructed(shared).unwrap();
+    let request = mutation(&fixture, owner.epoch, vec![shared], MutationKind::Clear);
+    let first = service.mutation_start(request).unwrap();
+    for phase in [
+        MutationPhase::ClearDispatched,
+        MutationPhase::ClearCompleted,
+        MutationPhase::RemoveDispatched,
+    ] {
+        service.mutation_advance(first, phase).unwrap();
+    }
+    service
+        .mutation_finish(first, Some("known namespace removal failure".into()))
+        .unwrap();
+    assert_eq!(
+        service
+            .intent_status(first.profile, first.intent)
+            .unwrap()
+            .record
+            .phase,
+        MutationPhase::FailedPartial
+    );
+    assert_eq!(service.status(owner).unwrap(), Some(shared));
+    assert!(fs::read(fixture.path()).unwrap().is_empty());
+    let second = service
+        .mutation_start(mutation(
+            &fixture,
+            owner.epoch,
+            vec![shared],
+            MutationKind::Delete,
+        ))
+        .unwrap();
+    assert!(matches!(
+        service.intent_status(first.profile, first.intent),
+        Err(LeaseError::StaleToken)
+    ));
+    assert!(matches!(
+        service.mutation_advance(first, MutationPhase::RemoveCompleted),
+        Err(LeaseError::StaleToken)
+    ));
+    for phase in [
+        MutationPhase::ClearDispatched,
+        MutationPhase::ClearCompleted,
+        MutationPhase::RemoveDispatched,
+        MutationPhase::RemoveCompleted,
+    ] {
+        service.mutation_advance(second, phase).unwrap();
+    }
+    let original = fixture.root.join("original-state");
+    fs::rename(fixture.state(), &original).unwrap();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(fixture.state())
+        .unwrap();
+    assert!(matches!(
+        service.mutation_finish(second, None),
+        Err(LeaseError::UnsafeIntent)
+    ));
+    assert_eq!(
+        service
+            .intent_status(second.profile, second.intent)
+            .unwrap()
+            .record
+            .phase,
+        MutationPhase::CatalogCommitting
+    );
+    assert_eq!(fs::read(fixture.path()).unwrap(), QUARANTINE_SENTINEL);
+    assert!(matches!(
+        service.mutation_advance(second, MutationPhase::ClearDispatched),
+        Err(LeaseError::StaleToken)
+    ));
+    fs::remove_dir(fixture.state()).unwrap();
+    fs::rename(original, fixture.state()).unwrap();
+    service.mutation_finish(second, None).unwrap();
+    assert_eq!(
+        service
+            .intent_status(second.profile, second.intent)
+            .unwrap()
+            .record
+            .phase,
+        MutationPhase::Completed
     );
 }
