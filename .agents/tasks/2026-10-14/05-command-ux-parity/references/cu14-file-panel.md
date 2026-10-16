@@ -575,3 +575,160 @@ the determinism evidence is the table above, not the 8-copy runs.
 Swift, macOS and hosted gates remain UNAVAILABLE: `scripts/check-macos-sources`,
 `scripts/build-macos-dev`, `scripts/check-macos-app`, the in-app smokes and
 `.github/workflows/macos-development.yml`. The macOS `O_SEARCH` fallback is compiled only there.
+
+## S3 CLI and control socket: `zmux open` and `zmux markdown open`
+
+Base: `4eddc9ce07bac31a66570d9b5dc8421db41cba64`.
+
+### What changed
+
+- `apps/cli/src/open.rs` (new): lexical operand classification, absolute paths, the request bound
+  and result reporting. `http://`/`https://` (ASCII case-insensitive) become `url` items; any other
+  `scheme://` is `unsupported_scheme`; everything else, including `foo:bar.txt` and `about:blank`,
+  is a path made absolute by joining `env::current_dir()` (no canonicalisation, `~` untouched).
+  An empty operand, a control character, an operand over 4096 bytes (after absolutising), no
+  operand, more than 16 operands, or an encoded request over 16384 bytes fails the whole
+  invocation before any connection (`invalid_operand`, `unsupported_scheme`, `request_too_large`,
+  "split the operands across invocations"). The size check runs twice: at parse time without a
+  password (a lower bound that already decides the common case) and in `run` with the caller's
+  real password. `run` sends one request, prints the server `result` pretty-printed, and returns
+  0 only if `result.ok` is true; otherwise it prints `zmux: N of M items failed` on stderr and
+  returns 1. A whole-request failure (`stale_revision`, unknown target, `policy_denied`,
+  transport) stays an ordinary `zmux: code: message` error with exit status 1 and no stdout.
+  A result without an `items` array is itself an error (fail fast, never a success-shaped guess).
+- `apps/cli/src/targets.rs`: `open` and `markdown open` reuse the selector loop and the focus
+  extraction (`extract_browser_focus` became `extract_focus` with message labels; the browser
+  messages are unchanged). Selector options must precede operands; `--` makes later operands
+  literal; a leftover option-looking operand is an unknown-option error. `request` was split into
+  `command_request` (returns the `ControlCommand`) so the new `Parsed::Open` variant does not
+  have to unwrap `Parsed::App`.
+- `apps/cli/src/main.rs`: `Parsed::Open(ControlCommand)`, a `run` arm, and a 5 s default client
+  budget for these commands (1 s probe + 2 s executor wait) unless the global `--timeout` is given.
+- `apps/cli/src/registry.rs`: `open` and `markdown` entries (`targeted`, socket) in a new `files`
+  group; the help text states the 2 MiB / 7 MiB limits, extension modes, dedupe, per-item errors,
+  focus rules, exit status and the 5 s default.
+- `apps/cli/src/registry/contracts.rs`: leaves `open` and `markdown open` (route `open`, pointers
+  `/request/operation/operation = open_items` and, for markdown, `force_mode = markdown`, default
+  `focus` read from the live parse); `parsed()` allows `Parsed::Open`. The probes carry an explicit
+  `--workspace workspace:1` so they do not depend on ambient `ZMUX_*` variables.
+- `apps/cli/src/registry/frozen-coverage.json`: `CMD-006` and `CMD-114` moved from `unresolved`
+  to `local_counterpart_compatibility_unverified` with `local_contract` `open` / `markdown open`.
+  `behavioral_parity_verified` stays false; nothing under `apps/cli/contracts/baseline/` changed.
+- `crates/desktop-runtime/src/control_policy.rs`: no behaviour change. `is_read` already treats
+  `Targeted` as a mutation unless the operation is on its short read list, so `open_items` is a
+  mutation without edits; a unit test now pins that (see below). The route, error codes
+  (including `whole_request_code`) and per-item codes were delivered in S2 and are unchanged.
+- `docs/local-control.md`: new "Opening files and web pages" section (wire shape, bounds, result
+  shape, per-item codes, exit status, no retry).
+
+### Red then green
+
+Red: `apps/cli/tests/open.rs` was written first and run against the unmodified CLI. All 12 tests
+failed (`unknown command \`open\``), i.e. 0 passed / 12 failed. A separate red appeared in
+`scripts/check` after the implementation: the catalog contract check
+(`offline_topics_and_agent_discovery_do_not_require_a_valid_socket`, which runs `commands --check`
+with `ZMUX_LOCAL_TMUX=1` and no `TMUX`) failed with `command contract drift: open: managed tmux
+caller is missing TMUX`, because my first leaf probe had no explicit target. The probes now name
+`--workspace workspace:1`, as the other targeted leaves do; that test is the regression guard.
+
+Green: the 12 `open.rs` tests pass, as do the changed `cli.rs` tests and the new unit tests.
+
+New and changed tests (all run by `cargo test --workspace --locked`):
+
+- `apps/cli/tests/open.rs` (new, 12). Wire tests use a one-shot fake app that owns the listener
+  and records the single request; "never connected" is proved after the child exits.
+  `open_sends_the_designed_wire_request_with_cwd_absolute_paths` (exact `open_items` operation:
+  relative paths joined to the fixture cwd, `..` and `~` untouched, absolute passthrough,
+  case-insensitive `HTTPS://`, `about:blank` as a path);
+  `open_options_select_scope_focus_and_literal_operands` (all four selectors, `--tab`,
+  `--expect-revision`, `--no-focus`, `--focus true|false` before and after operands, `--` and
+  option-looking operands); `open_defaults_follow_the_existing_target_environment_rules`
+  (`ZMUX_WORKSPACE_ID`/`ZMUX_SURFACE_ID` reach `caller`; an explicit selector replaces them);
+  `markdown_open_forces_markdown_and_accepts_paths_only`;
+  `lexical_errors_fail_the_whole_invocation_before_connecting` (22 rejections, each asserting the
+  message, empty stdout and that nothing connected: no/empty operands, control character, 4097-byte
+  path, `file://`, `ftp://`, unknown and misplaced options, focus conflicts and bad values,
+  repeated/invalid selectors, `markdown` without `open`, URL operands for markdown, 17 operands,
+  an oversize request);
+  `item_failures_print_the_full_result_and_exit_one_without_retrying` and
+  `whole_request_failures_exit_one_with_the_server_error_and_no_items` (exit statuses, stdout and
+  stderr contracts); `help_describes_both_commands_offline` (five help spellings with an invalid
+  relative socket, so none can connect; `Files:` group in the top-level help).
+  Real Desktop behind a real `ControlServer` (production file service with 60 s deadlines):
+  `a_mixed_batch_creates_ordered_tabs_and_reports_each_item` (markdown, text, image, a directory,
+  a missing file, a binary file and an https URL in one call: exit 1, `3 of 7 items failed`,
+  exact per-item codes `is_directory`/`not_found`/`binary_file`, tabs appended in operand order
+  only for successes, `kind` file/browser, first success selected, then an all-success call that
+  exits 0 with quiet stderr); `dedupe_no_focus_and_the_first_success_focus_rule` (`--no-focus`
+  keeps the starter terminal selected, re-opening is `deduplicated:true` with no new surface,
+  with focus the first success is selected and a later new tab is not);
+  `explicit_targets_environment_defaults_markdown_force_and_stale_revisions` (a caller workspace
+  wins over the focused one; `markdown open --pane` forces an extensionless file to markdown and
+  reports `content_mismatch` for a PNG; a stale `--expect-revision` and an unknown pane are
+  whole-request failures with no stdout, no `items` and no new tab);
+  `a_read_only_socket_is_refused_before_any_file_is_probed` (`policy_denied` through the CLI).
+- `apps/cli/tests/cli.rs`: `open` and `markdown` added to the help command list (each also runs
+  `--help`); the catalog assertions check `CMD-006`/`CMD-114` rows, both leaves
+  (`contract_status` partial, dispatcher, `focus` true, 5000 ms client timeout, `open_items`
+  pointer, `force_mode`, argument names) and that inventory stays 428.
+- `apps/cli/src/open.rs` unit tests (6): scheme detection table, order and kinds, markdown
+  forcing and URL refusal, the 16-operand / 4096-byte / request-size boundaries (exact bound
+  accepted, one over refused), control characters, and the 5 s default versus an explicit
+  `--timeout`.
+- `crates/desktop-runtime/src/control_policy.rs`:
+  `open_items_is_a_mutation_for_every_item_kind_and_force_mode` (read-only is refused, full is
+  admitted, the remote relay is denied, for path, URL and forced-markdown operations).
+
+Mutation checks (each applied, observed failing, then restored): putting `OpenItems` on the
+`is_read` list fails the control_policy test; exit status 0 on item failure fails 3 open tests;
+dropping the cwd join fails 6; treating every operand as scheme-less (so `file://` becomes a path)
+fails 3 including the lexical-rejection table.
+
+### Checks run
+
+- `scripts/check` (fmt, `cargo test --workspace --locked`, clippy `-D warnings`,
+  `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 542 tests
+  passed, 0 failed, 2 ignored (the `lease_child` and `mutation_child` subprocess fixtures,
+  unrelated) across 78 test binaries. No dependency change.
+- `zmux commands --check` passes inside the `cli` test (inventory entries 428).
+
+Determinism, executed against the final test binaries (24 CPUs; Linux; the harness ran each binary
+20 times serially, then 3 rounds of 8 concurrent copies, then 3 rounds of 24 concurrent copies
+alongside 24 busy-loop CPU hogs):
+
+| binary | serial | 8 concurrent x3 | 24 copies + 24 hogs x3 |
+| --- | --- | --- | --- |
+| `open` (apps/cli/tests/open.rs, 12 tests) | 20/20 | 24/24 | 72/72 |
+| `cli` (apps/cli/tests/cli.rs, 13 tests) | 20/20 | 24/24 | 72/72 |
+| `zmux` bin unit tests (apps/cli, incl. `open::tests`) | 20/20 | 24/24 | 72/72 |
+| `zmux-desktop-runtime` lib, `control_policy` filter | 20/20 | 24/24 | 72/72 |
+
+The new tests contain no sleeps used as synchronisation. The fake app spins on a non-blocking
+accept until the child has exited, and the child cannot finish without the reply the fake owes it.
+End-to-end waits are a bounded condition loop (60 s) on the Desktop's published snapshot, the
+established pattern. Server-side deadlines in the end-to-end fixture are 60 s (probe, command),
+so the assertions are about behaviour and cannot be turned into `probe_timeout` by load; each CLI
+call passes `--timeout 30000`.
+
+### UNAVAILABLE gates
+
+Unchanged from S2 and not run on this Linux machine: `scripts/check-macos-sources`,
+`scripts/build-macos-dev`, `scripts/check-macos-app`, the in-app smokes and
+`.github/workflows/macos-development.yml`. S3 touches no Swift. Rendering, editing, saving and
+tab presentation of the tabs that `zmux open` creates are S4 and are not verified here.
+
+### Deviations from the design, with reasons
+
+- `unsupported_scheme` (and `invalid_operand` for a URL given to `markdown open`) fail the whole
+  invocation before connecting, rather than becoming per-item results. D3 lists them as lexical
+  errors and the failure rule says purely lexical errors fail fast with no side effects; the
+  server still reports the same codes per item for other clients (bridge and raw socket).
+- The parse-time request-size check cannot know the password, so it is a lower bound; the exact
+  check runs in `run`, still before connecting. Both use the shared 16384-byte constant.
+- `is_read` and the server error vocabulary needed no change (the S2 route already classifies
+  `open_items` as a mutation); only a pinning unit test was added to `control_policy.rs`.
+- The end-to-end tests do not inject a gated `FilesConfig` backend; overload, stall and
+  `probe_timeout` behaviour are covered at their owner in `crates/desktop-runtime/tests/files.rs`
+  (S2), and the CLI test only asserts that the CLI relays whatever the server returned.
+- The `markdown` registry entry is the dispatcher name; its usage reads `markdown open ...` and
+  `zmux markdown` without `open` is an explicit error, as `browser` without a verb is.
