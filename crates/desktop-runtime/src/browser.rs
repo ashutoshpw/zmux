@@ -1011,13 +1011,13 @@ impl BrowserRuntime {
         if op.receipt.owner != *owner {
             return Err(BrowserError::StaleOwner);
         }
-        if op.receipt.state != BrowserOperationState::Pending {
-            // The exact current host and receipt owner have already been fenced.
-            // Never replace the authoritative terminal outcome or revive work.
-            return Err(BrowserError::ObsoleteEvent);
-        }
         if !op.dispatched {
             return Err(BrowserError::NotDispatched);
+        }
+        if op.receipt.state != BrowserOperationState::Pending {
+            // Exact current host, receipt owner and prior dispatch are proven.
+            // Never replace the authoritative terminal outcome or revive work.
+            return Err(BrowserError::ObsoleteEvent);
         }
         Ok(op)
     }
