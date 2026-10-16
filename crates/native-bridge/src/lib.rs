@@ -586,6 +586,38 @@ pub unsafe extern "C" fn zmux_desktop_profile_add(
     })
 }
 
+/// Trusted native inbox channel; reserves response capacity before mutation.
+/// Original request UUID Status is the only recovery path after uncertainty.
+///
+/// # Safety
+/// Request storage remains readable for length bytes; call off the UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_agent_messages(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if request.is_null() || length == 0 || length > MAX_REQUEST_BYTES {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: caller retains this checked, bounded readable request storage.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let request =
+            serde_json::from_slice::<zmux_desktop_runtime::agent_messages::NativeRequest>(bytes)
+                .map_err(|_| INVALID_ARGUMENT)?;
+        let request_id = request.request_id;
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        let reply = match desktop.native_agent_messages(request) {
+            Ok(receipt) => json!({"ok": true, "request_id": request_id, "receipt": receipt}),
+            Err(error) => json!({"ok": false, "request_id": request_id,
+                "error": {"message": error.error.to_string()}, "outcome_unknown": error.outcome_unknown}),
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
 /// Admit one strict catalog command through the shared profile mutation owner.
 ///
 /// # Safety

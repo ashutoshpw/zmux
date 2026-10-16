@@ -54,6 +54,11 @@ ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_
    waits at most two seconds for that envelope's worker acknowledgement and MUST run off
    the native UI thread. A nonzero C status or outcome_unknown=true must not be retried. */
 ZmuxResult zmux_desktop_transfer_files(uint64_t desktop, const uint8_t *request, size_t length);
+/* Trusted native inbox request JSON <=16384 bytes. Exact namespace/window origin;
+   only list/reply/exact-ID mark_read/settings/status. Off UI thread, at most two
+   seconds for admission. Queue acknowledgement is not durable success. Reserve
+   capacity before mutation; never replay Send, recover with original UUID status. */
+ZmuxResult zmux_desktop_agent_messages(uint64_t desktop, const uint8_t *request, size_t length);
 /* Admit one durable browser-profile Add using a UTF-8 name (1..128 bytes).
    Reserves output capacity before admission, waits at most two seconds off the UI
    thread, and returns an exact epoch/operation receipt. Receipt completion is in

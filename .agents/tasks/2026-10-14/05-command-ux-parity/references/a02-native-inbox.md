@@ -1,8 +1,8 @@
 # A02b: native Agent Inbox and reply plan
 
-Reviewed design and fixture-only implementation, 2026-10-16. Base: `8c54b39e797d826ccde8d181211d6c00e7df4cc1`.
+Reviewed design and implementation in progress, 2026-10-16. Base: `8c54b39e797d826ccde8d181211d6c00e7df4cc1`.
 Isolated worktree: `~/.worktrees/ashutoshpw/zmux/feat/native-agent-inbox`, tracking
-`origin/main`. Only the dedicated regression fixture and its startup/workflow plumbing have changed; production inbox behavior remains absent pending actual native red.
+`origin/main`. The dedicated regression was committed before production repair; actual Darwin missing-entrypoint red is now verified. Production inbox work is in progress and native green remains required.
 
 ## Scope and existing evidence
 
@@ -237,3 +237,70 @@ Parent approved only two setup repairs before another baseline run: exact-owned
 LaunchServices activation (existing native fixture pattern, PID checked, substitution
 forbidden) and semantic UUID comparison. Keep the actual key/responder checks and
 all original prerequisites. No production inbox code has been added.
+
+## True native red and production repair in progress
+
+Run [38854940772](https://github.com/ashutoshpw/zmux/actions/runs/38854940772), exact
+`63e6ab9fc8a26d946397a08debd13084d38ca2ca`, establishes the intended red. Both
+Swift 6 source slices passed (94.877 s); the arm64 package built (254.369 s).
+The owned app exited 1 without timeout (5.638 s) after all prerequisites passed,
+with exact failure `Native agent inbox: Agent Inbox entrypoint unavailable` at
+stage `entrypoint`. Activation PID equals owned app PID 11866; real source/other
+windows are 5/6; three independent children report zero input bytes. Raw source,
+phase logs and artifacts are in `/tmp/zmux-agent-inbox-red-38854940772/`.
+All 267 retained source hashes equal the frozen manifest and retained bytes.
+Archive SHA256: `3b26899cb02d1d445d51c979c57fff7dbc1097f763f35064ef5c4cdaf65fef85`.
+Parent authorized production repair immediately after this true red.
+
+Implemented owners, pending native compile/green:
+
+- `agent_messages/native.rs`: narrow List/Reply/exact-ID MarkRead/Settings/Status,
+  exact namespace/window checked on the executor. Status returns before selected
+  sender resolution. Only Reply derives sender from that window's selected model
+  terminal; no selected terminal means external local user. Explicit settings
+  targets prevent another window's ambient context becoming a fallback.
+- C ABI reserves output capacity before mutation; generic desktop deserialization
+  cannot construct the trusted command. NativeBridge keeps its handle private,
+  executes one transport call off the UI thread and never automatically replays it.
+- Typed models/client, bounded shared draft owner and one controller per exact
+  window. Menu/sidebar/keyboard share `showAgentInbox`. SF Symbol toolbar buttons
+  have explicit accessible labels; selection is visible; First Page returns from
+  pagination. Unchanged UUID rows retain their actual AppKit controls.
+- One pending mutation captures original UUID and parent/body/revision. Saved
+  clears only that unchanged draft. Status transport refusal cannot discharge an
+  already accepted uncertain mutation; only its authoritative receipt can do so.
+  Receiving settings capture scope/target/selection generation and refetch before
+  enabling controls if the selected recipient changed during the save.
+- Provider attempt metadata is optional read projection only. A registration is
+  not liveness evidence; no provider invocation/wake, retry, Ack or ReadTurn added.
+
+The same native case now extends through actual text editing, CLI new arrival and
+Refresh, hide/reopen with sibling focus, button plus Command-Return submission,
+newer draft editing during Save, exact parent/thread/sender/recipient and one saved
+reply, explicit selected-ID read leaving the arrival queued, global receiving off,
+refused native send with draft retention, and on without resurrecting failures.
+An independent runner-owned process then holds the actual journal flock: pending
+submission retains its original UUID; Check Status cannot send again. Real global
+response-buffer exhaustion refuses a status transport while the original remains
+uncertain. After releasing capacity and the actual lock, that same UUID resolves
+one durable reply and clears only its unchanged draft. Fresh child progress cycles
+establish zero terminal input after all UI actions. A mounted AppKit PNG is retained.
+
+A separate foreign C caller protects the distinct transport risks: exact UUID
+receipts; strict host-only method set; stale origin refusal; and output capacity
+refusal leaves durable global settings Off and creates no operation for the refused
+On request. Its first failure was fixture setup (zero-revision unchanged snapshot),
+not another product red; setup was corrected and the foreign test passes. Existing
+CLI/worker tests remain the domain owner; they are not copied into Swift/C tests.
+A real Linux process probe verified the independent flock holder's exclusion,
+identity, unlock and subsequent reacquisition. Source inventory is now 273 files.
+Native compilation, the expanded actual journey, PNG review and final same-source
+shutdown remain pending. Do not claim feature completion from portable checks.
+
+Portable implementation verification: `scripts/check` passes with 379 Rust tests,
+1 existing ignored, Clippy, license inventory and all three foreign C ABI callers.
+Log `/tmp/zmux-native-agent-inbox-implementation-check-20261016.log` SHA256
+`f8643a796b359df6dde26a84df7a86a25c682f9aaca54e8c80c6aa6864faa32f`.
+Runner `--check-inputs` and `git diff --check` pass. These are not native compile or
+UI-green evidence. Parent review findings on settings target/generation, early
+Status, first-page routing, stable rows and accessible icon actions are addressed.

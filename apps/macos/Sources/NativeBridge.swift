@@ -5,6 +5,12 @@ struct BridgeFailure: Error, LocalizedError, Sendable {
     var errorDescription: String? { message }
 }
 
+struct AgentMessageTransportFailure: Error, LocalizedError, Sendable {
+    let message: String
+    let outcomeUnknown: Bool
+    var errorDescription: String? { message }
+}
+
 struct DesktopShutdownReport: Decodable, Sendable {
     struct Pending: Decodable, Sendable {
         let sessions, launches, tmux, transfers, profiles, persistence, downloads: UInt64
@@ -179,6 +185,25 @@ actor NativeBridge {
         if let through { action["through_id"] = through }
         if let active { action["active"] = active }
         try await send(["command": "attention", "action": action])
+    }
+    /// One trusted message call, never replayed. The typed inbox client retains UUIDs.
+    /// Keeping transport bytes here avoids exposing the actor's native handle.
+    func nativeAgentMessages(_ data: Data) async throws -> Data {
+        guard handle != 0, !data.isEmpty, data.count <= 16_384 else {
+            throw AgentMessageTransportFailure(message: "Desktop is closed or the message request exceeds its bound.", outcomeUnknown: false)
+        }
+        let desktop = handle
+        return try await Task.detached {
+            let result = data.withUnsafeBytes { bytes in
+                zmux_desktop_agent_messages(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else {
+                throw AgentMessageTransportFailure(message: "Message acknowledgement failed (\(result.status)).",
+                                                   outcomeUnknown: result.status == -6)
+            }
+            do { return try Self.consume(result.value) }
+            catch { throw AgentMessageTransportFailure(message: "Message receipt was lost. Check the original operation status.", outcomeUnknown: true) }
+        }.value
     }
     /// Submit once and return attributable admission, before the disk worker completes.
     /// A lost acknowledgement is never replayed as another profile creation.

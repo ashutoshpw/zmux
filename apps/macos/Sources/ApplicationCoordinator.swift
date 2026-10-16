@@ -51,6 +51,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private var shutdownImagesReleased = false
     private var shutdownNativeIssues: [String] = []
     let bridge = NativeBridge()
+    lazy var agentInbox = AgentInboxCoordinator(bridge: bridge)
     let splitLayouts = WorkspaceSplitPreferences()
     lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
     lazy var notificationDelivery = makeNotificationDelivery()
@@ -236,6 +237,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
         notificationDelivery.stop()
+        agentInbox.stop()
         for host in mainWindowHosts.values { host.finishPresentation() }
         Task {
             await imagePastes.stopAccepting()
@@ -435,6 +437,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         imagePastes.update(snapshot)
         notificationDelivery.update(snapshot.nativeNotifications)
+        agentInbox.update(snapshot)
         // Detach every changed old hierarchy before attaching any new hierarchy.
         // A shared surface/session view can belong to at most one native parent.
         for (identity, host) in mainWindowHosts {
@@ -464,6 +467,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 } catch { self.reportError("Native window acknowledgement retained without replay: " + error.localizedDescription) }
             }
         }
+    }
+
+    func showAgentInbox(from host: MainWindowHost) {
+        guard let identity = host.identity, mainWindowHosts[identity] === host else { return }
+        agentInbox.show(from: host)
     }
 
     func windowKeyChanged(_ host: MainWindowHost, key: Bool) {
