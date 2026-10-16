@@ -29,6 +29,7 @@ mod hooks;
 mod inspection;
 mod local_multiplexer;
 mod local_zellij;
+mod open;
 mod pull_request;
 mod registry;
 mod session;
@@ -84,6 +85,7 @@ enum Parsed {
     Window(ControlCommand),
     WorkspaceMove(ControlCommand),
     SurfaceOrder(ControlCommand),
+    Open(ControlCommand),
 }
 
 enum Offline {
@@ -196,6 +198,10 @@ fn run() -> Result<u8, Box<dyn Error>> {
             let result = response_result(request(&options, command)?)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(0)
+        }
+        Parsed::Open(command) => {
+            let options = client_options(socket_override, timeout, password)?;
+            open::run(&options, command)
         }
         Parsed::LocalMultiplexer(invocation) => local_multiplexer::run(invocation),
         Parsed::LocalZellij(invocation) => local_zellij::run(invocation),
@@ -406,7 +412,11 @@ fn parse(
     if let Some(command) = command
         && registry::find(command).is_some_and(|spec| spec.targeted)
     {
-        return Ok((targets::parse(command, tail)?, socket, timeout, password));
+        let parsed = targets::parse(command, tail)?;
+        if !explicit_timeout && matches!(parsed, Parsed::Open(_)) {
+            timeout = open::DEFAULT_TIMEOUT;
+        }
+        return Ok((parsed, socket, timeout, password));
     }
     let parsed = match command {
         None | Some("-h" | "--help") => Parsed::Offline(Offline::Help(None)),
