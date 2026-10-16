@@ -111,3 +111,26 @@ receipt listed177 Rust/config/verifier inputs but omitted those JSON inputs; the
 legacy descriptor separately pins and retains their exactb15fb Git-object bytes,
 for180 total harness inputs. No runtime source or acceptance assertion changed.
 The v3 freeze supersedes v2 for this compiler-input retention repair.
+
+## First exact native diagnostic
+
+Final source reviews passed through v3 manifestf69e850a00b5190d73a6896cfada7f0d7eefd1c8200f3a014b9cfc227905dfe7
+and source0fca8c888b603667e79d64d38dc44772cb172066 was committed/pushed.
+[Run38861027393](https://github.com/ashutoshpw/zmux/actions/runs/38861027393)
+passed Darwin Swift6 compilation, host-only bundle creation/signing, exact
+dependency admission and signature/version, all59 actual owner tests with zero
+ignored, relocation byte inventory/signatures and actual relocated capability.
+Actual AppKit startup then refused the fixture's control socket directly under
+shared `/tmp`; the existing control owner correctly requires a private immediate
+parent directory. The app returned native operation-6 and startup cleanup waited
+until the outer150s owner deadline killed its owned group. No readiness owner or
+native-readiness report was produced; failure-profile cleanup was empty/passed.
+This is not successful AppKit/native start/attach acceptance.
+
+The exact failed artifact, all324 retained compiler inputs, original phase/log
+digests and exact retained dependency download were independently reverified.
+See [first-native failure record](r03-input-readiness-native-darwin-38861027393.md).
+The isolated repair creates an owned0700 short directory under canonical `/tmp`,
+places the control socket inside it, and removes the empty directory only after
+the normal socket cleanup gate. Runtime/admission/default source is unchanged.
+Source review precedes the next already-authorized scoped native run.

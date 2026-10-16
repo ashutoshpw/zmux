@@ -218,7 +218,12 @@ def run_relocated(bundle, output, accepted, source, execute, environment):
     report.with_suffix('.json.input.json').write_text(json.dumps(oracle))
     launcher = root / 'owned-app-launch.py'
     launcher.write_text(LAUNCHER)
-    socket = '/tmp/zn' + uuid.uuid4().hex
+    # The control owner requires its socket's immediate parent to be private;
+    # shared /tmp is only the short canonical base, never the socket parent.
+    socket_root = Path('/tmp') / ('zn' + uuid.uuid4().hex)
+    socket_root.mkdir(mode=0o700)
+    socket_root = socket_root.resolve(strict=True)
+    socket = str(socket_root / 'c')
     profile_id = str(uuid.uuid4())
     appenv = {key: value for key, value in environment.items() if not key.startswith(('ZMUX_', 'DYLD_'))}
     appenv.update(HOME=str(root / 'home'), SHELL='/bin/bash', TERM='xterm-256color',
@@ -231,6 +236,8 @@ def run_relocated(bundle, output, accepted, source, execute, environment):
     except Exception as primary:
         try:
             cleanup = cleanup_failed_profile(root, cli, binary, execute, appenv)
+            if not Path(socket).exists():
+                socket_root.rmdir()
             (root / 'failure-cleanup.json').write_text(json.dumps(cleanup, indent=2) + '\n')
         except Exception as cleanup_error:
             raise Rejected(str(primary) + '; explicit failed-journey cleanup: ' + str(cleanup_error)) from primary
@@ -256,9 +263,10 @@ def run_relocated(bundle, output, accepted, source, execute, environment):
     if (inventory(relocated) != before or verify_payload(dependency, 'input-readiness-v1')['binary_sha256'] != accepted['binary_sha256']
             or Path(socket).exists()):
         raise Rejected('native execution changed bundle bytes or retained control socket')
+    socket_root.rmdir()
     execute(['codesign', '--verify', '--deep', '--strict', '--verbose=2', str(relocated)], 'post-appkit-bundle-signature')
     return {'native_report': result, 'owned_launch': document(read_file(root / 'owned-launch.json', 2048)),
             'bundle_inventory_sha256': digest(json.dumps(before, sort_keys=True).encode()),
             'bundle_files': len(before), 'original_build_path_absent': not bundle.exists(),
             'exact_owner_cleanup': cleanup, 'actual_final_bundled_cli': True,
-            'dependency_resigned_or_rebuilt': False}
+            'private_control_socket_parent_removed': True, 'dependency_resigned_or_rebuilt': False}
