@@ -191,6 +191,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                     }
                 } catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
+                    if case .window("new", _, _) = command { self.pendingStatusNotifications = nil }
                     self.reportError(error.localizedDescription)
                 }
             }
@@ -393,7 +394,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 ?? mainWindowHosts.values.first(where: { $0.nativeReady }) else {
             if pendingStatusNotifications == nil {
                 pendingStatusNotifications = notifications
-                if !enqueue(.window("new", nil, true)) { pendingStatusNotifications = nil }
+                // An existing window may still be completing native startup.
+                // Wait for its ready receipt rather than creating a duplicate.
+                if snapshot?.model.windows.isEmpty == true,
+                   !enqueue(.window("new", nil, true)) { pendingStatusNotifications = nil }
             } else if notifications { pendingStatusNotifications = true }
             return
         }
