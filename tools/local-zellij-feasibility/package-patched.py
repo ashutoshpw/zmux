@@ -102,8 +102,9 @@ def main():
     parser.add_argument("--owner-receipt", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--readiness-owner-receipt", type=Path,
-                        help="mandatory exact actual readiness owner for the separate prepare-only variant")
+                        help="mandatory exact actual readiness owner for the separate readiness variant")
     parser.add_argument("--reviewed-policy-sha256", help="explicit operator assertion of independently reviewed exact notice policy")
+    parser.add_argument("--reviewed-readiness-source-sha256", help="exact reviewed readiness inventory required for finite diagnostic package retention")
     parser.add_argument("--prepare-only", action="store_true", help="local review artifact; never promotable or named as a distributable")
     args = parser.parse_args()
     if not args.output.is_absolute():
@@ -122,8 +123,12 @@ def main():
         readiness_owner_path = args.readiness_owner_receipt.resolve() if args.readiness_owner_receipt else None
         built, owner, binary, assets = verify_chain(producer_path, owner_path, readiness_owner_path)
         readiness = built.get("input_readiness", {}).get("requested") is True
-        if readiness and not args.prepare_only:
-            raise RuntimeError("readiness package is prepare-only ephemeral; no publication/admission is authorized")
+        if readiness:
+            if not args.prepare_only and args.reviewed_readiness_source_sha256 != built["input_readiness"]["inventory_sha256"]:
+                raise RuntimeError("diagnostic readiness retention requires the exact reviewed source inventory SHA256")
+            receipt["scope"] = "finite diagnostic readiness package only; no public release, default acquisition or native activation"
+        elif args.reviewed_readiness_source_sha256 is not None:
+            raise RuntimeError("legacy package cannot consume a reviewed readiness source assertion")
         environment = {key: value for key, value in os.environ.items() if key in built["build_environment_keys"] and not key.startswith("CARGO_")}
         environment.update(LANG="C", LC_ALL="C", TZ="UTC")
         for variable in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR"):
@@ -186,7 +191,8 @@ def main():
                     "metadata_only_text_supplements": read_json(policy)["metadata_only_text_supplements"],
                     "scope": receipt["scope"], "files": {}}
         if readiness:
-            manifest.update(variant=VARIANT, input_readiness={
+            manifest.update(variant=VARIANT, diagnostic_only=True, input_readiness={
+                "asserted_reviewed_source_inventory_sha256": args.reviewed_readiness_source_sha256,
                 "protocol_sha256": producer.digest(HERE / "input-readiness-protocol.json"),
                 "source_inventory_sha256": built["input_readiness"]["inventory_sha256"],
                 "owner_receipt_sha256": producer.digest(readiness_owner_path),
@@ -202,7 +208,7 @@ def main():
         if producer.digest(binary) != built["binary_sha256"] or producer.digest(payload / "bin/zellij") != built["binary_sha256"]:
             raise RuntimeError("tested executable changed while packaging")
         (payload / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-        prefix = "UNREVIEWED-" if args.prepare_only else ""
+        prefix = "UNREVIEWED-" if args.prepare_only else "DIAGNOSTIC-" if readiness else ""
         variant = "-" + VARIANT + "-" + built["input_readiness"]["inventory_sha256"][:12] if readiness else ""
         name = prefix + "zellij-0.43.0-zmux-" + platform["target"] + variant + "-" + policy_sha[:12] + ".tar.gz"
         archive = output / name
@@ -217,7 +223,7 @@ def main():
                 with path.open("rb") as data:
                     stream.addfile(info, data)
         if readiness:
-            receipt["input_readiness_archive"] = verify_readiness_archive(archive, manifest, built, producer.digest)
+            receipt["input_readiness_archive"] = verify_readiness_archive(archive, manifest, built, producer.digest, promotion_ready=not args.prepare_only)
         receipt.update(status="passed", promotion_ready=not args.prepare_only, archive=str(archive),
                        archive_sha256=producer.digest(archive), binary_sha256=built["binary_sha256"],
                        manifest_sha256=producer.digest(payload / "manifest.json"), notices=notice,

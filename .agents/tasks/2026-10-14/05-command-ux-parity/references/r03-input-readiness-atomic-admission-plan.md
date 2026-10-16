@@ -127,7 +127,8 @@ a user-facing artifact remains gated on the complete parity acceptance.
 - [x] Run combined repository check and publish exact combined head.
 - [x] Dispatch one authorized prepare-only Darwin run at `9a42f851`.
 - [ ] Review run38852664400 source/evidence and exact native/package receipts.
-- [ ] Implement isolated promotion/finite-retention source; freeze for review.
+- [x] Implement isolated [promotion/finite-retention source](r03-input-readiness-promotion.md).
+- [ ] Freeze promotion source and current prepare-only evidence for review.
 - [ ] Produce and independently review exact promoted readiness package.
 - [ ] Implement one atomic opt-in admission/consumer/native integration branch.
 - [ ] Prove final relocated bundle and actual AppKit behaviors before landing.

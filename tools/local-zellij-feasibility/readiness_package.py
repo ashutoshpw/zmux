@@ -166,7 +166,7 @@ def verify_consumer(owner_path):
     return {"executed": sorted(required), "silent_ready": ready[0], "terminal_before_ready": terminal}
 
 
-def verify_archive(archive, manifest, built, digest):
+def verify_archive(archive, manifest, built, digest, *, promotion_ready=False):
     """Check the emitted archive itself, including all corresponding source."""
     import hashlib
     from package_admission import MAX_ARCHIVE, archive_files
@@ -183,7 +183,13 @@ def verify_archive(archive, manifest, built, digest):
     require(actual["input_readiness"]["source_inventory_sha256"] == built["input_readiness"]["inventory_sha256"]
             and actual["input_readiness"]["protocol_sha256"] == inventory["inputs_sha256"]["input-readiness-protocol.json"],
             "archive protocol/source inventory differs")
-    require(actual == manifest and actual["promotion_ready"] is False, "archive manifest or ephemeral scope differs")
+    require(type(promotion_ready) is bool and actual == manifest
+            and actual["promotion_ready"] is promotion_ready, "archive manifest or promotion state differs")
+    if promotion_ready:
+        require(actual.get("diagnostic_only") is True
+                and actual["input_readiness"].get("asserted_reviewed_source_inventory_sha256")
+                    == built["input_readiness"]["inventory_sha256"],
+                "promoted readiness archive lacks diagnostic scope or exact source review")
     require(set(files) == set(manifest["files"]) | {"manifest.json"}, "archive file inventory differs")
     for name, expected in manifest["files"].items():
         require(len(files[name]) == expected["bytes"] and hashlib.sha256(files[name]).hexdigest() == expected["sha256"],
