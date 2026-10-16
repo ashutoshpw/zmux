@@ -2,7 +2,7 @@
 
 ## Contract and ownership
 
-TERM-009 still lacks multi-click selection: `TerminalView.mouseDown` ignores
+The TERM-009 baseline lacked multi-click selection: `TerminalView.mouseDown` ignores
 `clickCount`, and drag/copy operate on a simple pair of grid coordinates. Add
 double-click word selection and triple-click physical visible-row selection,
 including word/row drag extension, through one native selection owner. Keep
@@ -115,7 +115,7 @@ independently before a failed focus guard; clicks and Copy still require actual
 focus. No forced activation, fake focus, changed production view or relaxed oracle
 is part of this fixture repair.
 
-## Prepared production owner (not yet natively accepted)
+## Shared production owner
 
 One `TerminalSelection` instance per TerminalView owns character/word/physical-row
 anchors, forward/reverse drag expansion, highlight bounds and extracted text.
@@ -141,9 +141,8 @@ dimensions. After the unchanged alpha regression event, exact cell centers come
 from the existing public NSTextInputClient cursor rectangle and actual viewport
 cursor indices, not copied font metrics or a test-only geometry seam. Expected
 text comes from fixed child literals; UTF8 comparison rejects canonical Unicode
-normalization changes. This source is unpublished until an
-intended focused native baseline red is retained; source review and actual green
-compilation/execution are still required. No Linux port of this AppKit algorithm
+normalization changes. The diagnostic baseline red and owner green are
+now retained below; current-main integration remains separate. No Linux port of this AppKit algorithm
 or fake native metric test substitutes for those gates.
 
 ## LaunchServices admission reassessment
@@ -190,5 +189,49 @@ Independent native red review SHA256
 `cf6e9ac4fce17087be4125e9ea30579ce7dce10bb64c9cda3f132124e074626c`.
 `scripts/check` passed on the frozen fixture-only diagnostic worktree; the actual
 compiled CLI offline help also returned0 with an intentionally nonexistent
-socket. The production owner and expanded matrix still require actual native
-compilation, same-case green and successful shared shutdown before acceptance.
+socket. At that baseline checkpoint the owner still required actual native compilation,
+same-case green and successful shared shutdown; the accepted run below supplies
+those diagnostic results.
+
+
+## Accepted diagnostic native selection slice
+
+Run38834961185 at diagnostic3b686c1 passes the actual host build and all18 real
+mounted TerminalView event/menu cases. The original alpha event/menu command
+is unchanged from the accepted baseline red6b52949 and now copies exactlyalpha.
+The expanded matrix also passes triple-click physical row, forward/reverse
+character and word drags, two-row drag, styled-run word, CJK/combining/emoji cell
+spans, interior/right-edge selected spaces, known dot/space/underscore/slash word
+literals and real menu Select All. Every observed clipboard value matches its
+independent literal as exact UTF8, including NFD `e\u0301`.
+
+The actual appPID10803 equals the LaunchServices activationPID, and childPID10808
+has that exact parent and private nonce. Active/visible/key/terminal-responder
+are alltrue. Requested and actual viewport are31x100; public cursor-derived cell
+geometry is origin(10,10), width7.72705078125, height18. The native report reaches
+complete only after awaited shared coordinator shutdown. App exit0 in6.538s,
+non-timeout; retained build/native logs are complete, and the bounded owned
+process runner finishes with only its reported all-zombie group remnants. No
+adopted PID was signalled. No separate post-exit ps observation of child10808 is
+retained. Cleanup acceptance here is executed shared shutdown plus the scoped
+owned app-group runner, not an independent final-child-absence sample.
+
+All225 retained source copies match Git3b686c19217d6d42cf91b5c91d09d59ba4c1c1bc;
+the app archive SHA256 and Info.plist source agree. Artifact12017929769 ZIP SHA256
+`e4df6815c8e5f056543554ea2841f97fd4ccfb6062e1fc0301fc65968122e435`;
+app archive SHA256
+`a30b0ce42e79bce4e639ac1f880d91cea1e65317f6476b84fe53831873e34b81`.
+Independent native green review SHA256
+`75f4a21f8327288a47e182f6ac69c2412f8e982acc9de1b9623d5d8c8862ed9c`.
+Evidence root `target/agent-validation/t01-selection-native-38834961185/` retains
+the artifact, exact source audit, workflow log and frozen source/review receipts.
+Independent owner sourceV3 review SHA256
+`57aca882fbe8c31e232278d2e2f5e8f37da133d6ced398bc5afeea8b18a67d5f`.
+
+This is one hosted macOS15.7.9 ARM64 run with Xcode16.4 and default vt100, not a
+current-main validation, physical mouse/VoiceOver test, optional-engine comparison,
+Intel/minimum-macOS acceptance or release claim. Physical visible rows remain the
+scope: logical wrapped-line joining, retained history, autoscroll and copy mode
+are not implemented by this slice. No cmux implementation or assets were imported.
+The unchanged Rust/C ABI baseline passes `scripts/check`; later Swift/reference-
+only revisions reuse that result and require their relevant syntax/native gates.
