@@ -21,11 +21,44 @@ struct TerminalStyle: Decodable, Sendable {
 struct TerminalRun: Decodable, Sendable {
     let column: Int; let width: Int; let text: String; let style: TerminalStyle
 }
+struct TerminalRowCopy: Decodable, Sendable {
+    let wrapsToNext: Bool
+    let writtenEnd: Int
+}
 struct Viewport: Decodable, Sendable {
     let size: GridSize; let contents: String; let cursorRow: Int; let cursorCol: Int
     let lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
     let title: String?; let workingDirectory: String?
     let scrollbackOffset: Int; let scrollbackLines: Int; let alternateScreen: Bool
+    let rowCopy: [TerminalRowCopy]?
+    enum CodingKeys: String, CodingKey {
+        case size, contents, cursorRow, cursorCol, lines, applicationCursor, bracketedPaste, hideCursor
+        case title, workingDirectory, scrollbackOffset, scrollbackLines, alternateScreen, rowCopy
+    }
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        size = try c.decode(GridSize.self, forKey: .size)
+        contents = try c.decode(String.self, forKey: .contents)
+        cursorRow = try c.decode(Int.self, forKey: .cursorRow)
+        cursorCol = try c.decode(Int.self, forKey: .cursorCol)
+        lines = try c.decode([[TerminalRun]].self, forKey: .lines)
+        applicationCursor = try c.decode(Bool.self, forKey: .applicationCursor)
+        bracketedPaste = try c.decode(Bool.self, forKey: .bracketedPaste)
+        hideCursor = try c.decode(Bool.self, forKey: .hideCursor)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        workingDirectory = try c.decodeIfPresent(String.self, forKey: .workingDirectory)
+        scrollbackOffset = try c.decode(Int.self, forKey: .scrollbackOffset)
+        scrollbackLines = try c.decode(Int.self, forKey: .scrollbackLines)
+        alternateScreen = try c.decode(Bool.self, forKey: .alternateScreen)
+        rowCopy = try c.decodeIfPresent([TerminalRowCopy].self, forKey: .rowCopy)
+        if let rowCopy {
+            guard (1...120).contains(size.rows), (1...240).contains(size.cols),
+                  lines.count == size.rows, rowCopy.count == size.rows, rowCopy.allSatisfy({ (0...size.cols).contains($0.writtenEnd) }) else {
+                throw DecodingError.dataCorruptedError(forKey: .rowCopy, in: c,
+                    debugDescription: "Copy metadata must match the bounded viewport rows and written columns")
+            }
+        }
+    }
 }
 struct TerminalSnapshot: Decodable, Sendable {
     let state: String; let viewport: Viewport; let bytesRead: UInt64
