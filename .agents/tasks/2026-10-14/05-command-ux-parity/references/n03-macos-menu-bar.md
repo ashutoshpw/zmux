@@ -1,0 +1,89 @@
+# macOS menu bar parity correction
+
+**Audited:** 2026-10-16. **State:** missing; no implementation delivered here.
+Reference: read-only cmux `3ba653b9e5afb11d0bc578031142950d6136697e`.
+Current zmux: `8258ccb` (application source unchanged from `cdbb392`).
+
+The user's screenshot shows the application status menu in the top-right macOS
+menu bar. This is separate from the Dock, the main application menus, desktop
+notification banners and the in-window sidebar bell.
+
+## Verified cause
+
+`apps/macos/Sources` contains no `NSStatusBar`/`NSStatusItem` or `MenuBarExtra`
+owner. `AppDelegate` starts the `ApplicationCoordinator`; window hosts install
+`NSApp.mainMenu`, but neither creates a system status item. macOS therefore has
+no zmux icon to show. This is an unimplemented native feature, not an icon-hiding
+setting or an Accessibility/notification permission problem.
+
+The earlier ledgers cover notification behavior, global search, resource tools,
+updates and a Computer Use menu-bar projection separately. They do not provide
+an explicit acceptance matrix for this complete primary status menu. The audit
+must not be described as exhaustive while this surface has no delivery gate.
+
+## Reference behavior and current gaps
+
+| Surface / action | Current zmux / required work |
+| --- | --- |
+| Status icon and unread summary | Missing original icon renderer, retained native status item, unread state/tooltip and accessible identity. |
+| Recent notification previews | Bounded shared records exist; status-menu projection and action routing are missing. Preserve exact notification identity, title/body, timestamp and read state. |
+| Show Notifications | Sidebar presentation exists; add global menu activation through the correct window host. |
+| Jump to Latest Unread | Shared exact-target navigation exists; status-menu action/state is missing. Verify ordering against the reference. |
+| Mark All Read | Shared global mark-read exists; native menu control/state is missing. Include manual workspace attention when implemented. |
+| Clear All | Cursor/epoch-aware shared clearing exists; menu control/state is missing. Preserve arrivals after the captured clear boundary. |
+| Show main window / menu-bar-only behavior | Missing status entrypoint and preference/lifecycle behavior. Reuse the existing coordinator, never create another desktop/session owner. |
+| Search All Windows | Complete global search and status-button popover anchoring remain open; an active-terminal find action is not equivalent. |
+| Task Manager | Native process/resource window and action are missing; underlying inspection primitives alone do not implement the window. |
+| Sleepy Mode | Native mode, settings, power/display behavior and clean dismissal remain open. |
+| Keep Mac Awake | Missing explicit power-assertion owner, toggle/checkmark and cleanup. It must not silently alter the user's system settings. |
+| Start Profiling | Missing bounded profiling lifecycle, output handling and status-menu action. |
+| Cloud machines/account/create/more | Cloud identity/service foundations are partial; corresponding shared menu entries and complete VM behavior remain open. Hosting deferral is not a waiver for menu or service implementation. |
+| Check for Updates | Verified updater/release authority and native action remain open; opening an arbitrary release URL is not equivalent. |
+| Preferences | Full preferences owner and status-menu entrypoint remain open; Cloud Account alone is not the complete preferences UI. |
+| Quit zmux | Shared application shutdown exists; status-menu action is missing. Route through normal application termination and await owned cleanup. |
+
+Read-only reference sources: `Sources/App/MenuBarExtraController.swift`,
+`Sources/App/MenuBarProfilingMenuItem.swift`, `Sources/TerminalNotificationStore.swift`.
+They establish behavioral scope only. No cmux code, icon or other asset may be
+copied or translated into the MIT implementation.
+
+## Implementation boundaries
+
+- [ ] Add an original AppKit controller retained by the application coordinator,
+  created after successful startup and removed during shutdown. One status item
+  per application, independent of the count/visibility of workspace windows.
+- [ ] Render an original compact template icon for light/dark menu bars, with
+  readable attention state, tooltip and accessibility label. Use the shared
+  application snapshot, not whichever window happens to own the sidebar.
+- [ ] Build a bounded menu projection and reuse the existing attention operations
+  and exact notification-opening receipts. Menu callbacks enqueue work; no PTY,
+  network, disk scan, process wait or blocking bridge request on the UI thread.
+- [ ] Complete search/resource/power/profiling/preferences/update owners in their
+  respective work packages, then expose their shared actions here and in their
+  other entrypoints. Empty labels or inert controls cannot satisfy an action.
+- [ ] Reuse the same cloud entries/state as the main Cloud UI. Asynchronous refresh
+  must not destroy an active submenu or leak credentials. Local Docker/PM2 service
+  and `zmux.w3dev.app` tunnel remain the user's selected deployment approach.
+- [ ] Reconcile visibility preferences, menu-bar-only mode, window restoration,
+  last-window closure and application termination. Release status observers,
+  power assertions and owned workers through the shared shutdown path.
+
+## Acceptance
+
+- [ ] Packaged GitHub Actions macOS app displays the actual system status item;
+  retain a screenshot of the OS menu bar and its open menu, not an in-app imitation.
+- [ ] Exercise zero/read/unread/muted/closed-target notifications, multiple windows,
+  a minimized/hidden window and a notification arriving while the menu is open.
+  Verify exact target activation, enabled states, count/tooltip and captured clears.
+- [ ] Verify startup failure, repeated window creation/closure, hide/show preference
+  and normal termination leave no duplicate item, observer or owned power assertion.
+- [ ] Invoke each visible action and verify its real behavior through the production
+  owner. Shared state and menu presentation must agree after failures and restarts.
+- [ ] Verify both Swift architectures, focused shared tests, `scripts/check` and
+  a real packaged native status-menu journey. A passing sidebar suite does not
+  exercise this surface. Accessibility Save-dialog testing remains deferred and
+  does not block adding the status menu.
+
+This correction supplements [N02 workspace context menu](n02-workspace-context-menu.md)
+and the broader audit. Neither an icon-only slice nor this audit record establishes
+full cmux parity or authorizes describing a new artifact that way.

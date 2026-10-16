@@ -5,6 +5,22 @@
 
 ## Active implementation
 
+- macOS menu-bar screenshot exposes another missing native surface: no NSStatusItem
+  is constructed anywhere in the current app. N03 records icon/attention controls,
+  search/resources/power/profiling/cloud/preferences/updates and shared shutdown
+  requirements. This is implementation scope, not an OS permission/visibility
+  setting. Existing sidebar/native checks do not verify this surface.
+  Audit-document update passes `scripts/check` (workspace tests, strict Clippy,
+  notices and both C ABI suites); log `/tmp/zmux-workspace-menu-audit-check.log`.
+  No application code or new macOS artifact is delivered by this update.
+
+- Workspace context menu comparison confirms substantial unfinished behavior.
+  N02 records all 22 screenshot action families, existing conditional controls,
+  shared-owner gaps and the native acceptance matrix. The earlier audit already
+  identified many of these; compact-sidebar tests validated a subset and did not
+  satisfy the full-parity delivery criterion. No menu fix or full-parity build is
+  established by this audit. See `references/n02-workspace-context-menu.md`.
+
 - Compact sidebar/group UI accepted on macOS: source cdbb392, run38890159245
   passes all9 interaction flags, real second-window scoping and nonce-bound app
   physical cleanup/PID absence. Parent inspected both toggle-state screenshots,

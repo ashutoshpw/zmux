@@ -55,3 +55,8 @@ Archive SHA256 `a507e38013c385a519118e97af2fd595159a608245852e360b50aeb604166895
 [Apple Silicon preview artifact](https://github.com/ashutoshpw/zmux/actions/runs/38890159245/artifacts/12042350763).
 Broader product parity remains in progress; this is acceptance of the compact
 sidebar/grouping slice. Save dialog Accessibility remains explicitly deferred.
+
+The subsequent workspace-menu screenshots expose missing actions beyond this
+slice, including empty groups, pinning, metadata, attention controls and batch
+closing. See [N02 menu correction](n02-workspace-context-menu.md). The nine accepted
+flags above do not establish context-menu completeness or full grouping parity.
