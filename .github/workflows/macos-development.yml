@@ -6,7 +6,7 @@ on:
       suite:
         description: Native validation suite
         type: choice
-        options: [full, terminal-selection]
+        options: [full, terminal-selection, completed-history]
         default: full
         required: true
   push:
@@ -34,7 +34,7 @@ concurrency:
 
 jobs:
   development:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite != 'terminal-selection'
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
     runs-on: macos-15
     timeout-minutes: 25
     steps:
@@ -111,6 +111,7 @@ jobs:
             dist/zmux-local-tmux-smoke.png
           if-no-files-found: ignore
           retention-days: 7
+
       - name: Build receipt
         run: |
           python3 - <<'PY'
@@ -156,6 +157,44 @@ jobs:
             ${{ runner.temp }}/native-terminal-selection/*.log
             ${{ runner.temp }}/native-terminal-selection/*.zip
             ${{ runner.temp }}/native-terminal-selection/source/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  completed-history:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'completed-history'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned host Rust
+        run: rustup toolchain install 1.95.0 --profile minimal --target aarch64-apple-darwin
+      - name: Validate saved-history fixture inputs
+        run: python3 -B tools/native-completed-history/run.py --check-inputs
+      - name: Build host app and exercise restored saved output
+        run: python3 -B tools/native-completed-history/run.py --output "$RUNNER_TEMP/native-completed-history"
+      - name: Retain exact sources and native history evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-completed-history-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-completed-history/receipt.json
+            ${{ runner.temp }}/native-completed-history/native-completed-history.json
+            ${{ runner.temp }}/native-completed-history/native-completed-history.json.expected.txt
+            ${{ runner.temp }}/native-completed-history/fixture-session-input.json
+            ${{ runner.temp }}/native-completed-history/owned-launch.json
+            ${{ runner.temp }}/native-completed-history/owned-app-launch.py
+            ${{ runner.temp }}/native-completed-history/*.log
+            ${{ runner.temp }}/native-completed-history/*.zip
+            ${{ runner.temp }}/native-completed-history/source/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

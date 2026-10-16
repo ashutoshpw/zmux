@@ -75,7 +75,30 @@ struct UploadProgress: Decodable, Sendable {
     let state: String; let bytesSent: UInt64; let totalBytes: UInt64
     let remotePaths: [String]; let remoteResultUncertain: Bool; let error: String?; let delivery: String; let deliveryError: String?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint? }
+struct CompletedLocalZellijHistory: Decodable, Sendable {
+    struct Receipt: Decodable, Sendable {
+        struct Exit: Decodable, Sendable {
+            enum Kind: String, Decodable, Sendable { case exited, signaled }
+            let kind: Kind
+            let value: Int
+            var label: String {
+                switch kind {
+                case .exited: return "Process exited with status \(value)"
+                case .signaled: return "Process ended by signal \(value)"
+                }
+            }
+        }
+        let bindingDigest: String
+        let workloadExit: Exit
+    }
+    struct CapturedViewport: Decodable, Sendable {
+        let contents: String
+        let truncated: Bool
+    }
+    let receipt: Receipt
+    let viewport: CapturedViewport?
+}
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
@@ -94,7 +117,16 @@ indirect enum PaneTree: Decodable, Sendable {
         }
     }
     var key: String {
-        switch self { case .leaf(let pane): return "p\(pane.id):\(pane.selectedSurface):" + pane.surfaces.map { "\($0.id)" }.joined(separator: ","); case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))" }
+        switch self {
+        case .leaf(let pane):
+            let surfaces = pane.surfaces.map { surface in
+                let session = surface.sessionId.map(String.init) ?? "none"
+                let completion = surface.localZellijCompletion?.receipt.bindingDigest ?? "live"
+                return "\(surface.id):\(session):\(completion)"
+            }.joined(separator: ",")
+            return "p\(pane.id):\(pane.selectedSurface):" + surfaces
+        case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))"
+        }
     }
     var geometryKey: String {
         switch self { case .leaf(let pane): return "p\(pane.id)"; case .split(let axis, let a, let b): return "\(axis)(\(a.geometryKey),\(b.geometryKey))" }
