@@ -1,0 +1,118 @@
+{
+  "status": "passed",
+  "run_id": 38823056442,
+  "source_sha": "986600f2a258a20f896083a4407f08b3778afa2c",
+  "notice_policy_sha256": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79",
+  "hosts": [
+    {
+      "status": "passed",
+      "archive": "artifacts/experimental-zellij-package-Linux-X64-986600f2a258a20f896083a4407f08b3778afa2c/zellij-0.43.0-zmux-x86_64-unknown-linux-gnu-1dba7394d653.tar.gz",
+      "archive_sha256": "641f763f40f6d52dfeb4e3446273d7bcc22ed6779bd4a7b189d7a5456bdd623d",
+      "manifest_sha256": "391a3fb1885788fd45e467f8184501435a2fd7cb5dd55b6beb2d1010f28a3f6f",
+      "binary_sha256": "ee061714653522867315df952aa63780274c2afa63c1cdd0e7f05df74fc402c2",
+      "source_sha": "986600f2a258a20f896083a4407f08b3778afa2c",
+      "policy_sha256": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79",
+      "target": "x86_64-unknown-linux-gnu",
+      "executed_host": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "abi": {
+        "interpreter": "/lib64/ld-linux-x86-64.so.2",
+        "glibc_symbols": [
+          "2.2.5",
+          "2.3",
+          "2.3.2",
+          "2.3.4",
+          "2.4",
+          "2.5",
+          "2.7",
+          "2.9",
+          "2.14",
+          "2.15",
+          "2.16",
+          "2.17",
+          "2.18",
+          "2.25",
+          "2.27",
+          "2.28",
+          "2.29",
+          "2.30",
+          "2.32",
+          "2.33",
+          "2.34",
+          "2.38",
+          "2.39"
+        ],
+        "maximum_glibc_symbol_version": "2.39",
+        "needed_system_libraries": [
+          "libz.so.1",
+          "libc.so.6",
+          "ld-linux-x86-64.so.2",
+          "libgcc_s.so.1",
+          "libm.so.6"
+        ]
+      },
+      "owner_passed": 29,
+      "owner_suites": [
+        2,
+        15,
+        3,
+        4,
+        3,
+        2
+      ],
+      "owner_source_inputs": 145,
+      "outer_files": 1241,
+      "component_count": 410,
+      "nested_source_archives": 395,
+      "nested_source_members": 25745,
+      "negative_controls_verified": 13,
+      "external_package_receipt_sha256": "f0ccf21cdca80982f812b76ce36b507c7bddede670011557748a0a78fc86e144",
+      "embedded_modules_independently_matched": 10,
+      "original_prebuilt_modules_in_binary": 0,
+      "scope": "downloaded bytes/source-hash/owner/embedded-module/notice/source-container/loader verification only; no packaged executable executed; no default/native/universal/minimum-OS/reproducibility/signing claim"
+    },
+    {
+      "status": "passed",
+      "archive": "artifacts/experimental-zellij-package-macOS-ARM64-986600f2a258a20f896083a4407f08b3778afa2c/zellij-0.43.0-zmux-aarch64-apple-darwin-1dba7394d653.tar.gz",
+      "archive_sha256": "29d931115b1b013310c28df096bd05594cca848aba22209cc1f39cfaabc15a45",
+      "manifest_sha256": "a46b08268a4cb1ef38d7e69537a87816221149a96a84406c7e5dc55b81e02f5e",
+      "binary_sha256": "f3168d37e1ecd278e66b28edb0b5755202b6c16ff67ea0cd3d38ebd10d82b98d",
+      "source_sha": "986600f2a258a20f896083a4407f08b3778afa2c",
+      "policy_sha256": "1dba7394d65347f3ec8042b53ddb57341c6b46482f24118e10962e94931e8d79",
+      "target": "aarch64-apple-darwin",
+      "executed_host": "macOS-15.7.9-arm64-arm-64bit-Mach-O",
+      "abi": {
+        "minimum_macos_load_command": "11.0",
+        "sdk_load_command": "15.5",
+        "system_dylibs": [
+          "/System/Library/Frameworks/DiskArbitration.framework/Versions/A/DiskArbitration (compatibility version 1.0.0, current version 1.0.0)",
+          "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit (compatibility version 1.0.0, current version 275.0.0)",
+          "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0, current version 3502.1.255)",
+          "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 3502.1.255)",
+          "/usr/lib/libcurl.4.dylib (compatibility version 7.0.0, current version 9.0.0)",
+          "/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)",
+          "/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)"
+        ]
+      },
+      "owner_passed": 29,
+      "owner_suites": [
+        2,
+        15,
+        3,
+        4,
+        3,
+        2
+      ],
+      "owner_source_inputs": 145,
+      "outer_files": 1237,
+      "component_count": 409,
+      "nested_source_archives": 394,
+      "nested_source_members": 25379,
+      "negative_controls_verified": 13,
+      "external_package_receipt_sha256": "0685204fd3389130d8da0653e8085cfbfce72e1bdf7538f40b1d6ea9ab19dd46",
+      "embedded_modules_independently_matched": 10,
+      "original_prebuilt_modules_in_binary": 0,
+      "scope": "downloaded bytes/source-hash/owner/embedded-module/notice/source-container/loader verification only; no packaged executable executed; no default/native/universal/minimum-OS/reproducibility/signing claim"
+    }
+  ],
+  "scope": "both requested CI hosts accepted exact source/plugin/owner/negative/package gates and downloaded package bytes independently verified; retained CI artifacts only, no default acquisition/native embedding decision"
+}

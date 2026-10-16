@@ -254,3 +254,32 @@ only this repair, reusing the existing owned Cargo cache; its receipt is
 Concurrent runtime edits and parent-owned task records are excluded from this
 source snapshot and commit. Hosted run and final artifact receipts are retained
 separately after dispatch.
+
+
+## Verified both-host retained packages
+
+Replacement run [38823056442](https://github.com/ashutoshpw/zmux/actions/runs/38823056442)
+passed on Linux x86_64 and Darwin ARM64 at committed source
+`986600f2a258a20f896083a4407f08b3778afa2c`. The independently reviewed capture
+repair was the only package-pipeline change; notice policy remains unchanged.
+Both hosts executed 29 actual owner checks in suites `[2, 15, 3, 4, 3, 2]`, all
+thirteen negative controls and source-built ten-plugin/Wasmtime/EINTR gates.
+
+Independent downloaded-byte verification passed without executing downloaded
+binaries. Receipt: `target/agent-validation/r03-package-hosted-38823056442/verified-receipt.json`,
+SHA256 `73256d9dd903ca77a2c62cefbbe96f16a6eeb250b2da75f8ef7455e033330b9d`.
+It checked all manifest member hashes, exact Git source/provenance and receipt
+chains, raw embedded modules, source/notice containers and concrete loader metadata.
+Each binary independently matched all ten rebuilt modules and none of the fifteen
+original upstream prebuilt modules.
+
+- Linux: 410 actual compiler components, 395 nested source containers (25,745 members), 1,241 outer files. Archive SHA256 `641f763f40f6d52dfeb4e3446273d7bcc22ed6779bd4a7b189d7a5456bdd623d`; binary SHA256 `ee061714653522867315df952aa63780274c2afa63c1cdd0e7f05df74fc402c2`. Recorded GLIBC symbol maximum is 2.39, with interpreter `/lib64/ld-linux-x86-64.so.2`; this is not a portable Linux support claim.
+- Darwin: 409 actual compiler components, 394 nested source containers (25,379 members), 1,237 outer files. Archive SHA256 `29d931115b1b013310c28df096bd05594cca848aba22209cc1f39cfaabc15a45`; binary SHA256 `f3168d37e1ecd278e66b28edb0b5755202b6c16ff67ea0cd3d38ebd10d82b98d`; manifest SHA256 `a46b08268a4cb1ef38d7e69537a87816221149a96a84406c7e5dc55b81e02f5e`. Mach-O records minos 11.0 and SDK 15.5; actual execution was macOS 15.7.9 ARM64. The load command does not establish older-host support.
+
+These GitHub artifacts expire after seven days (Darwin package expires
+2026-10-22T23:40:05Z). They are explicit feasibility inputs, not durable default
+distribution. No hidden latest/refetch fallback is permitted; later default
+promotion needs immutable owned storage. No native app Start/Attach, Intel,
+universal, minimum-OS runtime, application distribution signing or notarization
+acceptance is claimed by this package verification. The next separately reviewed
+opt-in native packaging slice is tracked in [r03-native-package.md](r03-native-package.md).

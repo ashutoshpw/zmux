@@ -241,3 +241,35 @@ unchanged lock, licenses, patch and exact rebuild instructions. Original archive
 stay in private audit caches, outside package and workflow evidence uploads.
 The two transformed registry bundles are named `-source.tar.gz`; all other registry
 sources, including both MPL archives, remain pristine.
+
+## Explicit retained native packaging
+
+The verified package from run `38823056442` is an optional feasibility input.
+`retained-native-package.json` binds its exact Darwin ARM64 archive, executable,
+manifest, source/policy and seven-day GitHub artifact identity to the independent
+download review. Existing `pins.json` and ordinary installed-binary selection are
+unchanged. The admission tool performs no download, build or execution:
+
+```sh
+python3 -B tools/local-zellij-feasibility/accept-package.py --root /absolute/retained-artifact --target aarch64-apple-darwin
+python3 -B scripts/build-macos-dev --architecture host --with-zellij --zellij-package-root /absolute/retained-artifact
+```
+
+Only a Darwin ARM64 host build has an accepted package. Intel/universal requests
+fail before bundle replacement. The optional app retains the complete package,
+including sources/notices/provenance, under `Resources/Dependencies/local-zellij`.
+The builder verifies the dependency's existing signature and hashes every retained
+member again after app signing; it never re-signs or rebuilds that dependency.
+Ordinary app builds do not package or select Zellij.
+
+The manual `local-zellij-native-package.yml` gate retrieves only the exact locked
+artifact, checks its metadata/ZIP/package identity, builds the optional host app,
+and reruns the actual production CLI owner against the final bundled dependency.
+Its CLI is Cargo-built; the Zellij executable is the final app resource path.
+Native workflow execution remains required for acceptance of this new consumer.
+This slice adds no AppKit Start/Attach action, native persistence descriptor,
+default terminal selection, Intel/universal or older-macOS support claim.
+
+The GitHub input expires after seven days. Expired/missing exact retrieval fails
+visibly, with no latest/refetch/rebuild fallback. Later default distribution needs
+durable immutable owned storage and explicit promotion.

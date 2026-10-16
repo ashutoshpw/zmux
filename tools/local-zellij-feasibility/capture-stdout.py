@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
-"""Separate structured stdout inside the existing bounded parent's process group."""
+"""Separate bounded stdout inside the existing retained parent's process group."""
 import argparse
 from pathlib import Path
 import subprocess
 import sys
 
 MAX_STDOUT_BYTES = 8 * 1024 * 1024
+MAX_CAPTURE_BYTES = 128 * 1024 * 1024
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--max-bytes", type=int, default=MAX_STDOUT_BYTES,
+                        help="explicit stdout bound, at most 128 MiB; metadata defaults to 8 MiB")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not 0 < args.max_bytes <= MAX_CAPTURE_BYTES:
+        parser.error("stdout byte bound must be positive and at most 128 MiB")
     if not args.output.is_absolute() or not command:
         parser.error("structured stdout requires an absolute fresh output file and command")
     # This helper must run under the existing retained ProcessGroup owner. Cargo
@@ -26,11 +31,12 @@ def main():
         try:
             retained = 0
             while chunk := child.stdout.read(65536):
-                saved = chunk[:max(0, MAX_STDOUT_BYTES - retained)]
+                saved = chunk[:max(0, args.max_bytes - retained)]
                 output.write(saved)
                 retained += len(saved)
                 if len(saved) != len(chunk):
-                    raise RuntimeError("structured stdout exceeded 8 MiB")
+                    bound = "8 MiB" if args.max_bytes == MAX_STDOUT_BYTES else f"{args.max_bytes} bytes"
+                    raise RuntimeError("structured stdout exceeded " + bound)
             code = child.wait()
         finally:
             child.stdout.close()
