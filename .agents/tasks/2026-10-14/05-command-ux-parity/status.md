@@ -1,9 +1,44 @@
 # Status
 
 - **State:** in-progress
-- **Updated:** 2026-10-15
+- **Updated:** 2026-10-16
 
 ## Active implementation
+
+- Native38827114277 at7b passes Swift/focused native checks, then fails in
+  shutdown fixture directory creation (AlreadyExists). No browser acknowledgment
+  execution occurred. A process-local atomic suffix fixes parallel same-clock
+  fixture naming; fixed-clock old naming reproduces the failure, repaired naming
+  and exact restored source each pass all three existing shutdown tests.
+- Todo slice `fc47e98` adds scoped checklist commands and native activity
+  projection; 300-test/CABI validation and parent review pass. Persistence and
+  actual native acceptance remain open. Idle harness `1a28205` is independently
+  reviewed after rejecting partial sample coverage and changed process starts;
+  actual Darwin one/eight-terminal measurements remain pending.
+
+- Published through `7b6540e`: browser trusted-event completion `de4becd`,
+  opt-in retained ARM Zellij packaging `2b5d40f`, and admitted-child PR fixture
+  repair `7b6540e`. Each has scoped checks and independent source review;
+  browser and repair each pass isolated297-test/CABI checks. Package admission
+  and capture each pass nine checks, plus full core checks and actual retained
+  ZIP/negative controls. Native38827114277 and package38827122318 are running
+  on that exact commit. Preserve useful runs; no full-parity artifact handoff.
+- The PR fixture negative control catches direct-child-only cleanup with an
+  actual still-running descendant; the finite control exits naturally, without
+  signalling an adopted PID. Exact production code and full fixture then pass.
+  Runtime review receipt: `/tmp/zmux-a01c-admission-independent-review-20261016.json`.
+
+- Native38825900209 at76618a0 passes Swift6/focused native checks and eight
+  metadata cases, then fails the lookup deadline fixture because its gh child
+  marker is absent. The250ms shared deadline includes preceding Git/tool cleanup;
+  the fixture did not prove admission before asserting descendant cleanup.
+  Diagnosis and a deterministic boundary repair are in progress; production
+  timeout behavior has not been shown faulty. Browser acknowledgment source is
+  independently reviewed; isolated required checks are running before publication.
+- Cloud38825955954 at1507939 passes. The local Docker service was rebuilt with
+  backup-before-migration and returns health/ready200 at127.0.0.1:3530; the
+  post-start path-to-port check returns3530. Public zmux.w3dev.app still fails DNS
+  resolution from this host; no public authentication acceptance is claimed.
 
 - Published PR metadata `76618a0`: repository-verified URL/number handoff,
   exact workspace/window ownership, bounded child cleanup and native row/inspector

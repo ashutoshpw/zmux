@@ -51,6 +51,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+- [Shutdown fixture collision](references/s01-shutdown-fixture-collision.md) — deterministic parallel temporary-directory collision repair without runtime changes.
 - [F04 controlled idle workloads](references/f04-native-idle-workloads.md) — opt-in one/eight-terminal phase ownership and bounded named-host measurements.
 - [R03 native dependency packaging](references/r03-native-package.md) — opt-in ARM64 retained-package admission, unchanged executable provenance and native owner gates.
 - [Browser focus fixture](references/browser-focus-native-smoke.md) — explicit document-focus setup and unchanged strict restoration checks.
