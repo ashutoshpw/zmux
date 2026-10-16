@@ -77,6 +77,7 @@ enum AgentInboxSmoke {
         var livePIDs: Set<UInt32> = []
         var heldCapacity: HeldCapacity?
         var observedContent: NSView?
+        var shutdownStarted = false
         do {
             try await wait(coordinator, "initial real terminal") { state in
                 state.persistence?.startupPending != true && state.persistence?.restoring != true &&
@@ -398,6 +399,7 @@ enum AgentInboxSmoke {
             evidence.checks.append("independent_pty_progress_after_all_ui_actions_zero_input")
             inbox.makeKeyAndOrderFront(nil)
             try await capture(inbox, to: report.deletingLastPathComponent().appendingPathComponent("native-agent-inbox.png"))
+            shutdownStarted = true
             try await coordinator.shutdown()
             evidence.stage = "complete"; evidence.state = "complete"
             try await save(evidence, to: report)
@@ -415,7 +417,7 @@ enum AgentInboxSmoke {
             catch { FileHandle.standardError.write(Data("Lock release signal failed: \(error)\n".utf8)) }
             evidence.state = "failed"; evidence.failure = error.localizedDescription
             if let content = observedContent { evidence.mountedControls = mountedControls(content) }
-            do { evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: livePIDs) }
+            do { evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: shutdownStarted ? [] : livePIDs) }
             catch { evidence.failure = (evidence.failure ?? "") + "; counter verification: " + error.localizedDescription }
             try await save(evidence, to: report)
             throw error
@@ -532,7 +534,23 @@ enum AgentInboxSmoke {
         guard let view = window.contentView, view.bounds.width >= 560, view.bounds.height >= 640,
               let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw failure("Mounted inbox capture unavailable") }
         view.layoutSubtreeIfNeeded(); view.cacheDisplay(in: view.bounds, to: bitmap)
-        guard let data = bitmap.representation(using: .png, properties: [:]), data.count <= 8_388_608 else { throw failure("Inbox capture exceeds bound") }
+        // The content view is transparent over NSWindow's real background. Keep
+        // native pixels legible in an opaque artifact, including label/icon ink.
+        guard let opaque = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide, pixelsHigh: bitmap.pixelsHigh,
+                bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: opaque) else { throw failure("Opaque inbox capture context unavailable") }
+        let bounds = NSRect(x: 0, y: 0, width: CGFloat(bitmap.pixelsWide), height: CGFloat(bitmap.pixelsHigh))
+        let nativePixels = NSImage(size: bitmap.size)
+        nativePixels.addRepresentation(bitmap)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        window.effectiveAppearance.performAsCurrentDrawingAppearance {
+            window.backgroundColor.setFill(); bounds.fill()
+            nativePixels.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = opaque.representation(using: .png, properties: [:]), data.count <= 8_388_608 else { throw failure("Inbox capture exceeds bound") }
         try await Task.detached { try data.write(to: path, options: .atomic) }.value
     }
     private static func terminalPID(_ coordinator: ApplicationCoordinator, window: UInt64) -> UInt32? {
