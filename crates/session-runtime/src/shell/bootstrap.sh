@@ -22,6 +22,7 @@ zmux_shell_cleanup() {
     rm -f "$zmux_private_root/claude.sh" "$zmux_private_root/claude.zsh" "$zmux_private_root/claude.fish" \
         "$zmux_private_root/.zshenv" "$zmux_private_root/.zprofile" \
         "$zmux_private_root/.zshrc" "$zmux_private_root/env" \
+        "$zmux_private_root/attention" \
         "$zmux_private_root/plugin/.claude-plugin/plugin.json" \
         "$zmux_private_root/plugin/hooks/hooks.json"
     rmdir "$zmux_private_root/plugin/.claude-plugin" "$zmux_private_root/plugin/hooks" \
@@ -33,26 +34,43 @@ trap 'exit 143' TERM
 mkdir "$zmux_private_root/plugin" "$zmux_private_root/plugin/.claude-plugin" \
     "$zmux_private_root/plugin/hooks" || exit 70
 # ZMUX_GENERATED_FILES
+# Keep notification ingress outside any nested tmux/screen PTY. Only fixed event
+# names cross this private FIFO; the relay retains this session's original TTY,
+# never a device pathname that could later belong to another session. The outer
+# owner keeps the writer open; interactive descendants inherit neither descriptor.
+mkfifo "$zmux_private_root/attention" || exit 70
+exec 7>/dev/tty || exit 70
+(
+    trap - 0 HUP TERM
+    while IFS= read -r zmux_attention_event; do
+        case "$zmux_attention_event" in
+            stop) printf '\033]777;notify;Claude;Claude finished its turn\007' >&7 ;;
+            failure) printf '\033]777;notify;Claude;Claude stopped with an error\007' >&7 ;;
+            attention) printf '\033]777;notify;Claude;Claude needs attention\007' >&7 ;;
+        esac
+    done <"$zmux_private_root/attention"
+) &
+exec 8>"$zmux_private_root/attention"
 case "${zmux_shell##*/}" in
     bash)
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@"
+        "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@" 7>&- 8>&-
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}
         ZMUX_USER_ZDOTDIR_SET=${ZDOTDIR+x}
         export ZMUX_USER_ZDOTDIR ZMUX_USER_ZDOTDIR_SET
-        ZDOTDIR=$zmux_private_root "$zmux_shell" "$@"
+        ZDOTDIR=$zmux_private_root "$zmux_shell" "$@" 7>&- 8>&-
         ;;
     fish)
-        "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@"
+        "$zmux_shell" --init-command 'source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.fish"' "$@" 7>&- 8>&-
         ;;
     sh|dash)
         ZMUX_USER_ENV=${ENV-}
         export ZMUX_USER_ENV
-        ENV=$zmux_private_root/env "$zmux_shell" "$@"
+        ENV=$zmux_private_root/env "$zmux_shell" "$@" 7>&- 8>&-
         ;;
 esac
 exit $?
