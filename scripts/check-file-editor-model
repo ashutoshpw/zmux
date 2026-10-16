@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+if [ "$(uname -s)" != Darwin ]; then
+    echo 'File editor model acceptance requires macOS (Swift toolchain).' >&2
+    exit 1
+fi
+scratch=$(mktemp -d /tmp/zmux-file-editor-model.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT HUP INT TERM
+xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
+    apps/macos/Sources/FileEditorModel.swift tools/native-fixtures/file-editor-model.swift \
+    -o "$scratch/file-editor-model"
+"$scratch/file-editor-model"

@@ -49,19 +49,7 @@ private final class FileEditorTextView: NSTextView {
 @MainActor
 final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private enum Phase { case idle, attaching, ready, failed }
-    enum Banner: Equatable {
-        case none
-        case changedOnDisk(UInt64)
-        case deletedOnDisk
-        case unreadable(String)
-        case ownerLost(String)
-        case saveUnknown(UInt64)
-        case saveResolved
-        case loadFailed(String)
-        case message(String)
-        /// Informational: the dirty bit has not been confirmed yet; the observation keeps retrying.
-        case dirtyUnconfirmed
-    }
+    typealias Banner = FileBanner
 
     let surfaceID: UInt64
     /// Names this view instance to Rust; a different host cannot take over a bound surface.
@@ -82,25 +70,22 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private var ownerToken: FileOwnerToken?
     private var attachedEpoch: UUID?
     private var latestEpoch: UUID?
-    private var generation: UInt64 = 0
     private var writable = false
     private var busy = false
     private var closed = false
     private var staleOwner = false
-    /// True when the disk changed while this view had unsaved edits and the edits were kept.
-    private var externalPending = false
     private(set) var isLoaded = false
     private(set) var failureCode: String?
-    private(set) var banner = Banner.none
 
-    // Editing.
-    private var baseline = ""
-    private(set) var isDirty = false
+    // Editing. Every data-loss decision (what is unsaved, what a save writes, when typing is
+    // blocked, what a banner button does) is made by `FileEditorModel`, which the macOS fixture
+    // runs; this view only applies the answers. While a reload or attach is in flight the model
+    // says the editor is read-only: its reply replaces the whole buffer, so text typed meanwhile
+    // would be overwritten with no sign.
+    private var model = FileEditorModel()
+    var banner: Banner { model.banner }
+    var isDirty: Bool { model.isDirty }
     private var suppressEdits = false
-    /// True while a reload or an attach is in flight. Its reply replaces the whole buffer, so the
-    /// editor is read-only for that time: text typed meanwhile would otherwise be overwritten with
-    /// no sign. Saving is not part of this; it compares the buffer against what it wrote.
-    private var editingSuspended = false
     private var lastModelDirty = false
     /// Held for a panel whose Don't Save is being applied; see `DirtyMirrorGate`.
     private var dirtyGate = DirtyMirrorGate()
@@ -109,10 +94,6 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     private var observeGaveUp = false
 
     // External-change bookkeeping.
-    private var autoReloadedDiskGeneration: UInt64 = 0
-    private var dismissedDiskGeneration: UInt64 = 0
-    private var latestDiskGeneration: UInt64 = 0
-    private var dismissedDeleted = false
     private var workerStalledMs: UInt64?
 
     // Presentation.
@@ -173,11 +154,12 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     var displayName: String { title }
     var currentText: String { editor.string }
-    var hasUnsavedChanges: Bool { isDirty && (mode?.isEditableText ?? false) }
+    var hasUnsavedChanges: Bool { model.hasUnsavedChanges(editable: mode?.isEditableText ?? false) }
     var isMarkdown: Bool { mode == .markdown }
     var supportsWordWrap: Bool { (mode?.isEditableText ?? false) && presented === editorScroll }
     var canSave: Bool {
-        (mode?.isEditableText ?? false) && writable && ownerToken != nil && !busy && isDirty && !staleOwner
+        model.canSave(editable: mode?.isEditableText ?? false, writable: writable, attached: ownerToken != nil,
+                      busy: busy, staleOwner: staleOwner)
     }
     var canReload: Bool { !busy && !closed && (ownerToken != nil || staleOwner || phase == .failed) }
     var editorTextView: NSTextView { editor }
@@ -510,46 +492,21 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     private func reconcileExternal(_ entry: FileEntrySnapshot?) {
         guard let entry else { return }
-        latestDiskGeneration = entry.diskGeneration
-        guard ownerToken != nil, !busy else { return }
-        switch entry.state {
-        case "changed":
-            dismissedDeleted = false
-            if !hasUnsavedChanges {
-                if entry.diskGeneration != autoReloadedDiskGeneration {
-                    startReload(discard: true, automatic: true)
-                }
-            } else if entry.diskGeneration != dismissedDiskGeneration {
-                setBanner(.changedOnDisk(entry.diskGeneration))
-            }
-        case "deleted":
-            if !dismissedDeleted { setBanner(.deletedOnDisk) }
-        case "unreadable":
-            setBanner(.unreadable(entry.errorCode ?? "unknown"))
-        case "in_sync":
-            dismissedDeleted = false
-            if isExternalBanner && !externalPending { setBanner(.none) }
-        default:
-            break
-        }
-    }
-
-    private var isExternalBanner: Bool {
-        switch banner {
-        case .changedOnDisk, .deletedOnDisk, .unreadable: return true
-        default: return false
+        let unsaved = hasUnsavedChanges
+        switch model.externalStateReported(state: entry.state, diskGeneration: entry.diskGeneration, errorCode: entry.errorCode,
+                                           attached: ownerToken != nil, busy: busy, hasUnsavedChanges: unsaved) {
+        case .none: break
+        case .reloadAutomatically: startReload(discard: true, automatic: true)
+        case .show(let value): setBanner(value)
+        case .clearBanner: setBanner(.none)
         }
     }
 
     /// A save whose acknowledgement was lost reports its outcome through a later snapshot.
     private func reconcileOutcome(_ entry: FileEntrySnapshot?) {
-        guard case .saveUnknown(let operation) = banner, operation != 0,
-              let last = entry?.lastOp, last.opId == operation else { return }
-        switch last.state {
-        case "completed": setBanner(.saveResolved)
-        case "failed": setBanner(.message("The save that did not confirm in time failed (" + (last.code ?? "unknown") + "). Your text is unchanged."))
-        default: break
-        }
+        guard let last = entry?.lastOp,
+              let resolved = model.saveOutcomeBanner(lastOperation: last.opId, state: last.state, code: last.code) else { return }
+        setBanner(resolved)
     }
 
     // MARK: - Loading
@@ -623,10 +580,9 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         }
         ownerToken = token
         attachedEpoch = token.epoch
-        generation = newGeneration
+        model.attached(generation: newGeneration)
         writable = header.writable ?? false
         staleOwner = false
-        externalPending = false
         observeGaveUp = false
         phase = .ready
         failureCode = nil
@@ -635,9 +591,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         case .image: applyImage(reply.body)
         case .pdf: applyPDF(reply.body)
         }
-        if case .loadFailed = banner { setBanner(.none) }
-        if case .ownerLost = banner { setBanner(.none) }
-        if isExternalBanner || banner == .saveResolved { setBanner(.none) }
+        if banner.isObsoleteAfterLoad { setBanner(.none) }
     }
 
     private func applyText(_ body: Data) {
@@ -651,8 +605,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         editor.setSelectedRange(NSRange(location: min(selection.location, text.utf16.count), length: 0))
         editor.undoManager?.removeAllActions()
         suppressEdits = false
-        baseline = text
-        setDirty(false)
+        dirtyChanged(model.adopt(text: text))
         isLoaded = true
         refreshEditable()
         applyWrapSettings()
@@ -783,7 +736,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         }
         // One automatic attempt per observed disk generation; a failed attempt shows a banner and
         // waits for the next external change or an explicit Reload instead of looping.
-        if automatic { autoReloadedDiskGeneration = latestDiskGeneration }
+        if automatic { model.automaticReloadStarted() }
         busy = true
         suspendEditing()
         refreshHeader()
@@ -793,16 +746,13 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         guard !closed else { return }
         switch result {
         case .success(let reply):
-            if automatic && hasUnsavedChanges {
-                // The person typed after this automatic reload was scheduled but before it began
-                // (editing is read-only once it runs, see `suspendEditing`): keep their text. The Rust
-                // baseline moved on, so remember that the buffer no longer matches it; Save
-                // will ask before overwriting what changed on disk.
-                generation = reply.header.generation ?? generation
-                externalPending = true
-                setBanner(.changedOnDisk(latestDiskGeneration))
-            } else {
-                apply(reply)
+            // An automatic reload that finds text typed after it was scheduled but before it began
+            // (editing is read-only once it runs, see `suspendEditing`) keeps that
+            // text; every other reply replaces the buffer.
+            let unsaved = hasUnsavedChanges
+            switch model.reloadReplied(automatic: automatic, hasUnsavedChanges: unsaved, generation: reply.header.generation) {
+            case .replaceBuffer: apply(reply)
+            case .keepText(let notice): setBanner(notice)
             }
         case .failure(let failure):
             if failure.isOwnerLoss {
@@ -841,7 +791,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
             owner?.filePanelReport(saveUnavailableReason)
             return false
         }
-        if externalPending && !force {
+        if model.saveNeedsConflictPrompt(force: force) {
             switch await chooseConflict(FileConflict(kind: "modified", diskSha256: nil, diskSize: nil)) {
             case .overwrite: return await performSave(force: true)
             case .reload:
@@ -852,19 +802,16 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         }
         guard let token = ownerToken else { return false }
         let text = editor.string
-        let body = Data(text.utf8)
+        let body = model.savePayload(for: text)
         busy = true
         refreshHeader()
-        let result = await send(.save(token, baseGeneration: generation, force: force), body: body)
+        let result = await send(.save(token, baseGeneration: model.generation, force: force), body: body)
         busy = false
         guard !closed else { return false }
         switch result {
         case .success(let reply):
-            generation = reply.header.generation ?? generation
-            baseline = text
-            externalPending = false
-            setDirty(!Self.sameBytes(editor.string, text))
-            if isExternalBanner || banner == .saveResolved { setBanner(.none) }
+            dirtyChanged(model.saved(written: text, current: editor.string, generation: reply.header.generation))
+            if banner.isObsoleteAfterSave { setBanner(.none) }
             refreshHeader()
             return true
         case .failure(let failure):
@@ -926,36 +873,29 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     // MARK: - Editing gate
 
     private func suspendEditing() {
-        editingSuspended = true
+        model.suspendEditing()
         refreshEditable()
     }
 
     private func resumeEditing() {
-        editingSuspended = false
+        model.resumeEditing()
         refreshEditable()
     }
 
     private func refreshEditable() {
-        editor.isEditable = isLoaded && writable && !editingSuspended
+        editor.isEditable = model.isEditable(loaded: isLoaded, writable: writable)
     }
 
     // MARK: - Dirty tracking
 
     private func editorDidChange() {
         guard !suppressEdits else { return }
-        setDirty(!Self.sameBytes(editor.string, baseline))
+        dirtyChanged(model.textEdited(editor.string))
     }
 
-    /// Exact UTF-8 equality. Swift `==` on `String` treats canonically equivalent text (a
-    /// precomposed "é" and "e" plus a combining accent) as equal, which would hide an edit that
-    /// only changes the normalization form even though it changes the bytes Save writes.
-    private static func sameBytes(_ lhs: String, _ rhs: String) -> Bool {
-        lhs.utf8.elementsEqual(rhs.utf8)
-    }
-
-    private func setDirty(_ value: Bool) {
-        guard isDirty != value else { return }
-        isDirty = value
+    /// The model reported that the dirty bit changed: refresh the chrome and mirror it to Rust.
+    private func dirtyChanged(_ changed: Bool) {
+        guard changed else { return }
         refreshHeader()
         owner?.filePanelStateChanged(surfaceID)
         reconcileDirty()
@@ -1029,8 +969,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
 
     /// Treats the buffer as saved/abandoned so the tab can close without a second prompt.
     func discardLocalChanges() {
-        baseline = editor.string
-        setDirty(false)
+        dirtyChanged(model.adopt(text: editor.string))
     }
 
     /// Don't Save was chosen for this panel and is about to be settled. From here until
@@ -1266,8 +1205,7 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     }
 
     private func setBanner(_ value: Banner) {
-        guard banner != value else { return }
-        banner = value
+        guard model.setBanner(value) else { return }
         if let style = style(for: value) {
             bannerLabel.stringValue = style.text
             bannerLabel.toolTip = style.text
@@ -1290,30 +1228,15 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
     @objc private func secondaryTapped() { bannerAction(primary: false) }
 
     private func bannerAction(primary: Bool) {
-        switch (banner, primary) {
-        case (.changedOnDisk, true), (.unreadable, true), (.saveResolved, true), (.ownerLost, true):
+        let unsaved = hasUnsavedChanges
+        switch model.bannerAction(primary: primary, hasUnsavedChanges: unsaved) {
+        case .reloadFromDisk:
             // Replaces the buffer, so it asks first when there is unsaved text.
             reloadFromDisk()
-        case (.changedOnDisk(let diskGeneration), false):
-            dismissedDiskGeneration = diskGeneration
-            setBanner(.none)
-        case (.deletedOnDisk, true):
-            dismissedDeleted = true
-            setBanner(.none)
-        case (.ownerLost, false):
-            copyTextToPasteboard()
-        case (.saveUnknown(let operation), true) where operation == 0:
-            reloadFromDisk()
-        case (.saveUnknown(let operation), false) where operation == 0:
-            setBanner(.none)
-        case (.saveResolved, false):
-            setBanner(.none)
-        case (.loadFailed, true):
-            if hasUnsavedChanges { setBanner(.none) } else { retry() }
-        case (.message, true):
-            setBanner(.none)
-        default:
-            break
+        case .retry: retry()
+        case .copyText: copyTextToPasteboard()
+        case .dismiss: setBanner(.none)
+        case .nothing: break
         }
     }
 
