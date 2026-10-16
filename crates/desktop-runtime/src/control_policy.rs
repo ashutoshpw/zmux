@@ -252,6 +252,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         | ControlCommand::LocalTmuxStatus { .. }
         | ControlCommand::BrowserProfilesStatus { .. }
         | ControlCommand::BrowserProfileIntentStatus { .. }
+        | ControlCommand::BrowserProfileReconcileStatus { .. }
         | ControlCommand::BrowserStatus { .. }
         | ControlCommand::SessionStatus { .. }
         | ControlCommand::ListUploads
@@ -279,6 +280,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         }
         ControlCommand::LocalTmux { .. }
         | ControlCommand::BrowserProfiles { .. }
+        | ControlCommand::BrowserProfileReconcile { .. }
         | ControlCommand::Session { .. }
         | ControlCommand::Transfer { .. }
         | ControlCommand::Action { .. }

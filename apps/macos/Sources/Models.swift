@@ -325,6 +325,8 @@ struct BrowserProfileReceipt: Decodable, Sendable {
     let error: String?
 }
 struct BrowserProfileState: Decodable, Sendable {
+    let nativePendingRequests: Int?
+    let reconciliationPendingRequests: Int?
     let epoch: UUID
     let enabled: Bool
     let loading: Bool

@@ -134,6 +134,8 @@ pub struct ProfileReceipt {
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ProfileSnapshot {
+    pub native_pending_requests: usize,
+    pub reconciliation_pending_requests: usize,
     pub epoch: Uuid,
     pub enabled: bool,
     pub loading: bool,
@@ -290,6 +292,14 @@ impl ProfileRuntime {
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         if let Some(native) = &self.native {
+            let (requests, reconciliations) = native.pending_dispatch();
+            if self.snapshot.native_pending_requests != requests
+                || self.snapshot.reconciliation_pending_requests != reconciliations
+            {
+                self.snapshot.native_pending_requests = requests;
+                self.snapshot.reconciliation_pending_requests = reconciliations;
+                changed = true;
+            }
             for (intent, result) in native.outcomes() {
                 let Some((id, refreshing)) = self.native_pending.get_mut(&intent) else {
                     native.retire(intent);

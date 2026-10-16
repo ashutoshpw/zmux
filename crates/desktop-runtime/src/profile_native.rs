@@ -1,9 +1,11 @@
 //! Bounded shared native-operation rendezvous. No filesystem or WebKit work runs
 //! under this short mutex or on the core executor. Native effects are drained once.
+mod reconciliation;
 use crate::profile_leases::{
     LeaseError, LeaseService, MAX_MUTATIONS,
     journal::{IntentStatus, MutationKind},
 };
+pub use reconciliation::ReconcileReceipt;
 use serde::Serialize;
 use std::{
     collections::VecDeque,
@@ -29,6 +31,7 @@ pub struct NativeProfileOperations {
     pub catalog: PathBuf,
     pub service: Arc<LeaseService>,
     operations: Mutex<VecDeque<Operation>>,
+    reconciliations: Mutex<reconciliation::Reconciliations>,
 }
 impl NativeProfileOperations {
     pub fn new(
@@ -44,6 +47,7 @@ impl NativeProfileOperations {
             catalog,
             service,
             operations: Mutex::new(VecDeque::new()),
+            reconciliations: Mutex::new(Default::default()),
         })
     }
     pub(crate) fn admit(&self, profile: Uuid, kind: MutationKind) -> Result<Uuid, LeaseError> {
@@ -138,6 +142,19 @@ impl NativeProfileOperations {
         operation.outcome = Some(result.map_err(|e| e.chars().take(1024).collect()));
         Ok(())
     }
+    pub(crate) fn pending_dispatch(&self) -> (usize, usize) {
+        let native = self.operations.try_lock().map_or(MAX_MUTATIONS, |v| {
+            v.iter()
+                .filter(|op| !op.dispatched && op.outcome.is_none())
+                .count()
+        });
+        let reconcile = self.reconciliations.try_lock().map_or(MAX_MUTATIONS, |v| {
+            v.0.iter()
+                .filter(|(r, dispatched)| r.state == "pending" && !*dispatched)
+                .count()
+        });
+        (native, reconcile)
+    }
     pub(crate) fn outcomes(&self) -> Vec<(Uuid, Result<(), String>)> {
         let Ok(operations) = self.operations.try_lock() else {
             return Vec::new();
@@ -161,6 +178,7 @@ impl NativeProfileOperations {
         self.operations
             .try_lock()
             .map_or(MAX_MUTATIONS, |v| v.len())
+            + self.pending_reconciliations()
     }
     pub(crate) fn cancel_queued(&self) {
         if let Ok(mut operations) = self.operations.try_lock() {
