@@ -40,9 +40,10 @@ def main():
     report = dist / "native-sidebar.json"
     receipt = dist / "native-sidebar-process.json"
     lifecycle = dist / "native-sidebar-lifecycle.json"
+    status_report = dist / "native-status-menu.json"
     nonce = str(uuid.uuid4())
-    screenshots = [dist / "zmux-sidebar.png", dist / "zmux-sidebar-collapsed.png"]
-    for path in [report, receipt, lifecycle, *screenshots]:
+    screenshots = [dist / "zmux-sidebar.png", dist / "zmux-sidebar-collapsed.png", dist / "zmux-status-icon.png"]
+    for path in [report, receipt, lifecycle, status_report, *screenshots]:
         path.unlink(missing_ok=True)
     # Keep the actual HOME for macOS services. Profile/session storage and the
     # socket are explicit generated fixture paths, never the user's app state.
@@ -120,10 +121,18 @@ def main():
         failed = [key for key in required if result.get(key) is not True]
         if failed:
             raise RuntimeError("Sidebar acceptance failed: " + ", ".join(failed))
+        status_result = json.loads(status_report.read_text())
+        required_status = ("native_status_button", "system_menu_opened", "workspace_context_actions",
+                           "captured_mutations", "cross_window_notification_open", "inbox_presentation",
+                           "minimized_window_restore", "keep_awake_toggle", "single_application_owner")
+        required_status += ("last_window_recovery",)
+        failed_status = [key for key in required_status if status_result.get(key) is not True]
+        if failed_status:
+            raise RuntimeError("Native status menu acceptance failed: " + ", ".join(failed_status))
         for path in screenshots:
             if not path.is_file() or path.stat().st_size == 0:
                 raise RuntimeError(f"Missing native screenshot: {path.name}")
-        evidence.update(success=True, native=result)
+        evidence.update(success=True, native=result, status_menu=status_result)
         print("Native sidebar/grouping checks, correlated app cleanup and PID absence passed")
     except Exception as error:
         evidence["error"] = str(error)

@@ -71,6 +71,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private(set) var windowUUID: UUID?
     var nativeReady = false
     private var authorizedClose = false
+    private let workspaceMenuContexts = NSMapTable<NSMenu, WorkspaceContextTarget>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     private var bridge: NativeBridge { coordinator.bridge }
     private var browserDownloads: BrowserDownloads { coordinator.browserDownloads }
     private var notificationDelivery: NotificationDelivery { coordinator.notificationDelivery }
@@ -538,9 +539,16 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard !sidebarCollapsed, abs(sidebarContainer.bounds.width - 224) < 1 else { throw BridgeFailure(message: "Sidebar toggle did not restore its width") }
         try unchanged(); try geometry()
         try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar.png"))
+        let windowScopingVerified = snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true
+        guard let statusMenu = coordinator.statusMenu else { throw BridgeFailure(message: "Application has no macOS status menu") }
+        try await statusMenu.validateNativeMenu(report: report.deletingLastPathComponent().appendingPathComponent("native-status-menu.json"),
+            contextMenu: { id in
+                guard let workspace = self.snapshot?.model.workspaces.first(where: { $0.id == id }) else { return nil }
+                return self.workspaceMenu(for: workspace)
+            }, cli: { try await self.nativeCLI($0, externalCaller: true) })
         let receipt: [String: Bool] = ["compact_toolbar": true, "visible_toggle": true, "groups": true, "group_menus": true,
             "collapse_preserves_terminal": true, "focus_preserved": true, "sidebar_restored": true, "notification_toggle": true,
-            "window_scoping": snapshot?.model.workspaceGroups.allSatisfy { $0.windowId == self.identity?.windowId } == true]
+            "window_scoping": windowScopingVerified]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
     fileprivate func captureSidebarImage(_ url: URL) throws {
@@ -1028,6 +1036,18 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     private func workspaceMenu(for workspace: Workspace) -> NSMenu {
         let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
+        if let snapshot, let uuid = snapshot.workspaceIdentities.first(where: { $0.workspaceId == workspace.id })?.uuid {
+            workspaceMenuContexts.setObject(WorkspaceContextTarget(namespace: snapshot.model.identityNamespace,
+                workspace: workspace.id, uuid: uuid), forKey: menu)
+        }
+        populateWorkspaceMenu(menu, workspace: workspace)
+        return menu
+    }
+
+    private func populateWorkspaceMenu(_ menu: NSMenu, workspace: Workspace) {
+        menu.removeAllItems()
         let rename = menu.addItem(withTitle: "Rename Workspace…", action: #selector(renameWorkspaceFromMenu(_:)), keyEquivalent: "")
         rename.target = self
         rename.representedObject = NSNumber(value: workspace.id)
@@ -1036,15 +1056,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             if let owner = shared.model.windows.first(where: { $0.workspaceIds.contains(workspace.id) }),
                let index = owner.workspaceIds.firstIndex(of: workspace.id),
                let windowUUID = coordinator.mainWindowHosts[MainWindowIdentity(namespace: shared.model.identityNamespace, windowId: owner.id)]?.windowUUID {
-                let arrange = NSMenu(title: "Reorder Workspace")
-                arrange.autoenablesItems = false
+                menu.addItem(.separator())
                 for (title, destination) in [("Move Up", index - 1), ("Move Down", index + 1), ("Move to Top", 0), ("Move to Bottom", owner.workspaceIds.count - 1)] {
-                    let item = arrange.addItem(withTitle: title, action: #selector(reorderWorkspaceFromMenu(_:)), keyEquivalent: "")
+                    let item = menu.addItem(withTitle: title, action: #selector(reorderWorkspaceFromMenu(_:)), keyEquivalent: "")
                     item.target = self
                     item.isEnabled = destination >= 0 && destination < owner.workspaceIds.count && destination != index
                     item.representedObject = WorkspaceOrderTarget(namespace: shared.model.identityNamespace, workspace: workspaceUUID, window: windowUUID, index: destination, revision: shared.model.revision)
                 }
-                menu.addItem(withTitle: "Reorder Workspace", action: nil, keyEquivalent: "").submenu = arrange
             }
             let move = NSMenu(title: "Move to Window")
             for (index, window) in shared.model.windows.enumerated() where !window.workspaceIds.contains(workspace.id) {
@@ -1064,7 +1082,62 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let close = menu.addItem(withTitle: "Close Workspace", action: #selector(closeWorkspaceFromMenu(_:)), keyEquivalent: "")
         close.target = self
         close.representedObject = NSNumber(value: workspace.id)
-        return menu
+        appendWorkspaceAttention(to: menu, workspace: workspace)
+        menu.addItem(.separator())
+        let copy = menu.addItem(withTitle: "Copy Workspace ID", action: #selector(copyWorkspaceID(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.copy-id")
+        copy.representedObject = workspaceMenuContexts.object(forKey: menu)
+        copy.isEnabled = copy.representedObject != nil
+    }
+
+    private func appendWorkspaceAttention(to menu: NSMenu, workspace: Workspace) {
+        guard let snapshot else { return }
+        let records = snapshot.notifications.filter { $0.identityNamespace == snapshot.model.identityNamespace && $0.workspaceId == workspace.id }
+        menu.addItem(.separator())
+        let read = menu.addItem(withTitle: "Mark Workspace as Read", action: #selector(mutateWorkspaceNotifications(_:)), keyEquivalent: "")
+        read.target = self; read.isEnabled = records.contains { !$0.read }
+        read.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.read")
+        read.representedObject = NotificationMenuMutationTarget(.init(snapshot: snapshot, workspace: workspace.id, mutation: .markRead))
+        let latest = menu.addItem(withTitle: "Clear Latest Notification", action: #selector(mutateWorkspaceNotifications(_:)), keyEquivalent: "")
+        latest.target = self; latest.isEnabled = !records.isEmpty
+        latest.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.clear-latest")
+        if let id = records.max(by: { $0.id < $1.id })?.id {
+            latest.representedObject = NotificationMenuMutationTarget(.init(snapshot: snapshot, notification: id, mutation: .clear))
+        }
+        let notifications = NSMenu(title: "Notifications")
+        notifications.autoenablesItems = false
+        for record in records.reversed() {
+            notifications.addItem(StatusMenuController.notificationItem(record, snapshot: snapshot, target: self,
+                action: #selector(openWorkspaceNotification(_:))))
+        }
+        if records.isEmpty {
+            let empty = notifications.addItem(withTitle: "No Notifications", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+        }
+        menu.addItem(withTitle: "Notifications", action: nil, keyEquivalent: "").submenu = notifications
+    }
+
+    @objc private func mutateWorkspaceNotifications(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? NotificationMenuMutationTarget else { return }
+        enqueue(.notificationMutation(target.selection))
+    }
+    @objc private func openWorkspaceNotification(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? NotificationMenuOpenTarget else { return }
+        notificationDelivery.openInbox(target.target)
+    }
+    @objc private func copyWorkspaceID(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? WorkspaceContextTarget,
+              let snapshot, snapshot.model.identityNamespace == target.namespace,
+              snapshot.model.workspaces.contains(where: { $0.id == target.workspace }),
+              snapshot.workspaceIdentities.contains(where: { $0.workspaceId == target.workspace && $0.uuid == target.uuid }) else {
+            showError("Workspace is no longer available")
+            return
+        }
+        NSPasteboard.general.clearContents()
+        if !NSPasteboard.general.setString(target.uuid.uuidString.lowercased(), forType: .string) {
+            showError("Unable to copy workspace ID")
+        }
     }
 
     @objc private func showWorkspaceOptions(_ sender: NSView) {
@@ -1340,6 +1413,17 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if let context = workspaceMenuContexts.object(forKey: menu) {
+            guard let snapshot, snapshot.model.identityNamespace == context.namespace,
+                  let workspace = snapshot.model.workspaces.first(where: { $0.id == context.workspace }) else {
+                menu.removeAllItems()
+                let item = menu.addItem(withTitle: "Workspace no longer available", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                return
+            }
+            populateWorkspaceMenu(menu, workspace: workspace)
+            return
+        }
         if menu === browserProfilesMenu {
             menu.removeAllItems()
             if let state = snapshot?.browserProfiles, !state.loading, state.error == nil {
@@ -3048,7 +3132,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     do {
                         try self.writeSidebarLifecycle(report: report, complete: false)
                         try await controller.sidebarGroupingSmoke(report: report)
+                        let statusMenu = coordinator.statusMenu
                         try await coordinator.shutdown()
+                        try statusMenu?.verifyRemovedAfterShutdown()
                         try self.writeSidebarLifecycle(report: report, complete: true)
                         exit(0)
                     } catch {

@@ -72,6 +72,8 @@ jobs:
         run: scripts/build-macos-dev
       - name: Exercise packaged app and native rendering
         run: scripts/check-macos-app --skip-accessibility-save-tests
+      - name: Exercise native sidebar and system status menu
+        run: scripts/check-native-sidebar --skip-build
       - name: Upload downloadable development build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -89,6 +91,11 @@ jobs:
             dist/Zmux-native-window.png
             dist/zmux-browser-smoke.png
             dist/zmux-local-tmux-smoke.png
+            dist/native-sidebar*.json
+            dist/native-sidebar*.log
+            dist/native-status-menu.json
+            dist/zmux-sidebar*.png
+            dist/zmux-status-icon.png
           if-no-files-found: error
           retention-days: 14
       - name: Upload diagnostics on failure
@@ -109,6 +116,11 @@ jobs:
             dist/Zmux-native-window.png
             dist/zmux-browser-smoke.png
             dist/zmux-local-tmux-smoke.png
+            dist/native-sidebar*.json
+            dist/native-sidebar*.log
+            dist/native-status-menu.json
+            dist/zmux-sidebar*.png
+            dist/zmux-status-icon.png
           if-no-files-found: ignore
           retention-days: 7
 
@@ -271,7 +283,7 @@ jobs:
       - name: Build packaged app for runner architecture
         id: sidebar-build
         run: scripts/build-macos-dev --architecture host
-      - name: Exercise compact toolbar, sidebar grouping and physical shutdown
+      - name: Exercise sidebar, system status menu, notifications and physical shutdown
         run: scripts/check-native-sidebar --skip-build --architecture host
       - name: Save successful Rust build even when native acceptance fails
         if: always() && !cancelled() && steps.sidebar-build.outcome == 'success' && steps.sidebar-rust-cache.outputs.cache-hit != 'true'
@@ -293,6 +305,8 @@ jobs:
             dist/native-sidebar*.json
             dist/native-sidebar*.log
             dist/zmux-sidebar*.png
+            dist/native-status-menu.json
+            dist/zmux-status-icon.png
           if-no-files-found: error
           retention-days: 14
       - name: Retain diagnostics on failure
@@ -305,5 +319,7 @@ jobs:
             dist/native-sidebar*.json
             dist/native-sidebar*.log
             dist/zmux-sidebar*.png
+            dist/native-status-menu.json
+            dist/zmux-status-icon.png
           if-no-files-found: ignore
           retention-days: 7
