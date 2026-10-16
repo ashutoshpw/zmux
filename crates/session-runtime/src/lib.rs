@@ -32,7 +32,7 @@ use terminal::TerminalOwner;
 use thiserror::Error;
 #[cfg(feature = "ghostty")]
 pub use zmux_terminal_adapter::GhosttyLimits;
-use zmux_terminal_adapter::{EngineBatch, Size, Viewport, Wheel};
+use zmux_terminal_adapter::{EngineBatch, Pointer, Size, Viewport, Wheel};
 pub use zmux_terminal_adapter::{Key, KeyAction, KeyEvent, PASTE_BYTES};
 
 pub const INPUT_CHUNK_BYTES: usize = 4_096;
@@ -270,6 +270,7 @@ enum Input {
     Paste(String),
     Scroll(i32),
     Wheel(Wheel),
+    Pointer(Pointer),
 }
 
 struct Shared {
@@ -689,6 +690,15 @@ impl Session {
     /// preserve order. Only the session worker mutates the terminal parser.
     pub fn scroll(&self, lines: i32) -> Result<(), SessionError> {
         self.enqueue_event(Input::Scroll(lines.clamp(-1000, 1000)))
+    }
+    pub fn pointer(&self, event: Pointer) -> Result<(), SessionError> {
+        self.ensure_running()?;
+        if !self.application_wheel_supported {
+            return Err(SessionError::Failure(
+                "Ghostty pointer reporting is not yet supported".into(),
+            ));
+        }
+        self.enqueue_event(Input::Pointer(event))
     }
     pub fn wheel(&self, event: Wheel) -> Result<(), SessionError> {
         if !event.history && !self.application_wheel_supported {
@@ -1370,7 +1380,7 @@ impl Worker {
                             completion.finish(Some(InputWriteFailure::SessionExited), false);
                         }
                     }
-                    Input::Key(_) | Input::Paste(_) => {}
+                    Input::Key(_) | Input::Paste(_) | Input::Pointer(_) => {}
                 }
             }
             if dirty {
@@ -1447,6 +1457,10 @@ impl Worker {
                     self.written = 0;
                     let batch = self.terminal.scroll(0)?;
                     self.accept_batch(batch)?;
+                }
+                Input::Pointer(event) => {
+                    self.pending = self.terminal.pointer(event)?;
+                    self.written = 0;
                 }
                 Input::Wheel(event) => {
                     let (bytes, batch) = self.terminal.wheel(event)?;

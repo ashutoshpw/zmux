@@ -46,3 +46,24 @@ AppKit routing/coordinate/selection risk rather than duplicating encoding tables
 
 Read-only discovery complete; isolated worktree `feat/terminal-pointer` created
 from46422ef. Implementation and behavioral red/green evidence remain pending.
+
+## Worker dispatch delivered
+
+Actual raw-child regression c53e150 fails because the public native command parser
+rejects `pointer`, after the real child enables tracking. Original log:
+`/tmp/zmux-pointer-red.log`. The repair adds a bounded semantic Pointer event to
+the existing desktop/session queue, resolves modes at worker processing time and
+shares mouse report encoding with wheel input. Completed sessions and the existing
+completed-workload fence reject input; queued events after exit cannot write.
+Optional Ghostty pointer reporting is explicitly refused before queue admission.
+
+The same actual PTY fixture passes SGR press/motion/release, disabled mode, X10
+press-only suppression, VT200, any-motion/no-button and UTF8 cases. Child-issued
+mode changes are observed before submission; an ordinary trailing byte fences
+suppressed reports. Existing wheel coverage preserves large and non-UTF8 cells.
+Full scripts/check passes388 tests,1 existing ignored, strict Clippy/notices and
+both ABI checks (`/tmp/zmux-pointer-check-r2.log`). The first full run passed tests
+but Clippy requested an equivalent collapsed if in fixture polling; repaired.
+Independent session-storage review found no scoped protocol/lifecycle blocker.
+Native event wiring, published tracking hints and actual AppKit acceptance remain
+pending. This worker slice alone does not enable native mouse interaction.

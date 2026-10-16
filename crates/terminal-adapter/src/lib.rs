@@ -1,5 +1,7 @@
 //! Headless parser feasibility adapter, not a production renderer or full terminal engine.
 
+mod pointer;
+pub use pointer::{Pointer, PointerAction, PointerButton};
 mod engine;
 mod input;
 pub use engine::{Engine, EngineBatch, EngineError, EngineKind};
@@ -311,28 +313,7 @@ impl Terminal {
         let screen = self.parser.screen();
         if !event.history && screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None {
             let code = (if event.lines > 0 { 64 } else { 65 }) + (event.modifiers & 28);
-            let x = event.col.min(self.size.cols - 1);
-            let y = event.row.min(self.size.rows - 1);
-            let report = match screen.mouse_protocol_encoding() {
-                vt100::MouseProtocolEncoding::Sgr => {
-                    format!("\x1b[<{code};{};{}M", x + 1, y + 1).into_bytes()
-                }
-                vt100::MouseProtocolEncoding::Default => vec![
-                    27,
-                    b'[',
-                    b'M',
-                    code + 32,
-                    x.min(222) as u8 + 33,
-                    y.min(222) as u8 + 33,
-                ],
-                vt100::MouseProtocolEncoding::Utf8 => {
-                    let mut text = String::from("\x1b[M");
-                    for scalar in [u32::from(code + 32), u32::from(x + 33), u32::from(y + 33)] {
-                        text.push(char::from_u32(scalar).expect("bounded mouse coordinate"));
-                    }
-                    text.into_bytes()
-                }
-            };
+            let report = self.mouse_report(code, event.row, event.col, false);
             self.scroll(0);
             report.repeat(count)
         } else if !event.history && screen.alternate_screen() {
