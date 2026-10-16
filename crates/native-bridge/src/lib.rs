@@ -1,6 +1,8 @@
 //! Original C ABI feasibility bridge for the Rust workspace model.
 //! It does not yet execute session effects or implement native async rendering callbacks.
 
+mod profile_leases;
+
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -53,6 +55,8 @@ enum Entry {
     Buffer(Option<Arc<Vec<u8>>>),
 }
 struct NativeDesktop {
+    profile_catalog_directory: Option<PathBuf>,
+    profile_lease_directory: Option<PathBuf>,
     runtime: Arc<Desktop>,
     control: Option<ControlServer>,
     control_cleanup_failure: Mutex<Option<String>>,
@@ -350,16 +354,20 @@ pub unsafe extern "C" fn zmux_desktop_create_persistent(
 }
 
 fn create_desktop(state_directory: Option<PathBuf>) -> Result<u64, i32> {
-    create_configured_desktop(zmux_desktop_runtime::DesktopOptions {
-        state_directory,
-        ..Default::default()
-    })
+    create_configured_desktop_with_leases(
+        zmux_desktop_runtime::DesktopOptions {
+            state_directory,
+            ..Default::default()
+        },
+        None,
+    )
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DesktopConfiguration {
     state_directory: Option<PathBuf>,
+    profile_lease_directory: Option<PathBuf>,
     #[serde(default)]
     terminal_engine: zmux_desktop_runtime::terminal_engine::TerminalEngineConfig,
 }
@@ -380,21 +388,34 @@ pub unsafe extern "C" fn zmux_desktop_create_configured(
         let bytes = unsafe { std::slice::from_raw_parts(request, length) };
         let configuration: DesktopConfiguration =
             serde_json::from_slice(bytes).map_err(|_| INVALID_ARGUMENT)?;
-        if let Some(path) = &configuration.state_directory {
+        for path in [
+            &configuration.state_directory,
+            &configuration.profile_lease_directory,
+        ]
+        .into_iter()
+        .flatten()
+        {
             let text = path.to_str().ok_or(INVALID_ARGUMENT)?;
             if text.is_empty() || text.len() > 4096 || text.contains('\0') || !path.is_absolute() {
                 return Err(INVALID_ARGUMENT);
             }
         }
-        create_configured_desktop(zmux_desktop_runtime::DesktopOptions {
-            state_directory: configuration.state_directory,
-            terminal_engine: configuration.terminal_engine,
-            ..Default::default()
-        })
+        create_configured_desktop_with_leases(
+            zmux_desktop_runtime::DesktopOptions {
+                state_directory: configuration.state_directory,
+                terminal_engine: configuration.terminal_engine,
+                ..Default::default()
+            },
+            configuration.profile_lease_directory,
+        )
     })
 }
 
-fn create_configured_desktop(options: zmux_desktop_runtime::DesktopOptions) -> Result<u64, i32> {
+fn create_configured_desktop_with_leases(
+    options: zmux_desktop_runtime::DesktopOptions,
+    profile_lease_directory: Option<PathBuf>,
+) -> Result<u64, i32> {
+    let profile_catalog_directory = options.state_directory.clone();
     let mut registry = registry().try_lock().map_err(lock_status)?;
     if registry
         .entries
@@ -428,6 +449,8 @@ fn create_configured_desktop(options: zmux_desktop_runtime::DesktopOptions) -> R
         })
         .transpose()?;
     registry.insert(Entry::Desktop(Arc::new(NativeDesktop {
+        profile_catalog_directory,
+        profile_lease_directory,
         runtime,
         control,
         control_cleanup_failure: Mutex::new(None),

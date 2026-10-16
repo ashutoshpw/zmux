@@ -94,18 +94,24 @@ enum Request {
     },
 }
 
-/// Calls wait only for a bounded background acknowledgement and must never run on
-/// the native UI thread or core executor. A timeout does not drop a physical lock.
+/// Startup validates the fixed root with filesystem I/O. Startup and requests
+/// must run off the native UI thread and core executor. Request acknowledgements
+/// are bounded; a timeout does not drop a physical lock.
 pub struct LeaseService {
     sender: SyncSender<Request>,
 }
 impl LeaseService {
-    pub fn start() -> Result<Self, LeaseError> {
+    pub fn start(lease_directory: PathBuf) -> Result<Self, LeaseError> {
+        // Resolve and retain one namespace root for the service lifetime. Catalog
+        // locations may differ; they must never choose independent lock roots.
+        let directory =
+            state_directory(&lease_directory).map_err(|error| LeaseError::Io(error.to_string()))?;
         let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_REQUESTS);
         thread::Builder::new()
             .name("zmux-profile-leases".into())
             .spawn(move || {
                 let mut registry = Registry {
+                    directory,
                     epoch: Uuid::new_v4(),
                     next: 1,
                     leases: HashMap::new(),
@@ -183,13 +189,13 @@ impl LeaseService {
 }
 
 struct Registry {
+    directory: File,
     epoch: Uuid,
     next: u64,
     leases: HashMap<u64, PhysicalLease>,
 }
 struct PhysicalLease {
     token: LeaseToken,
-    _directory: File,
     _lock: File,
 }
 impl Registry {
@@ -220,7 +226,7 @@ impl Registry {
         let name = lock_name(profile);
         let lock = File::from(
             fs::openat(
-                &directory,
+                &self.directory,
                 name.as_str(),
                 OFlags::RDWR
                     | OFlags::CREATE
@@ -231,7 +237,7 @@ impl Registry {
             )
             .map_err(|error| LeaseError::Io(error.to_string()))?,
         );
-        inspect(&directory, &lock, &name)?;
+        inspect(&self.directory, &lock, &name)?;
         match mode {
             LeaseMode::Shared => lock.try_lock_shared(),
             LeaseMode::Exclusive => lock.try_lock(),
@@ -240,7 +246,7 @@ impl Registry {
             std::fs::TryLockError::WouldBlock => LeaseError::Busy,
             std::fs::TryLockError::Error(error) => LeaseError::Io(error.to_string()),
         })?;
-        inspect(&directory, &lock, &name)?;
+        inspect(&self.directory, &lock, &name)?;
         // Exclusive deletion cannot race this second identity check once all
         // native store construction and destructive owners use these leases.
         if !profile_exists(&directory, profile)
@@ -256,14 +262,8 @@ impl Registry {
             mode,
         };
         self.next = next;
-        self.leases.insert(
-            token.id,
-            PhysicalLease {
-                token,
-                _directory: directory,
-                _lock: lock,
-            },
-        );
+        self.leases
+            .insert(token.id, PhysicalLease { token, _lock: lock });
         Ok(token)
     }
     fn release(&mut self, token: LeaseToken) -> Result<(), LeaseError> {

@@ -60,6 +60,10 @@ ZmuxResult zmux_desktop_profile_add(uint64_t desktop, const uint8_t *name, size_
 /* Strict profile command JSON <=2048 bytes: add{name}, rename{profile,name}.
    Same bounded receipt, off-main admission and never-replay contract as profile_add. */
 ZmuxResult zmux_desktop_profile_command(uint64_t desktop, const uint8_t *request, size_t length);
+/* Fixed native datastore namespace; off UI/core. Status and unconstructed-token
+   release use desktop=0 and survive logical Desktop shutdown. Never release a
+   token after any WebKit datastore construction. */
+ZmuxResult zmux_desktop_profile_lease(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted native download lifecycle JSON, <=16384 bytes. Waits at most two seconds
    off the UI thread. Missing acknowledgement must not replay admission/publication.
    Caller-generated fenced tokens correlate uncertain outcomes with later snapshots. */

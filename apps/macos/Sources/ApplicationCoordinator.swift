@@ -92,7 +92,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private var browserEpoch: UUID?
     private(set) var terminals: [UInt64: TerminalView] = [:]
     private(set) var browsers: [UInt64: BrowserView] = [:]
-    private var browserDataStores: [UUID: WKWebsiteDataStore] = [:]
+    private lazy var browserProfileStores = BrowserProfileStores(bridge: bridge)
 
     init() {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
@@ -398,12 +398,17 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                         reportError("Browser profile is unavailable; its data store was not replaced")
                         continue
                     }
-                    if let existing = browserDataStores[profile] { dataStore = existing }
-                    else {
-                        guard browserDataStores.count < 32 else { reportError("Browser profile data store capacity reached"); continue }
-                        dataStore = WKWebsiteDataStore(forIdentifier: profile)
-                        browserDataStores[profile] = dataStore
-                    }
+                    guard let acquired = browserProfileStores.store(for: profile, isNeeded: { [weak self] in
+                        guard let self, self.shutdownTask == nil, let current = self.snapshot,
+                              current.browserProfiles.profiles.contains(where: { $0.id == profile }) else { return false }
+                        return current.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
+                            .contains { $0.kind == "browser" && $0.browserProfileId == profile }
+                    }, refresh: { [weak self] in
+                        guard let self, self.shutdownTask == nil, let current = self.snapshot else { return }
+                        do { try self.reconcile(current) }
+                        catch { self.reportError(error.localizedDescription) }
+                    }, reportError: { [weak self] message in self?.reportError(message) }) else { continue }
+                    dataStore = acquired
                 } else { dataStore = .nonPersistent() }
                 view = BrowserView(surface: surface, owner: self, dataStore: dataStore)
                 view.frame = NSRect(x: 0, y: 0, width: min(1920, max(640, mainWindowHost.browserViewportSize.width)), height: min(1200, max(480, mainWindowHost.browserViewportSize.height)))

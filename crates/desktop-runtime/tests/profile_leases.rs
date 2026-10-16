@@ -59,8 +59,11 @@ impl Fixture {
     fn state(&self) -> PathBuf {
         self.root.join("state")
     }
+    fn lease_root(&self) -> PathBuf {
+        self.root.join("leases")
+    }
     fn path(&self) -> PathBuf {
-        self.state()
+        self.lease_root()
             .join(format!("browser-profile-{}.lock", self.profiles[0]))
     }
     fn stop_catalog(&mut self) {
@@ -108,11 +111,12 @@ fn document() -> SessionDocument {
 }
 struct ChildLease(Child);
 impl ChildLease {
-    fn start(fixture: &Fixture) -> Self {
+    fn start(catalog: PathBuf, leases: PathBuf, profile: Uuid) -> Self {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", "lease_child", "--nocapture"])
-            .env("ZMUX_LEASE_CHILD_STATE", fixture.state())
-            .env("ZMUX_LEASE_CHILD_PROFILE", fixture.profiles[0].to_string())
+            .env("ZMUX_LEASE_CHILD_STATE", catalog)
+            .env("ZMUX_LEASE_CHILD_ROOT", leases)
+            .env("ZMUX_LEASE_CHILD_PROFILE", profile.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -160,7 +164,10 @@ fn lease_child() {
         thread::sleep(Duration::from_secs(10));
         std::process::exit(3);
     });
-    let service = LeaseService::start().unwrap();
+    let service = LeaseService::start(PathBuf::from(
+        std::env::var_os("ZMUX_LEASE_CHILD_ROOT").unwrap(),
+    ))
+    .unwrap();
     let token = service
         .acquire(
             PathBuf::from(std::env::var_os("ZMUX_LEASE_CHILD_STATE").unwrap()),
@@ -181,7 +188,7 @@ fn lease_child() {
 #[test]
 fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_inode() {
     let mut fixture = Fixture::new();
-    let service = LeaseService::start().unwrap();
+    let service = LeaseService::start(fixture.lease_root()).unwrap();
     let shared = service
         .acquire(
             fixture.state(),
@@ -193,7 +200,21 @@ fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_ino
     let identity = fs::metadata(fixture.path()).unwrap();
     assert_eq!(identity.nlink(), 1);
     assert_eq!(identity.mode() & 0o777, 0o600);
-    let mut child = ChildLease::start(&fixture);
+    // A copied catalog at another state path still addresses the same WebKit
+    // UUID. The independent process must share the namespace root, not derive
+    // its lock pathname from that catalog's location.
+    let mut copied = Fixture::new();
+    copied.stop_catalog();
+    fs::copy(
+        fixture
+            .state()
+            .join(zmux_desktop_runtime::profiles::CATALOG_NAME),
+        copied
+            .state()
+            .join(zmux_desktop_runtime::profiles::CATALOG_NAME),
+    )
+    .unwrap();
+    let mut child = ChildLease::start(copied.state(), fixture.lease_root(), fixture.profiles[0]);
     assert!(matches!(
         service.acquire(
             fixture.state(),
@@ -237,7 +258,7 @@ fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_ino
     // aliases on the default case-insensitive macOS filesystem.
     for path in [
         fixture.path(),
-        fixture.state().join(
+        fixture.lease_root().join(
             fixture
                 .path()
                 .file_name()
@@ -313,6 +334,8 @@ fn actual_process_shared_ownership_blocks_delete_lease_until_crash_and_keeps_ino
 fn lease_open_refuses_aliases_unsafe_inodes_and_unknown_profile_without_replacement() {
     for kind in ["symlink", "hardlink", "public", "nonempty"] {
         let fixture = Fixture::new();
+        fs::create_dir(fixture.lease_root()).unwrap();
+        fs::set_permissions(fixture.lease_root(), fs::Permissions::from_mode(0o700)).unwrap();
         let outside = fixture.root.join("outside");
         let file = OpenOptions::new()
             .write(true)
@@ -341,7 +364,7 @@ fn lease_open_refuses_aliases_unsafe_inodes_and_unknown_profile_without_replacem
         }
         let before = fs::symlink_metadata(fixture.path()).unwrap();
         let bytes = fs::read(fixture.path()).unwrap();
-        let service = LeaseService::start().unwrap();
+        let service = LeaseService::start(fixture.lease_root()).unwrap();
         assert!(
             service
                 .acquire(
@@ -360,7 +383,7 @@ fn lease_open_refuses_aliases_unsafe_inodes_and_unknown_profile_without_replacem
         assert_eq!(fs::read(fixture.path()).unwrap(), bytes);
     }
     let fixture = Fixture::new();
-    let service = LeaseService::start().unwrap();
+    let service = LeaseService::start(fixture.lease_root()).unwrap();
     let unknown = Uuid::new_v4();
     assert!(matches!(
         service.acquire(fixture.state(), owner(), unknown, LeaseMode::Shared),
@@ -368,7 +391,7 @@ fn lease_open_refuses_aliases_unsafe_inodes_and_unknown_profile_without_replacem
     ));
     assert!(
         !fixture
-            .state()
+            .lease_root()
             .join(format!("browser-profile-{unknown}.lock"))
             .exists()
     );
