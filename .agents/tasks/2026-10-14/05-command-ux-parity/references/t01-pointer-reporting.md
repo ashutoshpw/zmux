@@ -177,3 +177,11 @@ The first diagnostic revision e9d464a failed strict Swift compilation because
 phase.phase is optional and interpolating it directly is a warning treated as an
 error. Runs38861373416/38861358174 did not reach native runtime. The follow-up
 prints an explicit <missing> fallback; the prerequisite predicate is unchanged.
+
+Exact main3f81147 run38862148076 passes all35 cases, strict metadata decoding
+and shared shutdown. Parent independently verified271 retained source hashes,
+embedded source SHA and linked bridge, archive3737c9f969a64618af8f51bb6e7382c6720bcdb5a068db4f54dd4f0e00d94ba9,
+and actual child8314/parent8195/nonce9fd38e47-889b-4961-aa60-988584ed022c
+1002/1003 raw reports with exact sentinel/trailing bounds. Retained artifact:
+/tmp/zmux-main-pointer-38862148076. The earlier phase-c prerequisite did not
+recur; its unrecorded failed predicate is still unknown, not inferred resolved.

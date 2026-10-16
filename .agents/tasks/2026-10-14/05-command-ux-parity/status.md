@@ -5,6 +5,22 @@
 
 ## Active implementation
 
+- Main3f81147 native pointer/selection run38862148076 passes35 cases, strict
+  decoder and shared shutdown. Parent independently verified271 source hashes,
+  archive3737c9f969a64618af8f51bb6e7382c6720bcdb5a068db4f54dd4f0e00d94ba9,
+  embedded SHA/bridge and actual child8314/parent8195 raw mouse captures.
+  Priorab79307 phase-c prerequisite failure remains recorded; no claim of its
+  unrecorded cause. Physical mouse/optional-engine/saturation remain unverified.
+
+- User explicitly deferred Accessibility Save-dialog acceptance and requested a
+  separate disabled workflow. Regular native checks retain actual Cancel/cleanup
+  and report Save-dependent cases skipped, never passed. See B01 downloads record.
+- B01 production profile admission/clear/delete/reconciliation integrated from
+  reviewed11f51ac/8933710. Parent verified115 retained source files, universal
+  archive5ac5bdcd...e011de and actual3process/9lease native evidence38860801836.
+  Combined scripts/check passes404 tests/74groups/2explicit subprocess fixtures,
+  Clippy/notices/both ABI. Exact-main native revalidation remains pending.
+
 - Native pointer changes integrated asb04b6c6/affad11/98acf98/e0fd3a8 after
   independent verification of all268 retained Git source hashes, archive integrity,
   embedded source SHA and35 native cases from38858961638 at52b5ef0.

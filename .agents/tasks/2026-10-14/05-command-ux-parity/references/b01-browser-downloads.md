@@ -329,3 +329,26 @@ own browser without focus, with the same main-window owner and existing cleanup
 barrier. No production download/resource behavior changed. Local whitespace and
 source review are available; strict Swift compilation and actual native stage
 receipts remain hosted gates because this Linux host has no Swift/AppKit SDK.
+
+## User-deferred Accessibility acceptance (2026-10-16)
+
+The user confirmed no self-hosted macOS runner is available, explicitly requested
+skipping the Accessibility Save-dialog test for now, and requested a separate
+workflow kept disabled. This supersedes the prior requirement to block the normal
+artifact workflow on that host capability. It does not establish Save acceptance.
+
+`.github/workflows/native-save-dialog-accessibility.yml` retains the full public
+Accessibility driver path behind an unconditional false job condition and manual
+trigger only. Selecting an authorized runner and re-enabling it is future work.
+The regular macOS workflow passes `--skip-accessibility-save-tests` explicitly;
+no failed test or missing permission implicitly selects a skip. The app report
+records `native_save_dialog_accessibility: skipped_user_deferred` and
+`browser_downloads_native: false`. The driver checks this exact selected scope.
+
+Only the Save-dependent cases are deferred: destination acceptance for the three
+saved-download routes and the slow download case that needs an accepted destination.
+Real WKDownload creation, native NSSavePanel Cancel, terminal cancellation/cleanup,
+CLI event wait, browser surface cleanup and native download history menu remain
+required; `browser_downloads_cancel_native` must be true. Other native, browser,
+file ownership and shutdown checks remain enabled. No TCC changes, simulated Save
+callback, or success receipt replaces the deferred real-user-interaction test.

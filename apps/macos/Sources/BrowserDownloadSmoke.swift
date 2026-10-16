@@ -105,10 +105,11 @@ enum BrowserDownloadSmoke {
         cli: @escaping @MainActor ([String], Bool) async throws -> Data,
         snapshot: @MainActor () -> DesktopSnapshot?,
         browser: @MainActor (UInt64) -> BrowserView?
-    ) async throws {
+    ) async throws -> Bool {
+        let skipSaveAcceptance = ProcessInfo.processInfo.environment["ZMUX_NATIVE_SKIP_ACCESSIBILITY_SAVE_TESTS"] == "1"
         // Discover an unavailable host capability before creating a browser,
         // admitting a download or presenting a sheet. This is never acceptance.
-        try await preflight(report: report)
+        if !skipSaveAcceptance { try await preflight(report: report) }
         let setup = Task<URL, Error>.detached {
             let requested = FileManager.default.temporaryDirectory
                 .appendingPathComponent("zmux-native-download-" + UUID().uuidString, isDirectory: true)
@@ -141,26 +142,28 @@ enum BrowserDownloadSmoke {
             let selected = snapshot()?.workspace?.root.panes.map { $0.selectedSurface }
             // Same WebKit cookie context must survive an HTTP redirect into WKDownload.
             _ = try await cli(["browser", "eval"] + target + ["document.cookie = 'zmuxDownload=allowed; Path=/'; null"], false)
-            for (index, endpoint) in ["/download-redirect", "/download-mime", "/download"].enumerated() {
-                let prior = Set(snapshot()?.downloads.map(\.downloadId) ?? [])
-                if index == 2 {
-                    _ = try await cli(["browser", "goto"] + target + [origin + "/first"], false)
-                    try await wait("Action download fixture did not load") { browser(id)?.webView.title == "First fixture" && browser(id)?.webView.isLoading == false }
-                    _ = try await cli(["browser", "eval"] + target + ["const a = document.createElement('a'); a.href = '/download'; a.download = 'action.bin'; document.body.append(a); a.click(); null"], false)
-                } else { _ = try await cli(["browser", "goto"] + target + [origin + endpoint], false) }
-                try await wait("Native download save sheet did not open") { window.attachedSheet is NSSavePanel && snapshot()?.downloads.contains { !prior.contains($0.downloadId) } == true }
-                guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Download did not use NSSavePanel") }
-                let destination = root.appendingPathComponent("saved-" + String(index) + ".bin")
-                try await chooseDestination(destination, panel: panel)
-                try await wait("Native download never confirmed final publication") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "saved" && $0.cleanupComplete } == true }
-                let verify = Task<Data, Error>.detached { try Data(contentsOf: destination) }
-                guard try await verify.value == expected else { throw BridgeFailure(message: "WebKit saved different download bytes") }
-                let list = try decode(Listing.self, await cli(["browser", "download", "list"] + target + ["--json"], false))
-                guard let record = list.downloads.first, record.path == destination.path, record.bytes == UInt64(expected.count) else { throw BridgeFailure(message: "Native and CLI history disagree") }
-                // Observing a final path must leave its terminal event available.
-                _ = try await cli(["browser", "download", "wait"] + target + ["--path", destination.path, "--timeout-ms", "1000"], false)
-                let event = try decode(Event.self, await cli(["browser", "download", "wait"] + target + ["--timeout-ms", "1000"], false))
-                guard event.download.downloadId == record.downloadId, event.download.status == "saved" else { throw BridgeFailure(message: "Path wait consumed or retargeted the download event") }
+            if !skipSaveAcceptance {
+                for (index, endpoint) in ["/download-redirect", "/download-mime", "/download"].enumerated() {
+                    let prior = Set(snapshot()?.downloads.map(\.downloadId) ?? [])
+                    if index == 2 {
+                        _ = try await cli(["browser", "goto"] + target + [origin + "/first"], false)
+                        try await wait("Action download fixture did not load") { browser(id)?.webView.title == "First fixture" && browser(id)?.webView.isLoading == false }
+                        _ = try await cli(["browser", "eval"] + target + ["const a = document.createElement('a'); a.href = '/download'; a.download = 'action.bin'; document.body.append(a); a.click(); null"], false)
+                    } else { _ = try await cli(["browser", "goto"] + target + [origin + endpoint], false) }
+                    try await wait("Native download save sheet did not open") { window.attachedSheet is NSSavePanel && snapshot()?.downloads.contains { !prior.contains($0.downloadId) } == true }
+                    guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Download did not use NSSavePanel") }
+                    let destination = root.appendingPathComponent("saved-" + String(index) + ".bin")
+                    try await chooseDestination(destination, panel: panel)
+                    try await wait("Native download never confirmed final publication") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "saved" && $0.cleanupComplete } == true }
+                    let verify = Task<Data, Error>.detached { try Data(contentsOf: destination) }
+                    guard try await verify.value == expected else { throw BridgeFailure(message: "WebKit saved different download bytes") }
+                    let list = try decode(Listing.self, await cli(["browser", "download", "list"] + target + ["--json"], false))
+                    guard let record = list.downloads.first, record.path == destination.path, record.bytes == UInt64(expected.count) else { throw BridgeFailure(message: "Native and CLI history disagree") }
+                    // Observing a final path must leave its terminal event available.
+                    _ = try await cli(["browser", "download", "wait"] + target + ["--path", destination.path, "--timeout-ms", "1000"], false)
+                    let event = try decode(Event.self, await cli(["browser", "download", "wait"] + target + ["--timeout-ms", "1000"], false))
+                    guard event.download.downloadId == record.downloadId, event.download.status == "saved" else { throw BridgeFailure(message: "Path wait consumed or retargeted the download event") }
+                }
             }
             // The real panel's Cancel action must acknowledge a terminal cancellation.
             var prior = Set(snapshot()?.downloads.map(\.downloadId) ?? [])
@@ -170,26 +173,32 @@ enum BrowserDownloadSmoke {
             try await wait("Save-sheet cancellation did not clean up") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "cancelled" && $0.cleanupComplete } == true }
             _ = try await cli(["browser", "download", "wait"] + target + ["--timeout-ms", "1000"], false)
 
-            // Navigation must not cancel an independent body. Explicit cancellation
-            // waits for the physical object and removes only its private partial file.
-            prior = Set(snapshot()?.downloads.map(\.downloadId) ?? [])
-            _ = try await cli(["browser", "goto"] + target + [origin + "/download-slow"], false)
-            try await wait("Slow download save sheet did not open") { window.attachedSheet is NSSavePanel }
-            guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Slow download lost its save sheet") }
-            try await chooseDestination(root.appendingPathComponent("cancelled.bin"), panel: panel)
-            try await wait("Slow download did not start") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "downloading" } == true }
-            guard let slow = snapshot()?.downloads.first(where: { !prior.contains($0.downloadId) }) else { throw BridgeFailure(message: "Slow download lost its owner") }
-            _ = try await cli(["browser", "goto"] + target + [origin + "/second"], false)
-            try await wait("Navigation during download did not finish") { browser(id)?.webView.title == "Second fixture" && browser(id)?.webView.isLoading == false }
-            guard snapshot()?.downloads.first(where: { $0.downloadId == slow.downloadId })?.status == "downloading" else { throw BridgeFailure(message: "Navigation cancelled or retargeted its admitted download") }
-            _ = try await cli(["browser", "download", "cancel"] + target + [slow.downloadId.uuidString], false)
-            try await wait("Physical download cancellation did not clean up") { snapshot()?.downloads.contains { $0.downloadId == slow.downloadId && $0.status == "cancelled" && $0.cleanupComplete } == true }
-            let checkCancelled = Task<Bool, Never>.detached { FileManager.default.fileExists(atPath: root.appendingPathComponent("cancelled.bin").path) }
-            let cancellationPublished = await checkCancelled.value
-            guard !cancellationPublished, snapshot()?.workspace?.root.panes.map({ $0.selectedSurface }) == selected else { throw BridgeFailure(message: "Download cancellation published bytes or changed focus") }
+            if !skipSaveAcceptance {
+                // Navigation must not cancel an independent body. Explicit cancellation
+                // waits for the physical object and removes only its private partial file.
+                prior = Set(snapshot()?.downloads.map(\.downloadId) ?? [])
+                _ = try await cli(["browser", "goto"] + target + [origin + "/download-slow"], false)
+                try await wait("Slow download save sheet did not open") { window.attachedSheet is NSSavePanel }
+                guard let panel = window.attachedSheet as? NSSavePanel else { throw BridgeFailure(message: "Slow download lost its save sheet") }
+                try await chooseDestination(root.appendingPathComponent("cancelled.bin"), panel: panel)
+                try await wait("Slow download did not start") { snapshot()?.downloads.contains { !prior.contains($0.downloadId) && $0.status == "downloading" } == true }
+                guard let slow = snapshot()?.downloads.first(where: { !prior.contains($0.downloadId) }) else { throw BridgeFailure(message: "Slow download lost its owner") }
+                _ = try await cli(["browser", "goto"] + target + [origin + "/second"], false)
+                try await wait("Navigation during download did not finish") { browser(id)?.webView.title == "Second fixture" && browser(id)?.webView.isLoading == false }
+                guard snapshot()?.downloads.first(where: { $0.downloadId == slow.downloadId })?.status == "downloading" else { throw BridgeFailure(message: "Navigation cancelled or retargeted its admitted download") }
+                _ = try await cli(["browser", "download", "cancel"] + target + [slow.downloadId.uuidString], false)
+                try await wait("Physical download cancellation did not clean up") { snapshot()?.downloads.contains { $0.downloadId == slow.downloadId && $0.status == "cancelled" && $0.cleanupComplete } == true }
+                let checkCancelled = Task<Bool, Never>.detached { FileManager.default.fileExists(atPath: root.appendingPathComponent("cancelled.bin").path) }
+                let cancellationPublished = await checkCancelled.value
+                guard !cancellationPublished else { throw BridgeFailure(message: "Download cancellation published bytes") }
+            }
+            guard snapshot()?.workspace?.root.panes.map({ $0.selectedSurface }) == selected else {
+                throw BridgeFailure(message: "Download cancellation changed focus")
+            }
             _ = try await cli(["close-surface", "--surface", String(id)], false)
             surface = nil
             try await removeFixture(root)
+            return !skipSaveAcceptance
         } catch {
             if let panel = window.attachedSheet as? NSSavePanel { panel.cancel(nil) }
             var cleanupConfirmed = true
