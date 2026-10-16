@@ -98,6 +98,9 @@ impl Fixture {
                 Err(e) => panic!("{e}"),
             }
         };
+        // Darwin accepted sockets inherit the listener nonblocking flag.
+        // This fixture uses bounded blocking frames on the accepted connection.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
