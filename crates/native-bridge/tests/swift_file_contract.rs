@@ -2884,3 +2884,58 @@ fn the_tracker_names_every_deferred_item_of_design_section_7() {
         );
     }
 }
+
+/// Source pins for the banner ranking. The behaviour itself is exercised by the macOS fixture
+/// (`tools/native-fixtures/file-editor-model.swift`, UNAVAILABLE on this machine).
+#[test]
+fn a_disk_state_report_never_replaces_an_error_or_recovery_banner() {
+    let model = swift("FileEditorModel.swift");
+    let yields = between(
+        &model,
+        "var yieldsToExternal: Bool {",
+        "var isObsoleteAfterLoad",
+    );
+    assert!(
+        yields.contains("case .none, .dirtyUnconfirmed, .saveResolved: return true")
+            && yields.contains("default: return isExternal")
+            && !yields.contains(".message")
+            && !yields.contains(".saveUnknown")
+            && !yields.contains(".ownerLost")
+            && !yields.contains(".loadFailed"),
+        "only an empty, informational or disk-state banner may yield to a disk-state banner"
+    );
+    let reported = between(
+        &model,
+        "mutating func externalStateReported(",
+        "private mutating func externalReaction(",
+    );
+    assert!(
+        reported.contains("if case .show = reaction, !banner.yieldsToExternal { return .none }"),
+        "externalStateReported must drop a .show reaction while an error or recovery banner is showing"
+    );
+    let fixture = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tools/native-fixtures/file-editor-model.swift"),
+    )
+    .unwrap();
+    for needed in [
+        "does not replace \\(banner)",
+        ".saveUnknown(7), .saveUnknown(0)",
+        "a pending-save notice survives disk reports so its outcome can still resolve it",
+    ] {
+        assert!(
+            fixture.contains(needed),
+            "the macOS fixture lost its banner-ranking case `{needed}`"
+        );
+    }
+    let panel = swift("FilePanelView.swift");
+    let reason = between(
+        &panel,
+        "private var saveUnavailableReason: String {",
+        "/// Saves the buffer.",
+    );
+    assert!(
+        reason.contains("ownerToken == nil || staleOwner"),
+        "a stale owner must not be reported as 'no changes to save'"
+    );
+}

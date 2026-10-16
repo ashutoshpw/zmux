@@ -1996,3 +1996,53 @@ more than the 580 after fix round 1: the three tests above); clippy `-D warnings
 require upstream text review"); `scripts/check-native-bridge`. No Swift was compiled or run; every gate
 listed under "UNAVAILABLE gates" above is still UNAVAILABLE. The 579 and 580 figures earlier in this
 section were correct when recorded and are superseded by 583 for the current tree.
+
+### Fix round 3 (S5 final review, one blocking finding reported three times, verified valid and fixed)
+
+Base of this round: `9dfd10d`.
+
+Finding: error and recovery banners were overwritten by the next snapshot while the file stayed
+changed, deleted or unreadable on disk. Verified by reading the code path: `FilePanelView.update`
+runs `reconcileExternal` on every snapshot in the `.ready` phase; `FileEditorModel.externalStateReported`
+returned `.show(.changedOnDisk | .deletedOnDisk | .unreadable)` without looking at the current banner,
+and `setBanner` only suppresses an equal banner. So after a forced Overwrite failed with
+`permission_denied`, `directory_not_writable` or `hard_linked`, the `.message("Could not save ...")`
+banner was replaced within a tick by the changed-on-disk banner and the reason was never seen; a
+pending `.saveUnknown(op)` ("do not save again yet") was replaced the same way and, because
+`reconcileOutcome` only acts while that banner shows, could never resolve; a kept `.ownerLost`
+(`stale_view`) and a failed reload's `.loadFailed` were replaced too. No text was lost (the buffer
+stays and Copy Text works), but errors were silently dropped, against AGENTS.md and design D14/D21.
+It was not listed under the known limitations, so shipping it would have been undisclosed.
+
+Fix (in `apps/macos/Sources/FileEditorModel.swift`, so the decision stays in the AppKit-free model):
+- New `FileBanner.yieldsToExternal`: true only for `.none`, `.dirtyUnconfirmed`, `.saveResolved` and
+  the disk-state banners themselves. `.message`, `.saveUnknown`, `.ownerLost`, `.loadFailed` and
+  `.savedUnsynced` never yield.
+- `externalStateReported` now drops a `.show` reaction while a banner that does not yield is
+  showing. Nothing is lost by waiting: the dismissal markers are written only by the disk banners'
+  own buttons, so once the error banner is dismissed or resolved the next snapshot announces the disk
+  state. `.reloadAutomatically` (clean buffer) and `.clearBanner` are unchanged.
+- Related symptom from the first report: `saveUnavailableReason` (`FilePanelView.swift`) answered
+  "There are no changes to save." for a dirty buffer whose owner was stale. It now says the file is
+  not attached and to reload first (unsaved text is kept; Copy Text keeps it).
+
+Tests:
+- macOS fixture `tools/native-fixtures/file-editor-model.swift` (UNAVAILABLE here, no Swift
+  toolchain): for each of `.message`, `.saveUnknown(7)`, `.saveUnknown(0)`, `.ownerLost`, `.loadFailed`,
+  `.savedUnsynced` and each of the changed, deleted and unreadable states, a dirty view keeps the
+  banner across repeated reports and the disk state is announced once the banner is dismissed; the
+  yielding banners are checked; a pending-save notice still resolves through `saveOutcomeBanner`
+  after disk reports.
+- `a_disk_state_report_never_replaces_an_error_or_recovery_banner`
+  (`crates/native-bridge/tests/swift_file_contract.rs`): source pins for `yieldsToExternal`, the
+  guard in `externalStateReported`, the fixture cases and the stale-owner save message. These pins
+  prove the guard is written, not that it behaves; the behaviour is proven only by the fixture, which
+  has never been compiled or run (`scripts/check-file-editor-model` needs macOS, UNAVAILABLE here).
+
+#### Checks run (fix round 3)
+
+`scripts/check` PASS, exit 0 (log `/tmp/zmux-final3-check.log`, temporary): `cargo fmt --check`;
+`cargo test --workspace --locked` with 79 `test result` lines, 584 passed, 0 failed (one more than the
+583 after fix round 2: the new contract test); clippy `-D warnings`; license inventory; native bridge
+checks. No Swift was compiled or run; every gate under "UNAVAILABLE gates" above, including
+`scripts/check-file-editor-model` for the new fixture cases, is still UNAVAILABLE.

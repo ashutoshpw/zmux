@@ -26,6 +26,18 @@ enum FileBanner: Equatable, Sendable {
         }
     }
 
+    /// Whether an on-disk-state banner may take this banner's place. Error and recovery banners
+    /// (a failed save or reload, the unconfirmed-save wait, a lost owner) carry the reason for a
+    /// failure or a "do not save again yet" instruction; a snapshot that repeats the same disk
+    /// state must never replace them. Only an empty banner, another disk-state banner or a purely
+    /// informational notice yields.
+    var yieldsToExternal: Bool {
+        switch self {
+        case .none, .dirtyUnconfirmed, .saveResolved: return true
+        default: return isExternal
+        }
+    }
+
     /// Left over from an attach or reload whose reply replaced the buffer, so it no longer applies.
     var isObsoleteAfterLoad: Bool {
         switch self {
@@ -220,6 +232,17 @@ struct FileEditorModel: Sendable, Equatable {
                                         attached: Bool, busy: Bool, hasUnsavedChanges: Bool) -> FileExternalReaction {
         latestDiskGeneration = diskGeneration
         guard attached, !busy else { return .none }
+        let reaction = externalReaction(state: state, diskGeneration: diskGeneration, errorCode: errorCode,
+                                        hasUnsavedChanges: hasUnsavedChanges)
+        // An error or recovery banner outranks the disk-state banner: keep it. Nothing is lost
+        // by waiting, because the disk state is announced again once that banner is dismissed or
+        // resolved (the dismissal markers below are only written by the disk banners' own buttons).
+        if case .show = reaction, !banner.yieldsToExternal { return .none }
+        return reaction
+    }
+
+    private mutating func externalReaction(state: String, diskGeneration: UInt64, errorCode: String?,
+                                           hasUnsavedChanges: Bool) -> FileExternalReaction {
         switch state {
         case "changed":
             dismissedDeleted = false
