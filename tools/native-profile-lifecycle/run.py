@@ -41,6 +41,7 @@ def main():
     bundle_id = "app.w3dev.zmux.profile-lifecycle-probe." + uuid.uuid4().hex
     receipt = {"schema_version": 1, "state": "starting", "source_sha": source,
                "scenario": SCENARIO,
+               "termination": "nsapplication_terminate",
                "source_sha256": frozen, "nonce": nonce, "bundle_id": bundle_id,
                "profile_a": profile_a, "profile_b": profile_b,
                "platform": platform.platform(), "architecture": platform.machine(), "phases": [],
@@ -112,7 +113,7 @@ def main():
         receipt["archive"] = {"name": archive.name, "sha256": digest(archive)}
         fixture = f"http://127.0.0.1:{server.server_port}/fixture/{nonce}"
         preparation_path = root / "native-profile-prepare.json"
-        runner.run([str(executable), str(preparation_path), fixture,
+        preparation_log = runner.run([str(executable), str(preparation_path), fixture,
                     nonce, profile_a, profile_b, "prepare", str(preparation_path), SCENARIO], "native-profile-prepare", root,
                    receipt["phases"], timeout=45, cwd=REPO)
         prepared = json.loads(preparation_path.read_text())
@@ -122,8 +123,17 @@ def main():
             assert report["sourceSHA"] == source and report["bundleID"] == bundle_id and report["nonce"] == nonce
             assert report["profileA"].lower() == profile_a and report["profileB"].lower() == profile_b
             assert report["scenario"] == SCENARIO
+            assert report["termination"] == receipt["termination"]
+
+        def validate_termination(log, pid, phase):
+            prefix = "ZMUX_APPKIT_TERMINATION "
+            records = [json.loads(line[len(prefix):]) for line in log.splitlines() if line.startswith(prefix)]
+            expected = {"event": "application_will_terminate", "appPID": pid, "phase": phase}
+            assert records == [expected]
+            return records[0]
 
         validate_identity(prepared, owned_groups[-1]["pid"])
+        receipt["preparation_termination"] = validate_termination(preparation_log, prepared["appPID"], "prepare")
         assert prepared["phase"] == "prepare" and prepared["state"] == "prepared" and prepared["stage"] == "prepared_for_fresh_process"
         assert all(prepared[key] for key in ("mountedA", "aViewReleased", "heldDataRetained", "separateBRetained"))
         if SCENARIO == "baseline":
@@ -146,11 +156,12 @@ def main():
         receipt["same_process_acceptance"] = True
         assert digest(executable) == receipt["executable_sha256"]
         assert digest(archive) == receipt["archive"]["sha256"]
-        runner.run([str(executable), str(root / "native-profile-lifecycle.json"), fixture,
+        reopen_log = runner.run([str(executable), str(root / "native-profile-lifecycle.json"), fixture,
                     nonce, profile_a, profile_b, "reopen", str(preparation_path), SCENARIO], "native-profile-reopen", root,
                    receipt["phases"], timeout=45, cwd=REPO)
         report = json.loads((root / "native-profile-lifecycle.json").read_text())
         validate_identity(report, owned_groups[-1]["pid"])
+        receipt["reopen_termination"] = validate_termination(reopen_log, report["appPID"], "reopen")
         assert report["appPID"] != prepared["appPID"] and report["preparerPID"] == prepared["appPID"]
         assert report["phase"] == "reopen" and report["state"] == "complete" and report["stage"] == "public_cleanup_complete"
         assert report["separateBRetained"] and report["aViewReleased"]

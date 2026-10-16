@@ -275,3 +275,24 @@ assertions. The clear scenario retains its original strict empty-A/intact-B
 assertions. No delay, replay or per-cookie deletion is added. If the baseline also
 loses cookies, normal documented app termination is a separate comparison to
 investigate before attributing loss to A clearing or claiming durability.
+
+Run [38840541909](https://github.com/ashutoshpw/zmux/actions/runs/38840541909)
+at `c3b4a42a8631f86652e194158113b0ee09612f23` confirmed loss in that
+no-removal baseline. Before exit, each public cookie store contained its correct
+probe cookie with `sessionOnly=false` and future expiry. After reaped preparer
+PID 3246 exited 0, reader PID 3267 retained localStorage A/B but both JavaScript
+cookie strings and both public cookie-store arrays were empty. Both phases had no
+UUID removal or all-data clear. No timeout or pending callback occurred. The
+baseline does not establish cookie persistence under this fixture's direct exit,
+so the V5 B loss cannot be attributed to A clearing from these runs.
+
+The documented normal-termination comparison changes only successful phase
+completion to
+[`NSApplication.terminate(_:)`](https://developer.apple.com/documentation/appkit/nsapplication/terminate(_:)).
+Apple documents its termination request/delegate/`willTerminateNotification`
+sequence; it does not promise cookie disk persistence here. The probe retains an
+actual `applicationWillTerminate` log receipt with exact phase/PID. The runner
+requires that receipt plus the original owned exit/reap barrier before a reader
+launch. Failure still exits 1, with no direct-exit fallback, delay or retry. All
+baseline A/B retention assertions and store observations remain unchanged. The
+comparison's outcome, not the API name, must establish its effect on persistence.
