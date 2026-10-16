@@ -13,6 +13,11 @@ enum AgentInboxSmoke {
         let inputBytes: UInt64
         let sequence: UInt64
     }
+    private struct UTF8Evidence: Encodable, Sendable {
+        let name: String
+        let expected: [UInt8]
+        let observed: [UInt8]
+    }
     private struct HeldCapacity: Sendable { let core: UInt64; let buffers: [UInt64] }
     private struct Evidence: Encodable, Sendable {
         let scope = "native_agent_inbox_menu_and_durable_messages"
@@ -30,6 +35,7 @@ enum AgentInboxSmoke {
         var failure: String?
         var savedReplies: [UUID] = []
         var pendingRequestId: UUID?
+        var unicodeBytes: [UTF8Evidence] = []
     }
     private struct Message: Decodable {
         struct Address: Decodable { let surface_id: UUID }
@@ -117,7 +123,7 @@ enum AgentInboxSmoke {
             }
             let listed = try JSONDecoder().decode(Inbox.self, from: await cli(source, ["agent", "inbox"]))
             guard listed.messages.count == 3,
-                  listed.messages.contains(where: { $0.id == primary.id && $0.state == "queued" && $0.body == body &&
+                  listed.messages.contains(where: { $0.id == primary.id && $0.state == "queued" && $0.body.utf8.elementsEqual(body.utf8) &&
                       $0.sender.surface_id == otherChild.surface && $0.recipient.surface_id == sourceChild.surface }),
                   listed.messages.contains(where: { $0.id == sibling.id && $0.state == "queued" && $0.recipient.surface_id == otherChild.surface }),
                   listed.messages.contains(where: { $0.id == closed.id && $0.state == "failed" && $0.failure == "recipient_closed" && $0.recipient.surface_id == closedUUID }) else {
@@ -162,18 +168,52 @@ enum AgentInboxSmoke {
             row.performClick(nil)
             try await wait(coordinator, "selected message body and reply responder") { _ in
                 let views = descendants(content)
-                return views.contains { ($0 as? NSTextView)?.string == body || ($0 as? NSTextField)?.stringValue == body } &&
+                return views.contains { exact(($0 as? NSTextView)?.string, body) || exact(($0 as? NSTextField)?.stringValue, body) } &&
                     views.compactMap { $0 as? NSTextView }.contains { $0.isEditable && $0.accessibilityLabel() == "Reply" && inbox.firstResponder === $0 }
             }
             let rendered = descendants(content)
-            guard rendered.contains(where: { ($0 as? NSTextView)?.string == body || ($0 as? NSTextField)?.stringValue == body }),
+            guard rendered.contains(where: { exact(($0 as? NSTextView)?.string, body) || exact(($0 as? NSTextField)?.stringValue, body) }),
                   let reply = rendered.compactMap({ $0 as? NSTextView }).first(where: { $0.isEditable && $0.accessibilityLabel() == "Reply" }),
                   inbox.firstResponder === reply else { throw failure("Inbox body or actual reply first responder differs") }
             evidence.checks.append("actual_source_owned_inbox_exact_body_and_reply_responder")
+            // Distinct durable records have canonically equivalent text but different
+            // UTF-8 bytes. Actual row actions must replace the mounted body exactly.
+            let decomposedBody = "Canonical body e\u{301} · retained bytes"
+            let composedBody = "Canonical body é · retained bytes"
+            guard !decomposedBody.utf8.elementsEqual(composedBody.utf8) else { throw failure("Independent Unicode oracles are not distinct") }
+            let decomposed = try await send(source, from: otherChild, to: sourceChild.surface, body: decomposedBody)
+            let composed = try await send(source, from: otherChild, to: sourceChild.surface, body: composedBody)
+            guard decomposed.body.utf8.elementsEqual(decomposedBody.utf8), composed.body.utf8.elementsEqual(composedBody.utf8) else {
+                throw failure("Independent CLI canonical body byte prerequisites differ")
+            }
+            evidence.checks.append("independent_cli_canonical_equivalent_bodies_have_distinct_utf8")
+            evidence.stage = "unicode_body"
+            try await wait(coordinator, "both exact canonical message UUID rows") { _ in
+                let ids = Set(descendants(content).compactMap { $0.accessibilityIdentifier() })
+                return ids.contains(decomposed.id.uuidString.lowercased()) && ids.contains(composed.id.uuidString.lowercased())
+            }
+            guard let decomposedRow = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityIdentifier() == decomposed.id.uuidString.lowercased() }),
+                  let composedRow = descendants(content).compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityIdentifier() == composed.id.uuidString.lowercased() }),
+                  let mountedBody = descendants(content).compactMap({ $0 as? NSTextView }).first(where: { $0.accessibilityLabel() == "Message body" }) else {
+                throw failure("Actual canonical body rows/document unavailable")
+            }
+            decomposedRow.performClick(nil)
+            try await wait(coordinator, "selected decomposed body document") { _ in
+                decomposedRow.state == .on && mountedBody.string.utf8.elementsEqual(decomposedBody.utf8)
+            }
+            evidence.unicodeBytes.append(UTF8Evidence(name: "body_decomposed", expected: Array(decomposedBody.utf8), observed: Array(mountedBody.string.utf8)))
+            composedRow.performClick(nil)
+            guard composedRow.state == .on else { throw failure("Actual composed row selection did not commit") }
+            evidence.unicodeBytes.append(UTF8Evidence(name: "body_precomposed", expected: Array(composedBody.utf8), observed: Array(mountedBody.string.utf8)))
+            guard mountedBody.string.utf8.elementsEqual(composedBody.utf8) else {
+                throw failure("Selected canonical-equivalent message did not preserve exact UTF-8 body")
+            }
+            evidence.checks.append("native_row_selection_preserves_distinct_canonical_equivalent_utf8_bodies")
+            row.performClick(nil)
             evidence.stage = "journey"
             let draft = "  Native reply α界 e\u{301}🙂\t\nkept whitespace  \n"
             reply.insertText(draft, replacementRange: NSRange(location: 0, length: (reply.string as NSString).length))
-            guard reply.string == draft else { throw failure("Actual reply editing did not retain exact text") }
+            guard reply.string.utf8.elementsEqual(draft.utf8) else { throw failure("Actual reply editing did not retain exact text") }
             let arrival = try await send(source, from: otherChild, to: sourceChild.surface, body: "Later arrival stays queued")
             guard let refresh = button("Refresh", in: content), let submit = button("Send Reply", in: content),
                   let markRead = button("Mark Read", in: content), let status = button("Check Status", in: content),
@@ -183,7 +223,7 @@ enum AgentInboxSmoke {
             }
             refresh.performClick(nil)
             try await wait(coordinator, "real new arrival rendered without losing draft") { _ in
-                descendants(content).contains { $0.accessibilityIdentifier() == arrival.id.uuidString.lowercased() } && reply.string == draft
+                descendants(content).contains { $0.accessibilityIdentifier() == arrival.id.uuidString.lowercased() } && reply.string.utf8.elementsEqual(draft.utf8)
             }
             inbox.orderOut(nil)
             other.window.makeKeyAndOrderFront(nil)
@@ -192,26 +232,31 @@ enum AgentInboxSmoke {
             }
             menu.performActionForItem(at: index)
             try await wait(coordinator, "same reopened inbox draft and responder") { _ in
-                inbox.isVisible && inbox.parent === source.window && inbox.firstResponder === reply && reply.string == draft
+                inbox.isVisible && inbox.parent === source.window && inbox.firstResponder === reply && reply.string.utf8.elementsEqual(draft.utf8)
             }
             evidence.checks.append("draft_survives_real_arrival_refresh_hide_and_foreign_focus")
             evidence.children = try await counters(root, children: children, nonce: nonce, livePIDs: livePIDs)
+            let submittedDraft = "  Native reply α界 é🙂\t\nkept whitespace  \n"
+            reply.insertText(submittedDraft, replacementRange: NSRange(location: 0, length: (reply.string as NSString).length))
+            evidence.unicodeBytes.append(UTF8Evidence(name: "editor_precomposed", expected: Array(submittedDraft.utf8), observed: Array(reply.string.utf8)))
+            guard reply.string.utf8.elementsEqual(submittedDraft.utf8) else { throw failure("Actual precomposed draft editor bytes differ") }
             guard submit.isEnabled else { throw failure("Reply submit disabled despite a live original sender and draft") }
             submit.performClick(nil)
             try submitKey(in: inbox)
-            let laterEdit = draft + "edited while saving"
+            let laterEdit = submittedDraft + "edited while saving"
             reply.insertText("edited while saving", replacementRange: NSRange(location: (reply.string as NSString).length, length: 0))
             other.window.makeKeyAndOrderFront(nil)
             let replies = try await inboxUntil(source, "single durable native reply") { rows in
-                rows.messages.filter { $0.reply_to == primary.id && $0.body == draft }.count == 1
+                rows.messages.filter { $0.reply_to == primary.id && $0.body.utf8.elementsEqual(submittedDraft.utf8) }.count == 1
             }
-            guard let saved = replies.messages.first(where: { $0.reply_to == primary.id && $0.body == draft }),
+            guard let saved = replies.messages.first(where: { $0.reply_to == primary.id && $0.body.utf8.elementsEqual(submittedDraft.utf8) }),
                   saved.sender.surface_id == sourceChild.surface, saved.recipient.surface_id == otherChild.surface,
-                  saved.thread_id == primary.thread_id, saved.state == "queued",
+                  saved.thread_id == primary.thread_id, saved.state == "queued", saved.body.utf8.elementsEqual(submittedDraft.utf8),
                   replies.messages.filter({ $0.reply_to == primary.id }).count == 1 else { throw failure("Reply lost original parent/thread/sender/recipient or duplicated") }
             try await wait(coordinator, "saved receipt preserves newer draft revision") { _ in
-                !status.isEnabled && submit.isEnabled && reply.string == laterEdit && operationStatus(content).hasPrefix("Saved")
+                !status.isEnabled && submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8) && operationStatus(content).hasPrefix("Saved")
             }
+            evidence.unicodeBytes.append(UTF8Evidence(name: "saved_precomposed", expected: Array(submittedDraft.utf8), observed: Array(saved.body.utf8)))
             evidence.savedReplies.append(saved.id)
             evidence.checks.append("button_and_submit_key_save_one_exact_reply_and_keep_later_edit")
             let beforeRead = try JSONDecoder().decode(Inbox.self, from: await cli(source, ["agent", "inbox"]))
@@ -232,13 +277,13 @@ enum AgentInboxSmoke {
             try await wait(coordinator, "native receiving off receipt") { _ in receiving.isEnabled && receiving.state == .off && operationStatus(content).contains("settings saved") }
             submit.performClick(nil)
             try await wait(coordinator, "native opt-out refusal keeps draft") { _ in
-                operationStatus(content).contains("messaging disabled") && submit.isEnabled && reply.string == laterEdit
+                operationStatus(content).contains("messaging disabled") && submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8)
             }
             let failed = try await inboxUntil(source, "queued messages failed by explicit receiving off") { rows in
                 rows.messages.first(where: { $0.id == arrival.id })?.state == "failed" &&
                 rows.messages.first(where: { $0.id == saved.id })?.state == "failed"
             }
-            guard failed.messages.count == 5, failed.messages.first(where: { $0.id == saved.id })?.failure == "messaging_disabled" else { throw failure("Refused native send mutated inbox or failed messages lost their reason") }
+            guard failed.messages.count == 7, failed.messages.first(where: { $0.id == saved.id })?.failure == "messaging_disabled" else { throw failure("Refused native send mutated inbox or failed messages lost their reason") }
             try await wait(coordinator, "configured off after refused reply") { _ in receiving.isEnabled && receiving.state == .off }
             receiving.performClick(nil)
             try await settingsUntil(source, enabled: true)
@@ -256,18 +301,18 @@ enum AgentInboxSmoke {
             submit.performClick(nil)
             try submitKey(in: inbox)
             try await wait(coordinator, "real journal wait becomes explicit Check Status") { _ in
-                status.isEnabled && !submit.isEnabled && operationStatus(content).contains("Submission unconfirmed") && reply.string == laterEdit
+                status.isEnabled && !submit.isEnabled && operationStatus(content).contains("Submission unconfirmed") && reply.string.utf8.elementsEqual(laterEdit.utf8)
             }
             guard let operation = operationStatus(content).split(separator: " ").compactMap({ UUID(uuidString: String($0)) }).last else { throw failure("Uncertain operation did not expose its original UUID") }
             evidence.pendingRequestId = operation
             status.performClick(nil)
             try await wait(coordinator, "pending Check Status retains exact UUID and draft") { _ in
-                status.isEnabled && operationStatus(content).contains(operation.uuidString.lowercased()) && reply.string == laterEdit && !submit.isEnabled
+                status.isEnabled && operationStatus(content).contains(operation.uuidString.lowercased()) && reply.string.utf8.elementsEqual(laterEdit.utf8) && !submit.isEnabled
             }
             heldCapacity = try await reserveCapacity()
             status.performClick(nil)
             try await wait(coordinator, "rejected status transport cannot unlock original uncertain send") { _ in
-                status.isEnabled && !submit.isEnabled && reply.string == laterEdit &&
+                status.isEnabled && !submit.isEnabled && reply.string.utf8.elementsEqual(laterEdit.utf8) &&
                 operationStatus(content).contains("(-5)") && operationStatus(content).contains(operation.uuidString.lowercased())
             }
             if let heldCapacity { try await releaseCapacity(heldCapacity) }
@@ -280,9 +325,9 @@ enum AgentInboxSmoke {
                 reply.string.isEmpty && operationStatus(content).hasPrefix("Saved") && !status.isEnabled
             }
             let recovered = try await inboxUntil(source, "one original durable reply after real lock release") { rows in
-                rows.messages.contains { $0.request_id == operation && $0.reply_to == primary.id && $0.body == laterEdit }
+                rows.messages.contains { $0.request_id == operation && $0.reply_to == primary.id && $0.body.utf8.elementsEqual(laterEdit.utf8) }
             }
-            guard recovered.messages.count == 6,
+            guard recovered.messages.count == 8,
                   recovered.messages.filter({ $0.request_id == operation }).count == 1,
                   let recoveredReply = recovered.messages.first(where: { $0.request_id == operation }),
                   recoveredReply.sender.surface_id == sourceChild.surface,
@@ -354,6 +399,9 @@ enum AgentInboxSmoke {
             } while status == -4 && ContinuousClock.now < deadline
             guard status == 0 else { throw failure("Fixture response/core ownership cleanup failed: \(status)") }
         }
+    }
+    nonisolated private static func exact(_ value: String?, _ expected: String) -> Bool {
+        value?.utf8.elementsEqual(expected.utf8) == true
     }
     private static func button(_ title: String, in content: NSView) -> NSButton? {
         descendants(content).compactMap { $0 as? NSButton }.first { $0.title == title || $0.accessibilityLabel() == title }
@@ -441,7 +489,7 @@ enum AgentInboxSmoke {
     }
     private static func send(_ host: MainWindowHost, from sender: Child, to recipient: UUID, body: String) async throws -> Message {
         let sent = try JSONDecoder().decode(Sent.self, from: await cli(host, ["agent", "message", recipient.uuidString, "--", body], caller: sender))
-        guard sent.durability == "saved", sent.message.state == "queued", sent.message.body == body,
+        guard sent.durability == "saved", sent.message.state == "queued", sent.message.body.utf8.elementsEqual(body.utf8),
               sent.message.sender.surface_id == sender.surface, sent.message.recipient.surface_id == recipient else { throw failure("CLI send lost exact attribution/body/durability") }
         return sent.message
     }

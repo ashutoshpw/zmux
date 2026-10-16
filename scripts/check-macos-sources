@@ -19,6 +19,7 @@ architectures = ["arm64", "x86_64"]
 if platform.machine() == "x86_64":
     architectures.reverse()
 for architecture in architectures:
+    print("Checking Swift 6 native sources for " + architecture, flush=True)
     subprocess.run([
         "xcrun", "clang", "-fsyntax-only", "-std=c11", "-Wall", "-Wextra", "-Werror",
         "-target", f"{architecture}-apple-macosx14.0", "-isysroot", sdk,
@@ -31,6 +32,7 @@ for architecture in architectures:
         "-import-objc-header", str(root / "crates/native-bridge/include/zmux.h"),
         *map(str, sources),
     ], check=True)
+    print("Native app sources passed for " + architecture, flush=True)
     subprocess.run([
         "xcrun", "swiftc", "-typecheck", "-parse-as-library", "-swift-version", "6",
         "-strict-concurrency=complete", "-warnings-as-errors", "-O",
