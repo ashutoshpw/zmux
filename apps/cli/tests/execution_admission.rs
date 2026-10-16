@@ -75,7 +75,7 @@ impl Fixture {
         } else {
             fs::canonicalize("/bin/sh").unwrap()
         };
-        let spec = json!({"socket":socket,"starter":process_identity(std::process::id()).unwrap(),"program":program,"nonce":"a".repeat(64),"cwd":root,"shell":shell,"command":format!("printf x >> '{}'; exit 7",counter.display()),"owner_uuid":owner,"owner_generation":generation,"profile":profile,"admitted":true});
+        let spec = json!({"socket":socket,"starter":process_identity(std::process::id()).unwrap(),"program":program,"nonce":"a".repeat(64),"cwd":root,"shell":shell,"command":format!("{{ sleep 0.05; printf x; }} >> '{}'; exit 7",counter.display()),"owner_uuid":owner,"owner_generation":generation,"profile":profile,"admitted":true});
         let path = root.join("bootstrap.json");
         fs::write(&path, serde_json::to_vec(&spec).unwrap()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
