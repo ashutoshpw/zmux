@@ -474,3 +474,193 @@ fn every_browser_kind_test_in_the_swift_sources_is_audited() {
         "PaneTree.key must not include dirty state"
     );
 }
+
+/// The text of `source` from the first `start` to the next `end` after it.
+fn between<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+    let from = source
+        .find(start)
+        .unwrap_or_else(|| panic!("`{start}` not found in the Swift sources"));
+    let rest = &source[from..];
+    let to = rest[start.len()..]
+        .find(end)
+        .unwrap_or_else(|| panic!("`{end}` not found after `{start}`"));
+    &rest[..start.len() + to]
+}
+
+// The Swift cannot run on this machine, so these pin the structure that the native fixes depend
+// on. Each assertion fails if the corresponding fix is reverted; the macOS in-app smoke
+// (`FilePanelSmoke`) is the behavioural check and has not run here.
+
+#[test]
+fn close_requests_are_queued_never_dropped() {
+    let app = swift("App.swift");
+    assert!(
+        !app.contains("closePromptActive"),
+        "a single in-flight flag silently dropped every close made while another was pending"
+    );
+    let body = between(
+        &app,
+        "private func closeAfterFileCheck(",
+        "private func drainFileCloses",
+    );
+    assert!(
+        body.contains("pendingFileCloses.append"),
+        "requests must be queued"
+    );
+    assert!(
+        body.contains("maxPendingFileCloses") && body.contains("showError("),
+        "the queue is bounded and refuses visibly"
+    );
+    // Every early return in the request path is either a synchronous proceed, a folded repeat of
+    // the same gesture or the visible refusal.
+    for line in body.lines().filter(|l| l.contains("return")) {
+        let line = line.trim();
+        assert!(
+            line.starts_with(
+                "guard !pendingFileCloses.contains(where: { $0.key == key }) else { return }"
+            ) || line.contains("proceed(); return")
+                || line == "return",
+            "unexpected silent return in closeAfterFileCheck: {line}"
+        );
+    }
+    let drain = between(
+        &app,
+        "private func drainFileCloses",
+        "func refreshFileChrome",
+    );
+    assert!(
+        drain.contains("while let host = self")
+            && drain.contains("pendingFileCloses.removeFirst()"),
+        "the queue must be drained until empty, one request at a time"
+    );
+    // Every call site names the gesture so a repeat folds into it and a different one queues.
+    let calls = app.matches("closeAfterFileCheck(").count();
+    let keyed = app.matches("key: \"").count();
+    assert_eq!(calls, 6, "one definition and five call sites expected");
+    assert_eq!(keyed, 5, "every call site must pass a gesture key");
+    let smoke = swift("FilePanelSmoke.swift");
+    assert!(
+        smoke.contains("host.closeTerminalTab(markdownID)")
+            && smoke.contains("host.closeTerminalTab(reopenedID)")
+            && smoke.contains("hasPendingFileCloses"),
+        "the smoke must close several tabs back to back and wait for the queue to settle"
+    );
+}
+
+#[test]
+fn keyboard_focus_follows_content_that_replaces_the_loading_state() {
+    let panel = swift("FilePanelView.swift");
+    let present = between(
+        &panel,
+        "private func present(_ view: NSView)",
+        "private func showLoading",
+    );
+    let decided = present
+        .find("ownsFocus(in:")
+        .expect("present must decide focus");
+    let removed = present
+        .find("removeFromSuperview()")
+        .expect("present swaps views");
+    assert!(
+        decided < removed,
+        "focus ownership must be read before the outgoing view leaves the window"
+    );
+    assert!(
+        present.contains("makeFirstResponder(preferredResponder)"),
+        "focus must move to the new content"
+    );
+    assert!(
+        swift("FilePanelSmoke.swift")
+            .contains("keyboard focus moved into the rendered Markdown view"),
+        "the smoke must cover a tab selected while it loads"
+    );
+}
+
+#[test]
+fn dont_save_is_applied_only_after_the_whole_close_is_settled() {
+    let coordinator = swift("ApplicationCoordinator.swift");
+    let body = between(
+        &coordinator,
+        "func resolveFilesBeforeClose(",
+        "/// Quit: resolves every dirty panel",
+    );
+    let apply = body
+        .find("discards.forEach { $0.discardLocalChanges() }")
+        .expect("discards are applied in one place");
+    let settle = body
+        .find("settleDirtyMirror(")
+        .expect("mirrors are settled");
+    let last_return_false = body.rfind("return false").expect("abort paths exist");
+    assert_eq!(
+        body.matches("discardLocalChanges()").count(),
+        1,
+        "Don't Save must not clear dirty tracking inside the per-file loop"
+    );
+    assert!(
+        settle < apply && last_return_false < apply,
+        "discarding must come after every Cancel, failed Save and failed sync"
+    );
+    assert!(
+        body.contains("resumeDirtyMirror()") && body.contains("assumingDiscarded:"),
+        "an aborted settle must restore the model's dirty bit"
+    );
+    let smoke = swift("FilePanelSmoke.swift");
+    assert!(
+        smoke.contains("CloseScript([.discard, .cancel])"),
+        "the smoke must cancel after a Don't Save"
+    );
+}
+
+#[test]
+fn dirty_detection_compares_utf8_bytes_not_canonical_equivalence() {
+    let panel = swift("FilePanelView.swift");
+    for forbidden in [
+        "editor.string != baseline",
+        "editor.string != text",
+        "editor.string == baseline",
+        "editor.string == text",
+    ] {
+        assert!(
+            !panel.contains(forbidden),
+            "`{forbidden}` uses Swift String equality, which ignores normalization form"
+        );
+    }
+    let helper = between(&panel, "private static func sameBytes", "}");
+    assert!(
+        helper.contains("lhs.utf8.elementsEqual(rhs.utf8)"),
+        "sameBytes must compare UTF-8 code units"
+    );
+    assert_eq!(
+        panel.matches("Self.sameBytes(").count(),
+        2,
+        "both the keystroke path and the post-save path must use sameBytes"
+    );
+}
+
+#[test]
+fn the_dirty_observation_never_gives_up_after_a_count() {
+    let panel = swift("FilePanelView.swift");
+    let success = between(
+        &panel,
+        "case .success:\n                delay = 250",
+        "case .failure(let failure):\n                if failure.isRetryableObservation",
+    );
+    assert!(
+        !success.contains("observeGaveUp"),
+        "an acknowledged-but-unconfirmed observation must keep retrying, not stop for good"
+    );
+    assert!(
+        success.contains("confirmDelay = min(confirmDelay * 2, 2_000)")
+            && success.contains(".dirtyUnconfirmed"),
+        "retries slow to a bounded rate and say so"
+    );
+    let retry = between(
+        &panel,
+        "private func runObserveLoop",
+        "// MARK: - Close support",
+    );
+    assert!(
+        retry.contains("banner == .dirtyUnconfirmed"),
+        "the notice must clear once the model agrees"
+    );
+}

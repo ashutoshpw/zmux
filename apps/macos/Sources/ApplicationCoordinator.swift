@@ -597,6 +597,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     /// the close must not proceed.
     func resolveFilesBeforeClose(_ surfaces: [UInt64], window: NSWindow?) async -> Bool {
         let panels = filePanels(for: surfaces)
+        // Don't Save is only recorded here and applied once nothing can abort the close any more:
+        // a later Cancel or failed Save must leave every earlier file exactly as it was, still
+        // edited and still guarded.
+        var discards: [FilePanelView] = []
         for view in panels where view.hasUnsavedChanges {
             let choice: FileCloseChoice
             if let override = fileCloseChoiceOverride { choice = await override(view) }
@@ -617,12 +621,18 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             switch choice {
             case .cancel: return false
             case .save: guard await view.performSave(force: false) else { return false }
-            case .discard: view.discardLocalChanges()
+            case .discard: discards.append(view)
             }
         }
         for view in panels {
-            guard await view.settleDirtyMirror() else { return false }
+            let discarded = discards.contains { $0 === view }
+            guard await view.settleDirtyMirror(assumingDiscarded: discarded) else {
+                // Panels already settled may have told the model they are clean; put it right.
+                panels.forEach { $0.resumeDirtyMirror() }
+                return false
+            }
         }
+        discards.forEach { $0.discardLocalChanges() }
         return true
     }
 

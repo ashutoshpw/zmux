@@ -79,7 +79,17 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var completedHistories: [UInt64: CompletedTerminalHistoryView] { coordinator.completedHistories }
     private var browsers: [UInt64: BrowserView] { coordinator.browsers }
     private var files: [UInt64: FilePanelView] { coordinator.files }
-    private var closePromptActive = false
+    /// Close requests that must settle file panels first. They run one at a time, in the order the
+    /// person made them; a request is never dropped while another is being asked about.
+    private struct PendingFileClose {
+        let key: String
+        let surfaces: [UInt64]
+        let proceed: @MainActor () -> Void
+    }
+    private var pendingFileCloses: [PendingFileClose] = []
+    private var fileCloseDrain: Task<Void, Never>?
+    /// Bound on queued close requests. Beyond it the request is refused with a visible message.
+    private static let maxPendingFileCloses = 64
     var browserViewportSize: NSSize { canvas.bounds.size }
     private let sidebarContainer = BackgroundView(color: ZmuxPalette.sidebar)
     private let sidebarPanel = BackgroundView(color: ZmuxPalette.sidebar)
@@ -180,19 +190,35 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         for workspace in snapshot.model.workspaces where workspaceIds.contains(workspace.id) {
             for pane in workspace.root.panes { surfaces.append(contentsOf: pane.surfaces.map(\.id)) }
         }
-        closeAfterFileCheck(surfaces) { [weak self] in self?.enqueue(.window("close", windowId, nil)) }
+        closeAfterFileCheck(surfaces, key: "window:\(windowId)") { [weak self] in self?.enqueue(.window("close", windowId, nil)) }
     }
     /// Settles file panels among `surfaces` (unsaved-changes prompt, dirty-mirror sync) before an
-    /// app-initiated close. Without file panels the close proceeds synchronously.
-    private func closeAfterFileCheck(_ surfaces: [UInt64], proceed: @escaping @MainActor () -> Void) {
+    /// app-initiated close. Without file panels the close proceeds synchronously. Requests are
+    /// queued and settled one at a time in order, so several closes in a row (Cmd-W twice, closing
+    /// a list of tabs) all run. A request with the same `key` as one still waiting or being asked
+    /// about is the same gesture repeated: it is folded into that request, which still runs once.
+    private func closeAfterFileCheck(_ surfaces: [UInt64], key: String, proceed: @escaping @MainActor () -> Void) {
         guard !coordinator.filePanels(for: surfaces).isEmpty else { proceed(); return }
-        guard !closePromptActive else { return }
-        closePromptActive = true
-        Task { [weak self] in
-            guard let self else { return }
-            let allowed = await self.coordinator.resolveFilesBeforeClose(surfaces, window: self.window)
-            self.closePromptActive = false
-            if allowed { proceed() }
+        guard !pendingFileCloses.contains(where: { $0.key == key }) else { return }
+        guard pendingFileCloses.count < Self.maxPendingFileCloses else {
+            showError("Too many close requests are waiting for answers about unsaved files; answer the open prompts first")
+            return
+        }
+        pendingFileCloses.append(PendingFileClose(key: key, surfaces: surfaces, proceed: proceed))
+        drainFileCloses()
+    }
+    /// True while a close request is waiting for, or being asked about, unsaved files.
+    var hasPendingFileCloses: Bool { !pendingFileCloses.isEmpty }
+    private func drainFileCloses() {
+        guard fileCloseDrain == nil else { return }
+        fileCloseDrain = Task { [weak self] in
+            // The head stays queued while it is asked about, so a repeat of it is still folded.
+            while let host = self, let next = host.pendingFileCloses.first {
+                let allowed = await host.coordinator.resolveFilesBeforeClose(next.surfaces, window: host.window)
+                host.pendingFileCloses.removeFirst()
+                if allowed { next.proceed() }
+            }
+            self?.fileCloseDrain = nil
         }
     }
     func refreshFileChrome() {
@@ -1368,7 +1394,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     func selectTab(_ id: UInt64) { enqueue(.surface("select_surface", id, nil, nil, nil)) }
     func closeTerminalTab(_ id: UInt64) {
-        closeAfterFileCheck([id]) { [weak self] in self?.enqueue(.surface("close_surface", id, nil, nil, nil)) }
+        closeAfterFileCheck([id], key: "surface:\(id)") { [weak self] in self?.enqueue(.surface("close_surface", id, nil, nil, nil)) }
     }
     func newTerminalInPane(_ paneID: UInt64) { enqueue(.surface("create_surface", nil, paneID, nil, nil)) }
     @objc func newTerminal() {
@@ -1434,7 +1460,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         guard let pane = snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.surfaces.contains(where: { $0.id == id }) }) else { return }
         let others = pane.surfaces.filter { $0.id != id }
         guard confirmClose(title: "Close other tabs?", surfaces: others) else { return }
-        closeAfterFileCheck(others.map(\.id)) { [weak self] in self?.enqueue(.surface("close_other_surfaces", id, nil, nil, nil)) }
+        closeAfterFileCheck(others.map(\.id), key: "others:\(id)") { [weak self] in self?.enqueue(.surface("close_other_surfaces", id, nil, nil, nil)) }
     }
     /// Only live terminal sessions are described as sessions; file and browser tabs are counted
     /// separately so the copy never claims a file tab ends a shell.
@@ -1549,7 +1575,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     @objc func closePane() {
         guard let paneID = snapshot?.workspace?.focusedPane else { return }
         let surfaces = snapshot?.workspace?.root.panes.first(where: { $0.id == paneID })?.surfaces.map(\.id) ?? []
-        closeAfterFileCheck(surfaces) { [weak self] in self?.enqueue(.action("close_pane", paneID, nil, nil, nil)) }
+        closeAfterFileCheck(surfaces, key: "pane:\(paneID)") { [weak self] in self?.enqueue(.action("close_pane", paneID, nil, nil, nil)) }
     }
 
     @objc func workspaceSelected(_ sender: WorkspaceRowView) {
@@ -1602,7 +1628,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let surfaces = workspace.root.panes.flatMap { $0.surfaces }
         guard confirmClose(title: "Close workspace?", surfaces: surfaces) else { return }
         let workspaceID = workspace.id
-        closeAfterFileCheck(surfaces.map(\.id)) { [weak self] in self?.enqueue(.action("close_workspace", nil, nil, nil, workspaceID)) }
+        closeAfterFileCheck(surfaces.map(\.id), key: "workspace:\(workspaceID)") { [weak self] in self?.enqueue(.action("close_workspace", nil, nil, nil, workspaceID)) }
     }
 
     private func setSidebarDocument(_ view: NSView) {
