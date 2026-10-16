@@ -536,10 +536,10 @@ enum AgentInboxSmoke {
         view.layoutSubtreeIfNeeded(); view.cacheDisplay(in: view.bounds, to: bitmap)
         // The content view is transparent over NSWindow's real background. Keep
         // native pixels legible in an opaque artifact, including label/icon ink.
-        guard let opaque = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide, pixelsHigh: bitmap.pixelsHigh,
-                bitsPerSample: 8, samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
-                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-              let context = NSGraphicsContext(bitmapImageRep: opaque) else { throw failure("Opaque inbox capture context unavailable") }
+        guard let pixels = CGContext(data: nil, width: bitmap.pixelsWide, height: bitmap.pixelsHigh,
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { throw failure("Opaque inbox capture context unavailable") }
+        let context = NSGraphicsContext(cgContext: pixels, flipped: false)
         let bounds = NSRect(x: 0, y: 0, width: CGFloat(bitmap.pixelsWide), height: CGFloat(bitmap.pixelsHigh))
         let nativePixels = NSImage(size: bitmap.size)
         nativePixels.addRepresentation(bitmap)
@@ -550,7 +550,9 @@ enum AgentInboxSmoke {
             nativePixels.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
         }
         NSGraphicsContext.restoreGraphicsState()
-        guard let data = opaque.representation(using: .png, properties: [:]), data.count <= 8_388_608 else { throw failure("Inbox capture exceeds bound") }
+        guard let opaque = pixels.makeImage(),
+              let data = NSBitmapImageRep(cgImage: opaque).representation(using: .png, properties: [:]),
+              data.count <= 8_388_608 else { throw failure("Inbox capture exceeds bound") }
         try await Task.detached { try data.write(to: path, options: .atomic) }.value
     }
     private static func terminalPID(_ coordinator: ApplicationCoordinator, window: UInt64) -> UInt32? {
