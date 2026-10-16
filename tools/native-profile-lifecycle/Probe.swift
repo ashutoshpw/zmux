@@ -23,6 +23,13 @@ private struct CookieObservation: Codable, Sendable {
     let path: String
     let sessionOnly: Bool
     let expiresAt: Double?
+    let secure: Bool
+    let httpOnly: Bool
+}
+private struct NativeCookieSet: Codable, Sendable {
+    let profile: UUID
+    let value: String
+    var callbackReceived = false
 }
 private struct Report: Codable, Sendable {
     let sourceSHA: String
@@ -50,6 +57,9 @@ private struct Report: Codable, Sendable {
     var separateBStorageObservation: String?
     var aCookieStoreObservation: [CookieObservation]?
     var bCookieStoreObservation: [CookieObservation]?
+    var nativeCookieSets: [NativeCookieSet] = []
+    var aNativeCookieRetained = false
+    var bNativeCookieRetained = false
     var aDataRemoval: DataRemoval?
     var removals: [Removal] = []
     var failure: String?
@@ -242,12 +252,59 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
                 continuation.resume(returning: cookies.prefix(129).map {
                     CookieObservation(name: String($0.name.prefix(256)), value: String($0.value.prefix(256)),
                         domain: String($0.domain.prefix(256)), path: String($0.path.prefix(256)),
-                        sessionOnly: $0.isSessionOnly, expiresAt: $0.expiresDate?.timeIntervalSince1970)
+                        sessionOnly: $0.isSessionOnly, expiresAt: $0.expiresDate?.timeIntervalSince1970,
+                        secure: $0.isSecure, httpOnly: $0.isHTTPOnly)
                 })
             }
         }
         guard cookies.count <= 128 else { throw ProbeFailure(description: "Cookie observation exceeds bound") }
         return cookies
+    }
+    private func setNativeCookie(_ store: WKWebsiteDataStore?, profile: UUID, value: String) async throws {
+        guard report.phase == "prepare", report.scenario == "baseline",
+              let store, store.identifier == profile, store.isPersistent, report.nativeCookieSets.count < 2 else {
+            throw ProbeFailure(description: "Native cookie creation requires the exact preparer store")
+        }
+        let cookies = try await readCookies(store)
+        guard cookies.count == 1, let original = cookies.first,
+              original.name == "probe", original.value == value, original.domain == fixture.host,
+              original.path == "/", !original.sessionOnly, !original.secure, !original.httpOnly,
+              let expiry = original.expiresAt, expiry > Date().timeIntervalSince1970,
+              let native = HTTPCookie(properties: [.name: "native_created", .value: value,
+                  .domain: original.domain, .path: original.path, .expires: Date(timeIntervalSince1970: expiry)]),
+              !native.isSessionOnly, !native.isSecure, !native.isHTTPOnly else {
+            throw ProbeFailure(description: "Original persistent JS cookie attributes are not comparable")
+        }
+        report.nativeCookieSets.append(NativeCookieSet(profile: profile, value: value))
+        report.stage = "native_cookie_" + value.lowercased() + "_set_callback_pending"
+        try await save()
+        // Public completion acknowledges storage, not a promised disk flush.
+        // Call once; the unchanged external watchdog bounds a missing callback.
+        let _: Void = await withCheckedContinuation { continuation in
+            store.httpCookieStore.setCookie(native) { continuation.resume() }
+        }
+        report.nativeCookieSets[report.nativeCookieSets.count - 1].callbackReceived = true
+        report.stage = "native_cookie_" + value.lowercased() + "_set_callback_received"
+        try await save()
+    }
+    private func observeNativeCookies() async throws {
+        // The distinct name cannot satisfy the unchanged original probe= checks.
+        report.aNativeCookieRetained = try await evaluate(aView,
+            "JSON.stringify(document.cookie.split(';').map(v=>v.trim()).includes('native_created=A'))") == "true"
+        report.bNativeCookieRetained = try await evaluate(bView,
+            "JSON.stringify(document.cookie.split(';').map(v=>v.trim()).includes('native_created=B'))") == "true"
+    }
+    private func requireComparableCookieStores() throws {
+        for (cookies, value) in [(report.aCookieStoreObservation, "A"), (report.bCookieStoreObservation, "B")] {
+            guard let cookies, cookies.count == 2,
+                  Set(cookies.map(\.name)) == ["probe", "native_created"],
+                  cookies.allSatisfy({ $0.value == value && $0.domain == fixture.host && $0.path == "/" &&
+                      !$0.sessionOnly && !$0.secure && !$0.httpOnly && ($0.expiresAt ?? 0) > Date().timeIntervalSince1970 }),
+                  let firstExpiry = cookies.first?.expiresAt, let lastExpiry = cookies.last?.expiresAt,
+                  abs(firstExpiry - lastExpiry) < 1 else {
+                throw ProbeFailure(description: "Baseline requires both comparable persistent cookie creation paths")
+            }
+        }
     }
     private func observeCookieStores() async throws {
         report.stage = "cookie_store_observation_pending"
@@ -299,12 +356,19 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             try await observeRetainedAData()
         } else { try await reopenA() }
         try await observeBData()
+        if report.scenario == "baseline" { try await observeNativeCookies() }
         try await observeCookieStores()
         let aMatches = report.scenario == "baseline" ? report.heldDataRetained : report.reopenedAEmpty
         guard aMatches, report.separateBRetained else {
             throw ProbeFailure(description: report.scenario == "baseline"
                 ? "Fresh-process no-removal baseline did not preserve A and B data"
                 : "Fresh process did not observe empty A and unchanged B")
+        }
+        if report.scenario == "baseline" {
+            try requireComparableCookieStores()
+            guard report.aNativeCookieRetained, report.bNativeCookieRetained, report.nativeCookieSets.isEmpty else {
+                throw ProbeFailure(description: "Fresh-process baseline did not preserve native-created A/B cookies")
+            }
         }
         report.stage = "fresh_process_data_verified"
         try await save()
@@ -341,11 +405,19 @@ private final class Probe: NSObject, NSApplicationDelegate, WKNavigationDelegate
             report.mountedA = aView?.window === window && aStore?.identifier == report.profileA
             guard report.mountedA else { throw ProbeFailure(description: "A is not the actual mounted UUID store") }
             if report.scenario == "baseline" {
+                try await setNativeCookie(aStore, profile: report.profileA, value: "A")
+                try await setNativeCookie(bStore, profile: report.profileB, value: "B")
                 try await observeRetainedAData()
                 try await observeBData()
+                try await observeNativeCookies()
                 try await observeCookieStores()
                 guard report.heldDataRetained, report.separateBRetained else {
                     throw ProbeFailure(description: "No-removal baseline did not seed separate A/B data")
+                }
+                try requireComparableCookieStores()
+                guard report.aNativeCookieRetained, report.bNativeCookieRetained,
+                      report.nativeCookieSets.count == 2, report.nativeCookieSets.allSatisfy(\.callbackReceived) else {
+                    throw ProbeFailure(description: "Native creation path did not seed exact A/B cookies")
                 }
                 dropA()
                 try await observeARelease()
