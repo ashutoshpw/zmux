@@ -49,6 +49,12 @@ pub struct ControlRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlCommand {
+    AgentMessages {
+        request: crate::agent_messages::MessageRequest,
+    },
+    AgentMessagesStatus {
+        request_id: uuid::Uuid,
+    },
     SurfaceOrder {
         request: crate::surface_order::OrderRequest,
     },
@@ -244,6 +250,8 @@ impl ControlServer {
         Self::start_for_uid(path, desktop, geteuid(), policy)
     }
 
+    /// Revokes future admissions and waits for an already executing durable transaction.
+    /// Call from a worker; filesystem commit barriers must never block a UI/executor thread.
     pub fn set_policy(
         &self,
         policy: ControlPolicy,
@@ -584,6 +592,26 @@ fn dispatch(
     admission: &ControlAdmission,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::AgentMessages {
+            request: message_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::AgentMessages {
+                request: message_request,
+            },
+        ),
+        ControlCommand::AgentMessagesStatus {
+            request_id: message_id,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::AgentMessagesStatus {
+                request_id: message_id,
+            },
+        ),
         ControlCommand::Windows {
             request: window_request,
         } => mutate(
@@ -847,6 +875,14 @@ fn dispatch(
             "max_response_bytes": MAX_CONTROL_RESPONSE_BYTES,
             "max_terminals": crate::MAX_TERMINALS,
             "max_browsers": crate::MAX_BROWSERS,
+            "agent_messages": {
+                "durable_local_inbox": true, "max_body_bytes": crate::agent_messages::MAX_BODY_BYTES,
+                "max_messages":128,"max_page":crate::agent_messages::MAX_PAGE,
+                "lease_ttl_ms":10000,"max_claim":8,"max_pending_operations":8,
+                "settled_request_horizon":256,"delivery":"at_least_once",
+                "consumer_identity":"local_capability_not_authenticated_provider",
+                "provider_hooks":false,"wake":false,"native_inbox":false,
+            },
             "browser_automation": {
                 "native_host_required": true,
                 "document_generation_fencing": true,
@@ -1023,6 +1059,9 @@ fn mutate(
         DesktopError::TerminalUnavailable => ("terminal_not_ready", error.to_string()),
         other => ("command_rejected", other.to_string()),
     })?;
+    if let Some(receipt) = execution.agent_message_result {
+        return Ok(serde_json::json!(receipt));
+    }
     if let Some(order) = execution.surface_order_result {
         return Ok(order);
     }
@@ -1527,5 +1566,213 @@ mod tests {
         fs::remove_file(&path).unwrap();
         desktop.shutdown(Duration::from_secs(5)).unwrap();
         fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn message_io_and_queued_policy_writer_do_not_block_the_workspace_executor() {
+        use crate::{
+            agent_messages::{MessageAction, MessageRequest},
+            control_policy::ControlAccess,
+        };
+        use std::sync::mpsc;
+        let socket = test_socket("policy-io");
+        let root = socket.parent().unwrap();
+        fs::create_dir_all(root).unwrap();
+        fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+        let state = root.join("state");
+        let desktop = Arc::new(
+            Desktop::with_persistence(
+                Shell {
+                    program: "/bin/sh".into(),
+                    args: vec!["-i".into()],
+                    cwd: None,
+                },
+                state.clone(),
+            )
+            .unwrap(),
+        );
+        let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let initial = loop {
+            let snapshot = desktop_snapshot::read_until(&desktop, deadline);
+            if !snapshot.persistence.startup_pending && !snapshot.model.workspaces.is_empty() {
+                break snapshot;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(2));
+        };
+        let surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
+        let target = initial
+            .model
+            .object_uuid(TargetKind::Surface, surface.0)
+            .to_string();
+        let state_fd = crate::persistence::state_directory(&state).unwrap();
+        let journal_lock =
+            crate::persistence::lock_named(&state_fd, crate::agent_messages::LOCK_NAME).unwrap();
+        let message_id = uuid::Uuid::new_v4();
+        let command = ControlCommand::AgentMessages {
+            request: MessageRequest {
+                request_id: message_id,
+                caller: Default::default(),
+                action: MessageAction::Send {
+                    target: Some(target),
+                    reply_to: None,
+                    body: "blocked only on the journal worker".into(),
+                    sender_name: None,
+                    thread_id: None,
+                },
+            },
+        };
+        let body = serde_json::to_vec(&ControlRequest {
+            version: CONTROL_VERSION,
+            request_id: 500,
+            password: None,
+            command,
+        })
+        .unwrap();
+        let response = exchange_raw(&socket, body.len() as u32, &body);
+        assert!(response.ok);
+        assert_eq!(response.result.unwrap()["state"], "pending");
+        // Linux descriptor observation proves the real worker opened its state directory
+        // after acquiring socket authorization and while our journal lock prevents commit.
+        // Unlike its transient lock-open attempts, this descriptor spans the whole wait.
+        let expected = state.clone();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let owners = fs::read_dir("/proc/self/fd")
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter_map(|e| fs::read_link(e.path()).ok())
+                .filter(|p| p == &expected)
+                .count();
+            if owners >= 2 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "actual journal worker did not open state while waiting on its held file lock"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        let action = Action::CreateWorkspace {
+            name: "authorized must fail fast".into(),
+        };
+        let action_admission = server
+            .gate
+            .admit(
+                ControlOrigin::LocalOwner,
+                &ControlCommand::Action {
+                    action: action.clone(),
+                },
+                None,
+            )
+            .unwrap();
+        let status_admission = server
+            .gate
+            .admit(
+                ControlOrigin::LocalOwner,
+                &ControlCommand::AgentMessagesStatus {
+                    request_id: message_id,
+                },
+                None,
+            )
+            .unwrap();
+        let gate = server.gate.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer = thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = gate.replace(ControlPolicy::same_user(ControlAccess::ReadOnly));
+            done_tx.send(result).unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        // The writer cannot finish while the real journal transaction owns its guard.
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(25)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        let action_result = desktop.execute_authorized(
+            crate::Request {
+                version: CONTROL_VERSION,
+                request_id: 501,
+                payload: Command::Action { action },
+            },
+            Duration::from_millis(250),
+            action_admission,
+        );
+        let status_result = desktop.execute_authorized(
+            crate::Request {
+                version: CONTROL_VERSION,
+                request_id: 502,
+                payload: Command::AgentMessagesStatus {
+                    request_id: message_id,
+                },
+            },
+            Duration::from_millis(250),
+            status_admission,
+        );
+        desktop
+            .submit(crate::Request {
+                version: CONTROL_VERSION,
+                request_id: 503,
+                payload: Command::Action {
+                    action: Action::CreateWorkspace {
+                        name: "trusted executor remains live".into(),
+                    },
+                },
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_millis(250);
+        let trusted_live = loop {
+            let s = desktop_snapshot::read_until(&desktop, deadline);
+            if s.model
+                .workspaces
+                .iter()
+                .any(|w| w.name == "trusted executor remains live")
+            {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(1));
+        };
+        drop(journal_lock);
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+        server.shutdown(Duration::from_secs(2)).unwrap();
+        desktop.shutdown(Duration::from_secs(5)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(
+                action_result,
+                Ok(crate::Execution {
+                    result: Err(DesktopError::Policy(
+                        crate::control_policy::PolicyError::Unavailable
+                    )),
+                    ..
+                })
+            ),
+            "executor authorization waited behind a policy writer"
+        );
+        assert!(
+            matches!(
+                status_result,
+                Ok(crate::Execution {
+                    result: Err(DesktopError::Policy(
+                        crate::control_policy::PolicyError::Unavailable
+                    )),
+                    ..
+                })
+            ),
+            "message status authorization waited behind a policy writer"
+        );
+        assert!(
+            trusted_live,
+            "journal I/O stalled unrelated trusted executor work"
+        );
     }
 }

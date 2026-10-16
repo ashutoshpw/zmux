@@ -195,6 +195,11 @@ fn durable_queued_message_survives_restart_without_terminal_input() {
         assert!(Instant::now() < deadline);
         thread::sleep(Duration::from_millis(3));
     }
+    let portable = fs::read_to_string(root.0.join("state/session.json")).unwrap();
+    assert!(
+        !portable.contains(message["id"].as_str().unwrap()),
+        "portable session copied inbox state"
+    );
     app.stop();
     let reopened = App::open(&root.0);
     reopened.wait_terminals(2);
@@ -216,5 +221,188 @@ fn durable_queued_message_survives_restart_without_terminal_input() {
     assert_ne!(target.session_id, Some(old_session));
     let inbox = reopened.call(&["agent", "inbox", "--surface", &recipient_uuid]);
     assert_eq!(inbox["messages"], serde_json::json!([message]));
+    assert!(!root.0.join("terminal-input-counter").exists());
+}
+
+#[test]
+fn cli_message_literals_and_rejections_preserve_exact_inbox_contents() {
+    let root = Directory::new();
+    let app = App::open(&root.0);
+    let initial = desktop_snapshot::read(&app.desktop);
+    let surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
+    let target = initial
+        .model
+        .object_uuid(TargetKind::Surface, surface.0)
+        .to_string();
+    let literal = app.call(&["agent", "msg", &target, "--from", "--help", "--", "--help"]);
+    assert_eq!(literal["message"]["body"], "--help");
+    assert_eq!(literal["message"]["sender"]["name"], "--help");
+    let uuid = uuid::Uuid::new_v4().to_string();
+    for args in [
+        vec!["agent", "message", target.as_str()],
+        vec![
+            "agent",
+            "message",
+            target.as_str(),
+            "--request-id",
+            uuid.as_str(),
+            "--request-id",
+            uuid.as_str(),
+            "bad",
+        ],
+        vec![
+            "agent",
+            "message",
+            target.as_str(),
+            "--from",
+            "a",
+            "--from",
+            "b",
+            "bad",
+        ],
+        vec!["agent", "inbox", "--limit", "33"],
+        vec!["agent", "messages", "off", "--global", target.as_str()],
+    ] {
+        let output = app.output(&args);
+        assert!(
+            !output.status.success(),
+            "invalid grammar succeeded: {args:?}"
+        );
+    }
+    for bytes in [vec![b'x'; 4097], vec![0xff, 0xfe], Vec::new()] {
+        let mut child = app
+            .command(&["agent", "message", &target, "-"], None)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(&bytes).unwrap();
+        assert!(!child.wait_with_output().unwrap().status.success());
+    }
+    let rows = app.call(&["agent", "inbox"]);
+    assert_eq!(rows["messages"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["messages"][0]["id"], literal["message"]["id"]);
+    assert!(!root.0.join("terminal-input-counter").exists());
+}
+
+fn rpc(
+    app: &App,
+    command: desktop_runtime::control::ControlCommand,
+) -> desktop_runtime::control::ControlResponse {
+    use std::io::Read;
+    let mut stream = std::os::unix::net::UnixStream::connect(&app.socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let request = desktop_runtime::control::ControlRequest {
+        version: desktop_runtime::control::CONTROL_VERSION,
+        request_id: 42,
+        password: None,
+        command,
+    };
+    let bytes = serde_json::to_vec(&request).unwrap();
+    stream
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .unwrap();
+    stream.write_all(&bytes).unwrap();
+    let mut length = [0u8; 4];
+    stream.read_exact(&mut length).unwrap();
+    let mut response = vec![0; u32::from_be_bytes(length) as usize];
+    stream.read_exact(&mut response).unwrap();
+    serde_json::from_slice(&response).unwrap()
+}
+fn agent_operation(
+    app: &App,
+    action: desktop_runtime::agent_messages::MessageAction,
+) -> (uuid::Uuid, Value) {
+    use desktop_runtime::{agent_messages::MessageRequest, control::ControlCommand};
+    let id = uuid::Uuid::new_v4();
+    let response = rpc(
+        app,
+        ControlCommand::AgentMessages {
+            request: MessageRequest {
+                request_id: id,
+                caller: Default::default(),
+                action,
+            },
+        },
+    );
+    assert!(response.ok, "{:?}", response.error);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut receipt = response.result.unwrap();
+    while receipt["state"] == "pending" {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(2));
+        let response = rpc(app, ControlCommand::AgentMessagesStatus { request_id: id });
+        assert!(response.ok, "{:?}", response.error);
+        receipt = response.result.unwrap();
+    }
+    assert_eq!(receipt["state"], "completed", "{receipt}");
+    (id, receipt["result"].clone())
+}
+#[test]
+fn read_only_socket_can_list_but_cannot_obtain_consumer_capabilities_or_mutate() {
+    use desktop_runtime::{
+        agent_messages::MessageAction,
+        control::ControlCommand,
+        control_policy::{ControlAccess, ControlPolicy},
+    };
+    let root = Directory::new();
+    let app = App::open(&root.0);
+    let initial = desktop_snapshot::read(&app.desktop);
+    let surface = initial.model.workspaces[0].root.panes()[0].selected_surface;
+    let target = initial
+        .model
+        .object_uuid(TargetKind::Surface, surface.0)
+        .to_string();
+    app.call(&["agent", "message", &target, "queued"]);
+    let (operation, registration) = agent_operation(
+        &app,
+        MessageAction::Register {
+            surface: target.clone(),
+            provider: "neutral".into(),
+            interactive: true,
+        },
+    );
+    let token = registration["token"].as_str().unwrap();
+    app.server
+        .as_ref()
+        .unwrap()
+        .set_policy(ControlPolicy::same_user(ControlAccess::ReadOnly))
+        .unwrap();
+    let rows = app.call(&["agent", "inbox"]);
+    assert_eq!(rows["messages"][0]["state"], "queued");
+    assert!(
+        !app.output(&["agent", "message", &target, "denied"])
+            .status
+            .success()
+    );
+    assert!(
+        !app.output(&["agent", "inbox", "--mark-read"])
+            .status
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = rpc(
+            &app,
+            ControlCommand::AgentMessagesStatus {
+                request_id: operation,
+            },
+        );
+        let text = serde_json::to_string(&response).unwrap();
+        assert!(!text.contains(token));
+        if !response.ok
+            || response
+                .result
+                .as_ref()
+                .is_some_and(|r| r["state"] == "failed")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(2));
+    }
     assert!(!root.0.join("terminal-input-counter").exists());
 }

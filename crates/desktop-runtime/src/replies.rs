@@ -243,6 +243,7 @@ fn reply_execution(
     mutation: Option<NotificationMutation>,
 ) -> Execution {
     Execution {
+        agent_message_result: None,
         metadata_result: None,
         result,
         snapshot,

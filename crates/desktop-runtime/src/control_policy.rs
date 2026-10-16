@@ -212,8 +212,24 @@ impl AdmissionGuard<'_> {
     }
 }
 impl ControlAdmission {
+    /// Worker-only check: an executing durable transaction may retain this guard
+    /// through its commit barrier. Executor callers must use `try_check`.
     pub(crate) fn check(&self) -> Result<AdmissionGuard<'_>, PolicyError> {
         let state = self.state.read().map_err(|_| PolicyError::Unavailable)?;
+        self.guard(state)
+    }
+    /// Never wait behind a policy writer that may itself be awaiting durable I/O.
+    pub(crate) fn try_check(&self) -> Result<AdmissionGuard<'_>, PolicyError> {
+        let state = self
+            .state
+            .try_read()
+            .map_err(|_| PolicyError::Unavailable)?;
+        self.guard(state)
+    }
+    fn guard<'a>(
+        &self,
+        state: RwLockReadGuard<'a, State>,
+    ) -> Result<AdmissionGuard<'a>, PolicyError> {
         if state.generation != self.generation {
             return Err(PolicyError::Revoked);
         }
@@ -223,6 +239,8 @@ impl ControlAdmission {
 
 pub(crate) fn is_read(command: &ControlCommand) -> bool {
     match command {
+        ControlCommand::AgentMessages { request } => request.action.is_read(),
+        ControlCommand::AgentMessagesStatus { .. } => true,
         ControlCommand::SurfaceOrder { .. } => false,
         ControlCommand::WorkspaceOrder { request } => request.dry_run,
         ControlCommand::WindowStatus { .. } => true,

@@ -402,7 +402,7 @@ fn parent(path: &Path) -> Result<(File, OsString), PersistenceError> {
     let directory = open_directory(path.parent().ok_or(PersistenceError::InvalidPath)?)?;
     Ok((directory, name))
 }
-fn private_file(
+pub(crate) fn private_file(
     directory: &File,
     name: &OsStr,
     limit: usize,
@@ -439,7 +439,7 @@ pub(crate) fn check_file(
     }
     Ok(())
 }
-fn read_bounded(
+pub(crate) fn read_bounded(
     file: File,
     limit: usize,
     label: &'static str,
@@ -533,7 +533,7 @@ fn unique_next_ids<'de, D: serde::Deserializer<'de>>(
 fn lock_ledger(directory: &File) -> Result<File, PersistenceError> {
     lock_named(directory, LOCK_NAME)
 }
-fn lock_named(directory: &File, name: &str) -> Result<File, PersistenceError> {
+pub(crate) fn lock_named(directory: &File, name: &str) -> Result<File, PersistenceError> {
     // A concurrent first creation has returned ENOENT on a supported host.
     // Retry only this anchored open; persistent disappearance still fails closed.
     // No ledger access occurs until the opened descriptor passes validation and locks.
@@ -569,6 +569,9 @@ fn load(
     let directory = state_directory(state)?;
     let source = (|| {
         let (source_parent, name) = parent(path)?;
+        if crate::agent_messages::is_reserved_name(&name) {
+            return Err(PersistenceError::ReservedStatePath);
+        }
         private_file(
             &source_parent,
             &name,
@@ -679,7 +682,9 @@ fn save(
     let (directory, name) = parent(path)?;
     // An exporter can target another desktop's state directory. Never replace
     // the process-independent lease namespace, even outside our own directory.
-    if crate::profile_leases::is_reserved_name(&name) {
+    if crate::profile_leases::is_reserved_name(&name)
+        || crate::agent_messages::is_reserved_name(&name)
+    {
         return Err(PersistenceError::ReservedStatePath);
     }
     if name == LOCK_NAME
@@ -721,7 +726,7 @@ pub(crate) fn validate_document_size(document: &SessionDocument) -> Result<(), P
     serialize_bounded(document, MAX_DOCUMENT_BYTES, "session document").map(|_| ())
 }
 
-fn serialize_bounded(
+pub(crate) fn serialize_bounded(
     value: &impl Serialize,
     limit: usize,
     label: &'static str,
@@ -733,7 +738,7 @@ fn serialize_bounded(
     serde_json::to_writer(&mut output, value).map_err(|_| PersistenceError::TooLarge(label))?;
     Ok(output.bytes)
 }
-fn atomic_write(
+pub(crate) fn atomic_write(
     directory: &File,
     name: &OsStr,
     bytes: &[u8],

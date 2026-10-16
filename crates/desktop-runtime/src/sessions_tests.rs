@@ -122,6 +122,8 @@ fn worker(directory: &Directory) -> Worker {
         })),
     });
     Worker {
+        agent_messages: agent_messages::Runtime::start(None).unwrap(),
+        agent_message_result: None,
         local_tmux,
         local_zellij,
         launch_certificates: HashMap::new(),
