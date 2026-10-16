@@ -33,7 +33,7 @@ with (root/'child.json').open('x') as out:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce},out)
 rows=['alpha beta','alpha.beta  value_name /tmp/file','A界 e\\u0301🙂 Z','ab\\x1b[31mcd\\x1b[0mef','NATIVE_SELECTION_READY_'+nonce]
 os.write(1,('\\x1b[2J\\x1b[H'+'\\r\\n'.join(rows)+'\\r\\n').encode())
-for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_')]:
+for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_'),('c','WORD_UNICODE_READY_')]:
  ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
  if not ready:break
  assert os.read(0,1)==key.encode()
@@ -44,6 +44,7 @@ for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_')
   json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce,'rows':rows_count,'columns':columns,'phase':key},out)
  payload='X'*(columns-1)+' EDGE'
  if key=='b':payload='word'+'x'*(columns+4)+' end\\r\\nhardleft\\r\\nhardright'
+ if key=='c':payload='X'*(columns-1)+'e\\u0301tail end'
  if key=='v':payload='X'*(columns-2)+'界Z'
  if key=='m':payload='X'*(columns-1)+'界Z'
  if key=='u':payload='X'*(columns-1)+'e\\u0301🙂Z'
