@@ -72,6 +72,21 @@ ZmuxResult zmux_desktop_profile_native(const uint8_t *request, size_t length);
    off the UI thread. Missing acknowledgement must not replay admission/publication.
    Caller-generated fenced tokens correlate uncertain outcomes with later snapshots. */
 ZmuxResult zmux_desktop_download(uint64_t desktop, const uint8_t *request, size_t length);
+/* Trusted native file channel, excluded from sockets and generic dispatch. Frame in both
+   directions: u32 big-endian header_len | header JSON (UTF-8) | raw body bytes.
+   Requests: header_len <= ZMUX_FILE_MAX_HEADER and the whole frame <= 16384 bytes, except op
+   "save", whose raw UTF-8 body (<= ZMUX_FILE_MAX_SAVE_BODY) follows the header, so its frame
+   is <= ZMUX_FILE_MAX_SAVE_FRAME. Ops: attach, reload, save, observe, detach, open.
+   A reply buffer is reserved before any work: ZMUX_CAPACITY means nothing ran.
+   Replies are frames; attach/reload carry the file bytes (<= 7340032) as the body.
+   Waits at most two seconds (five for save) and MUST run off the UI thread. A nonzero
+   status, a timeout or outcome_unknown=true must NOT be replayed automatically, EXCEPT
+   "observe", an idempotent absolute-state write retried until the snapshot agrees.
+   Failures are ok:false headers with a stable error.code; a malformed, truncated or
+   oversized frame returns ZMUX_INVALID_ARGUMENT. */
+enum { ZMUX_FILE_MAX_HEADER = 16384, ZMUX_FILE_MAX_SAVE_BODY = 2097152,
+       ZMUX_FILE_MAX_SAVE_FRAME = 16384 + 2097152 };
+ZmuxResult zmux_desktop_file(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted native window completion/key observations; token-fenced, never replayed. */
 ZmuxResult zmux_desktop_window_event(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted host-only browser channel. Drain reserves an owned buffer before removing

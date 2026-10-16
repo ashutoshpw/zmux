@@ -1259,6 +1259,7 @@ fn desktop_error(error: DesktopError) -> (&'static str, String) {
         DesktopError::Browser(ref error) => error.code(),
         DesktopError::Failure(_) => "desktop_error",
         DesktopError::Download(ref error) => error.code,
+        DesktopError::File(_) => "file_error",
     };
     (code, error.to_string())
 }

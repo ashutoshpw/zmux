@@ -82,7 +82,9 @@ fn worker(directory: &Directory) -> Worker {
     };
     let terminal_engine = None;
     let (completion_tx, completion_rx) = mpsc::sync_channel(MAX_TERMINALS);
+    let files = Arc::new(crate::files::FileService::start(Default::default()).unwrap());
     let worker_shared = Arc::new(Shared {
+        files: Arc::clone(&files),
         profile_native: None,
         stop: AtomicBool::new(false),
         shutdown: Mutex::new(None),
@@ -113,6 +115,7 @@ fn worker(directory: &Directory) -> Worker {
             download_epoch: downloads.epoch,
             downloads: Vec::new(),
             download_waits: Vec::new(),
+            files: files.snapshot(Instant::now()),
             browser_pending_requests: 0,
             last_request_id: 0,
             last_error: None,
@@ -137,6 +140,7 @@ fn worker(directory: &Directory) -> Worker {
         workspace_order_result: None,
         workspace_group_result: None,
         surface_order_result: None,
+        open_result: None,
         download_result: None,
         profiles,
         profile_operation_id: None,

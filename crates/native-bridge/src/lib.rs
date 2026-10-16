@@ -1,6 +1,7 @@
 //! Original C ABI feasibility bridge for the Rust workspace model.
 //! It does not yet execute session effects or implement native async rendering callbacks.
 
+pub mod file_channel;
 mod profile_leases;
 mod profile_operations;
 
@@ -332,6 +333,13 @@ fn native_desktop(id: u64) -> Result<Arc<NativeDesktop>, i32> {
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_desktop_create() -> ZmuxResult {
     guard(|| create_desktop(None))
+}
+
+/// Test seam: a desktop with explicit runtime options (for example an injected file backend).
+/// Not a C export; the foreign ABI only offers the configured constructors above.
+#[doc(hidden)]
+pub fn create_desktop_with_options(options: zmux_desktop_runtime::DesktopOptions) -> ZmuxResult {
+    guard(|| create_configured_desktop_with_leases(options, None))
 }
 
 /// Create a desktop with durable session state. File I/O and restoration run on workers.
@@ -671,6 +679,35 @@ pub unsafe extern "C" fn zmux_desktop_window_event(
             }
         };
         reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Trusted native file channel (attach, reload, save, observe, detach, open). Excluded from
+/// socket and generic JSON dispatch. Frame: `u32 big-endian header_len | header JSON | body`.
+/// Requests are at most 16384 bytes except `save`, whose raw UTF-8 body may add up to 2 MiB.
+///
+/// # Safety
+/// Storage must remain readable for length bytes. Call off the UI thread: the call waits at
+/// most two seconds (five for save). A nonzero status, a timeout or `outcome_unknown` must
+/// never be replayed automatically, except `observe`, an idempotent absolute-state write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_file(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if request.is_null() || !(4..=file_channel::MAX_FILE_SAVE_FRAME_BYTES).contains(&length) {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: checked nonnull bounded storage, readable by the caller contract.
+        let frame = unsafe { std::slice::from_raw_parts(request, length) };
+        let (parsed, body) = file_channel::parse(frame).map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        // Claim response storage before any queueing: CAPACITY means nothing ran.
+        let reservation = Reservation::new()?;
+        let reply = file_channel::execute(&desktop, parsed, body);
+        reservation.publish(reply)
     })
 }
 

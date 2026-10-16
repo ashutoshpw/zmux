@@ -7,6 +7,8 @@ pub mod control_credentials;
 pub mod control_policy;
 mod download_paths;
 pub mod downloads;
+pub mod file_io;
+pub mod files;
 pub mod inspection;
 pub mod local_tmux;
 pub mod local_zellij;
@@ -187,6 +189,16 @@ pub enum Command {
     BrowserHost {
         event: BrowserHostEvent,
     },
+    /// Trusted native file view events (dirty observation, detach); never JSON.
+    #[serde(skip)]
+    FileHost {
+        event: files::FileHostEvent,
+    },
+    /// Probed `open` operands applied in order by the executor; never JSON.
+    #[serde(skip)]
+    OpenFiles {
+        batch: files::OpenBatch,
+    },
     #[serde(skip)]
     BrowserDrain,
     #[serde(skip)]
@@ -262,6 +274,8 @@ pub enum DesktopError {
     #[error("{0}")]
     Download(#[from] downloads::DownloadError),
     #[error("{0}")]
+    File(Box<files::FileFailure>),
+    #[error("{0}")]
     Policy(#[from] control_policy::PolicyError),
     #[error("target surface is not a terminal")]
     NotTerminal,
@@ -279,6 +293,33 @@ pub enum DesktopError {
     Timeout,
     #[error("{0}")]
     Failure(String),
+}
+impl From<files::FileFailure> for DesktopError {
+    fn from(failure: files::FileFailure) -> Self {
+        // Boxed: a failure carries a message and conflict detail, which would bloat every
+        // `Result<_, DesktopError>` in the executor.
+        DesktopError::File(Box::new(failure))
+    }
+}
+/// Map an executor-level failure onto the stable file error vocabulary.
+fn file_failure(error: DesktopError) -> files::FileFailure {
+    match error {
+        DesktopError::File(failure) => *failure,
+        DesktopError::QueueFull | DesktopError::Busy => files::FileFailure::new(
+            "busy",
+            "the desktop command queue is full; nothing was applied",
+        ),
+        DesktopError::Timeout => {
+            let mut failure = files::FileFailure::new(
+                "timeout",
+                "the desktop did not acknowledge in time; the outcome is unknown",
+            );
+            failure.outcome_unknown = true;
+            failure
+        }
+        DesktopError::Closed => files::FileFailure::new("closed", "desktop is closed"),
+        other => files::FileFailure::new("rejected", other.to_string()),
+    }
 }
 #[derive(Clone, Serialize)]
 pub struct Frame {
@@ -316,6 +357,8 @@ pub struct Snapshot {
     pub download_epoch: uuid::Uuid,
     pub downloads: Vec<downloads::DownloadRecord>,
     pub download_waits: Vec<downloads::WaitReceipt>,
+    /// File worker health and per-tab state with bounded operation receipts. Never content.
+    pub files: files::FilesSnapshot,
     pub browser_pending_requests: usize,
     pub last_request_id: u64,
     pub last_error: Option<String>,
@@ -331,6 +374,7 @@ struct Shared {
     shutdown: Mutex<Option<shutdown::Operation>>,
     snapshot: Mutex<Arc<Snapshot>>,
     profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
+    files: Arc<files::FileService>,
 }
 pub struct Desktop {
     sender: SyncSender<Envelope>,
@@ -367,6 +411,7 @@ pub(crate) struct Execution {
     pub workspace_order_result: Option<serde_json::Value>,
     pub workspace_group_result: Option<serde_json::Value>,
     pub surface_order_result: Option<serde_json::Value>,
+    pub open_result: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -408,6 +453,8 @@ pub struct DesktopOptions {
     pub local_tmux_profile: local_tmux::Profile,
     pub local_zellij: Option<local_zellij::Configuration>,
     pub terminal_engine: terminal_engine::TerminalEngineConfig,
+    /// `None` uses the production file service configuration.
+    pub files: Option<files::FilesConfig>,
 }
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
@@ -440,8 +487,10 @@ impl Desktop {
             options.local_tmux_profile,
             options.local_zellij,
             terminal_engine,
+            options.files.unwrap_or_default(),
         )
     }
+    #[allow(clippy::too_many_arguments)]
     fn start(
         shell: Shell,
         persistence: Option<sessions::SessionPersistence>,
@@ -450,7 +499,9 @@ impl Desktop {
         tmux_profile: local_tmux::Profile,
         zellij_configuration: Option<local_zellij::Configuration>,
         terminal_engine: Option<zmux_session_runtime::EngineOptions>,
+        files_config: files::FilesConfig,
     ) -> Result<Self, DesktopError> {
+        let files = Arc::new(files::FileService::start(files_config)?);
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
         let downloads = downloads::DownloadRuntime::default();
@@ -465,6 +516,7 @@ impl Desktop {
             .map(|p| p.snapshot.clone())
             .unwrap_or_default();
         let shared = Arc::new(Shared {
+            files: Arc::clone(&files),
             profile_native,
             stop: AtomicBool::new(false),
             shutdown: Mutex::new(None),
@@ -495,6 +547,7 @@ impl Desktop {
                 download_epoch: downloads.epoch,
                 downloads: Vec::new(),
                 download_waits: Vec::new(),
+                files: files.snapshot(Instant::now()),
                 browser_pending_requests: 0,
                 last_request_id: 0,
                 last_error: None,
@@ -525,6 +578,7 @@ impl Desktop {
                     workspace_order_result: None,
                     workspace_group_result: None,
                     surface_order_result: None,
+                    open_result: None,
                     download_result: None,
                     profiles,
                     profile_operation_id: None,
@@ -691,6 +745,115 @@ impl Desktop {
         execution
             .download_result
             .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
+    }
+
+    /// Trusted in-process opener (also behind the bridge `open` op): probe each operand on the
+    /// file worker within the probe deadline, then let the executor apply the results in order.
+    /// Per-item failures are data in the result; only whole-request failures are `Err`.
+    pub fn file_open(
+        &self,
+        paths: Vec<String>,
+        force_mode: Option<zmux_workspace_core::FileMode>,
+        focus: bool,
+    ) -> Result<serde_json::Value, files::FileFailure> {
+        self.ensure_files_open()?;
+        if paths.is_empty() || paths.len() > files::MAX_OPEN_ITEMS {
+            return Err(files::FileFailure::new(
+                "invalid_request",
+                format!("open takes 1 to {} paths", files::MAX_OPEN_ITEMS),
+            ));
+        }
+        let deadline = Instant::now() + self.shared.files.config().probe_timeout;
+        let items = paths
+            .into_iter()
+            .map(|operand| {
+                let probe = if Instant::now() >= deadline {
+                    Err(files::FileFailure::new(
+                        "probe_timeout",
+                        "the open deadline passed before this file was examined; nothing was opened",
+                    ))
+                } else {
+                    self.shared.files.probe(&operand, force_mode, deadline)
+                };
+                (operand, probe)
+            })
+            .collect();
+        let execution = self
+            .execute_native(
+                Command::OpenFiles {
+                    batch: files::OpenBatch { focus, items },
+                },
+                NATIVE_COMMAND_TIMEOUT,
+            )
+            .map_err(file_failure)?;
+        execution.result.map_err(file_failure)?;
+        execution
+            .open_result
+            .ok_or_else(|| files::FileFailure::new("internal", "open acknowledgement missing"))
+    }
+    /// Trusted native view attach. Blocks the calling (non-UI) thread for at most the read timeout.
+    pub fn file_attach(
+        &self,
+        epoch: uuid::Uuid,
+        surface_id: SurfaceId,
+        host_id: uuid::Uuid,
+    ) -> Result<files::FileContent, files::FileFailure> {
+        self.ensure_files_open()?;
+        self.shared.files.attach(epoch, surface_id, host_id)
+    }
+    pub fn file_reload(
+        &self,
+        owner: &files::FileOwner,
+        discard: bool,
+    ) -> Result<files::FileContent, files::FileFailure> {
+        self.ensure_files_open()?;
+        self.shared.files.reload(owner, discard)
+    }
+    /// A timeout is `outcome_unknown`: never replay it. The snapshot's `last_op` resolves it.
+    pub fn file_save(
+        &self,
+        owner: &files::FileOwner,
+        base_generation: u64,
+        force: bool,
+        body: Vec<u8>,
+    ) -> Result<files::SaveReceipt, files::FileFailure> {
+        self.ensure_files_open()?;
+        self.shared.files.save(owner, base_generation, force, body)
+    }
+    /// Idempotent absolute-state write of the view's dirty bit; safe to retry until the
+    /// snapshot agrees. Returns the published revision.
+    pub fn file_observe(
+        &self,
+        owner: &files::FileOwner,
+        dirty: bool,
+    ) -> Result<u64, files::FileFailure> {
+        self.file_host(files::FileHostEvent::Observed {
+            owner: owner.clone(),
+            dirty,
+        })
+    }
+    pub fn file_detach(&self, owner: &files::FileOwner) -> Result<u64, files::FileFailure> {
+        self.file_host(files::FileHostEvent::Detach {
+            owner: owner.clone(),
+        })
+    }
+    fn file_host(&self, event: files::FileHostEvent) -> Result<u64, files::FileFailure> {
+        self.ensure_files_open()?;
+        match &event {
+            files::FileHostEvent::Observed { owner, .. }
+            | files::FileHostEvent::Detach { owner } => self.shared.files.check_owner(owner)?,
+        }
+        let execution = self
+            .execute_native(Command::FileHost { event }, NATIVE_COMMAND_TIMEOUT)
+            .map_err(file_failure)?;
+        execution.result.map_err(file_failure)?;
+        Ok(execution.snapshot.revision)
+    }
+    fn ensure_files_open(&self) -> Result<(), files::FileFailure> {
+        if self.shared.stop.load(Ordering::Acquire) {
+            return Err(files::FileFailure::new("closed", "desktop is closed"));
+        }
+        Ok(())
     }
 
     pub fn profile_reconcile(
@@ -1081,6 +1244,7 @@ struct Worker {
     workspace_order_result: Option<serde_json::Value>,
     workspace_group_result: Option<serde_json::Value>,
     surface_order_result: Option<serde_json::Value>,
+    open_result: Option<serde_json::Value>,
     download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
     browser_dispatch: Option<BrowserDispatchBatch>,
@@ -1208,6 +1372,10 @@ impl Worker {
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
             dirty |= self.downloads.poll(&self.model.snapshot(), Instant::now());
+            dirty |= self
+                .shared
+                .files
+                .poll(&self.model.snapshot(), Instant::now());
             match self.windows.reconcile(&self.model.snapshot()) {
                 Ok(changed) => dirty |= changed,
                 Err(error) => self.last_error = Some(error.to_string()),
@@ -1288,6 +1456,7 @@ impl Worker {
         self.workspace_order_result = None;
         self.workspace_group_result = None;
         self.surface_order_result = None;
+        self.open_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if acknowledgement.is_some()
@@ -1404,6 +1573,7 @@ impl Worker {
                 workspace_order_result: self.workspace_order_result.take(),
                 workspace_group_result: self.workspace_group_result.take(),
                 surface_order_result: self.surface_order_result.take(),
+                open_result: self.open_result.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -1427,6 +1597,7 @@ impl Worker {
                     }
                     | Command::NativeDownload { .. }
                     | Command::BrowserHost { .. }
+                    | Command::FileHost { .. }
                     | Command::BrowserDrain
                     | Command::Windows {
                         request: windows::WindowRequest {
@@ -1446,6 +1617,7 @@ impl Worker {
                 Command::Session { .. }
                     | Command::Attention { .. }
                     | Command::BrowserHost { .. }
+                    | Command::FileHost { .. }
                     | Command::BrowserDrain
                     | Command::NativeDownload { .. }
                     | Command::NativeWindow { .. }
@@ -1593,6 +1765,11 @@ impl Worker {
                 }
                 Ok(())
             }
+            Command::FileHost { event } => self.file_host_event(event),
+            Command::OpenFiles { batch } => {
+                self.open_files(batch);
+                Ok(())
+            }
             Command::BrowserDrain => {
                 self.browser_dispatch = Some(
                     self.browser
@@ -1607,6 +1784,7 @@ impl Worker {
                 if restore {
                     self.browser
                         .reset("session restore replaced native browser hosts");
+                    self.shared.files.reset();
                     self.attention
                         .reset_native("session restore replaced notification targets");
                 }
@@ -2607,6 +2785,7 @@ impl Worker {
     fn publish(&mut self, closed: bool) -> Arc<Snapshot> {
         self.browser
             .reconcile(&self.model.snapshot(), Instant::now());
+        self.shared.files.reconcile(&self.model.snapshot());
         if let Err(error) = self.windows.reconcile(&self.model.snapshot()) {
             self.last_error = Some(error.to_string());
         }
@@ -2693,6 +2872,7 @@ impl Worker {
             download_epoch: self.downloads.epoch,
             downloads: self.downloads.records(),
             download_waits: self.downloads.wait_receipts(),
+            files: self.shared.files.snapshot(Instant::now()),
             browser_pending_requests: self.browser.pending_request_count(),
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),
