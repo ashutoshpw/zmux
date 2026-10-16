@@ -2728,6 +2728,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let storage: NativeDesktopStorage
                 if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
                     storage = .transient
+                } else if let index = CommandLine.arguments.firstIndex(of: "--agent-inbox-smoke"), CommandLine.arguments.count > index + 2 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
@@ -2739,6 +2741,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--agent-inbox-smoke"), CommandLine.arguments.count > index + 2 {
+                    do {
+                        try await AgentInboxSmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native agent inbox failed: \(error)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Agent inbox cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     do {
                         try await CompletedTerminalHistorySmoke.run(coordinator: coordinator, report: URL(fileURLWithPath: CommandLine.arguments[index + 1]))
@@ -2815,7 +2829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
+                if CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") || CommandLine.arguments.contains("--agent-inbox-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }
