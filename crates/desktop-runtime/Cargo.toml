@@ -22,5 +22,8 @@ zmux-session-runtime.workspace = true
 zmux-terminal-adapter.workspace = true
 zmux-remote-runtime.workspace = true
 
+[dev-dependencies]
+zmux-session-test-support = { path = "../session-runtime/test-support" }
+
 [lints]
 workspace = true
