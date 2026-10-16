@@ -6,7 +6,7 @@ on:
       suite:
         description: Native validation suite
         type: choice
-        options: [full, terminal-selection, completed-history, profile-operations]
+        options: [full, terminal-selection, completed-history, profile-operations, sidebar]
         default: full
         required: true
   push:
@@ -243,4 +243,48 @@ jobs:
             scripts/build-macos-dev
             tools/native-fixtures/profile-lease-holder.c
           if-no-files-found: warn
+          retention-days: 7
+
+  sidebar:
+    if: github.event_name == 'workflow_dispatch' && inputs.suite == 'sidebar'
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Type-check both native architecture slices
+        run: scripts/check-macos-sources
+      - name: Install pinned Rust
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Build universal packaged app
+        run: scripts/build-macos-dev
+      - name: Exercise compact toolbar, sidebar grouping and physical shutdown
+        run: scripts/check-native-sidebar --skip-build
+      - name: Retain validated universal package and native evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zmux-native-sidebar-universal-${{ github.sha }}
+          path: |
+            dist/zmux-dev-universal-*.zip
+            dist/zmux-dev-universal-*.zip.sha256
+            dist/build-info.json
+            dist/native-sidebar*.json
+            dist/native-sidebar*.log
+            dist/zmux-sidebar*.png
+          if-no-files-found: error
+          retention-days: 14
+      - name: Retain diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zmux-native-sidebar-diagnostics-${{ github.sha }}
+          path: |
+            dist/build-info.json
+            dist/native-sidebar*.json
+            dist/native-sidebar*.log
+            dist/zmux-sidebar*.png
+          if-no-files-found: ignore
           retention-days: 7
