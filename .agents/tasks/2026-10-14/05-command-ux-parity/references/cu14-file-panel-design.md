@@ -506,7 +506,11 @@ owner. Polling reuses the proven `download_paths.rs` shape and is testable on Li
   metadata to be stable across one more poll (coalesces a writer mid-write, 1-2 s total
   latency), then reads (bounded by the mode cap), hashes, and compares with `baseline.sha256`.
   Equal => silently adopt the new metadata (touch, identical rewrite). Different => `changed`
-  and `disk_generation += 1` (a second external write while a banner is up is visible).
+  and `disk_generation += 1` (a second external write while a banner is up is visible). The
+  generation counts distinct disk content: the service remembers the hash it last examined
+  (the baseline until the poller looks again, forgotten when the file is declared deleted), and
+  reading the same bytes a second time (the fingerprint is taken before the read, so a write
+  that lands in between is examined twice) never counts as another edit.
 - ENOENT must repeat on two consecutive polls to become `deleted` (an editor that deletes then
   recreates, or an atomic replace in progress, is not reported as deleted).
 - EACCES, a non-regular replacement, or a size over the cap => `unreadable` with a code.

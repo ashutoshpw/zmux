@@ -161,7 +161,7 @@ Base: `e66b1675e079db4c566f2a7d881ebb833ffd6d84`.
 
 ### Red then green
 
-Red: `crates/desktop-runtime/tests/files.rs` (the original 25 behavioural tests; 44 after the fix rounds) was written before
+Red: `crates/desktop-runtime/tests/files.rs` (the original 25 behavioural tests; 44 after the third fix round, 45 after the fourth) was written before
 `files.rs`. Run against a clean export of the base commit (`git archive e66b167`, separate target
 directory, so no branch, worktree or stash was involved) it fails to build:
 `error[E0432]: unresolved imports zmux_desktop_runtime::file_io, zmux_desktop_runtime::files`
@@ -469,6 +469,106 @@ counts and the 18-run flake claim above were stale and are corrected in place.
   `scripts/license-inventory --check`, `scripts/check-native-bridge`): PASS, exit 0; 521 tests
   passed, 0 failed, 2 ignored (the `lease_child` and `mutation_child` subprocess fixtures, unrelated) across 77 test binaries. No dependency change.
 - The native bridge C ABI check passed, including the framed file channel and profile lease checks.
+
+### S2 fourth fix round (determinism under load, verified one by one)
+
+One blocking finding: the threaded `tests/files.rs` suite flaked at 2-4x CPU oversubscription.
+Reproduced first on the unmodified tests (harness: N concurrent copies of the test binary plus N
+`while :; do :; done` hogs on this 24-CPU box): 14 of 96 whole-suite runs failed at 48 copies with
+48 hogs, and 35 of 384 on a diagnostic build. The earlier "deflaked" and determinism claims in the
+third round covered only 8 concurrent copies (and 8 with 48 hogs); that is superseded by the
+measurements below. Sub-findings (a)-(f), each confirmed before changing anything:
+
+- (a) `probe_timeout_is_an_explicit_item_error_and_other_items_complete` (confirmed, 13 failures
+  in the diagnostic run) and its socket twin. After the release the recovery `open_item` ran under
+  the fixture's own 150 ms probe deadline. Worse, the same tiny deadline can expire before the
+  first probe is even queued (the deadline check precedes `try_send`), so the worker never reaches
+  the gate and `wait_blocked` fails (seen at 4x as "no operation reached the gate"). Now
+  `Fixture::pin_worker` repeats short attempts until one provably parked the worker in the gate,
+  and only then is the call under test made, so both items must time out whatever the speed;
+  recovery after release is eventual (retry only on the explicit `probe_timeout`, 60 s patience).
+- (b) `shutdown_waits_for_a_busy_worker_and_joins_it_once_released` (confirmed, 3 failures). Two
+  causes. Test: `pending.files == 1` is written by the executor's own drain loop, which a loaded
+  machine may not have run yet; the test now observes `shutdown_status` until it does. Product
+  (a real, small race): `wait_shutdown` took its report, then read the clock, so a wait that ended
+  by expiry could return `deadline_expired == false`. It now reads the clock first and reports
+  after, so an expiry it observed is always in the report (`shutdown.rs`). The test asserts it on
+  a wait that ends by expiry. A real interleaving cannot be forced to fail deterministically, so
+  the fix is structural and I did not demonstrate it by mutation.
+- (c) `file_worker_changes_advance_the_revision_and_an_idle_service_does_not` (confirmed, 10
+  failures): the idle assertion is on the global revision and the `/bin/sh -i` starter terminal
+  printed its prompt after the 150 ms sleep. The fixture's starter terminal is now
+  `/bin/sh -c "exec cat"`, which never writes a byte, the sleep is gone, and "idle" is measured in
+  counted polls (`Fixture::wait_polls` uses the backend's own `open_leaf` counter as the clock).
+  The same helper replaced the sleeps in the touch assertion.
+- (d) `a_timed_out_reload_finishing_after_detach_does_not_rebind_the_old_view` (confirmed, 5
+  failures): the 100 ms read timeout also governed the setup and final attaches. Those now use
+  `attach_patiently` (a timed-out attach still completes on the worker and binds the same host,
+  so retrying with that host is idempotent); only the reload under test keeps the tiny timeout,
+  and the test waits until the worker is inside the read before it detaches.
+- (e) Broken pipe on the control socket (confirmed: 2 in the baseline run, and 2 more tests,
+  `a_closed_desktop...` and `a_mixed_batch...`, returning `invalid_frame`, "Resource temporarily
+  unavailable", in the diagnostic run). The server gives a client 500 ms from accept to deliver a frame; a descheduled
+  test client missed it and wrote to a closed socket. A request the server did not read was never
+  executed, so `Socket::call` reconnects and resends on `invalid_frame` or a broken pipe on
+  write and returns every other answer untouched. The 500 ms server constant is unchanged.
+- (f) `a_save_queued_behind_work_then_detached_...` (confirmed, 1 failure; the reviewer's
+  question about a recreated entry that loses its receipt is answered NO). A diagnostic build
+  printed the entry at the failure: `last_op = {attach, op_id 2, completed}`, `generation 1`,
+  `attached false`, i.e. the same entry, never recreated, and the save was never admitted. The
+  published snapshot lags the registry by an executor tick, so `wait_entry(.. "pending")` was
+  satisfied by a stale snapshot taken while the earlier ATTACH was pending; the test then
+  detached before its save thread had enqueued, `file_save` refused with `stale_owner` before any
+  receipt existed, and `state != "pending"` matched the old completed attach. Tests now wait for
+  the operation's own receipt (`wait_receipt(kind, state)`) in every place that did this
+  (`reload`/`save` receipts, the queue test, the timed-out save test).
+
+Found by the 4x runs after those fixes and also fixed:
+
+- Polling test, product imprecision (`files.rs`): `disk_generation` advanced on every load that
+  differed from the baseline. The fingerprint is taken before the read, so a write landing in
+  between made the poller read the same new bytes twice and count two edits. It now advances only
+  for content that differs from the hash the poller last examined (`Entry.disk_sha`: baseline
+  after an adopt, replaced per load, forgotten when the file is declared deleted, so a recreated
+  file always counts). Tests: `an_edit_landing_between_a_polls_stat_and_read_is_one_disk_generation`
+  (a backend hook writes the edit between the stat and the read, deterministically; with the old
+  rule the test fails with the production flake's exact message, `disk_generation` 3 instead of
+  2) and the unit test `only_new_disk_content_is_a_new_disk_generation`. Design D14 states it.
+  The polling and revision tests now make external edits with an atomic rename
+  (`replace_atomically`): an in-place `write(2)` or `std::fs::write` (truncate first) can be seen
+  half-written by a poller whose writer is descheduled, which is a different, unwinnable race.
+- `FilesConfig.command_timeout` (default 2 s, the previous constant) is the wait for the
+  executor's acknowledgement of `open`/`observe`/`detach`; tests set 60 s. The 2 s constant was
+  hit at 8x load by `file_open`/`file_detach`. Behaviour at the default is unchanged.
+- The session-restore test retries only the persistence layer's explicit "retry" answer
+  (generation ledger lock held by another holder); the unit test
+  `shutdown_joins_an_idle_worker_and_refuses_new_work` no longer uses a stopwatch (a 600 s tick
+  makes only the wake-up able to end the worker inside a 30 s budget).
+- Generic: all failure-only waits and the fixture's file timeouts are `PATIENCE` (60 s) instead of
+  5-8 s; shutdowns use the 30 s maximum. `capabilities_advertise...` sets its own 5000 ms probe
+  timeout because it asserts the advertised value.
+
+Determinism, executed against the final test binaries (24 CPUs; Linux):
+
+| binary | serial | 8 concurrent x3 | 48 copies + 48 hogs | 96 copies + 96 hogs |
+| --- | --- | --- | --- | --- |
+| desktop-runtime `files` (45 tests) | 20/20 | 24/24 | 288/288 (6 rounds) | 191/192 (see below) |
+| native-bridge `files` (7 tests) | 20/20 | 24/24 | 96/96 | not run |
+| desktop-runtime lib, `files::` filter | 20/20 (whole lib) | 24/24 (whole lib) | 96/96 | not run |
+
+Before the changes the same harness gave 14/96 at 48+48 (above). The single 96+96 failure is
+`a_mixed_batch_over_the_socket_...` returning `outcome_unknown`: the control server's own 2 s
+`COMMAND_TIMEOUT` for the executor expired at 8x oversubscription. That constant is the control
+server's and is unchanged; an earlier 96+96 run of an almost identical binary passed 288/288.
+Residual, not fixed because it is outside the file service: at 48+48 the *whole* lib unit-test
+binary still flakes in other modules' tests (`agent_messages::tests::pending_worker_credits_and_
+shutdown_remain_bounded_during_locked_io`, `control::tests::message_io_and_queued_policy_writer_
+do_not_block_the_workspace_executor`); both predate and are untouched by this slice.
+
+Checks: `scripts/check`: PASS, exit 0; 523 tests passed, 0 failed, 2 ignored (the `lease_child`
+and `mutation_child` subprocess fixtures) across 77 test binaries. Swift, macOS and hosted gates
+remain UNAVAILABLE. Corrections to earlier text: the `files` binary now has 45 tests (not 44), and
+the determinism evidence is the table above, not the 8-copy runs.
 
 ### UNAVAILABLE gates (unchanged)
 

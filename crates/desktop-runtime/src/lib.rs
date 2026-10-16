@@ -878,7 +878,7 @@ impl Desktop {
                         items,
                     },
                 },
-                NATIVE_COMMAND_TIMEOUT,
+                self.shared.files.config().command_timeout,
             )
             .map_err(file_failure)?;
         execution.result.map_err(file_failure)?;
@@ -939,7 +939,10 @@ impl Desktop {
             | files::FileHostEvent::Detach { owner } => self.shared.files.check_owner(owner)?,
         }
         let execution = self
-            .execute_native(Command::FileHost { event }, NATIVE_COMMAND_TIMEOUT)
+            .execute_native(
+                Command::FileHost { event },
+                self.shared.files.config().command_timeout,
+            )
             .map_err(file_failure)?;
         execution.result.map_err(file_failure)?;
         Ok(execution.snapshot.revision)

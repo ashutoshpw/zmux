@@ -59,6 +59,9 @@ pub struct FilesConfig {
     /// Wait for attach/reload/observe replies.
     pub read_timeout: Duration,
     pub save_timeout: Duration,
+    /// Wait for the executor to acknowledge a file command (applying an `open`, a view's dirty
+    /// bit or detach). An elapsed wait is reported as an unknown outcome.
+    pub command_timeout: Duration,
     /// Called once per executor tick. Tests use it to hold the executor deterministically;
     /// production hosts leave it `None`.
     pub executor_tick_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -73,6 +76,7 @@ impl Default for FilesConfig {
             probe_timeout: Duration::from_secs(1),
             read_timeout: Duration::from_secs(2),
             save_timeout: Duration::from_secs(5),
+            command_timeout: Duration::from_secs(2),
             executor_tick_hook: None,
         }
     }
@@ -266,6 +270,10 @@ struct Entry {
     state: EntryState,
     error_code: Option<&'static str>,
     baseline: Option<Baseline>,
+    /// Hash of the disk content the poller last examined (the baseline until it looks again,
+    /// `None` while the file is gone). `disk_generation` advances only for content that differs
+    /// from it, so a second look at the same external edit never counts as another edit.
+    disk_sha: Option<String>,
     generation: u64,
     disk_generation: u64,
     size: u64,
@@ -289,6 +297,7 @@ impl Entry {
             state: EntryState::Unattached,
             error_code: None,
             baseline: None,
+            disk_sha: None,
             generation: 0,
             disk_generation: 0,
             size: 0,
@@ -306,6 +315,7 @@ impl Entry {
     fn adopt(&mut self, sha256: String, bom: bool, fingerprint: Fingerprint, interval: Duration) {
         self.generation += 1;
         self.disk_generation = self.generation;
+        self.disk_sha = Some(sha256.clone());
         self.baseline = Some(Baseline { sha256, bom });
         self.size = fingerprint.size;
         self.mtime_ns = fingerprint.mtime_ns;
@@ -820,6 +830,7 @@ impl FileService {
         entry.host = None;
         entry.detaches += 1;
         entry.baseline = None;
+        entry.disk_sha = None;
         entry.state = EntryState::Unattached;
         entry.error_code = None;
         entry.analyzed = None;
@@ -1270,6 +1281,7 @@ impl Inner {
                     host,
                     generation: entry.generation,
                     baseline_sha: baseline.sha256.clone(),
+                    disk_sha: entry.disk_sha.clone(),
                     state: entry.state,
                     code: entry.error_code,
                     analyzed: entry.analyzed.clone(),
@@ -1310,6 +1322,9 @@ impl Inner {
             if update.bump_disk_generation {
                 entry.disk_generation += 1;
             }
+            if let Some(disk_sha) = update.disk_sha {
+                entry.disk_sha = disk_sha;
+            }
         }
     }
 }
@@ -1321,6 +1336,7 @@ struct PollInput {
     host: Uuid,
     generation: u64,
     baseline_sha: String,
+    disk_sha: Option<String>,
     state: EntryState,
     code: Option<&'static str>,
     analyzed: Option<Analyzed>,
@@ -1334,6 +1350,8 @@ struct PollUpdate {
     missing: u8,
     analyzed: Option<Analyzed>,
     bump_disk_generation: bool,
+    /// `Some` replaces the entry's remembered disk hash.
+    disk_sha: Option<Option<String>>,
 }
 /// Pure external-change decision (design D14). `load` runs only once metadata has been
 /// stable across two polls, which coalesces a writer that is still mid-write.
@@ -1349,6 +1367,7 @@ fn decide(
         missing,
         analyzed: None,
         bump_disk_generation: false,
+        disk_sha: None,
     };
     match observation {
         Observation::Missing => {
@@ -1358,6 +1377,8 @@ fn decide(
                 PollUpdate {
                     state: EntryState::Deleted,
                     code: None,
+                    // A file that comes back is a new disk generation even if its bytes match.
+                    disk_sha: Some(None),
                     ..keep(None, missing)
                 }
             } else {
@@ -1388,6 +1409,9 @@ fn decide(
             match load() {
                 Ok(loaded) => {
                     let changed = loaded.sha256 != input.baseline_sha;
+                    // The fingerprint was taken before the bytes were read, so a write that
+                    // lands in between is examined twice; only different bytes are a new edit.
+                    let new_content = changed && input.disk_sha.as_deref() != Some(&loaded.sha256);
                     let state = if changed {
                         EntryState::Changed
                     } else {
@@ -1403,7 +1427,8 @@ fn decide(
                             state,
                             code: None,
                         }),
-                        bump_disk_generation: changed,
+                        bump_disk_generation: new_content,
+                        disk_sha: Some(Some(loaded.sha256.clone())),
                     }
                 }
                 Err(error) => PollUpdate {
@@ -1417,6 +1442,7 @@ fn decide(
                         code: Some(error.code),
                     }),
                     bump_disk_generation: false,
+                    disk_sha: None,
                 },
             }
         }
@@ -1739,6 +1765,7 @@ mod tests {
             host: Uuid::new_v4(),
             generation: 1,
             baseline_sha: "base".into(),
+            disk_sha: Some("base".into()),
             state: EntryState::InSync,
             code: None,
             analyzed: analyzed.map(|fingerprint| Analyzed {
@@ -1798,6 +1825,56 @@ mod tests {
         );
         assert_eq!(still_writing.pending, Some(fingerprint(12)));
     }
+    fn loaded(sha256: &str, size: u64) -> Result<file_io::LoadedFile, FileError> {
+        Ok(file_io::LoadedFile {
+            bytes: Vec::new(),
+            meta: meta(size),
+            sha256: sha256.into(),
+            bom: false,
+            writable: true,
+        })
+    }
+    #[test]
+    fn only_new_disk_content_is_a_new_disk_generation() {
+        let mut state = input(Some(fingerprint(5)), Some(fingerprint(9)));
+        // The first examination of an external edit counts.
+        let first = decide(&state, Observation::Present(meta(9)), || loaded("edit", 9));
+        assert_eq!(first.state, EntryState::Changed);
+        assert!(first.bump_disk_generation);
+        assert_eq!(first.disk_sha, Some(Some("edit".into())));
+        // The same bytes examined again because the fingerprint moved (a write landed between
+        // the fingerprint and the read) are the same edit.
+        state.disk_sha = Some("edit".into());
+        state.analyzed = first.analyzed;
+        state.pending = Some(fingerprint(11));
+        let again = decide(&state, Observation::Present(meta(11)), || {
+            loaded("edit", 11)
+        });
+        assert_eq!(again.state, EntryState::Changed);
+        assert!(!again.bump_disk_generation, "same bytes, same generation");
+        // Different bytes are the next generation.
+        state.pending = Some(fingerprint(13));
+        let next = decide(&state, Observation::Present(meta(13)), || {
+            loaded("edit two", 13)
+        });
+        assert!(next.bump_disk_generation);
+        // Healing back to the baseline is not a new generation, and a file that disappeared and
+        // came back is, even with the bytes it had before.
+        let healed = decide(&state, Observation::Present(meta(13)), || {
+            loaded("base", 13)
+        });
+        assert_eq!(healed.state, EntryState::InSync);
+        assert!(!healed.bump_disk_generation);
+        state.missing = 1;
+        let gone = decide(&state, Observation::Missing, never);
+        assert_eq!(gone.disk_sha, Some(None));
+        state.disk_sha = None;
+        state.pending = Some(fingerprint(11));
+        let back = decide(&state, Observation::Present(meta(11)), || {
+            loaded("edit", 11)
+        });
+        assert!(back.bump_disk_generation);
+    }
     #[test]
     fn one_miss_is_not_a_delete_but_two_are() {
         let mut state = input(Some(fingerprint(5)), None);
@@ -1822,21 +1899,22 @@ mod tests {
         assert_ne!(service.epoch(), before);
         assert_eq!(service.check_owner(&owner).unwrap_err().code, "stale_owner");
         service
-            .shutdown(Instant::now() + Duration::from_secs(2))
+            .shutdown(Instant::now() + Duration::from_secs(30))
             .unwrap();
         assert!(service.is_finished());
     }
     #[test]
     fn shutdown_joins_an_idle_worker_and_refuses_new_work() {
-        let service = FileService::start(FilesConfig::default()).unwrap();
-        let started = Instant::now();
+        // A tick far longer than the shutdown budget: only the wake-up can end the worker in
+        // time, so a missing wake-up fails the shutdown itself (no stopwatch involved).
+        let service = FileService::start(FilesConfig {
+            poll_tick: Duration::from_secs(600),
+            ..FilesConfig::default()
+        })
+        .unwrap();
         service
-            .shutdown(Instant::now() + Duration::from_secs(2))
+            .shutdown(Instant::now() + Duration::from_secs(30))
             .unwrap();
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "wake avoids a full tick"
-        );
         assert_eq!(
             service
                 .probe("/x", None, Instant::now() + Duration::from_secs(1))

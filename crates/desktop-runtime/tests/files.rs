@@ -27,6 +27,12 @@ use zmux_desktop_runtime::{
 };
 use zmux_workspace_core::{Action, FileMode, SurfaceId};
 
+/// How long a test waits for something that is guaranteed to happen. It is only ever spent when
+/// a test is already failing, so it is generous: a test must never assume that a thread, the
+/// executor or the filesystem is fast. Deadlines that belong to the behaviour under test (the
+/// product's own timeouts) are separate and only ever make the *expected failure* time out.
+const PATIENCE: Duration = Duration::from_secs(60);
+
 /// Wraps the real backend. Any operation can be gated (blocked until released) and every call
 /// is counted, so tests can prove what did and did not reach the disk.
 #[derive(Default)]
@@ -35,6 +41,9 @@ struct Control {
     changed: Condvar,
     blocked: AtomicUsize,
     counts: Mutex<HashMap<&'static str, usize>>,
+    /// Runs once, just before the next backend `read`: an external writer that lands between a
+    /// load's `fstat` and its read, at an exact and reproducible point.
+    before_read: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 impl Control {
     fn arm(&self, op: &'static str) {
@@ -49,7 +58,7 @@ impl Control {
     }
     #[track_caller]
     fn wait_blocked(&self, expected: usize) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + PATIENCE;
         while self.blocked.load(Ordering::SeqCst) < expected {
             assert!(Instant::now() < deadline, "no operation reached the gate");
             thread::sleep(Duration::from_millis(2));
@@ -60,7 +69,7 @@ impl Control {
         let mut gated = self.gated.lock().unwrap();
         if *gated == Some(op) {
             self.blocked.fetch_add(1, Ordering::SeqCst);
-            let deadline = Instant::now() + Duration::from_secs(30);
+            let deadline = Instant::now() + PATIENCE;
             while *gated == Some(op) {
                 let (guard, timeout) = self
                     .changed
@@ -98,6 +107,10 @@ impl FileBackend for Gated {
         RealFs.writable(dir, name)
     }
     fn read(&self, file: &mut File, max_bytes: usize) -> Result<Vec<u8>, FileError> {
+        let hook = self.0.before_read.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
         self.0.pass("read");
         RealFs.read(file, max_bytes)
     }
@@ -162,18 +175,21 @@ impl Fixture {
             // Polling is opt-in per test so unrelated assertions never race the poller.
             poll_interval: Duration::from_secs(3600),
             poll_tick: Duration::from_millis(5),
-            stall_after: Duration::from_secs(60),
-            probe_timeout: Duration::from_secs(5),
-            read_timeout: Duration::from_secs(5),
-            save_timeout: Duration::from_secs(5),
+            stall_after: PATIENCE,
+            probe_timeout: PATIENCE,
+            read_timeout: PATIENCE,
+            save_timeout: PATIENCE,
+            command_timeout: PATIENCE,
             ..FilesConfig::default()
         };
         configure(&mut config);
         let desktop = Arc::new(
             Desktop::with_options(
+                // A silent starter terminal: it never writes a byte, so it can never publish a
+                // revision of its own and tests may reason about revisions exactly.
                 Shell {
                     program: "/bin/sh".into(),
-                    args: vec!["-i".into()],
+                    args: vec!["-c".into(), "exec cat".into()],
                     cwd: None,
                 },
                 DesktopOptions {
@@ -187,7 +203,6 @@ impl Fixture {
         let dir = std::env::temp_dir().join(format!("zmux-files-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let dir = std::fs::canonicalize(dir).unwrap();
-        // The starter terminal must be quiet before tests measure revisions.
         wait(&desktop, |s| {
             !s.frames.is_empty()
                 && s.frames.iter().all(|f| {
@@ -196,7 +211,6 @@ impl Fixture {
                         .is_some_and(|s| s.state == zmux_session_runtime::State::Running)
                 })
         });
-        thread::sleep(Duration::from_millis(150));
         Self {
             desktop,
             dir,
@@ -242,6 +256,27 @@ impl Fixture {
         let content = self.attach_as(surface, Uuid::new_v4()).unwrap();
         (content.owner.clone(), content)
     }
+    /// An attach that retries while the (deliberately tiny) read timeout fires before a loaded
+    /// worker answers. A timed-out attach still finishes on the worker and binds the same
+    /// `host`, so retrying with that host is idempotent and never replays a write.
+    #[track_caller]
+    fn attach_patiently(
+        &self,
+        surface: SurfaceId,
+        host: Uuid,
+    ) -> desktop_runtime::files::FileContent {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            match self.attach_as(surface, host) {
+                Ok(content) => return content,
+                Err(error) if matches!(error.code.as_str(), "timeout" | "busy") => {
+                    assert!(Instant::now() < deadline, "attach never completed: {error}");
+                    thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("attach failed: {error}"),
+            }
+        }
+    }
     fn entry(&self, surface: SurfaceId) -> Option<Value> {
         let files = serde_json::to_value(&self.snapshot().files).unwrap();
         files["entries"]
@@ -253,7 +288,7 @@ impl Fixture {
     }
     #[track_caller]
     fn wait_entry(&self, surface: SurfaceId, predicate: impl Fn(&Value) -> bool) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + PATIENCE;
         loop {
             if let Some(entry) = self.entry(surface)
                 && predicate(&entry)
@@ -266,6 +301,50 @@ impl Fixture {
                 self.entry(surface)
             );
             thread::sleep(Duration::from_millis(5));
+        }
+    }
+    /// Parks the file worker inside the probe of `operand` (the `canonicalize` gate must be
+    /// armed). A tiny `probe_timeout` can expire before an attempt is even queued on a loaded
+    /// machine, so attempts are repeated until one provably reached the worker: every attempt
+    /// returns by itself after the (short) deadline and none depends on how fast the machine is.
+    #[track_caller]
+    fn pin_worker(&self, operand: &Path) {
+        let deadline = Instant::now() + PATIENCE;
+        while self.control.blocked.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the worker was never pinned");
+            let attempt = self
+                .desktop
+                .file_open(vec![operand.to_str().unwrap().into()], None, true)
+                .unwrap();
+            assert_eq!(attempt["items"][0]["error"]["code"], "probe_timeout");
+            // The attempt gave up; the worker may still be about to dequeue it.
+            let settle = Instant::now() + Duration::from_millis(500);
+            while self.control.blocked.load(Ordering::SeqCst) == 0 && Instant::now() < settle {
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+    /// Waits for the receipt of one specific kind of operation. The published snapshot lags the
+    /// registry by an executor tick, so a snapshot read right after an operation was started can
+    /// still show the *previous* operation (even a stale `pending` of an earlier attach);
+    /// matching on `kind` and `state` together never mistakes one for the other.
+    #[track_caller]
+    fn wait_receipt(&self, surface: SurfaceId, kind: &str, state: &str) -> Value {
+        self.wait_entry(surface, |e| {
+            e["last_op"]["kind"] == kind && e["last_op"]["state"] == state
+        })
+    }
+    /// Blocks until the file worker has completed `polls` further fingerprint polls. Every poll
+    /// opens the leaf once, so the gated backend's own call counter is the clock: negative
+    /// assertions ("nothing changed after many polls") need no sleeps.
+    #[track_caller]
+    fn wait_polls(&self, polls: usize) {
+        // The poll that is counted may still be applying its result, so wait for one more.
+        let target = self.control.count("open_leaf") + polls + 1;
+        let deadline = Instant::now() + PATIENCE;
+        while self.control.count("open_leaf") < target {
+            assert!(Instant::now() < deadline, "the worker stopped polling");
+            thread::sleep(Duration::from_millis(2));
         }
     }
     fn close(&self, surface: SurfaceId) {
@@ -286,7 +365,7 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         self.control.release();
-        let _ = self.desktop.shutdown(Duration::from_secs(5));
+        let _ = self.desktop.shutdown(Duration::from_secs(30));
         let _ = std::fs::remove_dir_all(&self.dir);
         if let Some(state) = &self.state {
             let _ = std::fs::remove_dir_all(state);
@@ -295,7 +374,7 @@ impl Drop for Fixture {
 }
 #[track_caller]
 fn wait(desktop: &Desktop, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + PATIENCE;
     loop {
         let snapshot = desktop_snapshot::read(desktop);
         if predicate(&snapshot) {
@@ -732,7 +811,7 @@ fn owners_are_fenced_by_host_surface_lifetime_and_epoch() {
 impl Fixture {
     #[track_caller]
     fn wait_entry_gone(&self, surface: SurfaceId) {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        let deadline = Instant::now() + PATIENCE;
         while self.entry(surface).is_some() {
             assert!(Instant::now() < deadline, "entry was never retired");
             thread::sleep(Duration::from_millis(5));
@@ -781,9 +860,8 @@ fn a_reload_that_outlives_a_detach_never_rebinds_the_old_view() {
         fx.control.release();
         assert_eq!(failure(reload.join().unwrap()).code, "stale_owner");
     });
-    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] != "pending");
+    let entry = fx.wait_receipt(surface, "reload", "failed");
     assert_eq!(entry["attached"], false, "{entry}");
-    assert_eq!(entry["last_op"]["state"], "failed");
     assert_eq!(entry["last_op"]["code"], "stale_owner");
     // A new view can attach and the old owner stays fenced.
     assert!(fx.attach_as(surface, Uuid::new_v4()).is_ok());
@@ -795,19 +873,26 @@ fn a_reload_that_outlives_a_detach_never_rebinds_the_old_view() {
 
 #[test]
 fn a_timed_out_reload_finishing_after_detach_does_not_rebind_the_old_view() {
+    // The tiny read timeout belongs to the reload under test only. Every other call the test
+    // makes (the setup attach, the final attach) is retried until the worker has answered, so a
+    // slow machine can delay the test but never fail it.
     let fx = Fixture::with(|c| c.read_timeout = Duration::from_millis(100));
     let surface = fx.open("t.txt", b"timeout");
-    let (owner, _) = fx.attach(surface);
+    let host = Uuid::new_v4();
+    let owner = fx.attach_patiently(surface, host).owner;
     fx.control.arm("read");
     assert_eq!(
         failure(fx.desktop.file_reload(&owner, false)).code,
         "timeout"
     );
+    // The worker is inside the reload, past admission, when the view goes away.
+    fx.control.wait_blocked(1);
     fx.desktop.file_detach(&owner).unwrap();
     fx.control.release();
-    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] != "pending");
+    let entry = fx.wait_receipt(surface, "reload", "failed");
     assert_eq!(entry["attached"], false, "{entry}");
-    assert!(fx.attach_as(surface, Uuid::new_v4()).is_ok());
+    assert_eq!(entry["last_op"]["code"], "stale_owner");
+    fx.attach_patiently(surface, Uuid::new_v4());
 }
 
 #[test]
@@ -826,7 +911,9 @@ fn a_save_queued_behind_work_then_detached_releases_the_tab_and_never_writes() {
             fx.desktop
                 .file_save(&owner, content.generation, false, b"late".to_vec())
         });
-        fx.wait_entry(surface, |e| e["last_op"]["state"] == "pending");
+        // The save's own receipt, not the attach's: a snapshot taken while the attach ran can
+        // still be the newest one published.
+        fx.wait_receipt(surface, "save", "pending");
         fx.desktop.file_detach(&owner).unwrap();
         fx.control.release();
         assert_eq!(failure(save.join().unwrap()).code, "stale_owner");
@@ -834,8 +921,8 @@ fn a_save_queued_behind_work_then_detached_releases_the_tab_and_never_writes() {
     });
     assert_eq!(std::fs::read(fx.dir.join("s.txt")).unwrap(), b"original");
     assert_eq!(fx.control.count("rename"), 0);
-    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] != "pending");
-    assert_eq!(entry["last_op"]["code"], "stale_owner");
+    let entry = fx.wait_receipt(surface, "save", "failed");
+    assert_eq!(entry["last_op"]["code"], "stale_owner", "{entry}");
     // The tab is not wedged: a fresh attach is not `busy`.
     assert!(fx.attach_as(surface, Uuid::new_v4()).is_ok());
 }
@@ -918,13 +1005,14 @@ fn the_request_queue_is_bounded_and_overload_is_explicit() {
                 .map(|owner| scope.spawn(|| fx.desktop.file_reload(owner, false))),
         );
         for owner in &owners[..9] {
-            fx.wait_entry(owner.surface_id, |e| e["last_op"]["state"] == "pending");
+            fx.wait_receipt(owner.surface_id, "reload", "pending");
         }
         let overload = failure(fx.desktop.file_reload(&owners[9], false));
         assert_eq!(overload.code, "busy");
         assert!(!overload.outcome_unknown, "nothing ran");
-        // The refused surface is free again; nothing is left pending for it.
-        let entry = fx.entry(owners[9].surface_id).unwrap();
+        // The refused surface is free again; nothing is left pending for it, and the receipt it
+        // had before the refused reload is back (no receipt of the refused operation exists).
+        let entry = fx.wait_receipt(owners[9].surface_id, "attach", "completed");
         assert_ne!(entry["last_op"]["state"], "pending");
         fx.control.release();
         for handle in handles {
@@ -990,10 +1078,12 @@ fn a_save_that_times_out_is_outcome_unknown_and_is_never_replayed() {
 
     // The worker still finishes the one save it owns; nobody submits it again.
     fx.control.release();
-    let entry = fx.wait_entry(surface, |e| e["last_op"]["state"] == "completed");
+    let entry = fx.wait_receipt(surface, "save", "completed");
     assert_eq!(entry["last_op"]["op_id"], op_id);
     assert_eq!(entry["generation"], content.generation + 1);
-    thread::sleep(Duration::from_millis(300));
+    // The worker is a FIFO: a probe that has been answered proves that anything the save could
+    // have left queued ahead of it (a replay) has already run.
+    assert_eq!(fx.open_item(&fx.dir.join("u.txt"))["ok"], true);
     assert_eq!(
         fx.control.count("rename"),
         1,
@@ -1075,43 +1165,58 @@ fn a_session_restore_rotates_the_epoch_and_fences_every_earlier_view() {
     let old_epoch = fx.epoch();
     assert_eq!(old.epoch, old_epoch);
 
-    let run = |id: u64, command: SessionCommand| {
-        fx.desktop
-            .submit(Request {
-                version: 1,
-                request_id: id,
-                payload: Command::Session { action: command },
-            })
-            .unwrap();
-        let accepted = wait(&fx.desktop, |s| s.last_request_id == id);
-        assert!(accepted.last_error.is_none(), "{:?}", accepted.last_error);
-        let operation = accepted.persistence.operations.last().unwrap().operation_id;
-        let finished = wait(&fx.desktop, |s| {
-            s.persistence.operations.iter().any(|op| {
-                op.operation_id == operation && !matches!(op.state, OperationState::Pending)
-            })
-        });
-        let receipt = finished
-            .persistence
-            .operations
-            .iter()
-            .find(|op| op.operation_id == operation)
-            .unwrap();
-        assert!(
-            matches!(receipt.state, OperationState::Completed),
-            "{:?}",
-            receipt.error
-        );
-        finished
+    // The persistence layer answers `retry` (and changes nothing) when another holder of the
+    // generation ledger lock is in the middle of its reservation, e.g. the desktop's own
+    // startup on a loaded machine. That explicit answer is the only thing retried.
+    let next_id = std::sync::atomic::AtomicU64::new(1000);
+    let busy = |error: &str| error.contains("reserving session generations; retry");
+    let run = |command: SessionCommand| {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            assert!(Instant::now() < deadline, "the ledger stayed busy");
+            let id = next_id.fetch_add(1, Ordering::SeqCst);
+            fx.desktop
+                .submit(Request {
+                    version: 1,
+                    request_id: id,
+                    payload: Command::Session {
+                        action: command.clone(),
+                    },
+                })
+                .unwrap();
+            let accepted = wait(&fx.desktop, |s| s.last_request_id == id);
+            if accepted.last_error.as_deref().is_some_and(busy) {
+                continue;
+            }
+            assert!(accepted.last_error.is_none(), "{:?}", accepted.last_error);
+            let operation = accepted.persistence.operations.last().unwrap().operation_id;
+            let finished = wait(&fx.desktop, |s| {
+                s.persistence.operations.iter().any(|op| {
+                    op.operation_id == operation && !matches!(op.state, OperationState::Pending)
+                })
+            });
+            let receipt = finished
+                .persistence
+                .operations
+                .iter()
+                .find(|op| op.operation_id == operation)
+                .unwrap();
+            if receipt.error.as_deref().is_some_and(busy) {
+                continue;
+            }
+            assert!(
+                matches!(receipt.state, OperationState::Completed),
+                "{:?}",
+                receipt.error
+            );
+            return finished;
+        }
     };
     let export = fx.state.as_ref().unwrap().join("checkpoint.json");
-    let exported = run(
-        1,
-        SessionCommand::Export {
-            path: export.clone(),
-            force: false,
-        },
-    );
+    let exported = run(SessionCommand::Export {
+        path: export.clone(),
+        force: false,
+    });
     for (index, workspace) in exported.model.workspaces.iter().enumerate() {
         fx.desktop
             .submit(Request {
@@ -1126,7 +1231,7 @@ fn a_session_restore_rotates_the_epoch_and_fences_every_earlier_view() {
             .unwrap();
         wait(&fx.desktop, |s| s.last_request_id == 10 + index as u64);
     }
-    let restored = run(2, SessionCommand::Restore { path: Some(export) });
+    let restored = run(SessionCommand::Restore { path: Some(export) });
     assert!(
         file_surface(&restored, surface).is_some(),
         "the file tab is part of the restored session"
@@ -1363,7 +1468,7 @@ fn a_refused_observe_converges_once_the_queue_drains_and_the_close_guard_then_ho
 
     hold.0.lock().unwrap().0 = true;
     // Do not flood until the executor is provably parked inside the hook.
-    let parked = Instant::now() + Duration::from_secs(5);
+    let parked = Instant::now() + PATIENCE;
     while !hold.0.lock().unwrap().1 {
         assert!(
             Instant::now() < parked,
@@ -1430,6 +1535,24 @@ fn a_refused_observe_converges_once_the_queue_drains_and_the_close_guard_then_ho
     assert!(file_surface(&fx.snapshot(), surface).is_none());
 }
 
+/// An in-place edit that lands in one `write(2)`, made by the test thread itself at a point it
+/// controls (inside a backend call). `bytes` must be longer than the file.
+fn grow_in_place(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    let mut file = File::options().write(true).open(path).unwrap();
+    assert!(file.metadata().unwrap().len() < bytes.len() as u64);
+    file.write_all(bytes).unwrap();
+}
+/// An external edit as an atomic editor makes it: complete bytes appear under the name in one
+/// rename. A concurrent poller can never read a half-written file, however long this thread is
+/// descheduled, which an in-place `write(2)` (or `std::fs::write`, which truncates first) cannot
+/// promise: a poller that looks mid-write reports the torn bytes as one more edit.
+fn replace_atomically(dir: &Path, path: &Path, bytes: &[u8]) {
+    let staged = dir.join(format!(".staged-{}", Uuid::new_v4().simple()));
+    std::fs::write(&staged, bytes).unwrap();
+    std::fs::rename(&staged, path).unwrap();
+}
+
 #[test]
 fn polling_reports_changes_deletes_recreation_and_ignores_touch() {
     let fx = Fixture::with(|c| c.poll_interval = Duration::from_millis(20));
@@ -1446,19 +1569,21 @@ fn polling_reports_changes_deletes_recreation_and_ignores_touch() {
         .unwrap()
         .set_modified(std::time::SystemTime::now() + Duration::from_secs(30))
         .unwrap();
-    thread::sleep(Duration::from_millis(300));
+    // Counted polls, not elapsed time: the first notices the new metadata, the second reads and
+    // finds identical bytes, the rest prove nothing is reported afterwards.
+    fx.wait_polls(6);
     assert_eq!(fx.entry(surface).unwrap()["state"], "in_sync");
 
-    // An in-place edit is reported once its metadata is stable.
-    std::fs::write(&path, b"v2 edited").unwrap();
+    // An external edit is reported once its metadata is stable.
+    replace_atomically(&fx.dir, &path, b"v2 edited");
     entry = fx.wait_entry(surface, |e| e["state"] == "changed");
-    assert_eq!(entry["disk_generation"], 2);
+    assert_eq!(entry["disk_generation"], 2, "{entry}");
     assert_eq!(
         entry["generation"], 1,
         "the baseline the view shows is unchanged"
     );
     // A second external write while changed is visible as a new disk generation.
-    std::fs::write(&path, b"v3 edited again").unwrap();
+    replace_atomically(&fx.dir, &path, b"v3 edited again");
     entry = fx.wait_entry(surface, |e| e["disk_generation"] == 3);
     assert_eq!(entry["state"], "changed");
 
@@ -1470,7 +1595,7 @@ fn polling_reports_changes_deletes_recreation_and_ignores_touch() {
     // Deleting needs two consecutive misses; recreating is reported as a change.
     std::fs::remove_file(&path).unwrap();
     fx.wait_entry(surface, |e| e["state"] == "deleted");
-    std::fs::write(&path, b"back with new content").unwrap();
+    replace_atomically(&fx.dir, &path, b"back with new content");
     fx.wait_entry(surface, |e| e["state"] == "changed");
 
     // A directory in place of the file is unreadable, with a code.
@@ -1486,16 +1611,54 @@ fn polling_reports_changes_deletes_recreation_and_ignores_touch() {
 }
 
 #[test]
+fn an_edit_landing_between_a_polls_stat_and_read_is_one_disk_generation() {
+    let fx = Fixture::with(|c| c.poll_interval = Duration::from_millis(20));
+    let surface = fx.open("torn.txt", b"v1");
+    let path = fx.dir.join("torn.txt");
+    fx.attach(surface);
+    fx.wait_entry(surface, |e| e["state"] == "in_sync");
+    // The external edit lands in the middle of the poller's load of this touch: the load's
+    // fingerprint is the touch's, its bytes are the edit's. The poller then looks again at the
+    // (by now different) fingerprint and reads the very same bytes a second time.
+    let edited = path.clone();
+    *fx.control.before_read.lock().unwrap() =
+        Some(Box::new(move || grow_in_place(&edited, b"v2 edited")));
+    File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(30))
+        .unwrap();
+    let entry = fx.wait_entry(surface, |e| e["state"] == "changed");
+    assert!(
+        fx.control.before_read.lock().unwrap().is_none(),
+        "the edit happened inside the load"
+    );
+    assert_eq!(entry["disk_generation"], 2, "{entry}");
+    // Many more polls, including the second look at the same bytes: still one edit.
+    fx.wait_polls(10);
+    let entry = fx.entry(surface).unwrap();
+    assert_eq!(entry["state"], "changed");
+    assert_eq!(entry["disk_generation"], 2, "{entry}");
+    // A genuinely different external write is the next generation.
+    replace_atomically(&fx.dir, &path, b"v3 edited again");
+    fx.wait_entry(surface, |e| e["disk_generation"] == 3);
+    fx.wait_polls(10);
+    assert_eq!(fx.entry(surface).unwrap()["disk_generation"], 3);
+}
+
+#[test]
 fn file_worker_changes_advance_the_revision_and_an_idle_service_does_not() {
     let fx = Fixture::with(|c| c.poll_interval = Duration::from_millis(20));
     let surface = fx.open("rev.txt", b"v1");
     let path = fx.dir.join("rev.txt");
     let (owner, content) = fx.attach(surface);
+    fx.wait_receipt(surface, "attach", "completed");
     fx.wait_entry(surface, |e| e["state"] == "in_sync");
-    thread::sleep(Duration::from_millis(100));
-    // Idle: nothing is changing, so nothing is published.
+    // Idle: nothing is changing, so nothing is published. The starter terminal is silent and
+    // the poll counter (not a sleep) proves that several polls ran after the baseline.
     let idle = fx.snapshot().revision;
-    thread::sleep(Duration::from_millis(400));
+    fx.wait_polls(5);
     assert_eq!(
         fx.snapshot().revision,
         idle,
@@ -1504,7 +1667,7 @@ fn file_worker_changes_advance_the_revision_and_an_idle_service_does_not() {
 
     // With no other activity, each worker-side change reaches a new revision.
     let mut last = idle;
-    std::fs::write(&path, b"external write").unwrap();
+    replace_atomically(&fx.dir, &path, b"external write");
     fx.wait_entry(surface, |e| e["state"] == "changed");
     let after_change = fx.snapshot().revision;
     assert!(after_change > last);
@@ -1566,26 +1729,34 @@ fn probe_timeout_is_an_explicit_item_error_and_other_items_complete() {
     let slow = fx.write("slow.txt", b"slow");
     let fast = fx.write("fast.txt", b"fast");
     fx.control.arm("canonicalize");
-    let desktop = &fx.desktop;
-    let result = thread::scope(|scope| {
-        let call = scope.spawn(|| {
-            desktop.file_open(
-                vec![slow.to_str().unwrap().into(), fast.to_str().unwrap().into()],
-                None,
-                true,
-            )
-        });
-        fx.control.wait_blocked(1);
-        let result = call.join().unwrap().unwrap();
-        fx.control.release();
-        result
-    });
+    // With the worker pinned for the whole call, both items must hit the deadline whatever the
+    // machine speed: nothing here races the 150 ms.
+    fx.pin_worker(&slow);
+    let result = fx
+        .desktop
+        .file_open(
+            vec![slow.to_str().unwrap().into(), fast.to_str().unwrap().into()],
+            None,
+            true,
+        )
+        .unwrap();
+    fx.control.release();
     assert_eq!(result["items"][0]["error"]["code"], "probe_timeout");
     // The stuck worker cannot serve later items within the same deadline: explicit, not silent.
     assert_eq!(result["items"][1]["error"]["code"], "probe_timeout");
     assert_eq!(result["ok"], false);
-    let after = fx.open_item(&fast);
-    assert_eq!(after["ok"], true, "the worker recovers once released");
+    // Recovery is eventual: the released worker first finishes the two probes whose callers gave
+    // up, and the fixture's tiny probe deadline may still expire while it does. Only that
+    // explicit `probe_timeout` is tolerated, and each attempt queues one more bounded probe.
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let after = fx.open_item(&fast);
+        if after["ok"] == true {
+            break;
+        }
+        assert_eq!(after["error"]["code"], "probe_timeout", "{after}");
+        assert!(Instant::now() < deadline, "the worker never recovered");
+    }
 }
 
 #[test]
@@ -1597,23 +1768,40 @@ fn shutdown_waits_for_a_busy_worker_and_joins_it_once_released() {
     thread::scope(|scope| {
         let blocked = scope.spawn(|| fx.desktop.file_reload(&owner, false));
         fx.control.wait_blocked(1);
+        // The root deadline is short on purpose and the wait outlives it, so the wait itself ends
+        // by expiry. The gated worker holds the cleanup open however long this takes.
         let report = fx
             .desktop
-            .begin_shutdown(Duration::from_millis(300), false)
+            .begin_shutdown(Duration::from_millis(200), false)
             .unwrap();
         let pending = fx
             .desktop
-            .wait_shutdown(report.ticket, Duration::from_millis(500))
+            .wait_shutdown(report.ticket, Duration::from_secs(30))
             .unwrap();
         assert!(!pending.physical_cleanup_complete, "{pending:?}");
-        assert_eq!(pending.pending.files, 1);
-        assert!(pending.deadline_expired);
+        assert!(
+            pending.deadline_expired,
+            "a wait that ended by expiry reports the expiry: {pending:?}"
+        );
+        // The executor reports the pinned worker from its own drain loop, which a loaded machine
+        // may not have reached yet: observe the ticket until it does, no assumption about when.
+        let give_up = Instant::now() + PATIENCE;
+        let pinned = loop {
+            let status = fx.desktop.shutdown_status(report.ticket).unwrap();
+            if status.pending.files == 1 {
+                break status;
+            }
+            assert!(Instant::now() < give_up, "the worker was never reported");
+            thread::sleep(Duration::from_millis(2));
+        };
+        assert!(!pinned.physical_cleanup_complete, "{pinned:?}");
+        assert!(pinned.deadline_expired);
         fx.control.release();
         let result = blocked.join().unwrap();
         // The reload may complete or be dropped as closed; it is never left hanging.
         assert!(result.is_ok() || failure(result).code == "closed");
         // The root deadline already expired; the ticket keeps observing until the join.
-        let give_up = Instant::now() + Duration::from_secs(5);
+        let give_up = Instant::now() + PATIENCE;
         let done = loop {
             let status = fx.desktop.shutdown_status(report.ticket).unwrap();
             if status.physical_cleanup_complete || Instant::now() >= give_up {
@@ -1634,9 +1822,8 @@ fn shutdown_waits_for_a_busy_worker_and_joins_it_once_released() {
 fn idle_shutdown_joins_the_file_worker_within_the_deadline() {
     let fx = Fixture::new();
     fx.open("idle.txt", b"x");
-    let started = Instant::now();
-    fx.desktop.shutdown(Duration::from_secs(5)).unwrap();
-    assert!(started.elapsed() < Duration::from_secs(5));
+    // `shutdown` fails unless every owner, the file worker included, was joined inside the budget.
+    fx.desktop.shutdown(Duration::from_secs(30)).unwrap();
 }
 
 #[test]
@@ -1683,25 +1870,52 @@ impl Drop for Socket {
 }
 impl Socket {
     /// One framed request; returns the whole response.
+    ///
+    /// The server gives a client 500 ms from accept to deliver a whole frame and otherwise drops
+    /// the connection (`invalid_frame`, or a broken pipe if the client writes afterwards). Such a
+    /// request was never read, let alone executed, so a client that was descheduled for that long
+    /// simply reconnects and sends it again. Any other answer is returned untouched, and a request
+    /// that the server did read is never sent twice.
     fn call(&self, command: Value) -> Value {
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            match self.try_call(&command) {
+                Some(response) if response["error"]["code"] != "invalid_frame" => return response,
+                _ => assert!(
+                    Instant::now() < deadline,
+                    "the control server never accepted a whole frame"
+                ),
+            }
+        }
+    }
+    /// `None` when the server closed the connection before it had read the request.
+    fn try_call(&self, command: &Value) -> Option<Value> {
         use std::io::{Read, Write};
         let mut stream = std::os::unix::net::UnixStream::connect(&self.path).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
+        stream.set_read_timeout(Some(PATIENCE)).unwrap();
         let bytes = serde_json::to_vec(
             &json!({"version": CONTROL_VERSION, "request_id": 7, "command": command}),
         )
         .unwrap();
-        stream
-            .write_all(&(bytes.len() as u32).to_be_bytes())
-            .unwrap();
-        stream.write_all(&bytes).unwrap();
+        let mut frame = (bytes.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(&bytes);
+        match stream.write_all(&frame) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                ) =>
+            {
+                return None;
+            }
+            Err(error) => panic!("write the control frame: {error}"),
+        }
         let mut length = [0; 4];
         stream.read_exact(&mut length).unwrap();
         let mut response = vec![0; u32::from_be_bytes(length) as usize];
         stream.read_exact(&mut response).unwrap();
-        serde_json::from_slice(&response).unwrap()
+        Some(serde_json::from_slice(&response).unwrap())
     }
     /// An `open_items` request. `items` are `(kind, value)` pairs.
     fn open(&self, items: &[(&str, &str)], options: Value) -> Value {
@@ -2077,21 +2291,17 @@ fn a_gated_probe_times_out_per_item_over_the_socket_while_urls_still_open() {
     let socket = fx.serve(ControlAccess::Full);
     let slow = fx.write("slow.txt", b"slow");
     fx.control.arm("canonicalize");
-    let response = thread::scope(|scope| {
-        let call = scope.spawn(|| {
-            socket.open(
-                &[
-                    ("path", slow.to_str().unwrap()),
-                    ("url", "https://example.org/"),
-                ],
-                json!({}),
-            )
-        });
-        fx.control.wait_blocked(1);
-        let response = call.join().unwrap();
-        fx.control.release();
-        response
-    });
+    // The worker is parked before the request under test is sent, so the path item must hit the
+    // deadline however fast or slow the machine is.
+    fx.pin_worker(&slow);
+    let response = socket.open(
+        &[
+            ("path", slow.to_str().unwrap()),
+            ("url", "https://example.org/"),
+        ],
+        json!({}),
+    );
+    fx.control.release();
     let result = result_of(&response);
     assert_eq!(result["items"][0]["error"]["code"], "probe_timeout");
     assert_eq!(result["items"][1]["ok"], true);
@@ -2222,7 +2432,11 @@ fn new_tabs_go_to_the_resolved_pane_and_inspection_reports_file_surfaces() {
 
 #[test]
 fn capabilities_advertise_the_file_panel_limits_actually_in_force() {
-    let fx = Fixture::with(|c| c.poll_interval = Duration::from_millis(750));
+    let fx = Fixture::with(|c| {
+        c.poll_interval = Duration::from_millis(750);
+        // Advertised, never waited on, so the production value can be configured here.
+        c.probe_timeout = Duration::from_millis(5000);
+    });
     let socket = fx.serve(ControlAccess::Full);
     let capabilities = socket.call(json!({"method": "capabilities"}));
     assert_eq!(
@@ -2244,7 +2458,7 @@ fn a_closed_desktop_is_reported_as_closed_not_as_an_invalid_open_request() {
     // A malformed request is still `invalid_request`: the code reflects the real cause.
     assert_eq!(error_code(&socket.open(&[], json!({}))), "invalid_request");
     let calls = fx.probe_calls();
-    fx.desktop.shutdown(Duration::from_secs(5)).unwrap();
+    fx.desktop.shutdown(Duration::from_secs(30)).unwrap();
     let response = socket.open(&[("path", operand)], json!({}));
     assert_eq!(error_code(&response), "desktop_closed", "{response}");
     assert_eq!(
