@@ -394,7 +394,7 @@ fn executor_resolves_uuid_once_and_native_dispatch_is_once_only() {
             },
             now
         ),
-        Err(BrowserError::NotDispatched)
+        Err(BrowserError::ObsoleteEvent)
     ));
 }
 
@@ -838,7 +838,7 @@ fn zoom_finite_validation_precedes_dispatch_and_expired_native_mutation_is_not_r
             },
             expired
         ),
-        Err(BrowserError::NotDispatched)
+        Err(BrowserError::ObsoleteEvent)
     ));
     assert!(runtime.receipt(id).unwrap().result.is_none());
 }
@@ -1529,99 +1529,192 @@ fn obsolete_detach_requires_exact_retirement_and_preserves_live_hosts() {
     let batch = runtime.drain_requests(&model.snapshot(), now);
     assert_eq!(batch.requests[0].operation_id, id);
     assert_eq!(batch.requests[0].owner, live_owner);
+    let mut newest = owner.clone();
+    for _ in 0..MAX_RETIRED_BROWSER_HOSTS {
+        model
+            .apply(Action::CreateBrowser {
+                profile_id: None,
+                focus: false,
+                pane_id: pane,
+                url: "https://example.org/retire".into(),
+            })
+            .unwrap();
+        let added = model.snapshot().workspaces[0].root.panes()[0]
+            .surfaces
+            .iter()
+            .find(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser && s.id != live)
+            .unwrap()
+            .id;
+        newest = attach(&mut runtime, &model, added, now);
+        model
+            .apply(Action::CloseSurface { surface_id: added })
+            .unwrap();
+        runtime.reconcile(&model.snapshot(), now);
+    }
+    assert!(matches!(
+        runtime.host_event(
+            &model.snapshot(),
+            BrowserHostEvent::Detach {
+                owner: owner.clone()
+            },
+            now
+        ),
+        Err(BrowserError::StaleOwner)
+    ));
+    assert_eq!(
+        runtime
+            .host_event(
+                &model.snapshot(),
+                BrowserHostEvent::Detach {
+                    owner: newest.clone()
+                },
+                now
+            )
+            .unwrap_err()
+            .code(),
+        "obsolete_browser_event"
+    );
     runtime.reset("new epoch");
     assert!(matches!(
-        runtime.host_event(&model.snapshot(), BrowserHostEvent::Detach { owner }, now),
+        runtime.host_event(
+            &model.snapshot(),
+            BrowserHostEvent::Detach { owner: newest },
+            now
+        ),
         Err(BrowserError::StaleOwner)
     ));
 }
 
 #[test]
 fn obsolete_terminal_receipts_preserve_authoritative_outcomes_and_dispatch_guards() {
-    for action in [
-        read(),
-        BrowserAction::Zoom {
-            operation: BrowserZoom::Set { factor: 1.25 },
-        },
-    ] {
-        let (model, surface) = fixture();
-        let now = Instant::now();
-        let mut runtime = BrowserRuntime::default();
-        let owner = attach(&mut runtime, &model, surface, now);
-        let mut command = request(&model, surface, action);
-        command.timeout_ms = 10;
-        let id = runtime.admit(&model.snapshot(), command, now).unwrap();
-        let failure = || BrowserHostEvent::Fail {
-            operation_id: id,
-            owner: owner.clone(),
-            error: BrowserFailure {
-                code: "native_timeout".into(),
-                message: "late native receipt".into(),
-                outcome_unknown: true,
-            },
-        };
-        assert!(matches!(
-            runtime.host_event(&model.snapshot(), failure(), now),
-            Err(BrowserError::NotDispatched)
-        ));
-        runtime.drain_requests(&model.snapshot(), now);
-        let expired = now + Duration::from_millis(10);
-        runtime.reconcile(&model.snapshot(), expired);
-        let previous = serde_json::to_value(runtime.receipt(id).unwrap()).unwrap();
-        assert_eq!(previous["state"], "failed");
-        assert_eq!(previous["error"]["code"], "browser_timeout");
-        for event in [
-            failure(),
-            BrowserHostEvent::Complete {
-                operation_id: id,
-                owner: owner.clone(),
-                result: json!("late result"),
+    for completed in [false, true] {
+        for action in [
+            read(),
+            BrowserAction::Zoom {
+                operation: BrowserZoom::Set { factor: 1.25 },
             },
         ] {
-            let error = runtime
-                .host_event(&model.snapshot(), event, expired)
-                .unwrap_err();
-            assert_eq!(error.code(), "obsolete_browser_event");
+            let (model, surface) = fixture();
+            let now = Instant::now();
+            let mut runtime = BrowserRuntime::default();
+            let owner = attach(&mut runtime, &model, surface, now);
+            let mut command = request(&model, surface, action);
+            command.timeout_ms = 10;
+            let id = runtime.admit(&model.snapshot(), command, now).unwrap();
+            let failure = || BrowserHostEvent::Fail {
+                operation_id: id,
+                owner: owner.clone(),
+                error: BrowserFailure {
+                    code: "native_timeout".into(),
+                    message: "late native receipt".into(),
+                    outcome_unknown: true,
+                },
+            };
+            assert!(matches!(
+                runtime.host_event(&model.snapshot(), failure(), now),
+                Err(BrowserError::NotDispatched)
+            ));
+            runtime.drain_requests(&model.snapshot(), now);
+            let expired = now + Duration::from_millis(10);
+            if completed {
+                runtime
+                    .host_event(
+                        &model.snapshot(),
+                        BrowserHostEvent::Complete {
+                            operation_id: id,
+                            owner: owner.clone(),
+                            result: json!({"original":"success"}),
+                        },
+                        now,
+                    )
+                    .unwrap();
+            }
+            if !completed {
+                // The first late native failure must apply only the authoritative
+                // deadline transition, never the incoming error/outcome flag.
+                let error = runtime
+                    .host_event(&model.snapshot(), failure(), expired)
+                    .unwrap_err();
+                assert_eq!(error.code(), "obsolete_browser_event");
+            }
+            runtime.reconcile(&model.snapshot(), expired);
+            let previous = serde_json::to_value(runtime.receipt(id).unwrap()).unwrap();
+            if completed {
+                assert_eq!(previous["state"], "completed");
+                assert_eq!(previous["result"], json!({"original":"success"}));
+            } else {
+                assert_eq!(previous["state"], "failed");
+                assert_eq!(previous["error"]["code"], "browser_timeout");
+            }
+            for event in [
+                failure(),
+                BrowserHostEvent::Complete {
+                    operation_id: id,
+                    owner: owner.clone(),
+                    result: json!("late result"),
+                },
+            ] {
+                let error = runtime
+                    .host_event(&model.snapshot(), event, expired)
+                    .unwrap_err();
+                assert_eq!(error.code(), "obsolete_browser_event");
+                assert_eq!(
+                    serde_json::to_value(runtime.receipt(id).unwrap()).unwrap(),
+                    previous
+                );
+                assert!(
+                    runtime
+                        .drain_requests(&model.snapshot(), expired)
+                        .requests
+                        .is_empty()
+                );
+            }
+            assert!(matches!(
+                runtime.host_event(
+                    &model.snapshot(),
+                    BrowserHostEvent::Complete {
+                        operation_id: id,
+                        owner: owner.clone(),
+                        result: json!("x".repeat(MAX_BROWSER_RESULT_BYTES + 1))
+                    },
+                    expired
+                ),
+                Err(BrowserError::ResultTooLarge)
+            ));
             assert_eq!(
                 serde_json::to_value(runtime.receipt(id).unwrap()).unwrap(),
                 previous
             );
-            assert!(
-                runtime
-                    .drain_requests(&model.snapshot(), expired)
-                    .requests
-                    .is_empty()
-            );
+            let mut foreign = owner.clone();
+            foreign.host_id = Uuid::new_v4();
+            assert!(matches!(
+                runtime.host_event(
+                    &model.snapshot(),
+                    BrowserHostEvent::Complete {
+                        operation_id: id,
+                        owner: foreign,
+                        result: json!(null)
+                    },
+                    expired
+                ),
+                Err(BrowserError::StaleOwner)
+            ));
+            assert!(matches!(
+                runtime.host_event(
+                    &model.snapshot(),
+                    BrowserHostEvent::Fail {
+                        operation_id: u64::MAX,
+                        owner,
+                        error: BrowserFailure {
+                            code: "unknown".into(),
+                            message: "unknown".into(),
+                            outcome_unknown: false
+                        }
+                    },
+                    expired
+                ),
+                Err(BrowserError::NotFound)
+            ));
         }
-        let mut foreign = owner.clone();
-        foreign.host_id = Uuid::new_v4();
-        assert!(matches!(
-            runtime.host_event(
-                &model.snapshot(),
-                BrowserHostEvent::Complete {
-                    operation_id: id,
-                    owner: foreign,
-                    result: json!(null)
-                },
-                expired
-            ),
-            Err(BrowserError::StaleOwner)
-        ));
-        assert!(matches!(
-            runtime.host_event(
-                &model.snapshot(),
-                BrowserHostEvent::Fail {
-                    operation_id: u64::MAX,
-                    owner,
-                    error: BrowserFailure {
-                        code: "unknown".into(),
-                        message: "unknown".into(),
-                        outcome_unknown: false
-                    }
-                },
-                expired
-            ),
-            Err(BrowserError::NotFound)
-        ));
     }
 }

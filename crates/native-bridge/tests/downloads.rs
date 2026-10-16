@@ -166,6 +166,12 @@ fn foreign_download_capacity_precedes_admission_and_callbacks_require_exact_owne
         browser_event(desktop.value, &json!({"event":"detach","owner":foreign})),
         -6
     );
+    let mut wrong_live = owner.clone();
+    wrong_live["host_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        browser_event(desktop.value, &json!({"event":"detach","owner":wrong_live})),
+        -6
+    );
     let mut unknown = retired_owner.clone();
     unknown["surface_id"] = json!(u64::MAX);
     assert_eq!(

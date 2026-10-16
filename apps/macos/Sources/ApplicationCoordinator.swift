@@ -119,7 +119,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 if self.browserEventsNeedRecovery { await self.recoverBrowserHostEvents() }
                 guard !Task.isCancelled, self.shutdownTask == nil else { break }
                 guard generation == self.browserEventGeneration, let event else { continue }
-                do { try await self.bridge.browserEvent(event) }
+                do {
+                    if case .rejectedObsolete = try await self.bridge.browserEvent(event) {
+                        WindowLifecycleSmoke.trace("Native browser event rejected as obsolete; payload and downstream effects not applied")
+                    }
+                }
                 catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
                     self.browserEventsNeedRecovery = true
@@ -529,7 +533,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         let observations = browsers.values.compactMap { $0.automationObservation() }
         for event in attachments + observations {
             if Task.isCancelled { return }
-            do { try await bridge.browserEvent(event) }
+            do {
+                if case .rejectedObsolete = try await bridge.browserEvent(event) {
+                    WindowLifecycleSmoke.trace("Native browser recovery event rejected as obsolete; payload and downstream effects not applied")
+                }
+            }
             catch {
                 browserEventsNeedRecovery = true
                 reportError("Browser synchronization is retrying: " + error.localizedDescription)

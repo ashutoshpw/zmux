@@ -26,6 +26,8 @@ const MAX_RESPONSE_BYTES: usize = 8_388_608;
 const MAX_CORES: usize = 32;
 const MAX_BUFFERS: usize = 16;
 
+/// Browser event only: obsolete rejection; event payload and downstream effects not applied.
+pub const BROWSER_EVENT_OBSOLETE: i32 = 1;
 const OK: i32 = 0;
 const INVALID_HANDLE: i32 = -1;
 const INVALID_ARGUMENT: i32 = -2;
@@ -722,6 +724,9 @@ pub unsafe extern "C" fn zmux_desktop_browser_event(
         desktop(id)?
             .browser_host_event(event)
             .map_err(|error| match error {
+                DesktopError::Browser(
+                    zmux_desktop_runtime::browser::BrowserError::ObsoleteEvent,
+                ) => BROWSER_EVENT_OBSOLETE,
                 DesktopError::QueueFull | DesktopError::Busy => BUSY,
                 _ => INTERNAL,
             })?;
