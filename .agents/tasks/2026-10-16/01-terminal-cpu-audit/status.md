@@ -4,6 +4,24 @@
 - **Updated:** 2026-10-16
 
 ## Notes
+- Repair artifact65b93a1 passes focused native Actions38945882329 (artifact
+ 12066866594), including actual packaged plain SSH/nested tmux completion and
+  prompt cleanup, Bash3 startup/owner+group HUP/Ctrl-C/environment cases, native
+  metadata damage, sidebar/grouping/attention/status-menu/hide-show and cleanup.
+  Downloaded ZIP source/metadata/executable hash and old-renderer red receipt
+  verified at `/tmp/zmux-verified-build-38945882329/verification.json`.
+- Artifact archive SHA2564bd0a0ca96da1e3bb26b4e9413749814639996ea09684491c21556e4337020a3;
+  native executable SHA256c20ac763fa417533719affe13ab3789c6345e9fcd725d33c7e1c58241336ebd5.
+  Apple silicon/macOS14+, ad-hoc signed, no notarization. Actual Claude API/banner
+  remains user verification; tests execute the real plugin contract with a finite provider.
+- Foundation38945681938 passes both Linux/macOS. Fast Mac SSH probe38945681998
+  passes both transports. Broad universal38945681980 fails a browser manager
+  reopen fixture: predicate waits only for model surface/profile, then immediately
+  asserts a native WebView that may not be constructed yet. Initial-open code
+  already waits for native readiness. Added host existence to reopen wait; exact
+  UUID and subsequent cookie/localStorage assertions remain unchanged. This is a
+  readiness repair, not evidence of profile data loss. New native rerun required.
+  Existing untracked B01 clear/delete lifecycle work remains untouched.
 - Fast Darwin probe38943334798 narrows failure to plain SSH: local SSH client is
   gone, remote session leader is orphaned (PPID1) and waiting on foreground Bash/
   provider, both with distinct process groups. Provider INT/HUP are not ignored;
