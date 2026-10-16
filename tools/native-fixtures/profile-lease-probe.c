@@ -1,5 +1,10 @@
 /* Independent, finite process probing a real mounted WebKit profile's lease. */
+#if defined(__APPLE__)
+/* flock and O_NOFOLLOW are Darwin extensions under strict C11 compilation. */
+#define _DARWIN_C_SOURCE
+#else
 #define _POSIX_C_SOURCE 200809L
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
