@@ -200,12 +200,8 @@ fn actual_helper_never_executes_user_code_before_committed_run_and_executes_once
     );
     let binding = f.binding();
     f.admit(&binding);
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !f.counter.exists() {
-        assert!(Instant::now() < deadline);
-        thread::sleep(Duration::from_millis(2));
-    }
-    assert_eq!(fs::read(&f.counter).unwrap(), b"x");
+    // A created output file can still be empty until the admitted child writes.
+    // Authenticate completion and physical reap before checking its exact output.
     assert!(f.child.try_wait().unwrap().is_none());
     let terminal = f.terminal(&binding);
     assert_eq!(
