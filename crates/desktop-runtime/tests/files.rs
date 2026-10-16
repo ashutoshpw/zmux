@@ -20,6 +20,8 @@ use zmux_desktop_runtime as desktop_runtime;
 use zmux_desktop_runtime::{
     Command, Desktop, DesktopOptions, MAX_FILE_SURFACES, Request, Shell, Snapshot,
     attention::AttentionCommand,
+    control::{CONTROL_VERSION, ControlServer},
+    control_policy::{ControlAccess, ControlPolicy},
     file_io::{FileBackend, FileError, RealFs, sha256_hex},
     files::{FileFailure, FileOwner, FilesConfig},
 };
@@ -128,8 +130,10 @@ impl FileBackend for Gated {
 }
 
 struct Fixture {
-    desktop: Desktop,
+    desktop: Arc<Desktop>,
     dir: PathBuf,
+    /// Present when the desktop was started with session persistence.
+    state: Option<PathBuf>,
     control: Arc<Control>,
     _release: Release,
 }
@@ -138,6 +142,20 @@ impl Fixture {
         Self::with(|_| {})
     }
     fn with(configure: impl FnOnce(&mut FilesConfig)) -> Self {
+        Self::build(false, configure)
+    }
+    /// A desktop with session persistence, so export and restore are available.
+    fn persistent() -> Self {
+        Self::build(true, |_| {})
+    }
+    fn build(persistent: bool, configure: impl FnOnce(&mut FilesConfig)) -> Self {
+        let state = persistent.then(|| {
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!("zmux-files-state-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::canonicalize(path).unwrap()
+        });
         let control = Arc::new(Control::default());
         let mut config = FilesConfig {
             backend: Arc::new(Gated(control.clone())),
@@ -151,18 +169,21 @@ impl Fixture {
             ..FilesConfig::default()
         };
         configure(&mut config);
-        let desktop = Desktop::with_options(
-            Shell {
-                program: "/bin/sh".into(),
-                args: vec!["-i".into()],
-                cwd: None,
-            },
-            DesktopOptions {
-                files: Some(config),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let desktop = Arc::new(
+            Desktop::with_options(
+                Shell {
+                    program: "/bin/sh".into(),
+                    args: vec!["-i".into()],
+                    cwd: None,
+                },
+                DesktopOptions {
+                    files: Some(config),
+                    state_directory: state.as_ref().map(|path| path.join("state")),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
         let dir = std::env::temp_dir().join(format!("zmux-files-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let dir = std::fs::canonicalize(dir).unwrap();
@@ -179,6 +200,7 @@ impl Fixture {
         Self {
             desktop,
             dir,
+            state,
             _release: Release(control.clone()),
             control,
         }
@@ -266,6 +288,9 @@ impl Drop for Fixture {
         self.control.release();
         let _ = self.desktop.shutdown(Duration::from_secs(5));
         let _ = std::fs::remove_dir_all(&self.dir);
+        if let Some(state) = &self.state {
+            let _ = std::fs::remove_dir_all(state);
+        }
     }
 }
 #[track_caller]
@@ -989,6 +1014,193 @@ fn reload_is_refused_while_the_model_says_dirty_unless_discarding() {
 }
 
 #[test]
+fn attaching_again_as_the_bound_host_obeys_the_dirty_rule_and_never_loses_an_update() {
+    let fx = Fixture::new();
+    let surface = fx.open("again.txt", b"disk");
+    let host = Uuid::new_v4();
+    let content = fx.attach_as(surface, host).unwrap();
+    let owner = content.owner.clone();
+    fx.desktop.file_observe(&owner, true).unwrap();
+    std::fs::write(fx.dir.join("again.txt"), b"external edit").unwrap();
+    let before = fx.entry(surface).unwrap();
+    let reads = fx.control.count("read");
+
+    // A re-attach is the same operation as a reload without `discard`: refused while dirty,
+    // before any read, and nothing is re-baselined.
+    assert_eq!(failure(fx.attach_as(surface, host)).code, "dirty");
+    assert_eq!(
+        fx.control.count("read"),
+        reads,
+        "a refused attach reads nothing"
+    );
+    assert_eq!(
+        fx.entry(surface).unwrap()["generation"],
+        before["generation"]
+    );
+    assert!(file_surface(&fx.snapshot(), surface).unwrap().dirty);
+
+    // The old generation still fences the save: the external edit is reported, not overwritten.
+    let conflict =
+        failure(
+            fx.desktop
+                .file_save(&owner, content.generation, false, b"mine".to_vec()),
+        );
+    assert_eq!(conflict.code, "conflict");
+    assert_eq!(
+        std::fs::read(fx.dir.join("again.txt")).unwrap(),
+        b"external edit"
+    );
+
+    // Dropping the unsaved text is explicit, and then a re-attach is allowed again.
+    fx.desktop.file_reload(&owner, true).unwrap();
+    fx.desktop.file_observe(&owner, false).unwrap();
+    let again = fx.attach_as(surface, host).unwrap();
+    assert_eq!(again.body, b"external edit");
+}
+
+#[test]
+fn a_session_restore_rotates_the_epoch_and_fences_every_earlier_view() {
+    use desktop_runtime::sessions::{OperationState, SessionCommand};
+    let fx = Fixture::persistent();
+    let surface = fx.open("restored.txt", b"on disk");
+    let host = Uuid::new_v4();
+    let content = fx.attach_as(surface, host).unwrap();
+    let old = content.owner.clone();
+    let old_epoch = fx.epoch();
+    assert_eq!(old.epoch, old_epoch);
+
+    let run = |id: u64, command: SessionCommand| {
+        fx.desktop
+            .submit(Request {
+                version: 1,
+                request_id: id,
+                payload: Command::Session { action: command },
+            })
+            .unwrap();
+        let accepted = wait(&fx.desktop, |s| s.last_request_id == id);
+        assert!(accepted.last_error.is_none(), "{:?}", accepted.last_error);
+        let operation = accepted.persistence.operations.last().unwrap().operation_id;
+        let finished = wait(&fx.desktop, |s| {
+            s.persistence.operations.iter().any(|op| {
+                op.operation_id == operation && !matches!(op.state, OperationState::Pending)
+            })
+        });
+        let receipt = finished
+            .persistence
+            .operations
+            .iter()
+            .find(|op| op.operation_id == operation)
+            .unwrap();
+        assert!(
+            matches!(receipt.state, OperationState::Completed),
+            "{:?}",
+            receipt.error
+        );
+        finished
+    };
+    let export = fx.state.as_ref().unwrap().join("checkpoint.json");
+    let exported = run(
+        1,
+        SessionCommand::Export {
+            path: export.clone(),
+            force: false,
+        },
+    );
+    for (index, workspace) in exported.model.workspaces.iter().enumerate() {
+        fx.desktop
+            .submit(Request {
+                version: 1,
+                request_id: 10 + index as u64,
+                payload: Command::Action {
+                    action: Action::CloseWorkspace {
+                        workspace_id: workspace.id,
+                    },
+                },
+            })
+            .unwrap();
+        wait(&fx.desktop, |s| s.last_request_id == 10 + index as u64);
+    }
+    let restored = run(2, SessionCommand::Restore { path: Some(export) });
+    assert!(
+        file_surface(&restored, surface).is_some(),
+        "the file tab is part of the restored session"
+    );
+    assert_ne!(
+        restored.files.epoch, old_epoch,
+        "restore must rotate the file epoch"
+    );
+
+    // Every handle from before the restore is stale, whatever its host or surface looks like.
+    assert_eq!(
+        failure(fx.desktop.file_attach(old_epoch, surface, host)).code,
+        "stale_owner"
+    );
+    assert_eq!(
+        failure(fx.desktop.file_reload(&old, true)).code,
+        "stale_owner"
+    );
+    assert_eq!(
+        failure(
+            fx.desktop
+                .file_save(&old, content.generation, true, b"late".to_vec())
+        )
+        .code,
+        "stale_owner"
+    );
+    assert_eq!(
+        failure(fx.desktop.file_observe(&old, true)).code,
+        "stale_owner"
+    );
+    assert_eq!(failure(fx.desktop.file_detach(&old)).code, "stale_owner");
+    assert_eq!(
+        std::fs::read(fx.dir.join("restored.txt")).unwrap(),
+        b"on disk"
+    );
+    assert!(!file_surface(&fx.snapshot(), surface).unwrap().dirty);
+
+    // Views re-attach under the new epoch and work normally.
+    let fresh = fx
+        .desktop
+        .file_attach(restored.files.epoch, surface, Uuid::new_v4())
+        .unwrap();
+    assert_eq!(fresh.body, b"on disk");
+    assert_eq!(fresh.owner.epoch, restored.files.epoch);
+}
+
+#[test]
+fn the_registry_is_never_older_than_a_published_snapshot() {
+    let fx = Fixture::new();
+    for round in 0..30 {
+        let name = format!("loop-{round}.txt");
+        let path = fx.write(&name, b"body");
+        let item = fx.open_item(&path);
+        assert_eq!(item["ok"], true, "{item}");
+        let surface = SurfaceId(item["surface"]["surface_id"].as_u64().unwrap());
+        // The open acknowledgement says the tab exists, so the registry must know it already.
+        let content = fx
+            .attach_as(surface, Uuid::new_v4())
+            .unwrap_or_else(|failure| panic!("round {round}: attach right after open: {failure}"));
+        fx.close(surface);
+        // The close is published, so the owner is stale at once: never `unknown_surface`, never
+        // an operation against a surface the published model no longer has.
+        assert!(file_surface(&fx.snapshot(), surface).is_none());
+        for code in [
+            failure(fx.desktop.file_reload(&content.owner, true)).code,
+            failure(fx.desktop.file_observe(&content.owner, true)).code,
+            failure(
+                fx.desktop
+                    .file_save(&content.owner, content.generation, true, b"x".to_vec()),
+            )
+            .code,
+        ] {
+            assert_eq!(code, "stale_owner", "round {round}");
+        }
+        assert!(fx.entry(surface).is_none(), "round {round}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"body");
+    }
+}
+
+#[test]
 fn dirty_is_set_only_by_the_trusted_host_event_and_cleared_on_detach() {
     let fx = Fixture::new();
     let surface = fx.open("host.txt", b"x");
@@ -1446,5 +1658,573 @@ fn file_content_never_enters_the_snapshot_or_published_json() {
         json!(published.contains("sha256")),
         json!(false),
         "hashes stay inside the service"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The control-socket route (design D16): every test here talks to a real `ControlServer`.
+
+/// A real control socket for one fixture. The directory is private and short, as sockets need.
+struct Socket {
+    _server: ControlServer,
+    path: PathBuf,
+    dir: PathBuf,
+}
+impl Drop for Socket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+impl Socket {
+    /// One framed request; returns the whole response.
+    fn call(&self, command: Value) -> Value {
+        use std::io::{Read, Write};
+        let mut stream = std::os::unix::net::UnixStream::connect(&self.path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let bytes = serde_json::to_vec(
+            &json!({"version": CONTROL_VERSION, "request_id": 7, "command": command}),
+        )
+        .unwrap();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&bytes).unwrap();
+        let mut length = [0; 4];
+        stream.read_exact(&mut length).unwrap();
+        let mut response = vec![0; u32::from_be_bytes(length) as usize];
+        stream.read_exact(&mut response).unwrap();
+        serde_json::from_slice(&response).unwrap()
+    }
+    /// An `open_items` request. `items` are `(kind, value)` pairs.
+    fn open(&self, items: &[(&str, &str)], options: Value) -> Value {
+        let mut operation = json!({
+            "operation": "open_items",
+            "items": items.iter().map(|(kind, value)| json!({"kind": kind, "value": value})).collect::<Vec<_>>(),
+        });
+        for (key, value) in options.as_object().into_iter().flatten() {
+            if key != "scope" && key != "expected_model_revision" {
+                operation[key] = value.clone();
+            }
+        }
+        self.call(json!({"method": "targeted", "request": {
+            "scope": options.get("scope").cloned().unwrap_or(json!({})),
+            "caller": {},
+            "expected_model_revision": options.get("expected_model_revision").cloned().unwrap_or(Value::Null),
+            "operation": operation,
+        }}))
+    }
+}
+impl Fixture {
+    fn serve(&self, access: ControlAccess) -> Socket {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("zc-{}", &Uuid::new_v4().simple().to_string()[..8]));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.join("c.sock");
+        let server = ControlServer::start_with_policy(
+            &path,
+            Arc::clone(&self.desktop),
+            ControlPolicy::same_user(access),
+        )
+        .unwrap();
+        Socket {
+            _server: server,
+            path,
+            dir,
+        }
+    }
+    /// Backend calls that touch a user path.
+    fn probe_calls(&self) -> usize {
+        ["canonicalize", "open_dir", "open_leaf", "read"]
+            .iter()
+            .map(|op| self.control.count(op))
+            .sum()
+    }
+    fn surfaces_of_kind(&self, files: bool) -> usize {
+        self.snapshot()
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .filter(|s| s.file.is_some() == files && (files || s.url.is_some()))
+            .count()
+    }
+}
+#[track_caller]
+fn result_of(response: &Value) -> &Value {
+    assert_eq!(response["ok"], true, "{response}");
+    &response["result"]
+}
+#[track_caller]
+fn error_code(response: &Value) -> &str {
+    assert_eq!(response["ok"], false, "{response}");
+    response["error"]["code"].as_str().unwrap()
+}
+
+#[test]
+fn a_mixed_batch_over_the_socket_returns_exact_ordered_item_results() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let png = [&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A][..], b"x"].concat();
+    let mut late_nul = vec![b'a'; 8193];
+    late_nul.push(0);
+    let mut late_bad = vec![b'a'; 20_000];
+    late_bad.push(0xFF);
+    let paths: Vec<String> = [
+        ("README.md", b"# title\n".to_vec()),
+        ("main.rs", b"fn main() {}\n".to_vec()),
+        ("pic.png", png),
+        ("doc.pdf", b"%PDF-1.7\n".to_vec()),
+        ("nul.txt", late_nul),
+        ("bad.txt", late_bad),
+        ("over.txt", vec![b'a'; 2 * 1024 * 1024 + 1]),
+    ]
+    .into_iter()
+    .map(|(name, bytes)| fx.write(name, &bytes).to_str().unwrap().to_owned())
+    .collect();
+    let missing = fx.dir.join("missing.txt").to_str().unwrap().to_owned();
+    let directory = fx.dir.to_str().unwrap().to_owned();
+    let before = fx.snapshot().model.revision;
+    let items: Vec<(&str, &str)> = vec![
+        ("path", &paths[0]),
+        ("url", "https://example.org/docs"),
+        ("path", &directory),
+        ("path", &missing),
+        ("path", &paths[1]),
+        ("path", &paths[4]),
+        ("path", &paths[5]),
+        ("path", &paths[6]),
+        ("url", "file:///etc/hostname"),
+        ("url", "https://user:secret@example.org/"),
+        ("path", "relative/path.txt"),
+        ("path", &paths[2]),
+        ("path", &paths[3]),
+        ("url", "ftp://example.org/x"),
+    ];
+    let response = socket.open(&items, json!({}));
+    let result = result_of(&response);
+    let reported: Vec<(bool, String)> = result["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            assert_eq!(item["index"], index);
+            (
+                item["ok"].as_bool().unwrap(),
+                item["error"]["code"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    let expected: Vec<(bool, &str)> = vec![
+        (true, ""),
+        (true, ""),
+        (false, "is_directory"),
+        (false, "not_found"),
+        (true, ""),
+        (false, "binary_file"),
+        (false, "invalid_utf8"),
+        (false, "too_large"),
+        (false, "unsupported_scheme"),
+        (false, "invalid_url"),
+        (false, "invalid_operand"),
+        (true, ""),
+        (true, ""),
+        (false, "unsupported_scheme"),
+    ];
+    assert_eq!(
+        reported,
+        expected
+            .into_iter()
+            .map(|(ok, code)| (ok, code.to_owned()))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(result["ok"], false);
+    let items = result["items"].as_array().unwrap();
+    assert_eq!(items[0]["kind"], "file");
+    assert_eq!(items[0]["mode"], "markdown");
+    assert_eq!(items[0]["deduplicated"], false);
+    assert_eq!(items[0]["path"], paths[0]);
+    assert_eq!(items[1]["kind"], "url");
+    assert_eq!(items[1]["url"], "https://example.org/docs");
+    assert_eq!(items[4]["mode"], "text");
+    assert_eq!(items[11]["mode"], "image");
+    assert_eq!(items[12]["mode"], "pdf");
+    for index in [0, 1, 4, 11, 12] {
+        assert!(items[index]["surface"]["surface_id"].is_u64(), "{index}");
+        assert!(items[index]["surface"]["window_uuid"].is_string());
+    }
+    // New tabs are appended in operand order, one receipt each, and only the first success
+    // took the selection.
+    let created: Vec<_> = result["created_surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["surface_id"].clone())
+        .collect();
+    let expected_ids: Vec<_> = [0, 1, 4, 11, 12]
+        .iter()
+        .map(|i| items[*i]["surface"]["surface_id"].clone())
+        .collect();
+    assert_eq!(created, expected_ids);
+    assert_eq!(result["focused_surface"], items[0]["surface"]["surface_id"]);
+    assert_eq!(fx.surfaces_of_kind(true), 4);
+    assert_eq!(fx.surfaces_of_kind(false), 1);
+    assert!(fx.snapshot().model.revision > before);
+    // No file content crosses the socket.
+    assert!(!response.to_string().contains("# title"));
+}
+
+#[test]
+fn reopening_dedupes_and_focus_false_keeps_the_selection() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let first = fx.write("one.txt", b"1");
+    let second = fx.write("two.txt", b"2");
+    let (first, second) = (first.to_str().unwrap(), second.to_str().unwrap());
+    let terminal = selected_surface(&fx.snapshot());
+
+    let response = socket.open(&[("path", first)], json!({"focus": false}));
+    let item = result_of(&response)["items"][0].clone();
+    assert_eq!(item["ok"], true);
+    assert_eq!(
+        selected_surface(&fx.snapshot()),
+        terminal,
+        "focus false keeps the selection"
+    );
+
+    let response = socket.open(&[("path", second), ("path", first)], json!({}));
+    let items = &result_of(&response)["items"];
+    assert_eq!(items[0]["deduplicated"], false);
+    assert_eq!(items[1]["deduplicated"], true);
+    assert_eq!(
+        items[1]["surface"]["surface_id"],
+        item["surface"]["surface_id"]
+    );
+    assert_eq!(
+        selected_surface(&fx.snapshot()).0,
+        items[0]["surface"]["surface_id"].as_u64().unwrap(),
+        "only the first success is focused, a later duplicate does not steal it"
+    );
+    assert_eq!(fx.surfaces_of_kind(true), 2, "a duplicate opens no new tab");
+
+    // Deduplicating as the first success focuses the existing tab.
+    let response = socket.open(&[("path", first)], json!({}));
+    let again = &result_of(&response)["items"][0];
+    assert_eq!(again["deduplicated"], true);
+    assert_eq!(
+        selected_surface(&fx.snapshot()).0,
+        item["surface"]["surface_id"].as_u64().unwrap()
+    );
+    assert_eq!(result_of(&response)["created_surfaces"], json!([]));
+}
+
+#[test]
+fn the_seventeenth_file_and_a_forced_mode_are_item_results_over_the_socket() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let names: Vec<String> = (0..MAX_FILE_SURFACES)
+        .map(|i| {
+            fx.write(&format!("c{i}.txt"), b"x")
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let items: Vec<(&str, &str)> = names.iter().map(|n| ("path", n.as_str())).collect();
+    let response = socket.open(&items, json!({"focus": false}));
+    assert_eq!(result_of(&response)["ok"], true);
+    let extra = fx.write("extra.txt", b"x");
+    let response = socket.open(&[("path", extra.to_str().unwrap())], json!({}));
+    let item = &result_of(&response)["items"][0];
+    assert_eq!(item["error"]["code"], "file_capacity");
+    assert_eq!(result_of(&response)["ok"], false);
+    assert_eq!(fx.surfaces_of_kind(true), MAX_FILE_SURFACES);
+
+    // `markdown open`: a text file becomes markdown, media and URLs are refused per item.
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let notes = fx.write("notes.txt", b"text");
+    let png = fx.write(
+        "p.png",
+        &[&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A][..], b"x"].concat(),
+    );
+    let response = socket.open(
+        &[
+            ("path", notes.to_str().unwrap()),
+            ("path", png.to_str().unwrap()),
+            ("url", "https://example.org/"),
+        ],
+        json!({"force_mode": "markdown"}),
+    );
+    let items = &result_of(&response)["items"];
+    assert_eq!(items[0]["ok"], true);
+    assert_eq!(items[0]["mode"], "markdown");
+    assert_eq!(items[1]["error"]["code"], "content_mismatch");
+    assert_eq!(items[2]["error"]["code"], "invalid_operand");
+}
+
+#[test]
+fn a_read_only_socket_is_denied_before_any_file_is_touched() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::ReadOnly);
+    let path = fx.write("secret.txt", b"x");
+    let before = fx.snapshot().model.revision;
+    let calls = fx.probe_calls();
+    let response = socket.open(
+        &[
+            ("path", path.to_str().unwrap()),
+            ("path", "/definitely/missing"),
+        ],
+        json!({}),
+    );
+    assert_eq!(error_code(&response), "policy_denied", "{response}");
+    assert!(response.get("result").is_none_or(Value::is_null));
+    assert_eq!(
+        fx.probe_calls(),
+        calls,
+        "no existence oracle: the backend was not called at all"
+    );
+    assert_eq!(fx.snapshot().model.revision, before);
+    assert_eq!(fx.surfaces_of_kind(true), 0);
+    // Reads stay available.
+    let capabilities = socket.call(json!({"method": "capabilities"}));
+    assert_eq!(result_of(&capabilities)["access"], "read_only");
+}
+
+#[test]
+fn a_stale_revision_is_a_whole_request_error_that_changes_nothing() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let path = fx.write("rev.txt", b"x");
+    let model = fx.snapshot().model.clone();
+    let calls = fx.probe_calls();
+    let response = socket.open(
+        &[("path", path.to_str().unwrap())],
+        json!({"expected_model_revision": model.revision + 5}),
+    );
+    assert_eq!(error_code(&response), "stale_revision");
+    assert!(response.get("result").is_none_or(Value::is_null));
+    assert_eq!(fx.snapshot().model.revision, model.revision);
+    assert_eq!(fx.surfaces_of_kind(true), 0);
+    assert_eq!(
+        fx.probe_calls(),
+        calls,
+        "refused before any file is examined"
+    );
+
+    // The current revision is accepted.
+    let response = socket.open(
+        &[("path", path.to_str().unwrap())],
+        json!({"expected_model_revision": model.revision}),
+    );
+    assert_eq!(result_of(&response)["items"][0]["ok"], true);
+}
+
+#[test]
+fn the_executor_rechecks_the_revision_and_target_before_any_item_runs() {
+    use desktop_runtime::files::{OpenBatch, OpenPlan};
+    let fx = Fixture::new();
+    let path = fx.write("exec.txt", b"x");
+    let probe = fx
+        .desktop
+        .file_open(vec![path.to_str().unwrap().into()], None, false)
+        .unwrap();
+    assert_eq!(probe["ok"], true);
+    // A batch whose revision went stale between the probe and the executor (the window the
+    // early socket check cannot close) applies nothing.
+    let before = fx.snapshot();
+    let batch = |revision, scope: Value| OpenBatch {
+        focus: true,
+        scope: serde_json::from_value(scope).unwrap(),
+        caller: Default::default(),
+        expected_model_revision: revision,
+        items: vec![OpenPlan::Url {
+            url: "https://example.org/".into(),
+        }],
+    };
+    for (id, stale) in [
+        (990, batch(Some(before.model.revision + 9), json!({}))),
+        (991, batch(None, json!({"pane": "pane:9999"}))),
+    ] {
+        fx.desktop
+            .submit(Request {
+                version: 1,
+                request_id: id,
+                payload: Command::OpenFiles { batch: stale },
+            })
+            .unwrap();
+        let after = wait(&fx.desktop, |s| s.last_request_id == id);
+        assert!(after.last_error.is_some(), "request {id} must be refused");
+        assert_eq!(after.model.revision, before.model.revision);
+        assert_eq!(fx.surfaces_of_kind(false), 0, "no browser tab was created");
+    }
+}
+
+#[test]
+fn a_gated_probe_times_out_per_item_over_the_socket_while_urls_still_open() {
+    let fx = Fixture::with(|c| c.probe_timeout = Duration::from_millis(150));
+    let socket = fx.serve(ControlAccess::Full);
+    let slow = fx.write("slow.txt", b"slow");
+    fx.control.arm("canonicalize");
+    let response = thread::scope(|scope| {
+        let call = scope.spawn(|| {
+            socket.open(
+                &[
+                    ("path", slow.to_str().unwrap()),
+                    ("url", "https://example.org/"),
+                ],
+                json!({}),
+            )
+        });
+        fx.control.wait_blocked(1);
+        let response = call.join().unwrap();
+        fx.control.release();
+        response
+    });
+    let result = result_of(&response);
+    assert_eq!(result["items"][0]["error"]["code"], "probe_timeout");
+    assert_eq!(result["items"][1]["ok"], true);
+    assert_eq!(result["ok"], false);
+    assert_eq!(fx.surfaces_of_kind(true), 0);
+    assert_eq!(fx.surfaces_of_kind(false), 1);
+}
+
+#[test]
+fn open_items_validates_its_request_and_the_executor_path_refuses_it_raw() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let calls = fx.probe_calls();
+    let none = socket.open(&[], json!({}));
+    assert_eq!(error_code(&none), "invalid_request");
+    let many: Vec<(&str, &str)> = vec![("url", "https://example.org/"); 17];
+    assert_eq!(
+        error_code(&socket.open(&many, json!({}))),
+        "invalid_request"
+    );
+    let unknown = socket.call(json!({"method": "targeted", "request": {
+        "scope": {}, "caller": {}, "expected_model_revision": null,
+        "operation": {"operation": "open_items", "items": [], "surprise": true}}}));
+    assert_eq!(unknown["ok"], false);
+    let bad_kind = socket.call(json!({"method": "targeted", "request": {
+        "scope": {}, "caller": {}, "expected_model_revision": null,
+        "operation": {"operation": "open_items", "items": [{"kind": "stdin", "value": "x"}]}}}));
+    assert_eq!(bad_kind["ok"], false);
+    assert_eq!(fx.probe_calls(), calls);
+    assert_eq!(fx.surfaces_of_kind(true) + fx.surfaces_of_kind(false), 0);
+
+    // The generic executor path never takes unprobed paths.
+    let operation: desktop_runtime::targets::TargetOperation = serde_json::from_value(json!({
+        "operation": "open_items", "items": [{"kind": "path", "value": "/etc/hostname"}]
+    }))
+    .unwrap();
+    fx.desktop
+        .submit(Request {
+            version: 1,
+            request_id: 992,
+            payload: Command::Targeted {
+                request: desktop_runtime::targets::TargetRequest {
+                    operation,
+                    ..Default::default()
+                },
+            },
+        })
+        .unwrap();
+    let after = wait(&fx.desktop, |s| s.last_request_id == 992);
+    assert!(
+        after
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("control-socket probe path"),
+        "{:?}",
+        after.last_error
+    );
+    assert_eq!(fx.surfaces_of_kind(true), 0);
+    // And `open_files` is not a wire command at all.
+    assert!(
+        serde_json::from_value::<Request>(json!({
+            "version": 1, "request_id": 1,
+            "payload": {"command": "open_files", "batch": {}}
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn new_tabs_go_to_the_resolved_pane_and_inspection_reports_file_surfaces() {
+    let fx = Fixture::new();
+    let socket = fx.serve(ControlAccess::Full);
+    let workspace = fx.snapshot().model.workspaces[0].clone();
+    let first_pane = workspace.focused_pane;
+    fx.desktop
+        .submit(Request {
+            version: 1,
+            request_id: 993,
+            payload: Command::Action {
+                action: Action::SplitPane {
+                    pane_id: first_pane,
+                    axis: zmux_workspace_core::Axis::Horizontal,
+                },
+            },
+        })
+        .unwrap();
+    let split = wait(&fx.desktop, |s| {
+        s.last_request_id == 993 && s.pending_launches == 0
+    });
+    assert_ne!(
+        split.model.workspaces[0].focused_pane, first_pane,
+        "the split focused its new pane, so the default target is not the first pane"
+    );
+    let path = fx.write("scoped.txt", b"scoped");
+    let response = socket.open(
+        &[("path", path.to_str().unwrap())],
+        json!({"scope": {"pane": format!("pane:{}", first_pane.0)}}),
+    );
+    let item = &result_of(&response)["items"][0];
+    assert_eq!(item["surface"]["pane_id"], first_pane.0);
+
+    let listed = socket.call(json!({"method": "list_pane_surfaces", "pane_id": first_pane.0}));
+    let entries = result_of(&listed)["surfaces"].as_array().unwrap().clone();
+    let entry = entries
+        .iter()
+        .find(|e| e["kind"] == "file")
+        .unwrap_or_else(|| panic!("no file entry in {listed}"));
+    assert_eq!(entry["file"]["path"], path.to_str().unwrap());
+    assert_eq!(entry["file"]["mode"], "text");
+    assert_eq!(entry["file"]["dirty"], false);
+    assert!(entry["session_id"].is_null());
+
+    let current = socket.call(json!({"method": "current", "limit": 50}));
+    let current_item = result_of(&current)["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "file")
+        .cloned()
+        .unwrap_or_else(|| panic!("no file item in {current}"));
+    assert!(
+        current_item["session"].is_null(),
+        "a file has no terminal session"
+    );
+    assert_eq!(current_item["pane"]["id"], first_pane.0);
+}
+
+#[test]
+fn capabilities_advertise_the_file_panel_limits_actually_in_force() {
+    let fx = Fixture::with(|c| c.poll_interval = Duration::from_millis(750));
+    let socket = fx.serve(ControlAccess::Full);
+    let capabilities = socket.call(json!({"method": "capabilities"}));
+    assert_eq!(
+        result_of(&capabilities)["file_panel"],
+        json!({
+            "max_file_surfaces": 16, "max_open_items": 16, "max_text_bytes": 2_097_152,
+            "max_preview_bytes": 7_340_032, "poll_interval_ms": 750,
+            "open_probe_timeout_ms": 5000,
+        })
     );
 }

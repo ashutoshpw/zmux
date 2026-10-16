@@ -82,6 +82,35 @@ fn trusted_file_action_error() -> DesktopError {
         "file surfaces require the trusted file opener and native document owner".into(),
     )
 }
+/// Check the optimistic revision guard and bind an ambient local-tmux caller, exactly once,
+/// before an operation reads its target.
+pub(crate) fn prepare_target(
+    model: &Model,
+    request: &mut TargetRequest,
+) -> Result<(), DesktopError> {
+    request.validate_revision(model)?;
+    if request.caller.local_tmux.is_some() {
+        let explicit = request.scope.workspace.is_some()
+            || request.scope.pane.is_some()
+            || request.scope.surface.is_some();
+        if explicit {
+            // Explicit notification workspace attribution may use a unique
+            // ambient surface, but ambiguity cannot veto the hard scope.
+            request.caller = if matches!(&request.operation, TargetOperation::Notify { .. })
+                && request.scope.workspace.is_some()
+                && request.scope.pane.is_none()
+                && request.scope.surface.is_none()
+            {
+                request.caller.bind_local_tmux(model).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+        } else {
+            request.caller = request.caller.bind_local_tmux(model)?;
+        }
+    }
+    Ok(())
+}
 /// Browser and file tabs hold no process, so each has its own desktop-wide cap.
 fn ensure_surface_caps(model: &Model) -> Result<(), DesktopError> {
     use zmux_workspace_core::SurfaceKind;
@@ -747,6 +776,10 @@ impl Desktop {
             .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
     }
 
+    /// The file service configuration in force (capabilities report these values).
+    pub fn files_config(&self) -> &files::FilesConfig {
+        self.shared.files.config()
+    }
     /// Trusted in-process opener (also behind the bridge `open` op): probe each operand on the
     /// file worker within the probe deadline, then let the executor apply the results in order.
     /// Per-item failures are data in the result; only whole-request failures are `Err`.
@@ -756,32 +789,94 @@ impl Desktop {
         force_mode: Option<zmux_workspace_core::FileMode>,
         focus: bool,
     ) -> Result<serde_json::Value, files::FileFailure> {
-        self.ensure_files_open()?;
-        if paths.is_empty() || paths.len() > files::MAX_OPEN_ITEMS {
-            return Err(files::FileFailure::new(
-                "invalid_request",
-                format!("open takes 1 to {} paths", files::MAX_OPEN_ITEMS),
-            ));
-        }
-        let deadline = Instant::now() + self.shared.files.config().probe_timeout;
-        let items = paths
+        let items: Vec<_> = paths
             .into_iter()
-            .map(|operand| {
-                let probe = if Instant::now() >= deadline {
-                    Err(files::FileFailure::new(
-                        "probe_timeout",
-                        "the open deadline passed before this file was examined; nothing was opened",
-                    ))
-                } else {
-                    self.shared.files.probe(&operand, force_mode, deadline)
-                };
-                (operand, probe)
+            .map(|value| targets::OpenItem {
+                kind: targets::OpenItemKind::Path,
+                value,
             })
             .collect();
+        let force = match force_mode {
+            None => None,
+            Some(zmux_workspace_core::FileMode::Markdown) => Some(targets::OpenForceMode::Markdown),
+            Some(_) => {
+                return Err(files::FileFailure::new(
+                    "invalid_request",
+                    "only markdown can be forced when opening",
+                ));
+            }
+        };
+        let items = self.probe_open_items(&items, force)?;
+        self.open_planned(items, focus, Default::default(), Default::default(), None)
+    }
+    /// Probe every operand of one `open` off the executor, in order, under one deadline.
+    /// Items not examined before the deadline become `probe_timeout`; lexical refusals are
+    /// per-item results too. Only a malformed request (no items, too many) is an `Err`.
+    pub(crate) fn probe_open_items(
+        &self,
+        items: &[targets::OpenItem],
+        force: Option<targets::OpenForceMode>,
+    ) -> Result<Vec<files::OpenPlan>, files::FileFailure> {
+        self.ensure_files_open()?;
+        if items.is_empty() || items.len() > files::MAX_OPEN_ITEMS {
+            return Err(files::FileFailure::new(
+                "invalid_request",
+                format!("open takes 1 to {} items", files::MAX_OPEN_ITEMS),
+            ));
+        }
+        let force_mode = force.map(|_| zmux_workspace_core::FileMode::Markdown);
+        let deadline = Instant::now() + self.shared.files.config().probe_timeout;
+        Ok(items
+            .iter()
+            .map(|item| match item.kind {
+                targets::OpenItemKind::Path => {
+                    let probe = if Instant::now() >= deadline {
+                        Err(files::FileFailure::new(
+                            "probe_timeout",
+                            "the open deadline passed before this file was examined; nothing was opened",
+                        ))
+                    } else {
+                        self.shared
+                            .files
+                            .probe(&item.value, force_mode, deadline)
+                    };
+                    files::OpenPlan::File {
+                        operand: item.value.clone(),
+                        probe,
+                    }
+                }
+                targets::OpenItemKind::Url => match files::classify_url(&item.value, force_mode) {
+                    Ok(()) => files::OpenPlan::Url {
+                        url: item.value.clone(),
+                    },
+                    Err(failure) => files::OpenPlan::Invalid {
+                        kind: "url",
+                        operand: item.value.clone(),
+                        failure,
+                    },
+                },
+            })
+            .collect())
+    }
+    /// Apply probed items on the executor. The target is resolved there, once.
+    pub(crate) fn open_planned(
+        &self,
+        items: Vec<files::OpenPlan>,
+        focus: bool,
+        scope: zmux_workspace_core::targets::TargetScope,
+        caller: zmux_workspace_core::targets::CallerContext,
+        expected_model_revision: Option<u64>,
+    ) -> Result<serde_json::Value, files::FileFailure> {
         let execution = self
             .execute_native(
                 Command::OpenFiles {
-                    batch: files::OpenBatch { focus, items },
+                    batch: files::OpenBatch {
+                        focus,
+                        scope,
+                        caller,
+                        expected_model_revision,
+                        items,
+                    },
                 },
                 NATIVE_COMMAND_TIMEOUT,
             )
@@ -1462,7 +1557,7 @@ impl Worker {
         let previous_model = if acknowledgement.is_some()
             && matches!(
                 &request.payload,
-                Command::Action { .. } | Command::Targeted { .. }
+                Command::Action { .. } | Command::Targeted { .. } | Command::OpenFiles { .. }
             ) {
             Some(self.model.snapshot())
         } else {
@@ -1766,10 +1861,7 @@ impl Worker {
                 Ok(())
             }
             Command::FileHost { event } => self.file_host_event(event),
-            Command::OpenFiles { batch } => {
-                self.open_files(batch);
-                Ok(())
-            }
+            Command::OpenFiles { batch } => self.open_files(batch),
             Command::BrowserDrain => {
                 self.browser_dispatch = Some(
                     self.browser
@@ -1875,27 +1967,7 @@ impl Worker {
     }
     fn targeted(&mut self, mut request: TargetRequest) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
-        request.validate_revision(&model)?;
-        if request.caller.local_tmux.is_some() {
-            let explicit = request.scope.workspace.is_some()
-                || request.scope.pane.is_some()
-                || request.scope.surface.is_some();
-            if explicit {
-                // Explicit notification workspace attribution may use a unique
-                // ambient surface, but ambiguity cannot veto the hard scope.
-                request.caller = if matches!(&request.operation, TargetOperation::Notify { .. })
-                    && request.scope.workspace.is_some()
-                    && request.scope.pane.is_none()
-                    && request.scope.surface.is_none()
-                {
-                    request.caller.bind_local_tmux(&model).unwrap_or_default()
-                } else {
-                    Default::default()
-                };
-            } else {
-                request.caller = request.caller.bind_local_tmux(&model)?;
-            }
-        }
+        prepare_target(&model, &mut request)?;
         let paste = matches!(&request.operation, TargetOperation::PasteText { .. });
         match request.operation {
             TargetOperation::SelectWorkspaceNumber { digit } => {
@@ -2011,6 +2083,9 @@ impl Worker {
                 }
                 .map_err(|e| DesktopError::Failure(e.to_string()))
             }
+            TargetOperation::OpenItems { .. } => Err(DesktopError::Failure(
+                "open requires the control-socket probe path".into(),
+            )),
             _ => Err(DesktopError::Failure(
                 "read operation cannot mutate the desktop".into(),
             )),

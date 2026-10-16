@@ -5,7 +5,7 @@
 //! do not apply. Safety comes from component-wise `openat` walks that refuse symlinks,
 //! `O_NONBLOCK` opens plus a regular-file check, hard size caps and atomic same-directory saves.
 use rustix::{
-    fs::{self, Access, AtFlags, Mode, OFlags},
+    fs::{self, Access, AtFlags, FileType, Mode, OFlags},
     io::Errno,
 };
 use sha2::{Digest, Sha256};
@@ -156,6 +156,15 @@ pub trait FileBackend: Send + Sync {
     fn sync_dir(&self, dir: &File) -> Result<(), FileError>;
 }
 
+/// Flags of the leaf open. `NOCTTY` keeps a node that turns into a terminal between the
+/// inspection and the open (or a platform that disagrees about its type) from becoming the
+/// app's controlling terminal; `NONBLOCK` keeps a FIFO from hanging the worker.
+const LEAF_OPEN_FLAGS: OFlags = OFlags::RDONLY
+    .union(OFlags::NOFOLLOW)
+    .union(OFlags::NONBLOCK)
+    .union(OFlags::NOCTTY)
+    .union(OFlags::CLOEXEC);
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RealFs;
 impl FileBackend for RealFs {
@@ -196,14 +205,22 @@ impl FileBackend for RealFs {
         Ok(directory)
     }
     fn open_leaf(&self, dir: &File, name: &OsStr) -> Result<File, FileError> {
-        fs::openat(
-            dir,
-            name,
-            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map(File::from)
-        .map_err(|errno| from_errno("open file", errno))
+        // Inspect the node before opening it: opening a terminal, FIFO, socket or device must
+        // never happen (design D13 step 1). A symlink is left to `O_NOFOLLOW` to refuse.
+        let stat = fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|errno| from_errno("inspect file", errno))?;
+        match FileType::from_raw_mode(stat.st_mode) {
+            FileType::RegularFile | FileType::Directory | FileType::Symlink => {}
+            _ => {
+                return Err(FileError::new(
+                    "not_regular_file",
+                    "only regular files can be opened (not FIFOs, sockets or devices)",
+                ));
+            }
+        }
+        fs::openat(dir, name, LEAF_OPEN_FLAGS, Mode::empty())
+            .map(File::from)
+            .map_err(|errno| from_errno("open file", errno))
     }
     fn writable(&self, dir: &File, name: &OsStr) -> bool {
         fs::accessat(dir, name, Access::WRITE_OK, AtFlags::empty()).is_ok()
@@ -731,8 +748,14 @@ pub fn save(
         match unchanged {
             Ok(None) => {}
             Ok(Some(conflict)) => {
-                let _ = cleanup(FileError::new("conflict", "changed during save"));
-                return Err(SaveFailure::conflict(conflict));
+                // Keep the conflict detail, but surface a temporary that could not be removed
+                // in the message exactly as every other cleanup path does.
+                let mut failure = cleanup(FileError::new(
+                    "conflict",
+                    "file changed on disk since it was loaded",
+                ));
+                failure.conflict = Some(conflict);
+                return Err(failure);
             }
             Err(error) => return Err(cleanup(error)),
         }
