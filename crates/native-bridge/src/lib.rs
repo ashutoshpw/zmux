@@ -1,6 +1,7 @@
 //! Original C ABI feasibility bridge for the Rust workspace model.
 //! It does not yet execute session effects or implement native async rendering callbacks.
 
+pub mod file_channel;
 mod native_frames;
 mod profile_leases;
 mod profile_operations;
@@ -336,6 +337,13 @@ pub extern "C" fn zmux_desktop_create() -> ZmuxResult {
     guard(|| create_desktop(None))
 }
 
+/// Test seam: a desktop with explicit runtime options (for example an injected file backend).
+/// Not a C export; the foreign ABI only offers the configured constructors above.
+#[doc(hidden)]
+pub fn create_desktop_with_options(options: zmux_desktop_runtime::DesktopOptions) -> ZmuxResult {
+    guard(|| create_configured_desktop_with_leases(options, None))
+}
+
 /// Create a desktop with durable session state. File I/O and restoration run on workers.
 /// # Safety
 /// The path must remain readable for length bytes; it is UTF-8, without a trailing NUL.
@@ -519,6 +527,62 @@ pub unsafe extern "C" fn zmux_desktop_dispatch(
     })
 }
 
+/// Execute one workspace action or window command and return the executor's own result for it.
+/// Unlike `zmux_desktop_dispatch`, whose `ok:true` means only that the command was queued, this
+/// replies `ok:true` once the executor ran the command and `ok:false` with its error when it
+/// refused it.
+///
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call. This call may
+/// block for up to two seconds and must run off the native UI thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_dispatch_acknowledged(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_REQUEST_BYTES || (request.is_null() && length != 0) {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = desktop(id)?;
+        // Reserve the response before enqueueing: CAPACITY means nothing ran.
+        let reservation = Reservation::new()?;
+        // SAFETY: same checked pointer/length and caller ownership contract as desktop dispatch.
+        let bytes = if length == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(request, length) }
+        };
+        let reply = match serde_json::from_slice::<DesktopRequest>(bytes) {
+            Err(error) => transfer_error_reply(error.to_string(), false),
+            Ok(request) if request.version != ABI_VERSION => {
+                transfer_error_reply("expected protocol version 1".into(), false)
+            }
+            Ok(request) => match desktop.execute_acknowledged(request) {
+                Ok(execution) => match execution.result {
+                    Ok(()) => json!({
+                        "version": ABI_VERSION,
+                        "ok": true,
+                        "revision": execution.revision,
+                    }),
+                    Err(error) => transfer_error_reply(error.to_string(), false),
+                },
+                // The queue was full, so nothing ran and the caller may retry.
+                Err(zmux_desktop_runtime::CommandExecutionError {
+                    error: DesktopError::QueueFull,
+                    ..
+                }) => return Err(BUSY),
+                Err(error) => transfer_error_reply(error.error.to_string(), error.outcome_unknown),
+            },
+        };
+        let response = serde_json::to_vec(&reply).unwrap_or_else(|_| {
+            br#"{"ok":false,"error":{"message":"response serialization failed"},"outcome_unknown":true}"#.to_vec()
+        });
+        reservation.publish(response)
+    })
+}
+
 /// Execute one session-bound native file transfer and return its worker acknowledgement.
 ///
 /// # Safety
@@ -674,6 +738,35 @@ pub unsafe extern "C" fn zmux_desktop_window_event(
             }
         };
         reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Trusted native file channel (attach, reload, save, observe, detach, open). Excluded from
+/// socket and generic JSON dispatch. Frame: `u32 big-endian header_len | header JSON | body`.
+/// Requests are at most 16384 bytes except `save`, whose raw UTF-8 body may add up to 2 MiB.
+///
+/// # Safety
+/// Storage must remain readable for length bytes. Call off the UI thread: the call waits at
+/// most two seconds (five for save). A nonzero status, a timeout or `outcome_unknown` must
+/// never be replayed automatically, except `observe`, an idempotent absolute-state write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_file(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if request.is_null() || !(4..=file_channel::MAX_FILE_SAVE_FRAME_BYTES).contains(&length) {
+            return Err(INVALID_ARGUMENT);
+        }
+        // SAFETY: checked nonnull bounded storage, readable by the caller contract.
+        let frame = unsafe { std::slice::from_raw_parts(request, length) };
+        let (parsed, body) = file_channel::parse(frame).map_err(|_| INVALID_ARGUMENT)?;
+        let desktop = desktop(id)?;
+        // Claim response storage before any queueing: CAPACITY means nothing ran.
+        let reservation = Reservation::new()?;
+        let reply = file_channel::execute(&desktop, parsed, body);
+        reservation.publish(reply)
     })
 }
 

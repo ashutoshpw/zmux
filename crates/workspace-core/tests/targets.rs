@@ -181,3 +181,51 @@ fn scoped_targets_and_position_indices_reject_wrong_kind_and_cross_owner_without
         );
     }
 }
+
+#[test]
+fn target_create_file_resolves_the_selected_pane_into_a_core_action() {
+    let mut store = WorkspaceStore::with_identity_namespace(Uuid::from_u128(7));
+    let first = create(&mut store, "first");
+    let second = create(&mut store, "second");
+    let model = store.snapshot();
+    let scope = TargetScope {
+        pane: Some(format!("pane:{}", first.focused_pane.0).parse().unwrap()),
+        ..Default::default()
+    };
+    let wire: TargetAction = serde_json::from_value(serde_json::json!({
+        "action": "create_file", "path": "/tmp/notes.md", "mode": "markdown"
+    }))
+    .expect("focus defaults to true like create_browser");
+    let action = wire
+        .resolve(&model, &scope, &CallerContext::default())
+        .unwrap();
+    assert!(
+        matches!(&action, Action::CreateFile { pane_id, path, mode: FileMode::Markdown, focus: true }
+            if *pane_id == first.focused_pane && path == "/tmp/notes.md"),
+        "{action:?}"
+    );
+    // Resolution does not validate the path; the core action does, atomically.
+    let invalid = TargetAction::CreateFile {
+        path: "relative.txt".into(),
+        mode: FileMode::Text,
+        focus: false,
+    }
+    .resolve(&model, &scope, &CallerContext::default())
+    .unwrap();
+    assert!(store.apply(invalid).is_err());
+    assert_eq!(store.snapshot(), model);
+    assert_ne!(first.focused_pane, second.focused_pane);
+    assert!(
+        serde_json::from_value::<TargetAction>(serde_json::json!({
+            "action": "create_file", "path": "/tmp/a", "mode": "text", "dirty": true
+        }))
+        .is_err()
+    );
+    // Dirty observation has no targeted form: it is trusted-host-only.
+    assert!(
+        serde_json::from_value::<TargetAction>(serde_json::json!({
+            "action": "observe_file", "dirty": true
+        }))
+        .is_err()
+    );
+}

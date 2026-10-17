@@ -29,12 +29,25 @@ enum UICommand: Sendable {
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
     case pointer(UInt64, TerminalPointerEvent)
+    /// Runs the wrapped window, action or surface command and reports whether the core executed
+    /// it (the executor's own result, not queue acceptance). Used by closes that discard unsaved
+    /// file text only once the tab is really gone.
+    indirect case tracked(UICommand, CommandOutcome)
+}
+
+/// File-service work that can wait on a slow volume (a probe and an executor wait can hold one
+/// request for about three seconds). It has its own bounded queue and task so it can never stall
+/// terminal input, resize or wheel events queued behind it in the `UICommand` loop.
+enum FileCommand: Sendable {
+    /// Paths chosen in `File > Open...`, whether to focus the first, and whether to force Markdown.
+    case open([String], Bool, Bool)
+    case detach(FileOwnerToken)
 }
 
 /// Application lifetime owns one Rust Desktop. Main-window presenters borrow its
 /// views and command routes; constructing a presenter cannot start another owner.
 @MainActor
-final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
+final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, FilePanelOwner {
     private(set) var snapshot: DesktopSnapshot?
     private(set) var mainWindowHosts: [MainWindowIdentity: MainWindowHost] = [:]
     private lazy var initialWindowHost = MainWindowHost(coordinator: self)
@@ -92,6 +105,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private let stream: AsyncStream<UICommand>
     private let continuation: AsyncStream<UICommand>.Continuation
     private var commandTask: Task<Void, Never>?
+    /// Bound of the file queue; a request past it is refused visibly, never queued without limit.
+    static let fileCommandCapacity = 32
+    private let fileStream: AsyncStream<FileCommand>
+    private let fileContinuation: AsyncStream<FileCommand>.Continuation
+    private var fileCommandTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
     private let browserEvents = AsyncStream<(UInt64, BrowserHostEvent?)>.makeStream(bufferingPolicy: .bufferingOldest(256))
     private var browserEventGeneration: UInt64 = 0
@@ -103,9 +121,18 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
     private var completedHistoryNamespace: UUID?
     private(set) var browsers: [UInt64: BrowserView] = [:]
     private lazy var browserProfileStores = BrowserProfileStores(bridge: bridge)
+    /// One retained file panel per file surface, created and pruned in `reconcile` like `browsers`.
+    private(set) var files: [UInt64: FilePanelView] = [:]
+    private var filesNamespace: UUID?
+    /// Panels whose tab vanished while they held unsaved text. They are never silently dropped.
+    private(set) var orphanedFiles: [FilePanelView] = []
+    private var presentingOrphan = false
+    /// Replaces the Save / Don't Save / Cancel sheet; used by the in-app smoke only.
+    var fileCloseChoiceOverride: (@MainActor (FilePanelView) async -> FileCloseChoice)?
 
     init() {
         (stream, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(256))
+        (fileStream, fileContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingOldest(Self.fileCommandCapacity))
     }
 
     func start(storage: NativeDesktopStorage = .applicationSupport, terminalEngine: String? = nil) async throws {
@@ -142,59 +169,35 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         }
         commandTask = Task { [weak self, stream] in
             for await command in stream {
+                guard let self, !Task.isCancelled, self.shutdownTask == nil else {
+                    // A command that never ran must not leave a waiting close hanging.
+                    if case .tracked(_, let outcome) = command { outcome.finish(false) }
+                    break
+                }
+                do { try await self.perform(command) } catch {
+                    guard !Task.isCancelled, self.shutdownTask == nil else { break }
+                    if case .window("new", _, _) = command { self.pendingStatusNotifications = nil }
+                    self.reportError(error.localizedDescription)
+                }
+            }
+        }
+        fileCommandTask = Task { [weak self, fileStream] in
+            for await command in fileStream {
                 guard let self, !Task.isCancelled, self.shutdownTask == nil else { break }
                 do {
                     switch command {
-                    case .window(let operation, let window, let focus): try await self.bridge.window(operation, window: window, focus: focus)
-                    case .windowEvent(let event): try await self.bridge.windowEvent(event)
-                    case .workspaceMove(let workspace, let destination, let focus): try await self.bridge.moveWorkspace(workspace, destination: destination, focus: focus)
-                    case .workspaceOrder(let workspace, let window, let index, let revision): try await self.bridge.reorderWorkspace(workspace, window: window, index: index, revision: revision)
-                    case .surfaceOrder(let namespace, let surface, let pane, let value, let relative, let revision): try await self.bridge.reorderSurface(namespace: namespace, surface: surface, pane: pane, value: value, relative: relative, revision: revision)
-                    case .workspaceNumber(let window, let digit): try await self.bridge.selectWorkspaceNumber(digit, window: window)
-                    case .workspaceGroup(let namespace, let command):
-                        guard self.snapshot?.model.identityNamespace == namespace else { throw BridgeFailure(message: "Workspace group belongs to a previous desktop") }
-                        try await self.bridge.workspaceGroup(command)
-                    case .workspaceCreate(let window, let name): try await self.bridge.action("create_workspace_in_window", title: name, window: window)
-                    case .windowHistory(let window, let direction): try await self.bridge.action("navigate_focus_in_window", direction: direction, window: window)
-                    case .windowReopen(let window, let id): try await self.bridge.action("reopen_closed_in_window", closed: id, window: window)
-                    case .action(let action, let pane, let axis, let title, let workspace):
-                        try await self.bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace)
-                    case .surface(let action, let surface, let pane, let index, let closed):
-                        try await self.bridge.action(action, pane: pane, surface: surface, index: index, closed: closed)
-                    case .navigation(let action, let direction, let pane, let surface, let workspace, let focus):
-                        try await self.bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
-                    case .browser(let operation, let surface, let pane, let url, let title, let profile):
-                        try await self.bridge.browser(operation, surface: surface, pane: pane, url: url, title: title, profile: profile)
-                    case .downloadCancel(let record):
-                        try await self.bridge.cancelBrowserDownload(record)
-                    case .browserAutomation(let surface, let action):
-                        try await self.bridge.browserAction(surface: surface, action: action)
-                    case .attention(let operation, let id, let through, let active):
-                        try await self.bridge.attention(operation, id: id, through: through, active: active)
-                    case .notificationMutation(let selection):
-                        _ = try await self.bridge.notificationAction(.mutate(selection))
-                    case .pasteFiles(let surface, let paths):
-                        try await self.bridge.pasteFiles(surface: surface, paths: paths)
-                    case .cancelUpload(let id):
-                        try await self.bridge.cancelUpload(id: id)
-                    case .input(let session, let text):
-                        try await self.bridge.input(session: session, text: text)
-                    case .key(let session, let event):
-                        try await self.bridge.key(session: session, event: event)
-                    case .paste(let session, let text):
-                        try await self.bridge.paste(session: session, text: text)
-                    case .wheel(let session, let lines, let row, let col, let modifiers, let history):
-                        try await self.bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
-                    case .pointer(let session, let event):
-                        try await self.bridge.pointer(session: session, event: event)
-                    case .scroll(let session, let lines):
-                        try await self.bridge.scroll(session: session, lines: lines)
-                    case .resize(let session, let rows, let cols):
-                        try await self.bridge.resize(session: session, rows: rows, cols: cols)
+                    case .open(let paths, let focus, let forceMarkdown):
+                        let result = try await self.bridge.fileOpen(paths: paths, focus: focus, forceMarkdown: forceMarkdown)
+                        let failures = result.items.filter { !$0.ok }.map { item -> String in
+                            let operand = item.path ?? item.url ?? "item \(item.index)"
+                            return operand + ": " + (item.error?.message ?? "could not be opened") + " (" + (item.error?.code ?? "unknown") + ")"
+                        }
+                        if !failures.isEmpty { self.reportError(failures.prefix(3).joined(separator: "; ")) }
+                    case .detach(let owner):
+                        try await self.bridge.fileDetach(owner)
                     }
                 } catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
-                    if case .window("new", _, _) = command { self.pendingStatusNotifications = nil }
                     self.reportError(error.localizedDescription)
                 }
             }
@@ -255,12 +258,19 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         activationTask?.cancel(); activationTask = nil
         pendingActivationWindow = nil
         continuation.finish()
+        fileContinuation.finish()
         commandTask?.cancel()
+        fileCommandTask?.cancel()
         pollingTask?.cancel()
         windowTasks.values.forEach { $0.cancel() }
         windowTasks.removeAll()
         browsers.values.forEach { $0.close() }
         browsers.removeAll()
+        // Shutdown does not talk to the file service: its own shutdown joins the file worker.
+        files.values.forEach { $0.shutdown() }
+        orphanedFiles.forEach { $0.shutdown() }
+        files.removeAll()
+        orphanedFiles.removeAll()
         browserDownloads.beginShutdown()
         browserEvents.continuation.finish()
         browserEventTask?.cancel()
@@ -362,6 +372,75 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         try await task.value
     }
 
+    /// Runs one queued command against the core. A failure is thrown to the command loop, which
+    /// shows it; a tracked command also reports it to whoever is waiting for the answer.
+    /// `acknowledged` (only a tracked command sets it) waits for the executor's own result, so a
+    /// close the core refuses throws here rather than reading as accepted once it was queued.
+    private func perform(_ command: UICommand, acknowledged: Bool = false) async throws {
+        switch command {
+        case .window(let operation, let window, let focus): try await bridge.window(operation, window: window, focus: focus, acknowledged: acknowledged)
+        case .windowEvent(let event): try await bridge.windowEvent(event)
+        case .workspaceMove(let workspace, let destination, let focus): try await bridge.moveWorkspace(workspace, destination: destination, focus: focus)
+        case .workspaceOrder(let workspace, let window, let index, let revision): try await bridge.reorderWorkspace(workspace, window: window, index: index, revision: revision)
+        case .surfaceOrder(let namespace, let surface, let pane, let value, let relative, let revision): try await bridge.reorderSurface(namespace: namespace, surface: surface, pane: pane, value: value, relative: relative, revision: revision)
+        case .workspaceNumber(let window, let digit): try await bridge.selectWorkspaceNumber(digit, window: window)
+        case .workspaceGroup(let namespace, let command):
+            guard snapshot?.model.identityNamespace == namespace else { throw BridgeFailure(message: "Workspace group belongs to a previous desktop") }
+            try await bridge.workspaceGroup(command)
+        case .workspaceCreate(let window, let name): try await bridge.action("create_workspace_in_window", title: name, window: window)
+        case .windowHistory(let window, let direction): try await bridge.action("navigate_focus_in_window", direction: direction, window: window)
+        case .windowReopen(let window, let id): try await bridge.action("reopen_closed_in_window", closed: id, window: window)
+        case .action(let action, let pane, let axis, let title, let workspace):
+            try await bridge.action(action, pane: pane, axis: axis, title: title, workspace: workspace, acknowledged: acknowledged)
+        case .surface(let action, let surface, let pane, let index, let closed):
+            try await bridge.action(action, pane: pane, surface: surface, index: index, closed: closed, acknowledged: acknowledged)
+        case .navigation(let action, let direction, let pane, let surface, let workspace, let focus):
+            try await bridge.action(action, pane: pane, workspace: workspace, surface: surface, direction: direction, focus: focus)
+        case .browser(let operation, let surface, let pane, let url, let title, let profile):
+            try await bridge.browser(operation, surface: surface, pane: pane, url: url, title: title, profile: profile)
+        case .downloadCancel(let record):
+            try await bridge.cancelBrowserDownload(record)
+        case .browserAutomation(let surface, let action):
+            try await bridge.browserAction(surface: surface, action: action)
+        case .attention(let operation, let id, let through, let active):
+            try await bridge.attention(operation, id: id, through: through, active: active)
+        case .notificationMutation(let selection):
+            _ = try await bridge.notificationAction(.mutate(selection))
+        case .pasteFiles(let surface, let paths):
+            try await bridge.pasteFiles(surface: surface, paths: paths)
+        case .cancelUpload(let id):
+            try await bridge.cancelUpload(id: id)
+        case .input(let session, let text):
+            try await bridge.input(session: session, text: text)
+        case .key(let session, let event):
+            try await bridge.key(session: session, event: event)
+        case .paste(let session, let text):
+            try await bridge.paste(session: session, text: text)
+        case .wheel(let session, let lines, let row, let col, let modifiers, let history):
+            try await bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
+        case .pointer(let session, let event):
+            try await bridge.pointer(session: session, event: event)
+        case .scroll(let session, let lines):
+            try await bridge.scroll(session: session, lines: lines)
+        case .resize(let session, let rows, let cols):
+            try await bridge.resize(session: session, rows: rows, cols: cols)
+        case .tracked(let inner, let outcome):
+            do {
+                // Only the commands the bridge can acknowledge are trackable; anything else would
+                // report queue acceptance as success, which is exactly what tracking exists to avoid.
+                switch inner {
+                case .window, .action, .surface: break
+                default: throw BridgeFailure(message: "Only window, action and surface commands can be tracked")
+                }
+                try await perform(inner, acknowledged: true)
+                outcome.finish(true)
+            } catch {
+                outcome.finish(false)
+                throw error
+            }
+        }
+    }
+
     @discardableResult
     func enqueue(_ command: UICommand) -> Bool {
         mainWindowHost.clearErrorForCommand()
@@ -377,6 +456,26 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
             reportError("The application desktop is closed; the command was not accepted")
         @unknown default:
             reportError("The application command queue is unavailable")
+        }
+        return false
+    }
+    /// Queues file-service work (`File > Open...`, releasing a binding) off the terminal input path.
+    /// A full or closed queue is reported, never dropped silently.
+    @discardableResult
+    func enqueueFile(_ command: FileCommand) -> Bool {
+        if case .open = command { mainWindowHost.clearErrorForCommand() }
+        switch fileContinuation.yield(command) {
+        case .enqueued: return true
+        case .dropped:
+            switch command {
+            case .open: reportError("The file queue is full (\(Self.fileCommandCapacity) requests waiting on the file service); the files were not opened. Try again shortly.")
+            case .detach: reportError("The file queue is full; a closed file’s binding stays until Zmux restarts")
+            }
+        case .terminated:
+            // A binding released during shutdown is cleaned up by the file service's own shutdown.
+            if case .open = command { reportError("The application desktop is closed; the files were not opened") }
+        @unknown default:
+            reportError("The file command queue is unavailable")
         }
         return false
     }
@@ -490,6 +589,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
         retainCompletedHistories(retainedHistories, namespace: snapshot.model.identityNamespace)
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
+        reconcileFilePanels(snapshot)
         let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
         browsers = browsers.filter { key, value in
             if liveBrowsers.contains(key) { return true }
@@ -590,6 +690,153 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner {
                 } catch { self.reportError("Native window acknowledgement retained without replay: " + error.localizedDescription) }
             }
         }
+    }
+
+    /// Creates, updates and prunes file panels before any window presents them, so `paneView`
+    /// always finds the retained view of a selected file tab.
+    private func reconcileFilePanels(_ snapshot: DesktopSnapshot) {
+        let surfaces = snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "file" }
+        if filesNamespace != snapshot.model.identityNamespace {
+            for (id, view) in files { files.removeValue(forKey: id); retireFilePanel(view) }
+            filesNamespace = snapshot.model.identityNamespace
+        }
+        let live = Set(surfaces.map(\.id))
+        for (id, view) in files where !live.contains(id) {
+            files.removeValue(forKey: id)
+            retireFilePanel(view)
+        }
+        for surface in surfaces {
+            guard let file = surface.file else {
+                reportError("File tab \(surface.id) has no file description; it was not opened")
+                continue
+            }
+            let view: FilePanelView
+            if let existing = files[surface.id], existing.path == file.path { view = existing }
+            else {
+                if let stale = files.removeValue(forKey: surface.id) { retireFilePanel(stale) }
+                view = FilePanelView(surface: surface, file: file, owner: self)
+                files[surface.id] = view
+            }
+            view.update(surface: surface, files: snapshot.files)
+        }
+    }
+
+    /// A clean panel is released at once, and so is one whose Don't Save is waiting for the core's
+    /// close that just landed. One that still holds unsaved text is kept aside and the person is
+    /// asked what to do with it; its text is never discarded silently.
+    private func retireFilePanel(_ view: FilePanelView) {
+        if view.isDiscardPending {
+            // Don't Save was answered and the core has since closed the tab: the text is knowingly
+            // discarded, so there is nothing to ask. The close settlement only gives the hold back.
+            view.close()
+        } else if view.hasUnsavedChanges {
+            orphanedFiles.append(view)
+            presentNextOrphan()
+        } else {
+            view.close()
+        }
+    }
+
+    private func presentNextOrphan() {
+        guard !presentingOrphan, let view = orphanedFiles.first else { return }
+        presentingOrphan = true
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Unsaved changes to “" + view.displayName + "” have no tab"
+        alert.informativeText = "The tab was closed while it had unsaved changes, and this app cannot save them any more. Copy the text to keep it, or discard it."
+        alert.addButton(withTitle: "Copy Text")
+        alert.addButton(withTitle: "Discard")
+        Task { [weak self] in
+            let response = await presentSheet(alert, in: self?.mainWindowHost.window)
+            guard let self else { return }
+            if response == .alertFirstButtonReturn { view.copyTextToPasteboard() }
+            self.orphanedFiles.removeAll { $0 === view }
+            view.close()
+            self.presentingOrphan = false
+            self.presentNextOrphan()
+        }
+    }
+
+    var hasUnsavedFiles: Bool { !orphanedFiles.isEmpty || files.values.contains { $0.hasUnsavedChanges } }
+
+    func filePanels(for surfaces: [UInt64]) -> [FilePanelView] {
+        surfaces.compactMap { files[$0] }
+    }
+
+    /// Settles every file among `surfaces` before an app-initiated close: asks about unsaved text
+    /// (Save / Don't Save / Cancel) and makes the model's dirty bit match each panel. Nil means
+    /// the close must not proceed. The settlement's Don't Save answers stay pending: the caller
+    /// finishes it with the core's answer to the close, so a refused close discards nothing.
+    func resolveFilesBeforeClose(_ surfaces: [UInt64], window: NSWindow?) async -> FileCloseSettlement? {
+        // The decision (Cancel and a failed Save abort with nothing discarded; Don't Save is
+        // applied only once the core has closed the tab) lives in FileCloseResolution, which the
+        // macOS fixture exercises; this only supplies the question.
+        await FileCloseResolution.resolve(filePanels(for: surfaces)) { [self] view in
+            if let override = fileCloseChoiceOverride { return await override(view) }
+            let alert = NSAlert()
+            alert.messageText = "Do you want to save the changes to “" + view.displayName + "”?"
+            alert.informativeText = "Your changes will be lost if you don’t save them."
+            alert.addButton(withTitle: "Save")
+            alert.addButton(withTitle: "Don’t Save")
+            alert.addButton(withTitle: "Cancel")
+            switch await presentSheet(alert, in: window) {
+            case .alertFirstButtonReturn: return .save
+            case .alertSecondButtonReturn: return .discard
+            default: return .cancel
+            }
+        }
+    }
+
+    /// Quit: resolves every dirty panel, and refuses to quit while an orphan still holds text.
+    /// Nil means do not quit. A settlement means every panel was answered but nothing is discarded
+    /// yet: Quit is not final until the caller has decided to terminate, so the caller finishes
+    /// the settlement through `commitQuit` at that point and not before.
+    func resolveFilesBeforeQuit() async -> FileCloseSettlement? {
+        guard orphanedFiles.isEmpty else {
+            presentNextOrphan()
+            return nil
+        }
+        return await resolveFilesBeforeClose(Array(files.keys), window: mainWindowHost.window)
+    }
+
+    /// Applies a quit's Don't Save answers in the same synchronous step that starts the shutdown.
+    /// False means a panel took text after it was answered (or an orphan appeared): the discards
+    /// are given back, nothing is lost, and the caller must ask again instead of terminating.
+    func commitQuit(_ settlement: FileCloseSettlement) -> Bool {
+        guard orphanedFiles.isEmpty,
+              files.values.allSatisfy({ !$0.hasUnsavedChanges || settlement.isDiscarding($0) }) else {
+            settlement.finish(closeSucceeded: false)
+            return false
+        }
+        settlement.finish(closeSucceeded: true)
+        return true
+    }
+
+    /// Sends a close command and reports the core's answer: it succeeds once the core executed the
+    /// command, and fails when the command was not accepted, the core refused it, or the
+    /// application stopped before running it. The failure is also shown to the person.
+    func enqueueTracked(_ command: UICommand) -> CommandOutcome {
+        let outcome = CommandOutcome()
+        if !enqueue(.tracked(command, outcome)) { outcome.finish(false) }
+        return outcome
+    }
+
+    func refreshFileChrome() {
+        for host in mainWindowHosts.values { host.refreshFileChrome() }
+    }
+
+    func fileCall(_ request: FileHostRequest, body: Data) async throws -> FileHostReply {
+        try await bridge.file(request, body: body)
+    }
+    /// One gate for every file panel: attach and reload requests never run more than
+    /// `FileLoadPolicy.maxInFlight` at a time, so opening or restoring many file tabs queues them
+    /// instead of overflowing the Rust file worker's queue.
+    let fileLoadGate = FileLoadGate()
+    func filePanelStateChanged(_ surface: UInt64) { refreshFileChrome() }
+    func filePanelReport(_ message: String) { reportError(message) }
+    func filePanelDetach(_ owner: FileOwnerToken) {
+        // Not `enqueue`: an automatic release must not clear an error the person has not read.
+        enqueueFile(.detach(owner))
     }
 
     func windowKeyChanged(_ host: MainWindowHost, key: Bool) {

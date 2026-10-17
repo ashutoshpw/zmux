@@ -52,6 +52,17 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
     } else {
         None
     };
+    if command == "markdown" {
+        if args.first().map(String::as_str) != Some("open") {
+            return Err(CliError(
+                "markdown requires open; usage: zmux markdown open [TARGET_OPTIONS] PATH...".into(),
+            ));
+        }
+        if help_requested(&tail[1..]) {
+            return Ok(Parsed::Offline(Offline::Help(Some(command.into()))));
+        }
+        args.remove(0);
+    }
     let mut browser_profile = None;
     if browser_verb.as_deref() == Some("open") {
         let mut index = 0;
@@ -73,7 +84,11 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
         }
     }
     let browser_focus = if browser_verb.as_deref() == Some("open") {
-        extract_browser_focus(&mut args)?
+        extract_focus(&mut args, "browser focus", "browser open")?
+    } else if command == "open" {
+        extract_focus(&mut args, "focus", "open")?
+    } else if command == "markdown" {
+        extract_focus(&mut args, "focus", "markdown open")?
     } else {
         true
     };
@@ -209,6 +224,22 @@ pub(super) fn parse(command: &str, tail: &[OsString]) -> Result<Parsed, CliError
             },
             _ => return Err(CliError("browser requires open or navigate".into())),
         },
+        "open" | "markdown" => {
+            // Selector options lead; anything option-looking that is left over is a mistake
+            // unless `--` made the operands literal.
+            if !literal && let Some(option) = values.iter().find(|value| value.starts_with('-')) {
+                return Err(CliError(format!(
+                    "unknown {} option `{option}`; selector options must precede operands, and -- makes later operands literal",
+                    if command == "open" {
+                        "open"
+                    } else {
+                        "markdown open"
+                    }
+                )));
+            }
+            let operation = open::operation(command == "markdown", values, browser_focus)?;
+            return command_request(scope, expected_model_revision, operation).map(Parsed::Open);
+        }
         "list-panes" => {
             if !values.is_empty() {
                 return Err(CliError(
@@ -490,7 +521,13 @@ fn explicit_notification_scope(
     }
 }
 
-fn extract_browser_focus(args: &mut Vec<String>) -> Result<bool, CliError> {
+/// Pulls `--focus true|false` and `--no-focus` out of `args`, leaving selector options (and
+/// everything after `--`) for the caller. `focus_label` and `option_label` only shape messages.
+fn extract_focus(
+    args: &mut Vec<String>,
+    focus_label: &str,
+    option_label: &str,
+) -> Result<bool, CliError> {
     let mut focus = None;
     let mut retained = Vec::new();
     let mut index = 0;
@@ -502,17 +539,17 @@ fn extract_browser_focus(args: &mut Vec<String>) -> Result<bool, CliError> {
             }
             "--no-focus" => {
                 if focus.replace(false).is_some() {
-                    return Err(CliError(
-                        "repeated or conflicting browser focus option".into(),
-                    ));
+                    return Err(CliError(format!(
+                        "repeated or conflicting {focus_label} option"
+                    )));
                 }
                 index += 1;
             }
             "--focus" => {
                 if focus.is_some() {
-                    return Err(CliError(
-                        "repeated or conflicting browser focus option".into(),
-                    ));
+                    return Err(CliError(format!(
+                        "repeated or conflicting {focus_label} option"
+                    )));
                 }
                 focus = Some(match args.get(index + 1).map(String::as_str) {
                     Some("true") => true,
@@ -530,7 +567,7 @@ fn extract_browser_focus(args: &mut Vec<String>) -> Result<bool, CliError> {
                 }
             }
             other if other.starts_with('-') => {
-                return Err(CliError(format!("unknown browser open option `{other}`")));
+                return Err(CliError(format!("unknown {option_label} option `{other}`")));
             }
             _ => {
                 retained.push(args[index].clone());
@@ -546,6 +583,13 @@ fn request(
     expected_model_revision: Option<u64>,
     operation: TargetOperation,
 ) -> Result<Parsed, CliError> {
+    command_request(scope, expected_model_revision, operation).map(Parsed::App)
+}
+fn command_request(
+    scope: TargetScope,
+    expected_model_revision: Option<u64>,
+    operation: TargetOperation,
+) -> Result<ControlCommand, CliError> {
     // Global and exact-ID attention mutations have no caller/focus fallback.
     let caller = if matches!(
         &operation,
@@ -599,14 +643,14 @@ fn request(
     {
         return Err(CliError("todo requires --workspace or a live caller workspace/surface; foreground focus is not a todo target".into()));
     }
-    Ok(Parsed::App(ControlCommand::Targeted {
+    Ok(ControlCommand::Targeted {
         request: TargetRequest {
             scope,
             caller,
             expected_model_revision,
             operation,
         },
-    }))
+    })
 }
 pub(super) fn caller(scope: &TargetScope) -> Result<CallerContext, CliError> {
     Ok(

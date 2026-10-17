@@ -1096,6 +1096,49 @@ fn definitions() -> Vec<Contract> {
         c.limitations = "Native execution and read-only policy are checked at admission. Eval executes page content-world JavaScript and is a mutation. Wait/snapshot are bounded observations, not screenshots. Full output variants remain unresolved.";
         result.push(c);
     }
+    for (name, operands, force) in [
+        // An explicit scope keeps the probe independent of ambient ZMUX_* caller variables, and
+        // an absolute path keeps it independent of the invoker's working directory.
+        (
+            "open",
+            vec![
+                "--workspace",
+                "workspace:1",
+                "/README.md",
+                "https://example.org/",
+            ],
+            None,
+        ),
+        (
+            "markdown open",
+            vec!["--workspace", "workspace:1", "/README.md"],
+            Some("markdown"),
+        ),
+    ] {
+        let mut args = target_arguments();
+        args.extend(focus_arguments());
+        args.push(positional("operand", ValueKind::Text, true));
+        let mut c = contract(name, &operands, args, "targeted");
+        c.route = "open";
+        c.expected
+            .push(("/request/operation/operation", "open_items"));
+        if let Some(mode) = force {
+            c.expected.push(("/request/operation/force_mode", mode));
+        }
+        c.default_pointers
+            .push(("focus", "/request/operation/focus"));
+        c.focus = "conditional_on_focus_argument";
+        c.argument_rules.push(json!({
+            "operand_count": {"minimum": 1, "maximum": crate::open::MAX_OPERANDS},
+            "operand_kinds": if force.is_some() {
+                json!(["path"])
+            } else {
+                json!(["path", "http_or_https_url"])
+            }
+        }));
+        c.limitations = "Per-item result JSON with ok, kind, path/url, mode, deduplicated, surface or error{code,message}; exit status 1 when any item fails. Files only: text and Markdown to 2 MiB, image and PDF previews to 7 MiB, no directories, file:// or other schemes. Relative paths are made absolute in the CLI. Rendered output, editing and save behaviour are native presentation and are not verified by this parser contract; frozen option and output compatibility is unresolved.";
+        result.push(c);
+    }
     for verb in ["list", "wait", "cancel"] {
         let mut operands = vec!["--surface", "1"];
         if verb == "cancel" {
@@ -1154,6 +1197,7 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
         Parsed::SurfaceOrder(command) => ("surface_order", value(command)?),
         Parsed::Browser(command, _) => ("browser", value(command)?),
         Parsed::BrowserDownload(command, _) => ("browser_download", value(command)?),
+        Parsed::Open(command) => ("open", value(command)?),
         _ => {
             return Err(failure(format!(
                 "{} no longer parses to its app request",

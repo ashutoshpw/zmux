@@ -187,10 +187,11 @@ fn version_nine_groups_round_trip_stable_logical_identity_and_reject_malformed_o
     .unwrap();
     group(&mut store,json!({"operation":"create","window_id":window,"name":"G","workspace_ids":[ids[1],ids[3]],"external_id":"two"})).unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 9);
+    assert_eq!(wire["version"], 10);
     let limits = RestoreLimits {
         terminals: 8,
         browsers: 4,
+        files: 16,
     };
     let validate = |value: Value| {
         serde_json::from_value::<SessionDocument>(value)
@@ -268,7 +269,7 @@ fn version_nine_groups_round_trip_stable_logical_identity_and_reject_malformed_o
     )
     .unwrap();
     assert!(migrated.store.snapshot().workspace_groups.is_empty());
-    assert_eq!(migrated.store.session_document().unwrap().version, 9);
+    assert_eq!(migrated.store.session_document().unwrap().version, 10);
 }
 
 #[test]
