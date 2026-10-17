@@ -13,6 +13,7 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
     private weak var appController: MainWindowHost?
     private let endpoint: CloudEndpoint
     private let client: CloudClient
+    private let authenticationPresentationAnchor: NSWindow
     private let accountLabel = NSTextField(labelWithString: "Connect your workspace")
     private let detailLabel = NSTextField(wrappingLabelWithString: "Sign in to register this Mac and manage your devices.")
     private let message = NSTextField(wrappingLabelWithString: "")
@@ -32,6 +33,7 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
         client = Self.connection.client
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 540),
                               styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        authenticationPresentationAnchor = window
         window.title = "zmux Cloud"
         window.isReleasedWhenClosed = false
         window.center()
@@ -44,7 +46,9 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
         if authentication == nil { refresh(nil) }
     }
     required init?(coder: NSCoder) { nil }
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { window! }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        authenticationPresentationAnchor
+    }
     func windowWillClose(_ notification: Notification) {
         generation &+= 1
         authentication?.cancel(); authentication = nil
