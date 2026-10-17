@@ -1,9 +1,14 @@
 //! Real isolated tmux servers own persistence/identity; no fake tmux executable.
+//! The failure-injection tests wrap the real tmux and only perturb query output, timing, or kill-session.
 use std::{
     fs,
     os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt, symlink},
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -18,6 +23,14 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::build(false)
+    }
+    /// Delegates to the real tmux, but can emulate what a non-UTF-8 locale does to the
+    /// session query (tabs become `_`) and can refuse kill-session, driven by marker files.
+    fn faulty() -> Self {
+        Self::build(true)
+    }
+    fn build(faulty: bool) -> Self {
         let root = PathBuf::from("/tmp").join(format!("zmt-{}", Uuid::new_v4().simple()));
         fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
         let root = root.canonicalize().unwrap();
@@ -25,12 +38,77 @@ impl Fixture {
             .map(|p| p.join("tmux"))
             .find(|p| p.is_file())
             .expect("real tmux is required for local multiplexer contracts");
+        let real = binary;
+        let binary = if faulty {
+            let wrapper = root.join("tmux-wrapper");
+            fs::write(
+                &wrapper,
+                format!(
+                    r#"#!/bin/sh
+dir="{dir}"
+case "$*" in
+*kill-session*)
+    if [ -e "$dir/refuse-kill" ]; then echo "injected kill-session failure" >&2; exit 1; fi ;;
+*new-session*)
+    if [ -e "$dir/stall-created" ]; then
+        "{real}" "$@" || exit $?
+        touch "$dir/created"
+        sleep 60
+        exit 0
+    fi ;;
+*list-sessions*)
+    if [ -e "$dir/slow-queries" ]; then
+        n=$(cat "$dir/slow-queries")
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$dir/slow-queries"; exec "{real}" "$@"; fi
+        sleep 3
+    fi
+    if [ -e "$dir/clean-queries" ]; then
+        n=$(cat "$dir/clean-queries")
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$dir/clean-queries"; exec "{real}" "$@"; fi
+        if [ -e "$dir/replace-created" ]; then
+            "{real}" -S "$dir/profile/server.sock" kill-session -t =dev || exit $?
+            "{real}" -S "$dir/profile/server.sock" new-session -d -s dev 'exec sleep 60' || exit $?
+        fi
+        out=$("{real}" "$@"); rc=$?
+        printf '%s\n' "$out" | tr '\t' '_'
+        exit $rc
+    fi ;;
+esac
+exec "{real}" "$@"
+"#,
+                    dir = root.display(),
+                    real = real.display()
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+            wrapper
+        } else {
+            real.clone()
+        };
         let owner = LocalTmux::new(root.join("profile"), binary.clone()).unwrap();
         Self {
             root,
-            binary,
+            binary: real,
             owner,
         }
+    }
+    /// The next `clean` queries pass through; every later one has its tabs rewritten.
+    fn corrupt_queries_after(&self, clean: u32) {
+        fs::write(self.root.join("clean-queries"), clean.to_string()).unwrap();
+    }
+    /// The next `fast` queries pass through; every later one stalls for three seconds.
+    fn stall_queries_after(&self, fast: u32) {
+        fs::write(self.root.join("slow-queries"), fast.to_string()).unwrap();
+    }
+    fn wrapper(&self) -> PathBuf {
+        self.root.join("tmux-wrapper")
+    }
+    fn restore_stalls(&self) {
+        fs::remove_file(self.root.join("slow-queries")).unwrap();
+    }
+    fn restore_queries(&self) {
+        fs::remove_file(self.root.join("clean-queries")).unwrap();
     }
     fn tmux(&self, args: &[&str]) -> std::process::Output {
         Command::new(&self.binary)
@@ -376,4 +454,162 @@ fn saved_identity_pane_routing_and_gui_hints_follow_exact_owned_objects() {
             .pane_identity(&f.owner.socket_path(), outside.trim())
             .is_err()
     );
+}
+
+#[test]
+fn failed_post_create_query_rolls_back_a_session_and_server_this_start_created() {
+    let f = Fixture::faulty();
+    f.corrupt_queries_after(0);
+    let error = f
+        .owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid session metadata"), "{error}");
+    assert!(!error.contains("rollback"), "{error}");
+    f.restore_queries();
+    // The server this operation started must not linger as an orphan.
+    wait(|| !f.tmux(&["has-session", "-t", "=dev"]).status.success());
+    wait(|| std::os::unix::net::UnixStream::connect(f.owner.socket_path()).is_err());
+    let list = f.owner.list().unwrap();
+    assert!(!list.server_running);
+    assert!(list.sessions.is_empty());
+    assert!(list.unmanaged.is_empty());
+    // The name is reusable, proving nothing was registered or left running.
+    assert_eq!(f.start("dev").name, "dev");
+}
+
+#[test]
+fn failed_post_create_query_on_an_existing_server_removes_only_the_new_session() {
+    let f = Fixture::faulty();
+    let kept = f.start("kept");
+    f.run(&["new-session", "-d", "-s", "outside", "exec sleep 60"]);
+    let registry = fs::read(f.root.join("profile/registry.json")).unwrap();
+    // The pre-create query passes; the post-create one is corrupted.
+    f.corrupt_queries_after(1);
+    let error = f
+        .owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid session metadata"), "{error}");
+    f.restore_queries();
+    assert!(!f.tmux(&["has-session", "-t", "=dev"]).status.success());
+    assert!(f.tmux(&["has-session", "-t", "=outside"]).status.success());
+    assert_eq!(
+        f.owner.status(&SessionSelector::Id(kept.id)).unwrap().state,
+        "live"
+    );
+    let list = f.owner.list().unwrap();
+    assert!(list.server_running);
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.unmanaged.len(), 1);
+    assert_eq!(list.unmanaged[0].name, "outside");
+    assert_eq!(
+        fs::read(f.root.join("profile/registry.json")).unwrap(),
+        registry
+    );
+}
+
+#[test]
+fn failed_rollback_reports_both_failures_and_leaves_the_session_visible_as_unmanaged() {
+    let f = Fixture::faulty();
+    f.corrupt_queries_after(0);
+    fs::write(f.root.join("refuse-kill"), "").unwrap();
+    let error = f
+        .owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid session metadata"), "{error}");
+    assert!(error.contains("rollback"), "{error}");
+    assert!(error.contains("injected kill-session failure"), "{error}");
+    f.restore_queries();
+    let list = f.owner.list().unwrap();
+    assert!(list.sessions.is_empty());
+    assert_eq!(list.unmanaged[0].name, "dev");
+}
+
+#[test]
+fn rollback_preserves_a_foreign_session_that_reused_the_created_name() {
+    let f = Fixture::faulty();
+    let kept = f.start("kept");
+    f.corrupt_queries_after(1);
+    fs::write(f.root.join("replace-created"), "").unwrap();
+    let error = f
+        .owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid session metadata"), "{error}");
+    f.restore_queries();
+    let list = f.owner.list().unwrap();
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.sessions[0].id, kept.id);
+    assert_eq!(list.sessions[0].state, "live");
+    assert_eq!(list.unmanaged.len(), 1, "replacement must survive rollback");
+    assert_eq!(list.unmanaged[0].name, "dev");
+}
+
+#[test]
+fn cancellation_during_create_rolls_back_the_session() {
+    let f = Fixture::faulty();
+    fs::write(f.root.join("stall-created"), "").unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let owner = LocalTmux::new(f.root.join("profile"), f.wrapper())
+        .unwrap()
+        .with_cancellation(cancel.clone());
+    let created = f.root.join("created");
+    let trigger = thread::spawn(move || {
+        wait(|| created.exists());
+        cancel.store(true, Ordering::Release);
+    });
+    let error = owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    trigger.join().unwrap();
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!error.contains("rollback"), "{error}");
+    let list = f.owner.list().unwrap();
+    assert!(
+        !list.server_running,
+        "cancelled create must remove its server"
+    );
+    assert!(list.sessions.is_empty());
+    assert!(list.unmanaged.is_empty());
+}
+
+#[test]
+fn cancellation_after_create_still_rolls_back_the_session_and_server() {
+    let f = Fixture::faulty();
+    // No server exists yet, so the only query is the post-create one; it stalls.
+    f.stall_queries_after(0);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let owner = LocalTmux::new(f.root.join("profile"), f.wrapper())
+        .unwrap()
+        .with_cancellation(cancel.clone());
+    let trigger = {
+        let (cancel, socket) = (cancel.clone(), f.owner.socket_path());
+        thread::spawn(move || {
+            // Cancel only once new-session has really created the session.
+            wait(|| socket.exists());
+            thread::sleep(Duration::from_millis(500));
+            cancel.store(true, Ordering::Release);
+        })
+    };
+    let error = owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    trigger.join().unwrap();
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!error.contains("rollback"), "{error}");
+    wait(|| !f.tmux(&["has-session", "-t", "=dev"]).status.success());
+    wait(|| std::os::unix::net::UnixStream::connect(f.owner.socket_path()).is_err());
+    f.restore_stalls();
+    let list = f.owner.list().unwrap();
+    assert!(!list.server_running);
+    assert!(list.sessions.is_empty());
+    assert!(list.unmanaged.is_empty());
 }

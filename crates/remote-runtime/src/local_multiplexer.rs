@@ -27,6 +27,7 @@ pub const MAX_SESSIONS: usize = 64;
 pub const MAX_REGISTRY_BYTES: usize = 128 * 1024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const MARKER: &str = "@zmux_local_tmux_server";
+const CREATION_ID: &str = "ZMUX_LOCAL_TMUX_CREATION_ID";
 const REJECT: &str = "__zmux_stale_local_tmux_binding__";
 
 #[derive(Debug, Error)]
@@ -37,6 +38,8 @@ pub enum MultiplexerError {
     Unsafe(String),
     #[error("local tmux operation timed out; inspect status before retrying mutations")]
     Timeout,
+    #[error("local tmux operation cancelled; inspect list if owner creation was pending")]
+    Cancelled,
     #[error("local tmux profile is busy")]
     Busy,
     #[error("local tmux session was not found")]
@@ -272,9 +275,7 @@ impl LocalTmux {
             .as_ref()
             .is_some_and(|c| c.load(Ordering::Acquire))
         {
-            return Err(MultiplexerError::Failure(
-                "local tmux operation cancelled; inspect list if owner creation was pending".into(),
-            ));
+            return Err(MultiplexerError::Cancelled);
         }
         Ok(())
     }
@@ -442,6 +443,8 @@ impl LocalTmux {
         let mut create = vec![
             "new-session".into(),
             "-d".into(),
+            "-e".into(),
+            format!("{CREATION_ID}={id}"),
             "-s".into(),
             name.into(),
             "-c".into(),
@@ -450,7 +453,7 @@ impl LocalTmux {
         if let Some(command) = command {
             create.push(command.into());
         }
-        if server.is_some() {
+        let created = if server.is_some() {
             self.run(&[
                 "-N".into(),
                 "if-shell".into(),
@@ -458,7 +461,7 @@ impl LocalTmux {
                 format!("#{{==:#{{{MARKER}}},{marker}}}"),
                 tmux_command(&create),
                 REJECT.into(),
-            ])?;
+            ])
         } else {
             let mut args = vec![
                 "start-server".into(),
@@ -475,37 +478,58 @@ impl LocalTmux {
                 ";".into(),
             ];
             args.extend(create);
-            self.run(&args)?;
-            // Only a server created by this locked operation receives private mode.
-            let path = self.socket_path();
-            validate_socket(&path, false)?;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .map_err(|e| failure("secure tmux socket", e))?;
+            self.run(&args)
+        };
+        if let Err(error) = created {
+            // Even a failed invocation can have created a session before an output or
+            // transport failure. The token is installed atomically by new-session, so
+            // rollback cannot mistake a racing foreign session for this creation.
+            return Err(self.rollback_start_error(error, name, marker, id, server.is_none()));
         }
-        let live = self.query()?.ok_or_else(|| {
-            MultiplexerError::Failure(
-                "new tmux session exited before registration; no live session was recorded".into(),
-            )
-        })?;
-        if live.marker != Some(marker) {
-            return Err(MultiplexerError::Stale);
-        }
-        let session = live
-            .sessions
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| {
+        // The session now exists. Any failure before it is registered would leave it
+        // running but unmanaged, so undo exactly what this operation created.
+        let registered = (|| {
+            if server.is_none() {
+                // Only a server created by this locked operation receives private mode.
+                let path = self.socket_path();
+                validate_socket(&path, false)?;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                    .map_err(|e| failure("secure tmux socket", e))?;
+            }
+            let live = self.query()?.ok_or_else(|| {
                 MultiplexerError::Failure(
                     "new tmux session exited before registration; no live session was recorded"
                         .into(),
                 )
             })?;
+            if live.marker != Some(marker) {
+                return Err(MultiplexerError::Stale);
+            }
+            let session = live
+                .sessions
+                .iter()
+                .find(|s| s.name == name)
+                .ok_or_else(|| {
+                    MultiplexerError::Failure(
+                        "new tmux session exited before registration; no live session was recorded"
+                            .into(),
+                    )
+                })?;
+            let (session_id, created_at) = (session.id.clone(), session.created);
+            Ok((live, session_id, created_at))
+        })();
+        let (live, session_id, created_at) = match registered {
+            Ok(registered) => registered,
+            Err(error) => {
+                return Err(self.rollback_start_error(error, name, marker, id, server.is_none()));
+            }
+        };
         let record = Record {
             id,
             name: name.into(),
             server_incarnation: marker,
-            tmux_session_id: session.id.clone(),
-            created_at: session.created,
+            tmux_session_id: session_id,
+            created_at,
             cwd: cwd.to_string_lossy().into_owned(),
             gui_binding: None,
         };
@@ -655,6 +679,74 @@ impl LocalTmux {
             args,
         }
     }
+    fn rollback_start_error(
+        &self,
+        error: MultiplexerError,
+        name: &str,
+        marker: Uuid,
+        id: Uuid,
+        started_server: bool,
+    ) -> MultiplexerError {
+        match self.rollback_start(name, marker, id, started_server) {
+            Ok(()) => error,
+            Err(rollback) => MultiplexerError::Failure(format!(
+                "{error}; rollback of the new tmux session also failed ({rollback}); \
+                 inspect list for unmanaged sessions"
+            )),
+        }
+    }
+    /// Remove only this creation, checking its atomic session token as well as the server
+    /// incarnation. A session that reuses the name must survive cleanup.
+    fn rollback_start(
+        &self,
+        name: &str,
+        marker: Uuid,
+        id: Uuid,
+        started_server: bool,
+    ) -> Result<()> {
+        let condition = format!("#{{==:#{{{MARKER}}},{marker}}}");
+        self.run_rollback(&[
+            "-N".into(),
+            "if-shell".into(),
+            "-F".into(),
+            "-t".into(),
+            format!("={name}:"),
+            format!("#{{&&:{condition},#{{==:#{{{CREATION_ID}}},{id}}}}}"),
+            tmux_command(&["kill-session".into(), "-t".into(), format!("={name}")]),
+            REJECT.into(),
+        ])?;
+        if started_server {
+            // `exit-empty` normally stops it already; kill-server only an empty, ours server.
+            self.run_rollback(&[
+                "-N".into(),
+                "if-shell".into(),
+                "-F".into(),
+                format!("#{{&&:{condition},#{{==:#{{S:x}},}}}}"),
+                tmux_command(&["kill-server".into()]),
+                REJECT.into(),
+            ])?;
+        }
+        Ok(())
+    }
+    /// Rollback treats an absent server/session or a rejected guard as already undone.
+    /// It deliberately ignores cancellation: the registry lock is still held and the
+    /// invocation is bounded, so a cancelled start cannot leave an unmanaged session.
+    fn run_rollback(&self, args: &[String]) -> Result<()> {
+        let output = self.run_unchecked(args, None)?;
+        let stderr = &output.stderr;
+        if output.success
+            || stderr.contains(REJECT)
+            || stderr.contains("no server running")
+            || stderr.contains("can't find session")
+            || (stderr.contains("error connecting")
+                && (stderr.contains("Connection refused")
+                    || stderr.contains("No such file or directory")))
+        {
+            Ok(())
+        } else {
+            Err(failure("local tmux command failed", output.stderr.trim()))
+        }
+    }
     fn guarded(&self, record: &Record, condition: &str, command: Vec<String>) -> Result<()> {
         self.guarded_output(record, condition, tmux_command(&command))
             .map(|_| ())
@@ -728,76 +820,7 @@ impl LocalTmux {
             }
             return Err(failure("query local tmux", result.stderr.trim()));
         }
-        let mut marker = None;
-        let mut sessions = Vec::new();
-        let mut clients = Vec::new();
-        let mut saw_marker = false;
-        for line in result.stdout.lines() {
-            if let Some(value) = line.strip_prefix("SERVER:") {
-                if saw_marker {
-                    return Err(MultiplexerError::Failure(
-                        "tmux returned duplicate server identity".into(),
-                    ));
-                }
-                saw_marker = true;
-                marker = Uuid::parse_str(value).ok();
-            } else if let Some(value) = line.strip_prefix("SESSION:") {
-                let columns: Vec<_> = value.split('\t').collect();
-                if columns.len() != 3
-                    || !valid_session_id(columns[0])
-                    || columns[2].len() > 128
-                    || columns[2].chars().any(char::is_control)
-                {
-                    return Err(MultiplexerError::Failure(
-                        "tmux returned invalid session metadata".into(),
-                    ));
-                }
-                sessions.push(LiveSession {
-                    id: columns[0].into(),
-                    created: columns[1]
-                        .parse()
-                        .map_err(|e| failure("parse tmux creation time", e))?,
-                    name: columns[2].into(),
-                    clients: Vec::new(),
-                });
-            } else if let Some(value) = line.strip_prefix("CLIENT:") {
-                let columns: Vec<_> = value.split('\t').collect();
-                if columns.len() != 3
-                    || columns[0].is_empty()
-                    || columns[0].len() > 256
-                    || columns[0].chars().any(char::is_control)
-                    || !valid_session_id(columns[1])
-                {
-                    return Err(MultiplexerError::Failure(
-                        "tmux returned invalid client metadata".into(),
-                    ));
-                }
-                clients.push((
-                    columns[1].to_owned(),
-                    ClientInfo {
-                        id: columns[0].into(),
-                        process_id: columns[2]
-                            .parse()
-                            .map_err(|e| failure("parse tmux client PID", e))?,
-                    },
-                ));
-            } else {
-                return Err(MultiplexerError::Failure(
-                    "tmux returned an unexpected response".into(),
-                ));
-            }
-        }
-        if !saw_marker {
-            return Err(MultiplexerError::Failure(
-                "tmux omitted server identity".into(),
-            ));
-        }
-        for (id, client) in clients {
-            if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
-                session.clients.push(client);
-            }
-        }
-        Ok(Some(Server { marker, sessions }))
+        parse_query(&result.stdout).map(Some)
     }
     fn lock_registry(&self) -> Result<(File, Registry)> {
         self.check_cancelled()?;
@@ -917,9 +940,18 @@ impl LocalTmux {
     }
     fn run_raw(&self, args: &[String]) -> Result<Output> {
         self.check_cancelled()?;
+        self.run_unchecked(args, self.cancellation.as_deref())
+    }
+    /// Spawns one bounded tmux invocation. Rollback passes no cancellation flag: it must
+    /// still undo a half-finished `start` after cancellation, and `OPERATION_TIMEOUT` bounds it.
+    fn run_unchecked(&self, args: &[String], cancellation: Option<&AtomicBool>) -> Result<Output> {
         let mut command = Command::new(&self.binary);
+        // Captured output is protocol data, not terminal output: without a UTF-8 locale
+        // tmux rewrites control characters (tabs, 0x1f, ...) to `_`, so force UTF-8.
+        // `base_args` stays locale-neutral because attach runs on the user's terminal.
         command
             .args(self.base_args())
+            .arg("-u")
             .args(args)
             .process_group(0)
             .stdin(Stdio::null())
@@ -929,8 +961,112 @@ impl LocalTmux {
         command.env("ZMUX_LOCAL_TMUX_ROOT", &self.root);
         command.env("ZMUX_LOCAL_TMUX_PROFILE", &self.root);
         command.env("ZMUX_LOCAL_TMUX_BIN", &self.binary);
-        run_bounded(command, self.cancellation.as_deref())
+        run_bounded(command, cancellation)
     }
+}
+
+fn parse_query(stdout: &str) -> Result<Server> {
+    let mut marker = None;
+    let mut sessions = Vec::new();
+    let mut clients = Vec::new();
+    let mut saw_marker = false;
+    for line in stdout.lines() {
+        if let Some(value) = line.strip_prefix("SERVER:") {
+            if saw_marker {
+                return Err(MultiplexerError::Failure(
+                    "tmux returned duplicate server identity".into(),
+                ));
+            }
+            saw_marker = true;
+            marker = Uuid::parse_str(value).ok();
+        } else if let Some(value) = line.strip_prefix("SESSION:") {
+            let columns: Vec<_> = value.split('\t').collect();
+            if columns.len() != 3
+                || !valid_session_id(columns[0])
+                || columns[2].len() > 128
+                || columns[2].chars().any(char::is_control)
+            {
+                return Err(invalid_metadata("session", line));
+            }
+            sessions.push(LiveSession {
+                id: columns[0].into(),
+                created: columns[1]
+                    .parse()
+                    .map_err(|e| failure("parse tmux creation time", e))?,
+                name: columns[2].into(),
+                clients: Vec::new(),
+            });
+        } else if let Some(value) = line.strip_prefix("CLIENT:") {
+            let columns: Vec<_> = value.split('\t').collect();
+            if columns.len() != 3
+                || columns[0].is_empty()
+                || columns[0].len() > 256
+                || columns[0].chars().any(char::is_control)
+                || !valid_session_id(columns[1])
+            {
+                return Err(invalid_metadata("client", line));
+            }
+            clients.push((
+                columns[1].to_owned(),
+                ClientInfo {
+                    id: columns[0].into(),
+                    process_id: columns[2]
+                        .parse()
+                        .map_err(|e| failure("parse tmux client PID", e))?,
+                },
+            ));
+        } else {
+            return Err(MultiplexerError::Failure(
+                "tmux returned an unexpected response".into(),
+            ));
+        }
+    }
+    if !saw_marker {
+        return Err(MultiplexerError::Failure(
+            "tmux omitted server identity".into(),
+        ));
+    }
+    for (id, client) in clients {
+        if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
+            session.clients.push(client);
+        }
+    }
+    Ok(Server { marker, sessions })
+}
+
+/// tmux rewrites control characters, including the tab separators, to `_` unless it
+/// detects a UTF-8 locale. `run_raw` forces UTF-8, so this explains an unexpected reply.
+fn invalid_metadata(kind: &str, line: &str) -> MultiplexerError {
+    // Only a line without any tab can be a rewritten separator; otherwise the fields
+    // were separated correctly and blaming the locale would mislead.
+    let hint = if line.contains('\t') {
+        "a field is malformed or over its length limit"
+    } else {
+        "expected tab-separated fields; tmux replaces tabs with '_' when it does not detect \
+         a UTF-8 locale, so check LANG/LC_ALL/LC_CTYPE"
+    };
+    MultiplexerError::Failure(format!(
+        "tmux returned invalid {kind} metadata ({hint}); raw line: {}",
+        bounded_excerpt(line)
+    ))
+}
+/// Escape control characters and bound untrusted tmux text before it reaches an error.
+fn bounded_excerpt(text: &str) -> String {
+    const LIMIT: usize = 200;
+    let mut excerpt = String::new();
+    for character in text.chars() {
+        let escaped: String = if character.is_control() {
+            character.escape_default().collect()
+        } else {
+            character.into()
+        };
+        if excerpt.chars().count() + escaped.chars().count() > LIMIT {
+            excerpt.push_str("...");
+            break;
+        }
+        excerpt.push_str(&escaped);
+    }
+    excerpt
 }
 
 fn selected_binary() -> Result<PathBuf> {
@@ -1132,6 +1268,7 @@ use crate::bounded_command::Output;
 fn run_bounded(command: Command, cancellation: Option<&AtomicBool>) -> Result<Output> {
     crate::bounded_command::run(command, cancellation).map_err(|error| match error {
         crate::bounded_command::Error::Timeout => MultiplexerError::Timeout,
+        crate::bounded_command::Error::Cancelled => MultiplexerError::Cancelled,
         other => failure("local tmux command", other),
     })
 }
@@ -1152,6 +1289,68 @@ mod tests {
             "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > \"$1\"",
             false,
         );
+    }
+
+    #[test]
+    fn rewritten_tab_separators_report_a_bounded_sanitized_locale_hint() {
+        // What tmux prints for the query when it does not detect a UTF-8 locale.
+        let error = parse_query(&format!(
+            "SERVER:{}\nSESSION:$0_1792146830_dev\n",
+            Uuid::new_v4()
+        ))
+        .err()
+        .expect("rewritten separators must be rejected")
+        .to_string();
+        assert!(error.contains("invalid session metadata"), "{error}");
+        assert!(error.contains("LC_ALL"), "{error}");
+        assert!(error.contains("SESSION:$0_1792146830_dev"), "{error}");
+        let error = parse_query(&format!(
+            "SERVER:{}\nCLIENT:/dev/pts/1_$0_42\n",
+            Uuid::new_v4()
+        ))
+        .err()
+        .expect("rewritten client separators must be rejected")
+        .to_string();
+        assert!(error.contains("invalid client metadata"), "{error}");
+        assert!(error.contains("CLIENT:/dev/pts/1_$0_42"), "{error}");
+    }
+
+    #[test]
+    fn well_separated_invalid_metadata_does_not_blame_the_locale() {
+        let error = parse_query(&format!(
+            "SERVER:{}\nSESSION:$0\t1792146830\t{}\n",
+            Uuid::new_v4(),
+            "n".repeat(129)
+        ))
+        .err()
+        .expect("over-long session name must be rejected")
+        .to_string();
+        assert!(error.contains("invalid session metadata"), "{error}");
+        assert!(!error.contains("LC_ALL"), "{error}");
+    }
+
+    #[test]
+    fn invalid_metadata_excerpt_escapes_controls_and_is_bounded() {
+        let hostile = format!("SESSION:$0\x1b[31m\t{}", "x".repeat(10_000));
+        let error = invalid_metadata("session", &hostile).to_string();
+        assert!(!error.chars().any(char::is_control), "{error:?}");
+        assert!(error.contains("\\u{1b}[31m\\t"), "{error}");
+        assert!(error.ends_with("..."), "{error}");
+        assert!(error.len() < 600, "{}", error.len());
+        let multibyte = bounded_excerpt(&"\u{e9}".repeat(1_000));
+        assert!(multibyte.chars().count() <= 203);
+    }
+
+    #[test]
+    fn valid_tab_separated_metadata_still_parses() {
+        let marker = Uuid::new_v4();
+        let server = parse_query(&format!(
+            "SERVER:{marker}\nSESSION:$3\t1792146830\tdev\nCLIENT:/dev/pts/1\t$3\t42\n"
+        ))
+        .unwrap();
+        assert_eq!(server.marker, Some(marker));
+        assert_eq!(server.sessions[0].name, "dev");
+        assert_eq!(server.sessions[0].clients[0].process_id, 42);
     }
 
     fn assert_descendant_cleaned(script: &str, timeout: bool) {

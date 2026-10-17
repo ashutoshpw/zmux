@@ -1318,3 +1318,60 @@ The parent verified archive integrity, source metadata, all required smoke flags
 both captured images.15 resource/CLI samples cover18.50 seconds of this mixed smoke;
 these are instrumentation receipts, not controlled workload performance budgets.
 Full-window screencapture status1 remains explicit. No subset artifact was handed off.
+
+## Local tmux without a UTF-8 locale
+
+- Bug: with LANG/LC_ALL/LC_CTYPE unset, `local-tmux list/status/start` failed with
+  "tmux returned invalid session metadata". Reproduced on Linux tmux 3.2a: tmux rewrites
+  the tab separators (and also 0x1f/0x01, so a control-character delimiter would not help)
+  to `_`, e.g. `SESSION:$0_1792146830_dev`. The public CLI regression
+  (`headless_cli_reads_session_state_without_a_utf8_locale`) removes the three locale
+  variables, also pins `LC_ALL=C`/`POSIX`, and failed for exactly this reason before the fix.
+- Fix at the owner (`local_multiplexer.rs`): every captured tmux invocation passes `-u`
+  (attach specs for the user's terminal are unchanged). Query parsing is a pure
+  `parse_query`; invalid session/client metadata errors now carry a locale hint and a
+  control-escaped copy of the raw line bounded to about 200 characters (unit tests).
+- `start` rolls back when anything after creation fails before registration: it kills
+  only `=name`, guarded by the incarnation marker, and kills a server only if this
+  operation started it and no session remains. The original error is returned; a
+  rollback failure is appended. The registry-save-failure path is unchanged.
+  Failure injection wraps the real tmux (tab rewrite, refused kill-session) in
+  `crates/remote-runtime/tests/local_multiplexer.rs`; three tests cover new server,
+  existing server with foreign/managed sessions intact, and failed rollback. Disabling
+  the rollback or `-u` makes the corresponding tests fail.
+- Rollback ignores the cancellation flag (still bounded by `OPERATION_TIMEOUT`, registry
+  lock held), so a start cancelled after `new-session` still removes its session/server;
+  a failed `new-session` invocation itself also triggers guarded rollback. An atomic
+  per-creation session environment token prevents cleanup from killing a foreign
+  session, including one that reused the requested name. `MultiplexerError::Cancelled`
+  replaces the string-matched failure. Test
+  `cancellation_after_create_still_rolls_back_the_session_and_server` fails without it.
+- Gates: full `scripts/check` passed on Linux. macOS/native lanes were not run; this
+  changes no native code.
+
+## PR #1 integration review (2026-10-17)
+
+- User authorized review, repairs and merge after all findings are cleared.
+- Reviewed `141cb61` against main `cf81583`. Existing Linux/macOS foundation CI
+  passed on the old head; fresh integration checks are required.
+- Findings: rollback guarded only by server marker/name can kill a replacement
+  foreign session; shared runner integration loses typed cancellation and skips
+  rollback when creation is interrupted. Both require real-tmux regressions.
+- Completed review/repairs: retained main's shared process runner, preserved typed
+  cancellation and guarded rollback with an atomic per-creation token. Publication,
+  fresh hosted checks and merge remain pending.
+- Confirmed both findings before repairs: the replacement-session regression lost
+  the foreign session; cancellation during creation left a running server. Logs:
+  `/tmp/zmux-pr1-ownership-before.log`, `/tmp/zmux-pr1-cancellation-before.log`.
+- Repairs retain main's shared bounded runner and map its new typed cancellation
+  error to `MultiplexerError::Cancelled`. `new-session -e` atomically installs a
+  creation UUID; rollback checks that UUID and the server incarnation in the same
+  tmux command before killing the exact session. Failed creation invocations all
+  attempt this guarded cleanup, including output/transport failures.
+- Both added tests protect distinct real-owner lifecycle contracts (foreign-session
+  preservation and cleanup during the creation invocation), require no production
+  test seam, fail before repair and pass afterward. All 12 runtime local-tmux tests
+  pass. Full `scripts/check` passed on the integrated tree (workspace tests, fmt,
+  strict Clippy, notices and both C ABI checks); log `/tmp/zmux-pr1-check.log`.
+  Final source/test review found no further blockers in scope. Fresh hosted Linux/
+  macOS checks and merge remain pending; local native macOS execution unavailable.
