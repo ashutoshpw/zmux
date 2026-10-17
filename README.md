@@ -1,3 +1,5 @@
+<img src="apps/macos/Resources/AppIcon.png" width="96" height="96" alt="zmux logo">
+
 # zmux
 
 zmux is an independently implemented terminal workspace project: a Rust core with a thin

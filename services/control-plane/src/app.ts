@@ -244,6 +244,15 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
       if (request.method === "GET" && path === "/") return text(appPage(), "text/html; charset=utf-8");
       if (request.method === "GET" && path === "/app.css") return text(APP_CSS, "text/css; charset=utf-8");
       if (request.method === "GET" && path === "/app.js") return text(APP_JS, "text/javascript; charset=utf-8");
+      if (request.method === "GET" && ["/logo.png", "/apple-touch-icon.png", "/favicon.ico"].includes(path)) {
+        return new Response(Bun.file(new URL(`../public${path}`, import.meta.url)), {
+          headers: {
+            "content-type": path.endsWith(".ico") ? "image/x-icon" : "image/png",
+            "cache-control": "public, max-age=3600",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
       if (request.method === "GET" && path === "/health") return json({ status: "ok" });
       if (request.method === "GET" && path === "/ready") {
         try {
