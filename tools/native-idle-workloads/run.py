@@ -143,7 +143,8 @@ def verify_live_children(sampler, phase, root, nonce, app_pid, deadline):
     raise RuntimeError('Actual app process tree did not confirm the phase child identities')
 
 
-def execute_app(command, environment, root, sampler, receipt, source, nonce, repetitions):
+def execute_app(command, environment, root, sampler, receipt, source, nonce, repetitions,
+                sample_stacks=False):
     group = ProcessGroup(command, cwd=REPO, env=environment, stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     selector = selectors.DefaultSelector()
@@ -187,6 +188,24 @@ def execute_app(command, environment, root, sampler, receipt, source, nonce, rep
                             'observed_wall_unix_seconds': time.time(),
                             'handoff_wall_ms': (time.time() - phase['wallUnixSeconds']) * 1000,
                         })
+                        if sample_stacks and phase['stage'] == 'warmup':
+                            # Sample only our still-owned live child, during warmup.
+                            # End well before the measured window; sampler overhead
+                            # is not included in the workload's reported CPU phase.
+                            if group.exited():
+                                raise RuntimeError('Owned app exited before stack capture')
+                            profile = root / f"stacks-{phase['repetition']}-{phase['name']}.txt"
+                            sampled = subprocess.run(
+                                ['/usr/bin/sample', str(group.process.pid), '3', '10', '-file', str(profile)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=10, check=False)
+                            if (sampled.returncode != 0 or not profile.is_file()
+                                    or not 0 < profile.stat().st_size <= 2_097_152):
+                                raise RuntimeError('Native idle stack capture failed or exceeded its byte bound')
+                            receipt.setdefault('stack_samples', []).append({
+                                'file': profile.name, 'sha256': digest(profile),
+                                'pid': group.process.pid, 'phase_sequence': phase['sequence'],
+                                'stage': 'warmup', 'duration_seconds': 3})
                         consumed += 1
                     # Remember the identity observed before reading. An atomic
                     # publication during validation must trigger another read.
@@ -276,6 +295,8 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--repetitions', type=int, choices=(1, 2, 3), default=1)
     parser.add_argument('--check-inputs', action='store_true')
+    parser.add_argument('--sample-stacks', action='store_true',
+                        help='Capture owned app stacks during warmup, outside CPU measurement')
     args = parser.parse_args()
     frozen = source_files()
     ast.parse(CHILD)
@@ -339,7 +360,8 @@ def main():
         sampler.socket = root / 'control.socket'
         sampler.start()
         execute_app([str(REPO / 'dist/zmux.app/Contents/MacOS/zmux-app'), '--idle-workload-smoke',
-                     str(root / 'native-idle.json')], environment, root, sampler, receipt, source, nonce, args.repetitions)
+                     str(root / 'native-idle.json')], environment, root, sampler, receipt, source, nonce,
+                    args.repetitions, args.sample_stacks)
         sampler.stop()
         sampler_stopped = True
         resources = document(root / 'resources.json', MAX_RESOURCES_BYTES)

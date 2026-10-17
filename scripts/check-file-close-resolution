@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+if [ "$(uname -s)" != Darwin ]; then
+    echo 'File close resolution acceptance requires macOS (Swift toolchain).' >&2
+    exit 1
+fi
+scratch=$(mktemp -d /tmp/zmux-file-close-resolution.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT HUP INT TERM
+xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
+    apps/macos/Sources/FileCloseResolution.swift tools/native-fixtures/file-close-resolution.swift \
+    -o "$scratch/file-close-resolution"
+"$scratch/file-close-resolution"

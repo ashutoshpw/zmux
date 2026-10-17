@@ -479,4 +479,49 @@ mod tests {
                 .is_ok()
         );
     }
+    #[test]
+    fn open_items_is_a_mutation_for_every_item_kind_and_force_mode() {
+        use crate::targets::{
+            OpenForceMode, OpenItem, OpenItemKind, TargetOperation, TargetRequest,
+        };
+        let readonly = ControlGate::new(ControlPolicy::same_user(ControlAccess::ReadOnly));
+        let full = ControlGate::new(ControlPolicy::same_user(ControlAccess::Full));
+        for (kind, value, force_mode) in [
+            (OpenItemKind::Path, "/a/b.txt", None),
+            (OpenItemKind::Url, "https://example.org/", None),
+            (
+                OpenItemKind::Path,
+                "/a/README",
+                Some(OpenForceMode::Markdown),
+            ),
+        ] {
+            let command = ControlCommand::Targeted {
+                request: TargetRequest {
+                    operation: TargetOperation::OpenItems {
+                        items: vec![OpenItem {
+                            kind,
+                            value: value.into(),
+                        }],
+                        focus: true,
+                        force_mode,
+                    },
+                    ..Default::default()
+                },
+            };
+            assert!(!is_read(&command), "{value} must not count as a read");
+            // Refused before the executor, and therefore before any file is probed.
+            assert!(matches!(
+                readonly.admit(ControlOrigin::LocalOwner, &command, None),
+                Err(PolicyError::ReadOnly)
+            ));
+            assert!(
+                full.admit(ControlOrigin::LocalOwner, &command, None)
+                    .is_ok()
+            );
+            assert!(matches!(
+                full.admit(ControlOrigin::RemoteRelay, &command, None),
+                Err(PolicyError::RelayDenied)
+            ));
+        }
+    }
 }

@@ -331,6 +331,7 @@ fn window_scopes_resolve_empty_roots_and_fence_explicit_cross_window_objects() {
         .validate(zmux_workspace_core::RestoreLimits {
             terminals: 8,
             browsers: 4,
+            files: 16,
         })
         .unwrap();
 }

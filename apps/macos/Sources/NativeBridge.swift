@@ -1,5 +1,19 @@
 import Foundation
 
+private struct NativeFrameEnvelope: Decodable {
+    let schemaVersion: Int
+    let baseRevision: UInt64?
+    var snapshot: DesktopSnapshot
+    let framePackets: [NativeFramePacket]
+}
+private struct NativeFramePacket: Decodable {
+    let frame: Frame
+    let unchanged: Bool
+    let changedRows: [Int]?
+    let contentsStart: Int
+    let contentsEnd: Int
+}
+
 struct BridgeFailure: Error, LocalizedError, Sendable {
     let message: String
     var errorDescription: String? { message }
@@ -60,6 +74,8 @@ actor NativeBridge {
     private var handle: UInt64 = 0
     private var requestId: UInt64 = 0
     private var revision: UInt64 = 0
+    private var frameCache: [UInt64: Frame] = [:]
+    private var frameNamespace: UUID?
     private let profileLeaseEpoch = UUID()
 
     func start(storage: NativeDesktopStorage = .transient, terminalEngine: String? = nil) throws {
@@ -100,6 +116,7 @@ actor NativeBridge {
         }
         guard result.status == 0 else { throw Self.failure(result.status) }
         handle = result.value
+        revision = 0; frameCache.removeAll(); frameNamespace = nil
     }
     func acquireBrowserProfileLease(profile: UUID, store: UUID) async throws -> BrowserProfileLeaseToken {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed; profile store acquisition was not admitted.") }
@@ -122,15 +139,60 @@ actor NativeBridge {
     }
     func poll() throws -> DesktopSnapshot? {
         guard handle != 0 else { return nil }
-        let result = zmux_desktop_snapshot(handle, revision)
+        let result = zmux_desktop_poll_frames(handle, revision)
         if result.status == -4 { return nil }
         guard result.status == 0 else { throw Self.failure(result.status) }
         guard result.value != 0 else { return nil }
         let data = try Self.consume(result.value)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let snapshot = try decoder.decode(DesktopSnapshot.self, from: data)
-        guard snapshot.model.modelVersion == 6 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        let envelope = try decoder.decode(NativeFrameEnvelope.self, from: data)
+        let paneCount = envelope.snapshot.model.workspaces.reduce(0) { $0 + $1.root.panes.count }
+        guard envelope.schemaVersion == 1,
+              envelope.baseRevision == nil || (envelope.baseRevision == revision && frameNamespace == envelope.snapshot.model.identityNamespace),
+              envelope.framePackets.count <= paneCount else { throw BridgeFailure(message: "Invalid native frame baseline") }
+        var snapshot = envelope.snapshot
+        guard snapshot.model.modelVersion == 7 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        var next: [UInt64: Frame] = [:]
+        for packet in envelope.framePackets {
+            let frame = packet.frame
+            guard next[frame.sessionId] == nil else { throw BridgeFailure(message: "Duplicate native terminal frame") }
+            var terminal = frame.snapshot
+            if packet.unchanged {
+                guard envelope.baseRevision != nil, let old = frameCache[frame.sessionId], terminal == nil,
+                      packet.changedRows == nil else { throw BridgeFailure(message: "Missing unchanged native frame baseline") }
+                terminal = old.snapshot
+            } else if let rows = packet.changedRows {
+                guard envelope.baseRevision != nil, let old = frameCache[frame.sessionId]?.snapshot,
+                      let delta = terminal, old.viewport.size == delta.viewport.size,
+                      old.viewport.lines.count == delta.viewport.lines.count,
+                      Set(rows).count == rows.count,
+                      rows.allSatisfy({ delta.viewport.lines.indices.contains($0) }) else {
+                    throw BridgeFailure(message: "Invalid native terminal row delta")
+                }
+                var viewport = delta.viewport
+                let changed = Set(rows)
+                for row in viewport.lines.indices where !changed.contains(row) { viewport.lines[row] = old.viewport.lines[row] }
+                let bytes = Array(old.viewport.contents.utf8)
+                let replacement = Array(viewport.contents.utf8)
+                guard packet.contentsStart >= 0, packet.contentsEnd >= packet.contentsStart,
+                      packet.contentsEnd <= bytes.count,
+                      bytes.count - (packet.contentsEnd - packet.contentsStart) + replacement.count <= 8_388_608 else {
+                    throw BridgeFailure(message: "Invalid native terminal text delta")
+                }
+                var merged = Data(bytes[..<packet.contentsStart])
+                merged.append(contentsOf: replacement)
+                merged.append(contentsOf: bytes[packet.contentsEnd...])
+                guard let contents = String(data: merged, encoding: .utf8) else { throw BridgeFailure(message: "Native terminal text delta broke UTF-8") }
+                viewport.contents = contents
+                terminal = TerminalSnapshot(state: delta.state, viewport: viewport, bytesRead: delta.bytesRead,
+                    exitCode: delta.exitCode, failure: delta.failure)
+            }
+            next[frame.sessionId] = Frame(sessionId: frame.sessionId, processId: frame.processId,
+                starting: frame.starting, snapshot: terminal, failure: frame.failure)
+        }
+        snapshot.frames = envelope.framePackets.compactMap { next[$0.frame.sessionId] }
+        frameCache = next; frameNamespace = snapshot.model.identityNamespace
         revision = snapshot.revision
         return snapshot
     }
@@ -166,7 +228,9 @@ actor NativeBridge {
     func workspaceGroup(_ command: WorkspaceGroupCommand) async throws {
         try await send(["command": "action", "action": ["action": "workspace_group", "command": command.payload]])
     }
-    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil, window: UInt64? = nil) async throws {
+    /// `acknowledged` waits for the executor's own result instead of queue acceptance, so a
+    /// refused command throws. Closes that discard unsaved text use it.
+    func action(_ name: String, pane: UInt64? = nil, axis: String? = nil, title: String? = nil, workspace: UInt64? = nil, surface: UInt64? = nil, index: Int? = nil, closed: UInt64? = nil, direction: String? = nil, focus: Bool? = nil, window: UInt64? = nil, acknowledged: Bool = false) async throws {
         var action: [String: Any] = ["action": name]
         if let window { action["window_id"] = window }
         if let pane { action["pane_id"] = pane }
@@ -178,7 +242,7 @@ actor NativeBridge {
         if let closed { action["closed_id"] = closed }
         if let direction { action["direction"] = direction }
         if let focus { action["focus"] = focus }
-        try await send(["command": "action", "action": action])
+        try await send(["command": "action", "action": action], acknowledged: acknowledged)
     }
     func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?, profile: UUID? = nil) async throws {
         var action: [String: Any] = ["action": name, "url": url]
@@ -266,12 +330,12 @@ actor NativeBridge {
     func cancelBrowserDownload(_ record: BrowserDownloadRecord) async throws {
         try await send(["command": "downloads", "request": ["scope": ["surface": record.origin.surfaceUuid.uuidString.lowercased()], "action": ["operation": "cancel", "download_id": record.downloadId.uuidString.lowercased()]]])
     }
-    func window(_ operation: String, window: UInt64? = nil, focus: Bool? = nil) async throws {
+    func window(_ operation: String, window: UInt64? = nil, focus: Bool? = nil, acknowledged: Bool = false) async throws {
         var scope: [String: Any] = [:]
         if let window { scope["window"] = "window:" + String(window) }
         var action: [String: Any] = ["operation": operation]
         if let focus { action["focus"] = focus }
-        try await send(["command": "windows", "request": ["scope": scope, "action": action]])
+        try await send(["command": "windows", "request": ["scope": scope, "action": action]], acknowledged: acknowledged)
     }
     func windowEvent(_ event: NativeWindowEvent) async throws {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
@@ -347,6 +411,28 @@ actor NativeBridge {
             }
         }
         try await acknowledgement.value
+    }
+    /// Trusted native file channel: attach, reload, save, observe, detach and open. The blocking C
+    /// call (up to two seconds, five for save) runs on a detached worker, never on the main actor
+    /// or this actor's executor, so snapshot polling and input keep flowing. A failure whose
+    /// `outcomeUnknown` is true is never replayed; only `observe` is retried by its owner view.
+    func file(_ request: FileHostRequest, body: Data = Data()) async throws -> FileHostReply {
+        guard handle != 0 else { throw FileHostFailure(code: "closed", message: "Desktop is closed") }
+        let frame = try request.frame(body: body)
+        let desktop = handle
+        return try await Task.detached(priority: .userInitiated) {
+            let result = frame.withUnsafeBytes { bytes in
+                zmux_desktop_file(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else {
+                // -2, -4 and -5 are refused before Rust does any work (`FileBridgeRefusal`): -4
+                // and -5 are reported as the transient `busy`; any other status leaves the effect
+                // unknown.
+                let refusal = FileBridgeRefusal(status: result.status)
+                throw FileHostFailure(code: refusal.code, message: refusal.message, outcomeUnknown: refusal.outcomeUnknown)
+            }
+            return try FileHostReply.decode(Self.consume(result.value))
+        }.value
     }
     /// Wait for the attributable executor receipt on a separate worker. Actor reentrancy
     /// keeps normal input and snapshot polling flowing while this call awaits admission.
@@ -523,6 +609,7 @@ actor NativeBridge {
         let status = await Task.detached { zmux_desktop_shutdown_release(desktop, ticket) }.value
         guard status == 0 else { throw Self.failure(status) }
         handle = 0
+        frameCache.removeAll(); frameNamespace = nil
     }
     private nonisolated static func decodeShutdown(_ result: ZmuxResult) throws -> DesktopShutdownReport {
         guard result.status == 0 else { throw failure(result.status) }
@@ -549,24 +636,46 @@ actor NativeBridge {
         }
         handle = 0
     }
-    private func send(_ payload: [String: Any]) async throws {
+    private func send(_ payload: [String: Any], acknowledged: Bool = false) async throws {
         guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
         requestId += 1
         let data = try JSONSerialization.data(withJSONObject: ["version": 1, "request_id": requestId, "payload": payload])
         for attempt in 0..<100 {
-            let result = data.withUnsafeBytes { bytes in
-                zmux_desktop_dispatch(handle, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            let desktop = handle
+            let status: Int32
+            let body: Data
+            if acknowledged {
+                // Blocks for up to two seconds until the executor has run the command, so it runs
+                // on a detached worker: never on the main actor or this actor's executor.
+                (status, body) = try await Task.detached(priority: .userInitiated) {
+                    let result = data.withUnsafeBytes { bytes in
+                        zmux_desktop_dispatch_acknowledged(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                    }
+                    guard result.status == 0 else { return (result.status, Data()) }
+                    return (result.status, try Self.consume(result.value))
+                }.value
+            } else {
+                let result = data.withUnsafeBytes { bytes in
+                    zmux_desktop_dispatch(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+                }
+                status = result.status
+                body = result.status == 0 ? try Self.consume(result.value) : Data()
             }
-            if result.status == -4 {
+            if status == -4 {
+                // Nothing ran: the queue was full. Safe to try again for both entry points.
                 if attempt == 99 { throw BridgeFailure(message: "Terminal is busy; input was not accepted") }
                 try await Task.sleep(for: .milliseconds(10))
                 continue
             }
-            guard result.status == 0 else { throw Self.failure(result.status, operation: "send \(payload["command"] as? String ?? "unknown") request=\(requestId)") }
-            let response = try JSONSerialization.jsonObject(with: Self.consume(result.value)) as? [String: Any]
+            guard status == 0 else { throw Self.failure(status, operation: "send \(payload["command"] as? String ?? "unknown") request=\(requestId)") }
+            let response = try JSONSerialization.jsonObject(with: body) as? [String: Any]
             guard response?["ok"] as? Bool == true else {
                 let error = response?["error"] as? [String: Any]
-                throw BridgeFailure(message: error?["message"] as? String ?? "Command rejected")
+                var message = error?["message"] as? String ?? "Command rejected"
+                if acknowledged, response?["outcome_unknown"] as? Bool == true {
+                    message += " (the outcome is unknown and the command was not replayed)"
+                }
+                throw BridgeFailure(message: message)
             }
             return
         }

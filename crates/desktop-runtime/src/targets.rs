@@ -53,10 +53,40 @@ pub enum TargetOperation {
     Metadata {
         action: crate::metadata::MetadataAction,
     },
+    /// Open files and web pages as tabs. Only the control socket constructs the probed form
+    /// of this request; the generic executor path rejects it (design D16).
+    OpenItems {
+        items: Vec<OpenItem>,
+        #[serde(default = "default_focus")]
+        focus: bool,
+        #[serde(default)]
+        force_mode: Option<OpenForceMode>,
+    },
     ReadScreen,
     #[default]
     ListPanes,
     ListPaneSurfaces,
+}
+fn default_focus() -> bool {
+    true
+}
+/// One operand of `open`: the CLI has already classified it lexically.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenItem {
+    pub kind: OpenItemKind,
+    pub value: String,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenItemKind {
+    Path,
+    Url,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenForceMode {
+    Markdown,
 }
 impl TargetRequest {
     pub fn validate_revision(&self, model: &Snapshot) -> Result<(), TargetError> {

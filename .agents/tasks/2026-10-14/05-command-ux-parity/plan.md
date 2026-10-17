@@ -31,6 +31,8 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Priority journey: managed SSH plus remote file/image drop and paste; independent of cloud hosting.
 - [ ] P1: topology, ⌘T tabs, ⇧⌘T/recently-closed recovery, focus history and navigation.
 - [ ] P2: collapsible sidebar, attention inbox/badges and notification automation.
+- [ ] Close every workspace context action and conditional state in the N02 menu correction, with shared behavior and packaged native acceptance.
+- [ ] Implement the macOS status item and every N03 status-menu action through shared owners, with actual OS-menu acceptance.
 - [ ] P3a: embedded browser UI; P3b: full browser automation and advanced commands.
 - [ ] P4: launch/open, persistence/restore, settings, themes and customization.
 - [ ] P5: event automation, inspection, content tools and tmux-compatible operations.
@@ -51,6 +53,14 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] Cloud-dependent behavior passes deployed checks; hosting deferral stays explicit.
 
 ## References
+
+- [CU-14 file panel evidence](references/cu14-file-panel.md) and [design](references/cu14-file-panel-design.md) (research: [digest](references/cu14-file-panel-research.md)) — `zmux open` / `zmux markdown open`, bounded file service, atomic save and native text/Markdown/image/PDF tabs; Linux-verified Rust, CLI and bridge; Swift/macOS gates UNAVAILABLE; CU-14, CV-01, CV-05, CV-06 and package C01 are implementing, not verified.
+- [CPU and Claude completion repair](../../2026-10-16/01-terminal-cpu-audit/plan.md) —
+  reproduced active-screen data amplification, missing plain-Claude completion
+  ingress and phased repair/native profiling plan; implementation unstarted.
+
+- [N02 workspace context menu](references/n02-workspace-context-menu.md) — screenshot/source comparison, missing versus conditional actions, delivery failure and behavioral closure gates.
+- [N03 macOS menu bar](references/n03-macos-menu-bar.md) — absent status-item owner, full menu behavior, application lifecycle and native OS-menu gates.
 
 - [Terminal pointer reporting](references/t01-pointer-reporting.md) — missing mouse button/motion routing, shared worker design and actual PTY/native acceptance plan.
 

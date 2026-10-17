@@ -2,12 +2,19 @@ name: Native control action probe
 
 on:
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: Isolated AppKit boundary
+        type: choice
+        options: [control, activation]
+        default: control
 
 permissions:
   contents: read
 
 jobs:
   control-action:
+    if: inputs.scenario != 'activation'
     runs-on: macos-15
     timeout-minutes: 5
     env:
@@ -37,5 +44,51 @@ jobs:
             tools/native-control-probe/main.swift
             dist/control-action*.json
             dist/control-action*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  activation:
+    if: inputs.scenario == 'activation'
+    runs-on: macos-15
+    timeout-minutes: 5
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Compile isolated activation probe against public AppKit
+        run: |
+          mkdir -p dist/ActivationProbe.app/Contents/MacOS
+          sdk=$(xcrun --sdk macosx --show-sdk-path)
+          /usr/bin/grep -nE 'activate|yieldActivation' "$sdk/System/Library/Frameworks/AppKit.framework/Headers/NSRunningApplication.h" "$sdk/System/Library/Frameworks/AppKit.framework/Headers/NSApplication.h"
+          xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors -framework AppKit tools/native-activation-probe/main.swift -o dist/ActivationProbe.app/Contents/MacOS/ActivationProbe
+          python3 - <<'PY'
+          import os, plistlib
+          from pathlib import Path
+          info = {"CFBundleIdentifier": "app.w3dev.zmux.activation-probe." + os.environ["GITHUB_RUN_ID"],
+                  "CFBundleExecutable": "ActivationProbe", "CFBundleName": "zmux activation probe",
+                  "CFBundlePackageType": "APPL", "NSPrincipalClass": "NSApplication"}
+          Path('dist/ActivationProbe.app/Contents/Info.plist').write_bytes(plistlib.dumps(info))
+          PY
+          codesign --force --sign - dist/ActivationProbe.app
+      - name: Observe actual hidden application activation with finite lifetime
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          root = Path('dist').resolve()
+          subprocess.run(['/usr/bin/open', '-n', '-W', '--stdout', str(root/'activation.stdout.log'),
+                          '--stderr', str(root/'activation.stderr.log'), str(root/'ActivationProbe.app'),
+                          '--args', str(root/'activation.json')], check=True, timeout=45)
+          print((root/'activation.json').read_text())
+          PY
+      - name: Retain exact probe and observed framework state
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-activation-${{ github.sha }}
+          path: |
+            tools/native-activation-probe/main.swift
+            dist/activation*.json
+            dist/activation*.log
           if-no-files-found: warn
           retention-days: 7

@@ -1,11 +1,7 @@
 //! Explicit user-owned local tmux sessions. Filesystem/process waits belong on a
 //! CLI/background worker, never the desktop action executor. GUI binding is separate.
 use crate::ProcessSpec;
-use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, poll, pollfd};
-use nix::{
-    sys::signal::{Signal, killpg},
-    unistd::{Pid, geteuid},
-};
+use nix::unistd::geteuid;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
@@ -16,7 +12,7 @@ use std::{
         process::CommandExt,
     },
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -29,9 +25,9 @@ use uuid::Uuid;
 
 pub const MAX_SESSIONS: usize = 64;
 pub const MAX_REGISTRY_BYTES: usize = 128 * 1024;
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const MARKER: &str = "@zmux_local_tmux_server";
+const CREATION_ID: &str = "ZMUX_LOCAL_TMUX_CREATION_ID";
 const REJECT: &str = "__zmux_stale_local_tmux_binding__";
 
 #[derive(Debug, Error)]
@@ -447,6 +443,8 @@ impl LocalTmux {
         let mut create = vec![
             "new-session".into(),
             "-d".into(),
+            "-e".into(),
+            format!("{CREATION_ID}={id}"),
             "-s".into(),
             name.into(),
             "-c".into(),
@@ -483,23 +481,10 @@ impl LocalTmux {
             self.run(&args)
         };
         if let Err(error) = created {
-            // A cancelled or timed-out invocation may already have created the session (or
-            // the server) before it was stopped. Any other failure is a definite tmux
-            // rejection (e.g. a racing foreign session already owns the name), so nothing
-            // of ours exists and nothing may be killed.
-            if !matches!(
-                error,
-                MultiplexerError::Cancelled | MultiplexerError::Timeout
-            ) {
-                return Err(error);
-            }
-            return Err(match self.rollback_start(name, marker, server.is_none()) {
-                Ok(()) => error,
-                Err(rollback) => MultiplexerError::Failure(format!(
-                    "{error}; rollback of the new tmux session also failed ({rollback}); \
-                     inspect list for unmanaged sessions"
-                )),
-            });
+            // Even a failed invocation can have created a session before an output or
+            // transport failure. The token is installed atomically by new-session, so
+            // rollback cannot mistake a racing foreign session for this creation.
+            return Err(self.rollback_start_error(error, name, marker, id, server.is_none()));
         }
         // The session now exists. Any failure before it is registered would leave it
         // running but unmanaged, so undo exactly what this operation created.
@@ -536,13 +521,7 @@ impl LocalTmux {
         let (live, session_id, created_at) = match registered {
             Ok(registered) => registered,
             Err(error) => {
-                return Err(match self.rollback_start(name, marker, server.is_none()) {
-                    Ok(()) => error,
-                    Err(rollback) => MultiplexerError::Failure(format!(
-                        "{error}; rollback of the new tmux session also failed ({rollback}); \
-                         inspect list for unmanaged sessions"
-                    )),
-                });
+                return Err(self.rollback_start_error(error, name, marker, id, server.is_none()));
             }
         };
         let record = Record {
@@ -700,15 +679,39 @@ impl LocalTmux {
             args,
         }
     }
-    /// Remove only the session this `start` created, addressed by exact name and guarded by
-    /// the server incarnation marker. A rejected guard means the server we created is gone.
-    fn rollback_start(&self, name: &str, marker: Uuid, started_server: bool) -> Result<()> {
+    fn rollback_start_error(
+        &self,
+        error: MultiplexerError,
+        name: &str,
+        marker: Uuid,
+        id: Uuid,
+        started_server: bool,
+    ) -> MultiplexerError {
+        match self.rollback_start(name, marker, id, started_server) {
+            Ok(()) => error,
+            Err(rollback) => MultiplexerError::Failure(format!(
+                "{error}; rollback of the new tmux session also failed ({rollback}); \
+                 inspect list for unmanaged sessions"
+            )),
+        }
+    }
+    /// Remove only this creation, checking its atomic session token as well as the server
+    /// incarnation. A session that reuses the name must survive cleanup.
+    fn rollback_start(
+        &self,
+        name: &str,
+        marker: Uuid,
+        id: Uuid,
+        started_server: bool,
+    ) -> Result<()> {
         let condition = format!("#{{==:#{{{MARKER}}},{marker}}}");
         self.run_rollback(&[
             "-N".into(),
             "if-shell".into(),
             "-F".into(),
-            condition.clone(),
+            "-t".into(),
+            format!("={name}:"),
+            format!("#{{&&:{condition},#{{==:#{{{CREATION_ID}}},{id}}}}}"),
             tmux_command(&["kill-session".into(), "-t".into(), format!("={name}")]),
             REJECT.into(),
         ])?;
@@ -1261,130 +1264,19 @@ fn validate_socket(path: &Path, private: bool) -> Result<bool> {
     Ok(true)
 }
 
-struct Output {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-struct Running {
-    child: Child,
-}
-impl Drop for Running {
-    fn drop(&mut self) {
-        // The tmux server daemon creates its own session. Every remaining process
-        // in the launcher's group belongs to this bounded invocation, even after
-        // the leader exits or descendants close their inherited output pipes.
-        if let Err(e) = killpg(Pid::from_raw(self.child.id() as i32), Signal::SIGKILL)
-            && e != nix::errno::Errno::ESRCH
-        {
-            eprintln!("zmux tmux process cancellation: {e}");
-        }
-        if let Err(e) = self.child.wait() {
-            eprintln!("zmux tmux process reap: {e}");
-        }
-    }
-}
-fn run_bounded(mut command: Command, cancellation: Option<&AtomicBool>) -> Result<Output> {
-    let mut child = Running {
-        child: command.spawn().map_err(|e| failure("launch tmux", e))?,
-    };
-    let mut stdout = FileDescriptor::dup(&child.child.stdout.take().expect("piped stdout"))
-        .map_err(|e| failure("open tmux output", e))?;
-    let mut stderr = FileDescriptor::dup(&child.child.stderr.take().expect("piped stderr"))
-        .map_err(|e| failure("open tmux errors", e))?;
-    stdout
-        .set_non_blocking(true)
-        .map_err(|e| failure("configure tmux output", e))?;
-    stderr
-        .set_non_blocking(true)
-        .map_err(|e| failure("configure tmux errors", e))?;
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let mut out_eof = false;
-    let mut err_eof = false;
-    let deadline = Instant::now() + OPERATION_TIMEOUT;
-    let mut status = None;
-    loop {
-        if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
-            return Err(MultiplexerError::Cancelled);
-        }
-        for (pipe, bytes, eof) in [
-            (&mut stdout, &mut out, &mut out_eof),
-            (&mut stderr, &mut err, &mut err_eof),
-        ] {
-            if *eof {
-                continue;
-            }
-            for _ in 0..4 {
-                let mut buffer = [0; 4096];
-                match pipe.read(&mut buffer) {
-                    Ok(0) => {
-                        *eof = true;
-                        break;
-                    }
-                    Ok(n) => {
-                        if bytes.len() + n > MAX_OUTPUT_BYTES {
-                            return Err(MultiplexerError::Failure(
-                                "tmux response exceeded the 64 KiB stream bound".into(),
-                            ));
-                        }
-                        bytes.extend_from_slice(&buffer[..n]);
-                    }
-                    Err(e)
-                        if e.kind() == io::ErrorKind::WouldBlock
-                            || e.kind() == io::ErrorKind::Interrupted =>
-                    {
-                        break;
-                    }
-                    Err(e) => return Err(failure("read tmux response", e)),
-                }
-            }
-        }
-        if status.is_none() {
-            status = child
-                .child
-                .try_wait()
-                .map_err(|e| failure("poll tmux process", e))?;
-        }
-        if let Some(status) = status
-            && out_eof
-            && err_eof
-        {
-            return Ok(Output {
-                success: status.success(),
-                stdout: String::from_utf8(out).map_err(|e| failure("decode tmux output", e))?,
-                stderr: String::from_utf8(err).map_err(|e| failure("decode tmux errors", e))?,
-            });
-        }
-        if Instant::now() >= deadline {
-            return Err(MultiplexerError::Timeout);
-        }
-        let mut fds = Vec::new();
-        if !out_eof {
-            fds.push(pollfd {
-                fd: stdout.as_raw_file_descriptor(),
-                events: POLLIN,
-                revents: 0,
-            });
-        }
-        if !err_eof {
-            fds.push(pollfd {
-                fd: stderr.as_raw_file_descriptor(),
-                events: POLLIN,
-                revents: 0,
-            });
-        }
-        if let Err(e) = poll(&mut fds, Some(Duration::from_millis(10)))
-            && !matches!(&e,filedescriptor::Error::Poll(e) if e.kind()==io::ErrorKind::Interrupted)
-        {
-            return Err(failure("poll tmux output", e));
-        }
-    }
+use crate::bounded_command::Output;
+fn run_bounded(command: Command, cancellation: Option<&AtomicBool>) -> Result<Output> {
+    crate::bounded_command::run(command, cancellation).map_err(|error| match error {
+        crate::bounded_command::Error::Timeout => MultiplexerError::Timeout,
+        crate::bounded_command::Error::Cancelled => MultiplexerError::Cancelled,
+        other => failure("local tmux command", other),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::{sys::signal::Signal, unistd::Pid};
 
     #[test]
     fn timeout_kills_pipe_holding_descendant_after_leader_exits() {

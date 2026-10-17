@@ -117,6 +117,8 @@ fn help_and_version_are_complete_and_offline() {
         "clear-notifications",
         "send-text",
         "read-screen",
+        "open",
+        "markdown",
         "prototype",
         "help",
     ] {
@@ -293,6 +295,60 @@ fn offline_topics_and_agent_discovery_do_not_require_a_valid_socket() {
                 .iter()
                 .any(|leaf| leaf["name"] == name && leaf["contract_status"] == "partial")
         );
+    }
+    // `open` and `markdown open` map to bounded local leaves; behavioural parity stays false.
+    for (id, spelling, name, force) in [
+        ("CMD-006", "open", "open", Value::Null),
+        (
+            "CMD-114",
+            "markdown open",
+            "markdown open",
+            "markdown".into(),
+        ),
+    ] {
+        let row = entries
+            .iter()
+            .find(|row| row["inventory_id"] == id)
+            .unwrap();
+        assert_eq!(row["reference_command"], spelling);
+        assert_eq!(row["status"], "local_counterpart_compatibility_unverified");
+        assert_eq!(row["local_contract"], name);
+        let leaf = contracts
+            .iter()
+            .find(|leaf| leaf["name"] == name)
+            .unwrap_or_else(|| panic!("no contract leaf {name}"));
+        assert_eq!(leaf["contract_status"], "partial");
+        assert_eq!(
+            leaf["dispatcher"],
+            if name == "open" { "open" } else { "markdown" }
+        );
+        assert_eq!(leaf["parser_defaults"]["focus"], true);
+        assert_eq!(leaf["parser_defaults"]["client_timeout_ms"], 5000);
+        assert_eq!(
+            leaf["parser_probe"]["request"]["request"]["operation"]["operation"],
+            "open_items"
+        );
+        assert_eq!(
+            leaf["parser_probe"]["request"]["request"]["operation"]["force_mode"],
+            force
+        );
+        let arguments: Vec<_> = leaf["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|argument| argument["name"].as_str().unwrap())
+            .collect();
+        for expected in [
+            "window",
+            "workspace",
+            "pane",
+            "surface",
+            "focus",
+            "no_focus",
+            "operand",
+        ] {
+            assert!(arguments.contains(&expected), "{name} omits {expected}");
+        }
     }
     let click = entries
         .iter()

@@ -110,7 +110,7 @@ pub struct AllocationReservation {
 }
 #[derive(Debug)]
 pub enum PersistenceOutcome {
-    Loaded(LoadedSession),
+    Loaded(Box<LoadedSession>),
     Reserved(AllocationReservation),
     Saved,
     Profiles(crate::profiles::Catalog),
@@ -181,9 +181,8 @@ impl PersistenceWorker {
                         match request.request {
                             Request::Profiles { command } => profile_catalog(&state_path, command)
                                 .map(PersistenceOutcome::Profiles),
-                            Request::Load { path } => {
-                                load(&state_path, &path, limits).map(PersistenceOutcome::Loaded)
-                            }
+                            Request::Load { path } => load(&state_path, &path, limits)
+                                .map(|loaded| PersistenceOutcome::Loaded(Box::new(loaded))),
                             Request::Reserve {
                                 namespace,
                                 minimum_id,

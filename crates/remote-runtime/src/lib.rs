@@ -11,6 +11,7 @@
 //! known-hosts files are rejected. A destination name may be either a DNS name
 //! or an `ssh_config` alias; resolving configuration is left to OpenSSH.
 
+mod bounded_command;
 mod config;
 pub mod connection;
 pub mod upload;

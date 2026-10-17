@@ -15,6 +15,27 @@ host-key verification and interactive authentication, on the terminal's PTY work
 `--command TEXT` starts an explicit remote command. Alternatively place remote command
 arguments after `--`; OpenSSH combines them using the remote account's shell semantics.
 The managed terminal requests a remote PTY for both shell and command launches.
+For interactive shell launches, zmux adds a temporary session-only Claude attention
+plugin on the remote host. Bash, zsh, POSIX sh and fish have startup adapters; user
+startup files and Claude settings are retained. Turn completion and provider
+permission notices travel through that exact SSH PTY into its local inbox, without
+forwarding the local control socket or requiring cloud services. Explicit remote
+commands are not wrapped. Set `ZMUX_CLAUDE_INTEGRATION_DISABLED=1` in the remote
+shell to bypass Claude wrapping; `ZMUX_SHELL_INTEGRATION_DISABLED=1` in the app's
+launch environment disables integration for new local and SSH shells. A supported
+Claude version with repeatable `--plugin-dir` is required. A private session FIFO
+relays fixed attention events to the original terminal, including from nested tmux
+sessions. One blocked relay process lives with each integrated shell; no tmux
+configuration is changed. An inherited wrapper bypasses expired hook directories.
+On legacy Bash3/4 owners, the signal-reset stage uses `/usr/bin/perl` and immediately
+execs the interactive shell; it adds no resident interpreter. If that tool is
+missing, zmux starts the ordinary shell and reports that integration is unavailable.
+User Perl startup/module preferences are preserved for the launched shell.
+Configured OpenSSH `RemoteCommand` launches are preserved and bypass automatic
+integration. A bounded `ssh -G` probe runs on the launch worker before ordinary
+shell launches; OpenSSH may evaluate configured `Match exec` during this probe.
+Notification banners
+also require enabling zmux's macOS system-notification permission.
 The launcher passes the SSH program and connection options directly as argv.
 OpenSSH still owns configured ProxyCommand, Match exec and LocalCommand behavior.
 This launch requires full local-control access and remains denied to remote relay origins.

@@ -25,6 +25,224 @@ use zmux_desktop_runtime::{
 use zmux_workspace_core::Action;
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
+
+#[test]
+fn plain_claude_completion_reaches_background_attention_while_provider_is_alive() {
+    let fixture = Fixture::new();
+    let provider = fixture.0.join("claude");
+    // This provider fixture consumes the real session-injected plugin contract.
+    // It never calls Claude's API or reads an operator's settings/transcripts.
+    fs::write(&provider, r##"#!/usr/bin/python3
+import json, os, pathlib, subprocess, sys
+args = sys.argv[1:]
+assert args[-3:] == ['--settings', '{"user_setting":true}', 'literal $HOME ; text'], args
+plugins = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == '--plugin-dir']
+pathlib.Path('observed-plugin').write_text(plugins[0] if plugins else '')
+for directory in plugins:
+    hooks = json.loads((pathlib.Path(directory)/'hooks/hooks.json').read_text())['hooks']
+    for entry in hooks.get('Stop', []):
+        for hook in entry['hooks']:
+            subprocess.run(hook['command'], shell=True, input=b'{"hook_event_name":"Stop","session_id":"fixture"}', check=True, timeout=3)
+print('PROVIDER_STOPPED_BUT_ALIVE', flush=True)
+sys.stdin.readline()
+"##).unwrap();
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+    let rc = fixture.0.join("bashrc");
+    fs::write(
+        &rc,
+        format!(
+            "export PATH=\"{}:$PATH\"\nPS1=\nTMOUT=20\nprintf 'SHELL_BOOT_READY\\n'\n",
+            fixture.0.display()
+        ),
+    )
+    .unwrap();
+    let desktop = Desktop::new(Shell {
+        program: "/bin/bash".into(),
+        args: vec![
+            "--noprofile".into(),
+            "--rcfile".into(),
+            rc.to_str().unwrap().into(),
+            "-i".into(),
+        ],
+        cwd: Some(fixture.0.clone()),
+    })
+    .unwrap();
+    let ready = wait(&desktop, |s| {
+        s.frames.iter().any(|f| {
+            f.snapshot
+                .as_ref()
+                .is_some_and(|s| s.viewport.contents.contains("SHELL_BOOT_READY"))
+        })
+    });
+    let session = ready.frames[0].session_id;
+    execute(
+        &desktop,
+        1,
+        Command::Attention {
+            action: AttentionCommand::AppActive { active: false },
+        },
+    );
+    desktop
+        .native_notification_event(NativeNotificationEvent::Authorization {
+            epoch: ready.native_notifications.epoch,
+            generation: 1,
+            state: NotificationAuthorization::Authorized,
+        })
+        .unwrap();
+    execute(
+        &desktop,
+        2,
+        Command::Input {
+            session_id: session,
+            text: "claude --settings '{\"user_setting\":true}' 'literal $HOME ; text'\n".into(),
+        },
+    );
+    let completed = wait(&desktop, |s| !s.notifications.is_empty());
+    assert_eq!(completed.notifications.len(), 1);
+    assert_eq!(completed.notifications[0].title, "Claude");
+    assert_eq!(completed.notifications[0].body, "Claude finished its turn");
+    assert!(!completed.notifications[0].read);
+    assert_eq!(completed.native_notifications.desired.len(), 1);
+    let alive = wait(&desktop, |s| {
+        s.frames[0]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .viewport
+            .contents
+            .contains("PROVIDER_STOPPED_BUT_ALIVE")
+    });
+    assert_eq!(
+        alive.frames[0].snapshot.as_ref().unwrap().state,
+        zmux_session_runtime::State::Running
+    );
+    assert_eq!(alive.frames[0].session_id, session);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let plugin = fs::read_to_string(fixture.0.join("observed-plugin")).unwrap();
+    assert!(
+        !PathBuf::from(plugin).exists(),
+        "Local hook files survived session shutdown"
+    );
+}
+
+#[test]
+fn native_menu_mutations_capture_scope_cursor_and_epoch_without_changing_focus() {
+    let fixture = Fixture::new();
+    let desktop = fixture.desktop();
+    let initial = wait(&desktop, |s| {
+        !s.persistence.startup_pending && s.pending_launches == 0 && !s.model.workspaces.is_empty()
+    });
+    let first = initial.model.workspaces[0].id;
+    let first_surface = initial.model.workspaces[0].root.panes()[0].selected().id;
+    let second = execute(
+        &desktop,
+        1,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Other notification owner".into(),
+            },
+        },
+    );
+    let second_surface = second.model.workspaces.last().unwrap().root.panes()[0]
+        .selected()
+        .id;
+    let focused = execute(
+        &desktop,
+        2,
+        Command::Action {
+            action: Action::CreateWorkspace {
+                name: "Keep selected".into(),
+            },
+        },
+    );
+    let notify = |surface_id, title: &str| Command::Attention {
+        action: AttentionCommand::Notify {
+            surface_id,
+            title: title.into(),
+            subtitle: String::new(),
+            body: String::new(),
+            desktop: Some(false),
+            reply: false,
+        },
+    };
+    let first_event = execute(&desktop, 3, notify(first_surface, "Captured first"));
+    let first_id = first_event.notifications.last().unwrap().id;
+    let captured = execute(&desktop, 4, notify(second_surface, "Captured other owner"));
+    let cursor = captured.notifications.last().unwrap().id;
+    let arrival = execute(
+        &desktop,
+        5,
+        notify(first_surface, "Arrived after menu opening"),
+    );
+    let latest_id = arrival.notifications.last().unwrap().id;
+    let mutation = |kind, scope, epoch, namespace| {
+        serde_json::from_value::<NativeAttentionAction>(serde_json::json!({
+            "action":"mutate", "mutation":kind, "workspace_id":scope,
+            "through_id":cursor, "epoch":epoch, "identity_namespace":namespace,
+        }))
+        .expect("native menu mutations must be admitted by the shared owner")
+    };
+    let epoch = captured.native_notifications.epoch;
+    let namespace = captured.model.identity_namespace;
+    let receipt = desktop
+        .native_notification_action(mutation("mark_read", Some(first), epoch, namespace))
+        .unwrap();
+    assert!(receipt.focused_window_id.is_none());
+    assert!(receipt.focused_workspace_id.is_none());
+    let read = wait(&desktop, |s| {
+        s.notifications.iter().any(|n| n.id == first_id && n.read)
+    });
+    assert_eq!(
+        read.model.focused_workspace,
+        focused.model.focused_workspace
+    );
+    assert!(
+        read.notifications
+            .iter()
+            .filter(|n| n.id != first_id)
+            .all(|n| !n.read)
+    );
+    for (wrong_epoch, wrong_namespace) in [
+        (uuid::Uuid::new_v4(), namespace),
+        (epoch, uuid::Uuid::new_v4()),
+    ] {
+        assert!(
+            desktop
+                .native_notification_action(mutation("clear", None, wrong_epoch, wrong_namespace))
+                .is_err()
+        );
+        assert_eq!(wait(&desktop, |_| true).notifications.len(), 3);
+    }
+    let mut exact_remove = serde_json::json!({
+        "action":"mutate", "mutation":"clear", "notification_id":first_id,
+        "through_id":cursor, "epoch":epoch, "identity_namespace":namespace,
+    });
+    exact_remove["workspace_id"] = serde_json::json!(first);
+    assert!(
+        desktop
+            .native_notification_action(serde_json::from_value(exact_remove.clone()).unwrap())
+            .is_err()
+    );
+    assert_eq!(wait(&desktop, |_| true).notifications.len(), 3);
+    exact_remove.as_object_mut().unwrap().remove("workspace_id");
+    desktop
+        .native_notification_action(serde_json::from_value(exact_remove).unwrap())
+        .unwrap();
+    let removed = wait(&desktop, |s| s.notifications.len() == 2);
+    assert!(removed.notifications.iter().all(|n| n.id != first_id));
+    desktop
+        .native_notification_action(mutation("clear", None, epoch, namespace))
+        .unwrap();
+    let cleared = wait(&desktop, |s| s.notifications.len() == 1);
+    assert_eq!(cleared.notifications[0].id, latest_id);
+    assert!(!cleared.notifications[0].read);
+    assert_eq!(
+        cleared.model.focused_workspace,
+        focused.model.focused_workspace
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {

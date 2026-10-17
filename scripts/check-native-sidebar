@@ -9,6 +9,8 @@ import platform
 import signal
 import subprocess
 import tempfile
+import time
+import uuid
 
 
 def main():
@@ -22,7 +24,8 @@ def main():
     if not args.skip_build:
         subprocess.run([str(root / "scripts/build-macos-dev"), "--architecture", args.architecture], cwd=root, check=True)
     dist = root / "dist"
-    executable = dist / "zmux.app/Contents/MacOS/zmux-app"
+    bundle = dist / "zmux.app"
+    executable = bundle / "Contents/MacOS/zmux-app"
     metadata = json.loads((dist / "build-info.json").read_text())
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if metadata["source_sha"] != source_sha:
@@ -36,60 +39,103 @@ def main():
     socket = directory / "c"
     report = dist / "native-sidebar.json"
     receipt = dist / "native-sidebar-process.json"
-    screenshots = [dist / "zmux-sidebar.png", dist / "zmux-sidebar-collapsed.png"]
-    for path in [report, receipt, *screenshots]:
+    lifecycle = dist / "native-sidebar-lifecycle.json"
+    status_report = dist / "native-status-menu.json"
+    nonce = str(uuid.uuid4())
+    screenshots = [dist / "zmux-sidebar.png", dist / "zmux-sidebar-collapsed.png", dist / "zmux-status-icon.png"]
+    for path in [report, receipt, lifecycle, status_report, *screenshots]:
         path.unlink(missing_ok=True)
     # Keep the actual HOME for macOS services. Profile/session storage and the
     # socket are explicit generated fixture paths, never the user's app state.
     environment = {key: os.environ[key] for key in
                    ("HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG", "LC_ALL", "__CF_USER_TEXT_ENCODING")
                    if key in os.environ}
-    environment.update(ZMUX_SOCKET=str(socket), ZMUX_SOCKET_PATH=str(socket))
     process = None
     evidence = {"success": False, "source_sha": metadata["source_sha"],
                 "fixture_directory": str(directory), "socket_path": str(socket),
-                "architectures": metadata["architectures"],
+                "architectures": metadata["architectures"], "nonce": nonce,
+                "app_pid_absent": False, "physical_cleanup_complete": False,
                 "packaged_executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
                 "environment": "Allowlisted OS environment; explicit isolated profile and control socket"}
     try:
-        with (dist / "native-sidebar.stdout.log").open("wb") as output, \
-                (dist / "native-sidebar.stderr.log").open("wb") as errors:
-            process = subprocess.Popen([str(executable), "--sidebar-grouping-smoke", str(report),
-                                        str(directory / "profile")], cwd=root, env=environment,
+        command = ["/usr/bin/open", "-n", "-W",
+                   "--stdout", str(dist / "native-sidebar.stdout.log"),
+                   "--stderr", str(dist / "native-sidebar.stderr.log"),
+                   "--env", "ZMUX_SOCKET=" + str(socket),
+                   "--env", "ZMUX_SOCKET_PATH=" + str(socket),
+                   "--env", "ZMUX_SIDEBAR_NONCE=" + nonce,
+                   str(bundle), "--args", "--sidebar-grouping-smoke", str(report),
+                   str(directory / "profile")]
+        with (dist / "native-sidebar-driver.stdout.log").open("wb") as output, \
+                (dist / "native-sidebar-driver.stderr.log").open("wb") as errors:
+            process = subprocess.Popen(command, cwd=root, env=environment,
                                        stdin=subprocess.DEVNULL, stdout=output, stderr=errors,
                                        start_new_session=True)
-            evidence["original_pid"] = process.pid
+            evidence["launch_driver_pid"] = process.pid
             try:
                 status = process.wait(timeout=150)
             except subprocess.TimeoutExpired as error:
                 evidence["timed_out"] = True
-                # Only this runner's own process group is stopped. Never match
-                # application names or target the installed/running user app.
+                # This is only our open(1) driver, not the app Launch Services
+                # owns. Do not signal an app whose identity is unverified.
                 os.killpg(process.pid, signal.SIGTERM)
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
-                raise RuntimeError("Sidebar fixture exceeded its 150 second deadline") from error
-        evidence.update(normal_exit_status=status, original_pid_waited_and_reaped=True,
+                raise RuntimeError("Sidebar Launch Services driver exceeded its 150 second deadline; app cleanup unconfirmed") from error
+        evidence.update(launch_driver_exit_status=status, launch_driver_waited_and_reaped=True,
                         owned_socket_absent=not socket.exists())
         if status != 0:
-            raise RuntimeError(f"Sidebar fixture exited with status {status}")
+            raise RuntimeError(f"Sidebar Launch Services driver exited with status {status}")
+        identity = json.loads(lifecycle.read_text())
+        evidence["app_lifecycle"] = identity
+        if identity.get("nonce") != nonce or identity.get("source_sha") != source_sha:
+            raise RuntimeError("Sidebar app lifecycle identity does not match this launch")
+        app_pid = identity.get("app_pid")
+        if type(app_pid) is not int or app_pid <= 1 or app_pid == process.pid:
+            raise RuntimeError("Sidebar lifecycle does not identify a distinct valid app PID")
+        evidence["app_pid"] = app_pid
+        if identity.get("physical_cleanup_complete") is not True:
+            raise RuntimeError("Sidebar app did not confirm physical cleanup")
+        evidence["physical_cleanup_complete"] = True
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                os.kill(app_pid, 0)
+            except ProcessLookupError:
+                evidence["app_pid_absent"] = True
+                break
+            # A live or reused PID is never treated as confirmed app exit and
+            # never signalled. Permission errors also fail closed.
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Sidebar app PID remains present after driver exit; PID reuse or cleanup unconfirmed")
+            time.sleep(0.05)
         if socket.exists():
             raise RuntimeError("Sidebar fixture exited without removing its owned control socket")
+        if not report.is_file():
+            raise RuntimeError("Native sidebar/status assertions did not publish a success receipt; inspect native-sidebar.stderr.log")
         result = json.loads(report.read_text())
         required = ("compact_toolbar", "visible_toggle", "groups", "group_menus",
                     "collapse_preserves_terminal", "focus_preserved", "sidebar_restored",
-                    "notification_toggle", "window_scoping")
+                    "notification_toggle", "window_scoping", "native_terminal_damage")
         failed = [key for key in required if result.get(key) is not True]
         if failed:
             raise RuntimeError("Sidebar acceptance failed: " + ", ".join(failed))
+        status_result = json.loads(status_report.read_text())
+        required_status = ("native_status_button", "system_menu_opened", "workspace_context_actions",
+                           "captured_mutations", "cross_window_notification_open", "inbox_presentation",
+                           "minimized_window_restore", "keep_awake_toggle", "single_application_owner")
+        required_status += ("hidden_window_recovery",)
+        failed_status = [key for key in required_status if status_result.get(key) is not True]
+        if failed_status:
+            raise RuntimeError("Native status menu acceptance failed: " + ", ".join(failed_status))
         for path in screenshots:
             if not path.is_file() or path.stat().st_size == 0:
                 raise RuntimeError(f"Missing native screenshot: {path.name}")
-        evidence.update(success=True, native=result)
-        print("Native sidebar/grouping checks and original-process shutdown passed")
+        evidence.update(success=True, native=result, status_menu=status_result)
+        print("Native sidebar/grouping checks, correlated app cleanup and PID absence passed")
     except Exception as error:
         evidence["error"] = str(error)
         raise

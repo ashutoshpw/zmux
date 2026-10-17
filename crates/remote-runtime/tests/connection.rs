@@ -119,7 +119,7 @@ fn openssh_config_applies_to_master_but_cannot_change_auxiliary_route() {
     let config_path = fixture.control_path().parent().unwrap().join("config");
     fs::write(
         &config_path,
-        "Host prod-alias\n  HostName configured.invalid\n  User configured-user\n  Port 2202\n  ProxyCommand /bin/echo configured-proxy\n  PermitLocalCommand yes\n  LocalCommand /bin/echo configured-local\n",
+        "Host prod-alias\n  HostName configured.invalid\n  User configured-user\n  Port 2202\n  ProxyCommand /bin/echo configured-proxy\n  PermitLocalCommand yes\n  LocalCommand /bin/echo configured-local\n  RemoteCommand printf configured-remote\n",
     )
     .unwrap();
     let descriptor = SshDescriptor::builder("prod-alias")
@@ -141,6 +141,10 @@ fn openssh_config_applies_to_master_but_cannot_change_auxiliary_route() {
         Some("/bin/echo configured-proxy")
     );
     assert_eq!(config_value(&terminal, "permitlocalcommand"), Some("yes"));
+    assert_eq!(
+        config_value(&terminal, "remotecommand"),
+        Some("printf configured-remote")
+    );
 
     let operation = effective_config(connection.operation_spec("true").unwrap());
     assert_eq!(config_value(&operation, "hostname"), Some("prod-alias"));
