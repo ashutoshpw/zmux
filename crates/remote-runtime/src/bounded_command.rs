@@ -18,6 +18,8 @@ const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum Error {
     #[error("worker command timed out")]
     Timeout,
+    #[error("worker command cancelled; inspect state if creation was pending")]
+    Cancelled,
     #[error("{0}")]
     Failure(String),
 }
@@ -74,9 +76,7 @@ pub(crate) fn run(
     let mut status = None;
     loop {
         if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
-            return Err(Error::Failure(
-                "worker command cancelled; inspect state if creation was pending".into(),
-            ));
+            return Err(Error::Cancelled);
         }
         for (pipe, bytes, eof) in [
             (&mut stdout, &mut out, &mut out_eof),
