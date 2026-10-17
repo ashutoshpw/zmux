@@ -281,7 +281,8 @@
       "title": "Session persistence, launch and quit recovery",
       "status": "in_progress",
       "evidence": [
-        "s01-session-persistence.md"
+        "s01-session-persistence.md",
+        "cu14-file-panel.md"
       ],
       "owner": "new Rust persistence owner, native startup/termination",
       "depends_on": [
@@ -293,7 +294,18 @@
         "Implement path/open startup, cwd/layout/command routing and crash/previous-launch restore",
         "Unify quit confirmation, deferred cleanup, cancellation and recoverable snapshot; extend schema with each later surface/window kind"
       ],
-      "exit_gate": "Restart/crash/corrupt files and failed restore retain recoverable data; exports omit secrets; restored local shells differ explicitly from preserved remote jobs; multiwindow/browser additions round-trip when T03/B01 land."
+      "exit_gate": "Restart/crash/corrupt files and failed restore retain recoverable data; exports omit secrets; restored local shells differ explicitly from preserved remote jobs; multiwindow/browser additions round-trip when T03/B01 land.",
+      "implemented_slices": [
+        "CU-14 slice: file surface kind with session format version 10 persistence and restore, and zmux open / zmux markdown open routing (opening itself delivered; preferred editor, file:// and file:LINE are not)"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "All earlier S01 commit-slice gates stay open",
+        "Native verification of file tab restore on macOS (UNAVAILABLE here)",
+        "Rollback consequence: every session saved by this build is session format 10 (not only those with file tabs), so a build that predates version 10 refuses all of them and cannot restore them"
+      ]
     },
     {
       "id": "S02",
@@ -368,7 +380,7 @@
     {
       "id": "C01",
       "title": "Content, project panes, file explorer and search",
-      "status": "planned",
+      "status": "implementing",
       "owner": "new content models/providers and native content hosts",
       "depends_on": [
         "F02",
@@ -381,7 +393,19 @@
         "Add local/remote file explorer and bounded cross-surface search; remote provider integrates R02",
         "Add original project parser/pane for files/targets/schemes/build settings and project open routing"
       ],
-      "exit_gate": "Each non-PTY surface has load/error/close/restore/focus/AX behavior; safe file routing and root ownership; no command injection; remote explorer remains incomplete until real remote acceptance."
+      "exit_gate": "Each non-PTY surface has load/error/close/restore/focus/AX behavior; safe file routing and root ownership; no command injection; remote explorer remains incomplete until real remote acceptance.",
+      "implemented_slices": [
+        "C01a native file panel: bounded Rust file service, atomic save with conflict detection, polling live reload, trusted native file channel and Swift/AppKit text, Markdown, image and PDF tabs (implemented, not verified on macOS)"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "Slices 2 to 4 (diff/review/comments, file explorer and search, project parser) are untouched",
+        "CV-02, CV-07 and the deferred parts of CV-01, CV-05 and CV-06 remain open",
+        "macOS and hosted CI verification of the native file panel (UNAVAILABLE here)",
+        "No exit-gate claim: non-PTY surface focus/AX behavior and remote explorer remain unverified"
+      ]
     },
     {
       "id": "A01",
@@ -1841,12 +1865,45 @@
       "feature": "Markdown open, render, file links, live reload, and unavailable-file state",
       "primary_package": "C01",
       "audit_status": "missing",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-browser-content.json#CV-01",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Relative file links and images, tables, task lists, raw HTML and GitHub-flavoured extensions in rendered Markdown are not delivered; the in-panel unavailable-file recovery is Retry only",
+        "Markdown rendering fidelity (AttributedString) and live reload in the app are unobserved; reload is bounded polling and can miss a same-size same-timestamp rewrite",
+        "Real file watching (FSEvents/inotify) is not delivered, and the persisted viewport and Markdown view mode (rendered or source) are not restored across a relaunch",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
       ]
     },
     {
@@ -1897,12 +1954,45 @@
       "feature": "File preview modes and live reload",
       "primary_package": "C01",
       "audit_status": "missing",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-browser-content.json#CV-05",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Quick Look and media sessions, PDF thumbnails/outline/zoom/rotation/share/viewport restore, image zoom/anchor, native drag, remote preview refresh and preserved scroll position across reload are not delivered",
+        "Real file watching (FSEvents/inotify) is not delivered, so a same-size same-timestamp rewrite can be missed by polling; the persisted viewport of an image or PDF is not restored across a relaunch",
+        "Image and PDF corrupt-body decode failure is reported by the native view only; there is no Rust decoder",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
       ]
     },
     {
@@ -1911,12 +2001,45 @@
       "feature": "Text file editor and viewer settings",
       "primary_package": "C01",
       "audit_status": "missing",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-browser-content.json#CV-06",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Delivered in S4: a word-wrap toggle (File > Toggle Word Wrap, Opt-Cmd-L, and a header button) stored as one global user default, filePanel.wordWrap; it is not per file, not in the session document, and has no command-palette action. Not delivered: syntax highlighting, line numbers, indent guides, current-line highlight, tab width, encoding selection/conversion (non-UTF-8 is rejected), editor zoom and shared save/wrap/find/zoom command-palette actions",
+        "Save As, three-way merge/diff of a conflict, backup of overwritten content, autosave and crash recovery of unsaved text are not delivered (closing is blocked instead); ownership/ACL/xattr preservation, hard-linked saves and network-volume semantics are not provided",
+        "In-place fallback writes are not delivered (a file the atomic same-directory replace cannot handle is refused rather than written in place); the persisted editor viewport is not restored across a relaunch",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
       ]
     },
     {
@@ -2135,12 +2258,46 @@
       "feature": "Open command file/content routing and preferred external editor",
       "primary_package": "S01",
       "audit_status": "missing",
-      "delivery_status": "planned",
+      "delivery_status": "implementing",
       "acceptance_source": "audit-browser-content.json#CU-14",
-      "implementation_commits": [],
-      "verification_receipts": [],
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
       "remaining_gates": [
-        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Preferred external editor, system opener fallback, directory-to-workspace creation, file:// operands, file:LINE anchors, --profile for URL items and shell-quoted editor launch are not delivered",
+        "Case-variant alias dedupe on case-insensitive volumes is not delivered: two spellings of one path that differ only by case may open as two tabs; the persisted viewport and Markdown view mode are not restored, and real file watching (FSEvents/inotify) is not delivered",
+        "Frozen-coverage CMD-006 (open) and CMD-114 (markdown open) are local_counterpart_compatibility_unverified: option and output compatibility with the reference is not verified, behavioral_parity_verified stays false",
+        "Remote (SSH) workspace files (R02) and non-UTF-8 paths are not supported",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
       ]
     },
     {

@@ -49,8 +49,8 @@
       "inventory_id": "CMD-006",
       "reference_command": "open",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "open"
     },
     {
       "inventory_id": "CMD-007",
@@ -805,8 +805,8 @@
       "inventory_id": "CMD-114",
       "reference_command": "markdown open",
       "review_owner": "audit-browser-content.md",
-      "status": "unresolved",
-      "local_contract": null
+      "status": "local_counterpart_compatibility_unverified",
+      "local_contract": "markdown open"
     },
     {
       "inventory_id": "CMD-115",

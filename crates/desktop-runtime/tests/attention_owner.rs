@@ -462,6 +462,7 @@ fn restored_surface_with_a_fresh_session_cannot_receive_an_old_notification_acti
         .validate(RestoreLimits {
             terminals: 8,
             browsers: 4,
+            files: 16,
         })
         .unwrap();
     let restored = WorkspaceStore::prepare_session_restore(document, &[SessionId(10000)], None)

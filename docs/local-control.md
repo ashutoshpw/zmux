@@ -51,6 +51,60 @@ redacted from debug output and authentication errors. Child PTYs remove
 when CLI commands inside terminals need password-mode access. This credential store is
 a private local file; Keychain integration and a native settings editor remain open.
 
+## Opening files and web pages
+
+`zmux open [TARGET_OPTIONS] [--focus true|false | --no-focus] [--] PATH_OR_URL...` and
+`zmux markdown open [TARGET_OPTIONS] [--focus true|false | --no-focus] [--] PATH...` send one
+`targeted` request whose operation is `open_items`:
+
+```json
+{"operation": "open_items", "focus": true, "force_mode": null,
+ "items": [{"kind": "path", "value": "/abs/README.md"},
+           {"kind": "url", "value": "https://example.org/docs"}]}
+```
+
+`force_mode` is `null` or `"markdown"` (always `"markdown"` for `markdown open`). The CLI
+classifies each operand lexically and makes relative paths absolute against its working
+directory (it does not canonicalise and does not expand `~`). One to 16 operands are accepted
+and the encoded request must stay within the 16 KiB request bound. A lexical error (empty
+operand, control character, path or address over 4096 bytes, a scheme other than `http://` or
+`https://`, a URL given to `markdown open`, an unknown option, too many operands or an oversize
+request) fails the whole invocation before any connection, so a partly valid command has no side
+effects. Selector options (`--window`, `--workspace`, `--pane`, `--surface`/`--tab`,
+`--expect-revision`) precede the operands and follow the usual target rules, including
+`ZMUX_WORKSPACE_ID` and `ZMUX_SURFACE_ID` defaults; `--` makes later operands literal.
+
+`open_items` is a mutation: read-only and password-read-only sockets refuse it, and remote relay
+origins are denied, before any file is examined. The app probes the files off its workspace
+executor within a one second budget, then applies the items strictly in order. The default
+client timeout for these two commands is 5 seconds; a global `--timeout` overrides it.
+
+The result is the usual mutation receipt (`created_surfaces`, `focused_*`, `model_revision`,
+`revision`) plus:
+
+```json
+{"ok": false, "items": [
+  {"index": 0, "kind": "file", "ok": true, "path": "/abs/README.md", "mode": "markdown",
+   "deduplicated": false, "surface": {"surface_id": 9, "surface_uuid": "..."}},
+  {"index": 1, "kind": "url", "ok": true, "url": "https://example.org/docs", "surface": {}},
+  {"index": 2, "kind": "file", "ok": false, "path": "/abs/src",
+   "error": {"code": "is_directory", "message": "..."}}]}
+```
+
+`ok` is true only when every item succeeded; opening an already open file is a success with
+`deduplicated: true`; no second tab is created and the existing one is selected when focus applies. Per-item error
+codes are `invalid_operand`, `unsupported_scheme`, `invalid_url`, `not_found`,
+`permission_denied`, `is_directory`, `not_regular_file`, `too_large`, `binary_file`,
+`invalid_utf8`, `content_mismatch`, `path_not_utf8`, `io_error`, `probe_timeout`,
+`file_worker_unavailable`, `busy`, `file_capacity`, `browser_capacity` and `tab_capacity`.
+Messages never contain file content. A stale `--expect-revision`, an unknown target, a policy
+refusal or a transport failure is an ordinary control error with no `items`.
+
+The CLI prints the full result on stdout. Exit status 0 means every item succeeded. If any item
+failed, stdout still carries the full per-item JSON, stderr says `zmux: N of M items failed` and
+the status is 1. A whole-request failure prints `zmux: code: message` and exits 1. Nothing is
+retried: after a timeout, inspect `list-pane-surfaces` before opening again.
+
 ## Policy changes and scope
 
 The server's `set_policy` API changes access without replacing its socket. Admissions

@@ -26,7 +26,7 @@ if result.returncode != 0:
     sys.stderr.write(result.stderr)
     raise SystemExit(f"C ABI executable failed with status {result.returncode}")
 responses = [json.loads(line) for line in result.stdout.splitlines()]
-assert len(responses) == 7, responses
+assert len(responses) == 8, responses
 assert responses[0]["error"]["code"] == "unsupported_version"
 assert responses[1]["error"]["code"] == "invalid_request"
 created = responses[2]
@@ -38,7 +38,10 @@ assert responses[3]["error"]["code"] == "action_rejected"
 assert responses[4]["error"]["code"] == "invalid_request"
 assert responses[5]["snapshot"] == created["snapshot"]
 assert responses[6]["snapshot"]["revision"] == 0 and responses[6]["snapshot"]["workspaces"] == []
-print("C ABI checks passed: wire decoding, ownership, stale handles, bounded copy, and capacity-before-mutation.")
+# The trusted file channel round trip (open, attach, framed raw-body save, stale-view refusal,
+# detach) is asserted inside the C caller; it reports its completion as the final line.
+assert responses[7] == {"file_channel": "ok", "saved_bytes": 13}, responses[7]
+print("C ABI checks passed: wire decoding, ownership, stale handles, bounded copy, capacity-before-mutation and the framed trusted file channel.")
 
 lease_executable = libdir / "zmux-native-profile-lease-check"
 subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",

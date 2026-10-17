@@ -481,3 +481,551 @@ fn browser_tabs_have_no_pty_and_restore_the_observed_url_without_replaying_navig
     assert_ne!(restored.id, browser.id);
     assert!(state.closed_items.is_empty());
 }
+
+// ---- file surfaces (CU-14 S1): identity and a trusted dirty bit, never content ----
+
+fn file_pane(store: &mut WorkspaceStore) -> PaneId {
+    workspace(store).1
+}
+fn create_file(
+    store: &mut WorkspaceStore,
+    pane: PaneId,
+    path: &str,
+    mode: FileMode,
+) -> Result<Transition, ActionError> {
+    store.apply(Action::CreateFile {
+        pane_id: pane,
+        path: path.into(),
+        mode,
+        focus: true,
+    })
+}
+fn pane_surfaces(store: &WorkspaceStore, pane: PaneId) -> Vec<Surface> {
+    store
+        .snapshot()
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .find(|p| p.id == pane)
+        .unwrap()
+        .surfaces
+        .clone()
+}
+fn last_surface(store: &WorkspaceStore, pane: PaneId) -> Surface {
+    pane_surfaces(store, pane).pop().unwrap()
+}
+fn mark_dirty(store: &mut WorkspaceStore, surface: SurfaceId, dirty: bool) {
+    store
+        .apply(Action::ObserveFile {
+            surface_id: surface,
+            dirty,
+        })
+        .unwrap();
+}
+
+#[test]
+fn create_file_appends_a_tab_without_session_effects_and_honours_focus() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, terminal, _) = workspace(&mut store);
+    let created = create_file(
+        &mut store,
+        pane,
+        "/home/a/proj/README.md",
+        FileMode::Markdown,
+    )
+    .expect("absolute canonical path is accepted");
+    assert!(created.effects.is_empty(), "file tabs never start sessions");
+    let file = last_surface(&store, pane);
+    assert_eq!(file.kind, SurfaceKind::File);
+    assert_eq!(file.session_id, None);
+    assert_eq!(file.url, None);
+    assert_eq!(file.navigation, 0);
+    assert_eq!(file.browser_profile_id, None);
+    assert_eq!(file.title, "README.md");
+    assert_eq!(
+        file.file,
+        Some(FileSurface {
+            path: "/home/a/proj/README.md".into(),
+            mode: FileMode::Markdown,
+            dirty: false
+        })
+    );
+    let snapshot = store.snapshot();
+    assert_eq!(
+        snapshot.workspaces[0].root.panes()[0].selected_surface,
+        file.id
+    );
+    // focus:false leaves selection alone; terminals keep `file == None`.
+    let terminal_surface = pane_surfaces(&store, pane)
+        .into_iter()
+        .find(|s| s.id == terminal)
+        .unwrap();
+    assert_eq!(terminal_surface.file, None);
+    store
+        .apply(Action::SelectSurface {
+            surface_id: terminal,
+        })
+        .unwrap();
+    let action: Action = serde_json::from_value(serde_json::json!({
+        "action":"create_file", "pane_id":pane, "path":"/home/a/main.rs", "mode":"text", "focus":false
+    }))
+    .unwrap();
+    store.apply(action).unwrap();
+    assert_eq!(
+        store.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        terminal
+    );
+    // Legacy-style requests omit focus; the new tab is then selected like a browser.
+    let action: Action = serde_json::from_value(serde_json::json!({
+        "action":"create_file", "pane_id":pane, "path":"/home/a/pic.png", "mode":"image"
+    }))
+    .unwrap();
+    store.apply(action).unwrap();
+    let pane_now = store.snapshot().workspaces[0].root.panes()[0].clone();
+    assert_eq!(
+        pane_now.selected_surface,
+        pane_now.surfaces.last().unwrap().id
+    );
+}
+
+#[test]
+fn create_file_rejects_bad_paths_and_modes_without_touching_the_store() {
+    let mut store = WorkspaceStore::default();
+    let pane = file_pane(&mut store);
+    let before = store.snapshot();
+    let next = store.next_identifier();
+    let too_long = format!("/{}", "a".repeat(4096));
+    for path in [
+        "",
+        "relative/file.txt",
+        "file.txt",
+        "~/file.txt",
+        "/",
+        "/tmp/dir/",
+        "/tmp/../etc/passwd",
+        "/tmp/./file",
+        "/tmp//file",
+        "/tmp/fi\0le",
+        "/tmp/fi\nle",
+        "/tmp/fi\u{7f}le",
+        "/tmp/\u{85}file",
+        too_long.as_str(),
+    ] {
+        let error = create_file(&mut store, pane, path, FileMode::Text)
+            .expect_err(&format!("{path:?} must be rejected"));
+        assert!(
+            matches!(error, ActionError::InvalidOperation(_)),
+            "{path:?}: {error:?}"
+        );
+        assert_eq!(store.snapshot(), before, "{path:?}");
+        assert_eq!(store.next_identifier(), next, "{path:?}");
+    }
+    // The limit is on bytes: a path of exactly 4096 bytes is the largest accepted.
+    let longest = format!("/{}", "b".repeat(4095));
+    create_file(&mut store, pane, &longest, FileMode::Text).unwrap();
+    assert_eq!(last_surface(&store, pane).title.chars().count(), 128);
+    // Unknown modes and fields never deserialize.
+    for wire in [
+        serde_json::json!({"action":"create_file","pane_id":pane,"path":"/a","mode":"video"}),
+        serde_json::json!({"action":"create_file","pane_id":pane,"path":"/a","mode":"text","dirty":true}),
+        serde_json::json!({"action":"create_file","pane_id":pane,"path":"/a"}),
+    ] {
+        assert!(serde_json::from_value::<Action>(wire).is_err());
+    }
+    assert!(
+        create_file(&mut store, PaneId(9999), "/tmp/x", FileMode::Text).is_err(),
+        "unknown pane"
+    );
+}
+
+#[test]
+fn create_file_rejects_duplicate_paths_and_a_full_pane() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/one.txt", FileMode::Text).unwrap();
+    let before = store.snapshot();
+    // Exact canonical duplicate, even in another mode, is refused in any pane.
+    for mode in [FileMode::Text, FileMode::Markdown] {
+        let error = create_file(&mut store, pane, "/tmp/one.txt", mode).unwrap_err();
+        assert!(error.to_string().contains("already open"), "{error}");
+    }
+    let (_, other_pane, _, _) = workspace(&mut store);
+    let before_other = store.snapshot();
+    let error = create_file(&mut store, other_pane, "/tmp/one.txt", FileMode::Text).unwrap_err();
+    assert!(error.to_string().contains("already open"), "{error}");
+    assert_eq!(store.snapshot(), before_other);
+    assert_ne!(before, before_other);
+    // Case variants are different canonical strings (documented gap, D18).
+    create_file(&mut store, pane, "/tmp/ONE.txt", FileMode::Text).unwrap();
+    // Fill the pane to MAX_SURFACES_PER_PANE; the next file is a capacity error.
+    while pane_surfaces(&store, pane).len() < MAX_SURFACES_PER_PANE {
+        let path = format!("/tmp/fill-{}.txt", pane_surfaces(&store, pane).len());
+        create_file(&mut store, pane, &path, FileMode::Text).unwrap();
+    }
+    let full = store.snapshot();
+    assert_eq!(
+        create_file(&mut store, pane, "/tmp/overflow.txt", FileMode::Text).unwrap_err(),
+        ActionError::Capacity {
+            resource: "tabs per pane",
+            limit: MAX_SURFACES_PER_PANE
+        }
+    );
+    assert_eq!(store.snapshot(), full);
+}
+
+#[test]
+fn observe_file_sets_and_clears_dirty_only_on_editable_file_surfaces() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, terminal, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let text = last_surface(&store, pane).id;
+    create_file(&mut store, pane, "/tmp/b.md", FileMode::Markdown).unwrap();
+    let markdown = last_surface(&store, pane).id;
+    create_file(&mut store, pane, "/tmp/c.png", FileMode::Image).unwrap();
+    let image = last_surface(&store, pane).id;
+    create_file(&mut store, pane, "/tmp/d.pdf", FileMode::Pdf).unwrap();
+    let pdf = last_surface(&store, pane).id;
+    store
+        .apply(Action::CreateBrowser {
+            profile_id: None,
+            focus: false,
+            pane_id: pane,
+            url: "https://example.com/".into(),
+        })
+        .unwrap();
+    let browser = last_surface(&store, pane).id;
+    for id in [text, markdown] {
+        mark_dirty(&mut store, id, true);
+        let dirty = |store: &WorkspaceStore| {
+            pane_surfaces(store, pane)
+                .into_iter()
+                .find(|s| s.id == id)
+                .unwrap()
+                .file
+                .unwrap()
+                .dirty
+        };
+        assert!(dirty(&store));
+        mark_dirty(&mut store, id, false);
+        assert!(!dirty(&store));
+    }
+    let before = store.snapshot();
+    let observe = |id, dirty| Action::ObserveFile {
+        surface_id: id,
+        dirty,
+    };
+    for id in [terminal, browser] {
+        for dirty in [true, false] {
+            assert!(store.apply(observe(id, dirty)).is_err(), "{id:?}");
+        }
+    }
+    for id in [image, pdf] {
+        assert!(
+            store.apply(observe(id, true)).is_err(),
+            "{id:?} is never dirty"
+        );
+    }
+    assert!(store.apply(observe(SurfaceId(9999), true)).is_err());
+    assert_eq!(
+        store.snapshot(),
+        before,
+        "rejections leave the store untouched"
+    );
+    // Clearing an already clean preview surface is an idempotent no-op.
+    store.apply(observe(image, false)).unwrap();
+    assert_eq!(store.snapshot(), before);
+}
+
+#[test]
+fn observe_file_is_idempotent_and_does_not_advance_the_revision_when_unchanged() {
+    let mut store = WorkspaceStore::default();
+    let pane = file_pane(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let id = last_surface(&store, pane).id;
+    let clean = store.snapshot();
+    let same = store
+        .apply(Action::ObserveFile {
+            surface_id: id,
+            dirty: false,
+        })
+        .unwrap();
+    assert!(same.effects.is_empty());
+    assert_eq!(same.revision, clean.revision);
+    assert_eq!(store.snapshot(), clean);
+    let changed = store
+        .apply(Action::ObserveFile {
+            surface_id: id,
+            dirty: true,
+        })
+        .unwrap();
+    assert_eq!(changed.revision, clean.revision + 1);
+    let repeated = store
+        .apply(Action::ObserveFile {
+            surface_id: id,
+            dirty: true,
+        })
+        .unwrap();
+    assert_eq!(repeated.revision, changed.revision);
+    assert_eq!(store.snapshot().revision, changed.revision);
+}
+
+#[test]
+fn close_paths_refuse_dirty_file_atomically_and_succeed_once_clean() {
+    // CloseSurface
+    let mut store = WorkspaceStore::default();
+    let (_, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let file = last_surface(&store, pane).id;
+    mark_dirty(&mut store, file, true);
+    let before = store.snapshot();
+    let next = store.next_identifier();
+    let error = store
+        .apply(Action::CloseSurface { surface_id: file })
+        .unwrap_err();
+    assert!(error.to_string().contains("unsaved changes"), "{error}");
+    assert_eq!(store.snapshot(), before);
+    assert_eq!(store.next_identifier(), next);
+    mark_dirty(&mut store, file, false);
+    store
+        .apply(Action::CloseSurface { surface_id: file })
+        .unwrap();
+
+    // CloseOtherSurfaces: only the tabs that would be closed matter.
+    let mut store = WorkspaceStore::default();
+    let (_, pane, terminal, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let file = last_surface(&store, pane).id;
+    mark_dirty(&mut store, file, true);
+    let before = store.snapshot();
+    assert!(
+        store
+            .apply(Action::CloseOtherSurfaces {
+                surface_id: terminal
+            })
+            .is_err()
+    );
+    assert_eq!(store.snapshot(), before);
+    store
+        .apply(Action::CloseOtherSurfaces { surface_id: file })
+        .expect("a dirty file that stays open does not block closing its siblings");
+    assert_eq!(pane_surfaces(&store, pane).len(), 1);
+    mark_dirty(&mut store, file, false);
+
+    // ClosePane
+    let mut store = WorkspaceStore::default();
+    let (_, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Markdown).unwrap();
+    let file = last_surface(&store, pane).id;
+    store
+        .apply(Action::SplitPane {
+            pane_id: pane,
+            axis: Axis::Horizontal,
+        })
+        .unwrap();
+    mark_dirty(&mut store, file, true);
+    let before = store.snapshot();
+    assert!(store.apply(Action::ClosePane { pane_id: pane }).is_err());
+    assert_eq!(store.snapshot(), before);
+    mark_dirty(&mut store, file, false);
+    store.apply(Action::ClosePane { pane_id: pane }).unwrap();
+
+    // CloseWorkspace
+    let mut store = WorkspaceStore::default();
+    let (workspace_id, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let file = last_surface(&store, pane).id;
+    mark_dirty(&mut store, file, true);
+    let before = store.snapshot();
+    assert!(
+        store
+            .apply(Action::CloseWorkspace { workspace_id })
+            .is_err()
+    );
+    assert_eq!(store.snapshot(), before);
+    mark_dirty(&mut store, file, false);
+    store
+        .apply(Action::CloseWorkspace { workspace_id })
+        .unwrap();
+
+    // CloseWindow reaches the same guard through its workspaces.
+    let mut store = WorkspaceStore::default();
+    workspace(&mut store);
+    store.apply(Action::CreateWindow { focus: false }).unwrap();
+    let state = store.snapshot();
+    let window = state.windows[1].id;
+    let window_workspace = state.windows[1].selected_workspace.unwrap();
+    let window_pane = state
+        .workspaces
+        .iter()
+        .find(|w| w.id == window_workspace)
+        .unwrap()
+        .focused_pane;
+    create_file(&mut store, window_pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let file = last_surface(&store, window_pane).id;
+    mark_dirty(&mut store, file, true);
+    let before = store.snapshot();
+    let next = store.next_identifier();
+    assert!(
+        store
+            .apply(Action::CloseWindow { window_id: window })
+            .is_err()
+    );
+    assert_eq!(store.snapshot(), before);
+    assert_eq!(store.next_identifier(), next);
+    mark_dirty(&mut store, file, false);
+    store
+        .apply(Action::CloseWindow { window_id: window })
+        .unwrap();
+}
+
+#[test]
+fn reopen_file_resets_dirty_and_rejects_open_path() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.md", FileMode::Markdown).unwrap();
+    let original = last_surface(&store, pane);
+    store
+        .apply(Action::RenameSurface {
+            surface_id: original.id,
+            name: "notes".into(),
+        })
+        .unwrap();
+    store
+        .apply(Action::CloseSurface {
+            surface_id: original.id,
+        })
+        .unwrap();
+    let effects = store
+        .apply(Action::ReopenClosed { closed_id: None })
+        .unwrap()
+        .effects;
+    assert!(effects.is_empty(), "reopening a file starts no session");
+    let reopened = last_surface(&store, pane);
+    assert_ne!(reopened.id, original.id, "a fresh surface identity");
+    assert_eq!(reopened.title, "notes");
+    assert_eq!(
+        reopened.file,
+        Some(FileSurface {
+            path: "/tmp/a.md".into(),
+            mode: FileMode::Markdown,
+            dirty: false
+        })
+    );
+    assert!(store.snapshot().closed_items.is_empty());
+
+    // The path was opened elsewhere while the tab was closed: explicit failure, history kept.
+    store
+        .apply(Action::CloseSurface {
+            surface_id: reopened.id,
+        })
+        .unwrap();
+    let (_, other_pane, _, _) = workspace(&mut store);
+    create_file(&mut store, other_pane, "/tmp/a.md", FileMode::Text).unwrap();
+    let before = store.snapshot();
+    let error = store
+        .apply(Action::ReopenClosed { closed_id: None })
+        .unwrap_err();
+    assert!(error.to_string().contains("already open"), "{error}");
+    assert_eq!(store.snapshot(), before);
+    assert_eq!(before.closed_items.len(), 1);
+}
+
+#[test]
+fn reopening_a_closed_pane_or_workspace_keeps_file_paths_clean() {
+    let mut store = WorkspaceStore::default();
+    let (workspace_id, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    create_file(&mut store, pane, "/tmp/b.pdf", FileMode::Pdf).unwrap();
+    store
+        .apply(Action::CloseWorkspace { workspace_id })
+        .unwrap();
+    let effects = store
+        .apply(Action::ReopenClosed { closed_id: None })
+        .unwrap()
+        .effects;
+    assert_eq!(sessions(&effects).len(), 1, "only the terminal restarts");
+    let state = store.snapshot();
+    let files: Vec<_> = state
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .flat_map(|p| p.surfaces.iter())
+        .filter_map(|s| s.file.clone())
+        .collect();
+    assert_eq!(files.len(), 2);
+    assert!(files.iter().all(|f| !f.dirty));
+}
+
+#[test]
+fn move_surface_keeps_file_state() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, _, _) = workspace(&mut store);
+    create_file(&mut store, pane, "/tmp/a.txt", FileMode::Text).unwrap();
+    let file = last_surface(&store, pane);
+    mark_dirty(&mut store, file.id, true);
+    let (_, destination, _, _) = workspace(&mut store);
+    let effects = store
+        .apply(Action::MoveSurface {
+            surface_id: file.id,
+            pane_id: destination,
+            index: 1,
+        })
+        .unwrap()
+        .effects;
+    assert!(effects.is_empty());
+    let moved = last_surface(&store, destination);
+    assert_eq!(moved.id, file.id);
+    assert_eq!(
+        moved.file,
+        Some(FileSurface {
+            path: "/tmp/a.txt".into(),
+            mode: FileMode::Text,
+            dirty: true
+        })
+    );
+}
+
+#[test]
+fn snapshot_serializes_file_surface_shape() {
+    let mut store = WorkspaceStore::default();
+    let (_, pane, terminal, _) = workspace(&mut store);
+    create_file(
+        &mut store,
+        pane,
+        "/Users/a/proj/README.md",
+        FileMode::Markdown,
+    )
+    .unwrap();
+    let wire = serde_json::to_value(store.snapshot()).unwrap();
+    let surfaces = &wire["workspaces"][0]["root"]["pane"]["surfaces"];
+    assert_eq!(surfaces[0]["id"], terminal.0);
+    assert_eq!(surfaces[0]["kind"], "terminal");
+    assert!(surfaces[0]["file"].is_null());
+    let file = &surfaces[1];
+    assert_eq!(file["kind"], "file");
+    assert!(file["session_id"].is_null());
+    assert!(file["url"].is_null());
+    assert_eq!(file["navigation"], 0);
+    assert!(file["browser_profile_id"].is_null());
+    assert_eq!(file["title"], "README.md");
+    assert!(file["cwd"].is_null());
+    assert!(file["remote"].is_null());
+    assert!(file["local_tmux"].is_null());
+    assert!(file["local_zellij"].is_null());
+    assert!(file["local_zellij_completion"].is_null());
+    assert_eq!(
+        file["file"],
+        serde_json::json!({"path":"/Users/a/proj/README.md","mode":"markdown","dirty":false})
+    );
+    assert_eq!(wire["model_version"], 7);
+    assert_eq!(
+        serde_json::to_value(FileMode::Pdf).unwrap(),
+        serde_json::json!("pdf")
+    );
+}
+
+#[test]
+fn model_version_is_seven() {
+    assert_eq!(MODEL_VERSION, 7);
+    assert_eq!(WorkspaceStore::default().snapshot().model_version, 7);
+}

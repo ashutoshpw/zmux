@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+if [ "$(uname -s)" != Darwin ]; then
+    echo 'File load gate acceptance requires macOS (Swift toolchain).' >&2
+    exit 1
+fi
+scratch=$(mktemp -d /tmp/zmux-file-load-gate.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT HUP INT TERM
+xcrun swiftc -parse-as-library -swift-version 6 -strict-concurrency=complete -warnings-as-errors \
+    apps/macos/Sources/FileLoadGate.swift tools/native-fixtures/file-load-gate.swift \
+    -o "$scratch/file-load-gate"
+"$scratch/file-load-gate"

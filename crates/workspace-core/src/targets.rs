@@ -650,6 +650,12 @@ pub enum TargetAction {
     NavigateBrowser {
         url: String,
     },
+    CreateFile {
+        path: String,
+        mode: crate::FileMode,
+        #[serde(default = "crate::default_focus")]
+        focus: bool,
+    },
 }
 impl TargetAction {
     pub fn resolve(
@@ -763,6 +769,12 @@ impl TargetAction {
             Self::NavigateBrowser { url } => Action::NavigateBrowser {
                 surface_id: target.surface,
                 url,
+            },
+            Self::CreateFile { path, mode, focus } => Action::CreateFile {
+                pane_id: target.pane,
+                path,
+                mode,
+                focus,
             },
         })
     }

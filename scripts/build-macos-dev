@@ -94,7 +94,7 @@ for arch in architectures:
     run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete", "-warnings-as-errors", "-O", "-g",
          "-target", f"{arch}-apple-macosx14.0", "-sdk", sdk,
          "-import-objc-header", str(root / "crates/native-bridge/include/zmux.h"),
-         *map(str, sources), "-L", str(frameworks), "-lzmux_native_bridge", "-framework", "AppKit", "-framework", "WebKit", "-framework", "UserNotifications", "-framework", "AuthenticationServices", "-framework", "Security", "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-framework", "IOKit",
+         *map(str, sources), "-L", str(frameworks), "-lzmux_native_bridge", "-framework", "AppKit", "-framework", "WebKit", "-framework", "UserNotifications", "-framework", "AuthenticationServices", "-framework", "Security", "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers", "-framework", "IOKit", "-framework", "PDFKit",
          "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks", "-o", str(binary)])
     binaries.append(binary)
 executable = macos / "zmux-app"
