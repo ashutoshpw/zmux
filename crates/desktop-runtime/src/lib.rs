@@ -7,6 +7,8 @@ pub mod control_credentials;
 pub mod control_policy;
 mod download_paths;
 pub mod downloads;
+pub mod file_io;
+pub mod files;
 pub mod inspection;
 pub mod local_tmux;
 pub mod local_zellij;
@@ -63,7 +65,80 @@ use zmux_workspace_core::{
 
 pub const MAX_TERMINALS: usize = 8;
 pub const MAX_BROWSERS: usize = 4;
+/// Desktop-wide cap on file tabs, beside the terminal and browser caps.
+pub const MAX_FILE_SURFACES: usize = 16;
 const MAX_COMMANDS: usize = 32;
+
+/// File tabs name local paths that only a canonicalising opener may choose, and their
+/// dirty bit may only come from the native view that holds the unsaved text.
+fn is_trusted_file_action(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::CreateFile { .. } | Action::ObserveFile { .. }
+    )
+}
+fn trusted_file_action_error() -> DesktopError {
+    DesktopError::Failure(
+        "file surfaces require the trusted file opener and native document owner".into(),
+    )
+}
+/// Check the optimistic revision guard and bind an ambient local-tmux caller, exactly once,
+/// before an operation reads its target.
+pub(crate) fn prepare_target(
+    model: &Model,
+    request: &mut TargetRequest,
+) -> Result<(), DesktopError> {
+    request.validate_revision(model)?;
+    if request.caller.local_tmux.is_some() {
+        let explicit = request.scope.workspace.is_some()
+            || request.scope.pane.is_some()
+            || request.scope.surface.is_some();
+        if explicit {
+            // Explicit notification workspace attribution may use a unique
+            // ambient surface, but ambiguity cannot veto the hard scope.
+            request.caller = if matches!(&request.operation, TargetOperation::Notify { .. })
+                && request.scope.workspace.is_some()
+                && request.scope.pane.is_none()
+                && request.scope.surface.is_none()
+            {
+                request.caller.bind_local_tmux(model).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+        } else {
+            request.caller = request.caller.bind_local_tmux(model)?;
+        }
+    }
+    Ok(())
+}
+/// Browser and file tabs hold no process, so each has its own desktop-wide cap.
+fn ensure_surface_caps(model: &Model) -> Result<(), DesktopError> {
+    use zmux_workspace_core::SurfaceKind;
+    let (mut browsers, mut files) = (0, 0);
+    for surface in model
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .flat_map(|p| &p.surfaces)
+    {
+        match surface.kind {
+            SurfaceKind::Browser => browsers += 1,
+            SurfaceKind::File => files += 1,
+            SurfaceKind::Terminal => {}
+        }
+    }
+    if browsers > MAX_BROWSERS {
+        return Err(DesktopError::Failure(format!(
+            "development build supports at most {MAX_BROWSERS} browser tabs"
+        )));
+    }
+    if files > MAX_FILE_SURFACES {
+        return Err(DesktopError::Failure(format!(
+            "development build supports at most {MAX_FILE_SURFACES} file tabs; close one first"
+        )));
+    }
+    Ok(())
+}
 const UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 const TRANSFER_RECEIPT_TIMEOUT: Duration = Duration::from_secs(2);
 const NATIVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -143,6 +218,16 @@ pub enum Command {
     BrowserHost {
         event: BrowserHostEvent,
     },
+    /// Trusted native file view events (dirty observation, detach); never JSON.
+    #[serde(skip)]
+    FileHost {
+        event: files::FileHostEvent,
+    },
+    /// Probed `open` operands applied in order by the executor; never JSON.
+    #[serde(skip)]
+    OpenFiles {
+        batch: files::OpenBatch,
+    },
     #[serde(skip)]
     BrowserDrain,
     #[serde(skip)]
@@ -218,6 +303,8 @@ pub enum DesktopError {
     #[error("{0}")]
     Download(#[from] downloads::DownloadError),
     #[error("{0}")]
+    File(Box<files::FileFailure>),
+    #[error("{0}")]
     Policy(#[from] control_policy::PolicyError),
     #[error("target surface is not a terminal")]
     NotTerminal,
@@ -235,6 +322,33 @@ pub enum DesktopError {
     Timeout,
     #[error("{0}")]
     Failure(String),
+}
+impl From<files::FileFailure> for DesktopError {
+    fn from(failure: files::FileFailure) -> Self {
+        // Boxed: a failure carries a message and conflict detail, which would bloat every
+        // `Result<_, DesktopError>` in the executor.
+        DesktopError::File(Box::new(failure))
+    }
+}
+/// Map an executor-level failure onto the stable file error vocabulary.
+fn file_failure(error: DesktopError) -> files::FileFailure {
+    match error {
+        DesktopError::File(failure) => *failure,
+        DesktopError::QueueFull | DesktopError::Busy => files::FileFailure::new(
+            "busy",
+            "the desktop command queue is full; nothing was applied",
+        ),
+        DesktopError::Timeout => {
+            let mut failure = files::FileFailure::new(
+                "timeout",
+                "the desktop did not acknowledge in time; the outcome is unknown",
+            );
+            failure.outcome_unknown = true;
+            failure
+        }
+        DesktopError::Closed => files::FileFailure::new("closed", "desktop is closed"),
+        other => files::FileFailure::new("rejected", other.to_string()),
+    }
 }
 #[derive(Clone, Serialize)]
 pub struct Frame {
@@ -272,6 +386,8 @@ pub struct Snapshot {
     pub download_epoch: uuid::Uuid,
     pub downloads: Vec<downloads::DownloadRecord>,
     pub download_waits: Vec<downloads::WaitReceipt>,
+    /// File worker health and per-tab state with bounded operation receipts. Never content.
+    pub files: files::FilesSnapshot,
     pub browser_pending_requests: usize,
     pub last_request_id: u64,
     pub last_error: Option<String>,
@@ -287,6 +403,7 @@ struct Shared {
     shutdown: Mutex<Option<shutdown::Operation>>,
     snapshot: Mutex<Arc<Snapshot>>,
     profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
+    files: Arc<files::FileService>,
 }
 pub struct Desktop {
     sender: SyncSender<Envelope>,
@@ -323,6 +440,7 @@ pub(crate) struct Execution {
     pub workspace_order_result: Option<serde_json::Value>,
     pub workspace_group_result: Option<serde_json::Value>,
     pub surface_order_result: Option<serde_json::Value>,
+    pub open_result: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -335,6 +453,22 @@ pub struct TransferExecution {
 #[derive(Debug)]
 pub struct TransferExecutionError {
     pub error: DesktopError,
+    pub outcome_unknown: bool,
+}
+
+/// The executor's own answer to one acknowledged command: what the executor did, not whether the
+/// command was queued.
+#[derive(Debug)]
+pub struct CommandExecution {
+    pub result: Result<(), DesktopError>,
+    pub revision: u64,
+}
+
+#[derive(Debug)]
+pub struct CommandExecutionError {
+    pub error: DesktopError,
+    /// True when the command may already have run (acknowledgement timed out or the desktop
+    /// closed); such a command must not be replayed.
     pub outcome_unknown: bool,
 }
 
@@ -364,6 +498,8 @@ pub struct DesktopOptions {
     pub local_tmux_profile: local_tmux::Profile,
     pub local_zellij: Option<local_zellij::Configuration>,
     pub terminal_engine: terminal_engine::TerminalEngineConfig,
+    /// `None` uses the production file service configuration.
+    pub files: Option<files::FilesConfig>,
 }
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
@@ -396,8 +532,10 @@ impl Desktop {
             options.local_tmux_profile,
             options.local_zellij,
             terminal_engine,
+            options.files.unwrap_or_default(),
         )
     }
+    #[allow(clippy::too_many_arguments)]
     fn start(
         shell: Shell,
         persistence: Option<sessions::SessionPersistence>,
@@ -406,7 +544,9 @@ impl Desktop {
         tmux_profile: local_tmux::Profile,
         zellij_configuration: Option<local_zellij::Configuration>,
         terminal_engine: Option<zmux_session_runtime::EngineOptions>,
+        files_config: files::FilesConfig,
     ) -> Result<Self, DesktopError> {
+        let files = Arc::new(files::FileService::start(files_config)?);
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
         let browser = BrowserRuntime::default();
         let downloads = downloads::DownloadRuntime::default();
@@ -421,6 +561,7 @@ impl Desktop {
             .map(|p| p.snapshot.clone())
             .unwrap_or_default();
         let shared = Arc::new(Shared {
+            files: Arc::clone(&files),
             profile_native,
             stop: AtomicBool::new(false),
             shutdown: Mutex::new(None),
@@ -451,6 +592,7 @@ impl Desktop {
                 download_epoch: downloads.epoch,
                 downloads: Vec::new(),
                 download_waits: Vec::new(),
+                files: files.snapshot(Instant::now()),
                 browser_pending_requests: 0,
                 last_request_id: 0,
                 last_error: None,
@@ -481,6 +623,7 @@ impl Desktop {
                     workspace_order_result: None,
                     workspace_group_result: None,
                     surface_order_result: None,
+                    open_result: None,
                     download_result: None,
                     profiles,
                     profile_operation_id: None,
@@ -623,6 +766,56 @@ impl Desktop {
         })
     }
 
+    /// Execute one workspace action or window command on the executor and return the executor's
+    /// own result for it, unlike `submit`, which only reports that the command was queued. Native
+    /// closes use this so a close the executor refuses (a dirty file tab, a terminal restoration
+    /// in progress) is seen as refused. Waits up to two seconds: call off the native UI thread,
+    /// and never replay a result with `outcome_unknown`.
+    pub fn execute_acknowledged(
+        &self,
+        request: Request,
+    ) -> Result<CommandExecution, CommandExecutionError> {
+        let refused = |error: DesktopError| CommandExecutionError {
+            error,
+            outcome_unknown: false,
+        };
+        if request.version != 1 {
+            return Err(refused(DesktopError::Failure(
+                "acknowledged dispatch requires protocol version 1".into(),
+            )));
+        }
+        if !matches!(
+            &request.payload,
+            Command::Action { .. } | Command::Windows { .. }
+        ) {
+            return Err(refused(DesktopError::Failure(
+                "acknowledged dispatch accepts only action and windows commands".into(),
+            )));
+        }
+        self.validate(&request).map_err(refused)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Envelope {
+            request,
+            acknowledgement: Some(sender),
+            authorization: None,
+            reply_deadline: None,
+        })
+        .map_err(refused)?;
+        let execution = receiver
+            .recv_timeout(NATIVE_COMMAND_TIMEOUT)
+            .map_err(|error| CommandExecutionError {
+                error: match error {
+                    mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
+                    mpsc::RecvTimeoutError::Disconnected => DesktopError::Closed,
+                },
+                outcome_unknown: true,
+            })?;
+        Ok(CommandExecution {
+            result: execution.result,
+            revision: execution.snapshot.revision,
+        })
+    }
+
     pub fn native_window_event(
         &self,
         event: windows::NativeWindowEvent,
@@ -647,6 +840,182 @@ impl Desktop {
         execution
             .download_result
             .ok_or_else(|| DesktopError::Failure("native download acknowledgement missing".into()))
+    }
+
+    /// The file service configuration in force (capabilities report these values).
+    pub fn files_config(&self) -> &files::FilesConfig {
+        self.shared.files.config()
+    }
+    /// Trusted in-process opener (also behind the bridge `open` op): probe each operand on the
+    /// file worker within the probe deadline, then let the executor apply the results in order.
+    /// Per-item failures are data in the result; only whole-request failures are `Err`.
+    pub fn file_open(
+        &self,
+        paths: Vec<String>,
+        force_mode: Option<zmux_workspace_core::FileMode>,
+        focus: bool,
+    ) -> Result<serde_json::Value, files::FileFailure> {
+        let items: Vec<_> = paths
+            .into_iter()
+            .map(|value| targets::OpenItem {
+                kind: targets::OpenItemKind::Path,
+                value,
+            })
+            .collect();
+        let force = match force_mode {
+            None => None,
+            Some(zmux_workspace_core::FileMode::Markdown) => Some(targets::OpenForceMode::Markdown),
+            Some(_) => {
+                return Err(files::FileFailure::new(
+                    "invalid_request",
+                    "only markdown can be forced when opening",
+                ));
+            }
+        };
+        let items = self.probe_open_items(&items, force)?;
+        self.open_planned(items, focus, Default::default(), Default::default(), None)
+    }
+    /// Probe every operand of one `open` off the executor, in order, under one deadline.
+    /// Items not examined before the deadline become `probe_timeout`; lexical refusals are
+    /// per-item results too. Only a malformed request (no items, too many) is an `Err`.
+    pub(crate) fn probe_open_items(
+        &self,
+        items: &[targets::OpenItem],
+        force: Option<targets::OpenForceMode>,
+    ) -> Result<Vec<files::OpenPlan>, files::FileFailure> {
+        self.ensure_files_open()?;
+        if items.is_empty() || items.len() > files::MAX_OPEN_ITEMS {
+            return Err(files::FileFailure::new(
+                "invalid_request",
+                format!("open takes 1 to {} items", files::MAX_OPEN_ITEMS),
+            ));
+        }
+        let force_mode = force.map(|_| zmux_workspace_core::FileMode::Markdown);
+        let deadline = Instant::now() + self.shared.files.config().probe_timeout;
+        Ok(items
+            .iter()
+            .map(|item| match item.kind {
+                targets::OpenItemKind::Path => {
+                    let probe = if Instant::now() >= deadline {
+                        Err(files::FileFailure::new(
+                            "probe_timeout",
+                            "the open deadline passed before this file was examined; nothing was opened",
+                        ))
+                    } else {
+                        self.shared
+                            .files
+                            .probe(&item.value, force_mode, deadline)
+                    };
+                    files::OpenPlan::File {
+                        operand: item.value.clone(),
+                        probe,
+                    }
+                }
+                targets::OpenItemKind::Url => match files::classify_url(&item.value, force_mode) {
+                    Ok(url) => files::OpenPlan::Url { url },
+                    Err(failure) => files::OpenPlan::Invalid {
+                        kind: "url",
+                        operand: item.value.clone(),
+                        failure,
+                    },
+                },
+            })
+            .collect())
+    }
+    /// Apply probed items on the executor. The target is resolved there, once.
+    pub(crate) fn open_planned(
+        &self,
+        items: Vec<files::OpenPlan>,
+        focus: bool,
+        scope: zmux_workspace_core::targets::TargetScope,
+        caller: zmux_workspace_core::targets::CallerContext,
+        expected_model_revision: Option<u64>,
+    ) -> Result<serde_json::Value, files::FileFailure> {
+        let execution = self
+            .execute_native(
+                Command::OpenFiles {
+                    batch: files::OpenBatch {
+                        focus,
+                        scope,
+                        caller,
+                        expected_model_revision,
+                        items,
+                    },
+                },
+                self.shared.files.config().command_timeout,
+            )
+            .map_err(file_failure)?;
+        execution.result.map_err(file_failure)?;
+        execution
+            .open_result
+            .ok_or_else(|| files::FileFailure::new("internal", "open acknowledgement missing"))
+    }
+    /// Trusted native view attach. Blocks the calling (non-UI) thread for at most the read timeout.
+    pub fn file_attach(
+        &self,
+        epoch: uuid::Uuid,
+        surface_id: SurfaceId,
+        host_id: uuid::Uuid,
+    ) -> Result<files::FileContent, files::FileFailure> {
+        self.ensure_files_open()?;
+        self.shared.files.attach(epoch, surface_id, host_id)
+    }
+    pub fn file_reload(
+        &self,
+        owner: &files::FileOwner,
+        discard: bool,
+    ) -> Result<files::FileContent, files::FileFailure> {
+        self.ensure_files_open()?;
+        self.shared.files.reload(owner, discard)
+    }
+    /// A timeout is `outcome_unknown`: never replay it. The snapshot's `last_op` resolves it.
+    pub fn file_save(
+        &self,
+        owner: &files::FileOwner,
+        base_generation: u64,
+        force: bool,
+        body: Vec<u8>,
+    ) -> Result<files::SaveReceipt, files::FileFailure> {
+        self.ensure_files_open()?;
+        self.shared.files.save(owner, base_generation, force, body)
+    }
+    /// Idempotent absolute-state write of the view's dirty bit; safe to retry until the
+    /// snapshot agrees. Returns the published revision.
+    pub fn file_observe(
+        &self,
+        owner: &files::FileOwner,
+        dirty: bool,
+    ) -> Result<u64, files::FileFailure> {
+        self.file_host(files::FileHostEvent::Observed {
+            owner: owner.clone(),
+            dirty,
+        })
+    }
+    pub fn file_detach(&self, owner: &files::FileOwner) -> Result<u64, files::FileFailure> {
+        self.file_host(files::FileHostEvent::Detach {
+            owner: owner.clone(),
+        })
+    }
+    fn file_host(&self, event: files::FileHostEvent) -> Result<u64, files::FileFailure> {
+        self.ensure_files_open()?;
+        match &event {
+            files::FileHostEvent::Observed { owner, .. }
+            | files::FileHostEvent::Detach { owner } => self.shared.files.check_owner(owner)?,
+        }
+        let execution = self
+            .execute_native(
+                Command::FileHost { event },
+                self.shared.files.config().command_timeout,
+            )
+            .map_err(file_failure)?;
+        execution.result.map_err(file_failure)?;
+        Ok(execution.snapshot.revision)
+    }
+    fn ensure_files_open(&self) -> Result<(), files::FileFailure> {
+        if self.shared.stop.load(Ordering::Acquire) {
+            return Err(files::FileFailure::new("closed", "desktop is closed"));
+        }
+        Ok(())
     }
 
     pub fn profile_reconcile(
@@ -765,7 +1134,9 @@ impl Desktop {
             NativeAttentionAction::Open { .. }
             | NativeAttentionAction::OpenInbox { .. }
             | NativeAttentionAction::JumpToUnread => true,
-            NativeAttentionAction::Dismiss { .. } | NativeAttentionAction::Reply { .. } => false,
+            NativeAttentionAction::Dismiss { .. }
+            | NativeAttentionAction::Reply { .. }
+            | NativeAttentionAction::Mutate { .. } => false,
             NativeAttentionAction::Event { .. } => {
                 return Err(DesktopError::Failure(
                     "use native_notification_event for notification observations".into(),
@@ -1037,6 +1408,7 @@ struct Worker {
     workspace_order_result: Option<serde_json::Value>,
     workspace_group_result: Option<serde_json::Value>,
     surface_order_result: Option<serde_json::Value>,
+    open_result: Option<serde_json::Value>,
     download_result: Option<serde_json::Value>,
     browser_operation_id: Option<u64>,
     browser_dispatch: Option<BrowserDispatchBatch>,
@@ -1164,6 +1536,10 @@ impl Worker {
                 .browser
                 .reconcile(&self.model.snapshot(), Instant::now());
             dirty |= self.downloads.poll(&self.model.snapshot(), Instant::now());
+            dirty |= self
+                .shared
+                .files
+                .poll(&self.model.snapshot(), Instant::now());
             match self.windows.reconcile(&self.model.snapshot()) {
                 Ok(changed) => dirty |= changed,
                 Err(error) => self.last_error = Some(error.to_string()),
@@ -1244,12 +1620,13 @@ impl Worker {
         self.workspace_order_result = None;
         self.workspace_group_result = None;
         self.surface_order_result = None;
+        self.open_result = None;
         // Capture creation receipts on the same executor as the mutation. Selection is
         // independent: a no-focus split must still identify its new objects precisely.
         let previous_model = if acknowledgement.is_some()
             && matches!(
                 &request.payload,
-                Command::Action { .. } | Command::Targeted { .. }
+                Command::Action { .. } | Command::Targeted { .. } | Command::OpenFiles { .. }
             ) {
             Some(self.model.snapshot())
         } else {
@@ -1360,6 +1737,7 @@ impl Worker {
                 workspace_order_result: self.workspace_order_result.take(),
                 workspace_group_result: self.workspace_group_result.take(),
                 surface_order_result: self.surface_order_result.take(),
+                open_result: self.open_result.take(),
                 created_uploads: snapshot
                     .uploads
                     .iter()
@@ -1383,6 +1761,7 @@ impl Worker {
                     }
                     | Command::NativeDownload { .. }
                     | Command::BrowserHost { .. }
+                    | Command::FileHost { .. }
                     | Command::BrowserDrain
                     | Command::Windows {
                         request: windows::WindowRequest {
@@ -1402,6 +1781,7 @@ impl Worker {
                 Command::Session { .. }
                     | Command::Attention { .. }
                     | Command::BrowserHost { .. }
+                    | Command::FileHost { .. }
                     | Command::BrowserDrain
                     | Command::NativeDownload { .. }
                     | Command::NativeWindow { .. }
@@ -1549,6 +1929,8 @@ impl Worker {
                 }
                 Ok(())
             }
+            Command::FileHost { event } => self.file_host_event(event),
+            Command::OpenFiles { batch } => self.open_files(batch),
             Command::BrowserDrain => {
                 self.browser_dispatch = Some(
                     self.browser
@@ -1563,6 +1945,7 @@ impl Worker {
                 if restore {
                     self.browser
                         .reset("session restore replaced native browser hosts");
+                    self.shared.files.reset();
                     self.attention
                         .reset_native("session restore replaced notification targets");
                 }
@@ -1577,6 +1960,9 @@ impl Worker {
                 "browser observations require a trusted native document owner",
             )
             .into()),
+            Command::Action { action } if is_trusted_file_action(&action) => {
+                Err(trusted_file_action_error())
+            }
             Command::Action { action } => {
                 if Self::window_action_is_private(&action) {
                     return Err(DesktopError::Failure(
@@ -1650,27 +2036,7 @@ impl Worker {
     }
     fn targeted(&mut self, mut request: TargetRequest) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
-        request.validate_revision(&model)?;
-        if request.caller.local_tmux.is_some() {
-            let explicit = request.scope.workspace.is_some()
-                || request.scope.pane.is_some()
-                || request.scope.surface.is_some();
-            if explicit {
-                // Explicit notification workspace attribution may use a unique
-                // ambient surface, but ambiguity cannot veto the hard scope.
-                request.caller = if matches!(&request.operation, TargetOperation::Notify { .. })
-                    && request.scope.workspace.is_some()
-                    && request.scope.pane.is_none()
-                    && request.scope.surface.is_none()
-                {
-                    request.caller.bind_local_tmux(&model).unwrap_or_default()
-                } else {
-                    Default::default()
-                };
-            } else {
-                request.caller = request.caller.bind_local_tmux(&model)?;
-            }
-        }
+        prepare_target(&model, &mut request)?;
         let paste = matches!(&request.operation, TargetOperation::PasteText { .. });
         match request.operation {
             TargetOperation::SelectWorkspaceNumber { digit } => {
@@ -1701,6 +2067,9 @@ impl Worker {
                     *selector = self.profiles.resolve(selector)?.to_string();
                 }
                 let action = action.resolve(&model, &request.scope, &request.caller)?;
+                if is_trusted_file_action(&action) {
+                    return Err(trusted_file_action_error());
+                }
                 self.action(action)?;
                 self.acknowledge_focused();
                 Ok(())
@@ -1783,6 +2152,9 @@ impl Worker {
                 }
                 .map_err(|e| DesktopError::Failure(e.to_string()))
             }
+            TargetOperation::OpenItems { .. } => Err(DesktopError::Failure(
+                "open requires the control-socket probe path".into(),
+            )),
             _ => Err(DesktopError::Failure(
                 "read operation cannot mutate the desktop".into(),
             )),
@@ -2085,6 +2457,49 @@ impl Worker {
         let model = self.model.snapshot();
         self.attention.reconcile(&model);
         match action {
+            NativeAttentionAction::Mutate {
+                epoch,
+                identity_namespace,
+                through_id,
+                workspace_id,
+                notification_id,
+                mutation,
+            } => {
+                if identity_namespace != model.identity_namespace {
+                    return Err(attention::AttentionError::StaleTarget.into());
+                }
+                let filter = if let Some(id) = notification_id {
+                    if workspace_id.is_some() {
+                        return Err(attention::AttentionError::InvalidSelector(
+                            "native menu mutation accepts one scope",
+                        )
+                        .into());
+                    }
+                    NotificationFilter::Id(id)
+                } else if let Some(workspace_id) = workspace_id {
+                    if !model.workspaces.iter().any(|w| w.id == workspace_id) {
+                        return Err(attention::AttentionError::StaleTarget.into());
+                    }
+                    NotificationFilter::Workspace {
+                        identity_namespace,
+                        workspace_id,
+                    }
+                } else {
+                    NotificationFilter::All
+                };
+                let kind = match mutation {
+                    attention::NotificationMenuMutation::MarkRead => {
+                        NotificationMutationKind::MarkRead
+                    }
+                    attention::NotificationMenuMutation::Clear => NotificationMutationKind::Clear,
+                };
+                self.notification_mutation = Some(self.attention.apply_mutation(
+                    &filter,
+                    kind,
+                    Some(through_id),
+                    Some(epoch),
+                )?);
+            }
             NativeAttentionAction::Event { event } => self.attention.native_event(&model, event)?,
             NativeAttentionAction::Open { target } => {
                 self.open_notification(&target, true)?;
@@ -2233,19 +2648,7 @@ impl Worker {
                 "development build supports at most {MAX_TERMINALS} terminals; close a tab and wait for cleanup first"
             )));
         }
-        let browsers = candidate
-            .snapshot()
-            .workspaces
-            .iter()
-            .flat_map(|w| w.root.panes())
-            .flat_map(|p| &p.surfaces)
-            .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::Browser)
-            .count();
-        if browsers > MAX_BROWSERS {
-            return Err(DesktopError::Failure(format!(
-                "development build supports at most {MAX_BROWSERS} browser tabs"
-            )));
-        }
+        ensure_surface_caps(&candidate.snapshot())?;
         self.profiles
             .validate_transition(&self.model.snapshot(), &candidate.snapshot())?;
         self.validate_todo_candidate(&candidate)?;
@@ -2569,6 +2972,7 @@ impl Worker {
     fn publish(&mut self, closed: bool) -> Arc<Snapshot> {
         self.browser
             .reconcile(&self.model.snapshot(), Instant::now());
+        self.shared.files.reconcile(&self.model.snapshot());
         if let Err(error) = self.windows.reconcile(&self.model.snapshot()) {
             self.last_error = Some(error.to_string());
         }
@@ -2655,6 +3059,7 @@ impl Worker {
             download_epoch: self.downloads.epoch,
             downloads: self.downloads.records(),
             download_waits: self.downloads.wait_receipts(),
+            files: self.shared.files.snapshot(Instant::now()),
             browser_pending_requests: self.browser.pending_request_count(),
             last_request_id: self.last_request_id,
             last_error: self.last_error.clone(),
@@ -2670,5 +3075,50 @@ impl Worker {
             Err(error) => eprintln!("zmux desktop publication failed: {error}"),
         }
         published
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zmux_workspace_core::FileMode;
+
+    fn model_with_files(count: usize) -> Model {
+        let mut store = WorkspaceStore::default();
+        store
+            .apply(Action::CreateWorkspace { name: "w".into() })
+            .unwrap();
+        let mut pane = store.snapshot().workspaces[0].focused_pane;
+        for index in 0..count {
+            if index % 8 == 7 {
+                // Tab capacity is per pane; spread files over panes.
+                store
+                    .apply(Action::SplitPane {
+                        pane_id: pane,
+                        axis: zmux_workspace_core::Axis::Vertical,
+                    })
+                    .unwrap();
+                pane = store.snapshot().workspaces[0].focused_pane;
+            }
+            store
+                .apply(Action::CreateFile {
+                    pane_id: pane,
+                    path: format!("/tmp/zmux-cap-{index}.txt"),
+                    mode: FileMode::Text,
+                    focus: true,
+                })
+                .unwrap();
+        }
+        store.snapshot()
+    }
+
+    #[test]
+    fn file_surface_cap_is_enforced_independently_of_the_browser_cap() {
+        ensure_surface_caps(&model_with_files(MAX_FILE_SURFACES)).expect("at the cap is allowed");
+        let error = ensure_surface_caps(&model_with_files(MAX_FILE_SURFACES + 1)).unwrap_err();
+        assert!(
+            error.to_string().contains("at most 16 file tabs"),
+            "{error}"
+        );
     }
 }

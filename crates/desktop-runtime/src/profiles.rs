@@ -173,6 +173,7 @@ impl ProfileRuntime {
                 RestoreLimits {
                     terminals: 0,
                     browsers: 0,
+                    files: 0,
                 },
             )
             .map_err(failure)?;

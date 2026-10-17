@@ -2090,7 +2090,7 @@ fn workspace_groups_preserve_live_children_and_survive_actual_save_shutdown_and_
     });
     let disk: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
-    assert_eq!(disk["version"], 9);
+    assert_eq!(disk["version"], 10);
     assert_eq!(
         disk["workspace_groups"],
         serde_json::to_value(&expected_groups).unwrap()
@@ -2113,4 +2113,130 @@ fn workspace_groups_preserve_live_children_and_survive_actual_save_shutdown_and_
         "restart must reserve fresh runtime Session IDs while preserving group identity"
     );
     reopened.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+fn with_files(mut store: WorkspaceStore, count: usize) -> WorkspaceStore {
+    let pane = store.snapshot().workspaces[0].focused_pane;
+    for index in 0..count {
+        store
+            .apply(Action::CreateFile {
+                pane_id: pane,
+                path: format!("/tmp/zmux-session-file-{index}.md"),
+                mode: zmux_workspace_core::FileMode::Markdown,
+                focus: true,
+            })
+            .unwrap();
+    }
+    store
+}
+
+#[test]
+fn file_surface_persists_and_restores_through_the_private_state_directory() {
+    let directory = Directory::new();
+    let store = with_files(fixture(), 2);
+    directory.write(&serde_json::to_vec(&store.session_document().unwrap()).unwrap());
+    let desktop = directory.desktop();
+    let restored = wait(&desktop, ready);
+    let files: Vec<_> = restored
+        .model
+        .workspaces
+        .iter()
+        .flat_map(|w| w.root.panes())
+        .flat_map(|p| p.surfaces.iter())
+        .filter(|s| s.kind == zmux_workspace_core::SurfaceKind::File)
+        .cloned()
+        .collect();
+    assert_eq!(files.len(), 2);
+    for (index, file) in files.iter().enumerate() {
+        assert_eq!(file.session_id, None, "a file tab never owns a PTY");
+        let descriptor = file.file.as_ref().unwrap();
+        assert_eq!(
+            descriptor.path,
+            format!("/tmp/zmux-session-file-{index}.md")
+        );
+        assert_eq!(descriptor.mode, zmux_workspace_core::FileMode::Markdown);
+        assert!(!descriptor.dirty);
+    }
+    assert_eq!(
+        restored.control_frames.len(),
+        2,
+        "only the two terminals launch"
+    );
+    // A committed change autosaves; the persisted file carries path and mode, never state.
+    send(
+        &desktop,
+        7,
+        Command::Action {
+            action: Action::RenameSurface {
+                surface_id: files[0].id,
+                name: "renamed note".into(),
+            },
+        },
+    );
+    wait(&desktop, |s| s.last_request_id == 7);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    let disk = fs::read_to_string(directory.0.join("session.json")).unwrap();
+    assert!(!disk.contains("dirty"), "{disk}");
+    let disk: serde_json::Value = serde_json::from_str(&disk).unwrap();
+    assert_eq!(
+        disk["version"],
+        zmux_workspace_core::SESSION_DOCUMENT_VERSION
+    );
+    let saved = &disk["workspaces"][0]["root"]["second"]["pane"]["surfaces"];
+    assert_eq!(
+        saved
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["content"]["kind"] == "file")
+            .count(),
+        2
+    );
+    let reopened = directory.desktop();
+    let again = wait(&reopened, ready);
+    assert!(again.model.workspaces[0].root.panes().iter().any(|p| {
+        p.surfaces
+            .iter()
+            .any(|s| s.title == "renamed note" && s.file.is_some())
+    }));
+    reopened.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn restore_over_file_limit_is_rejected_with_recoverable_state() {
+    let directory = Directory::new();
+    let over = zmux_desktop_runtime::MAX_FILE_SURFACES + 1;
+    let store = with_files(fixture(), over);
+    let bytes = serde_json::to_vec(&store.session_document().unwrap()).unwrap();
+    directory.write(&bytes);
+    let desktop = directory.desktop();
+    let snapshot = wait(&desktop, ready);
+    assert!(!snapshot.persistence.autosave_enabled);
+    assert!(snapshot.persistence.error.is_some());
+    assert_eq!(snapshot.model.workspaces[0].name, "Terminal");
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+    assert_eq!(
+        fs::read(directory.0.join("session.json")).unwrap(),
+        bytes,
+        "the over-limit document is retained untouched for recovery"
+    );
+    // At the cap the same shape restores normally.
+    let at_cap = Directory::new();
+    let store = with_files(fixture(), zmux_desktop_runtime::MAX_FILE_SURFACES);
+    at_cap.write(&serde_json::to_vec(&store.session_document().unwrap()).unwrap());
+    let desktop = at_cap.desktop();
+    let restored = wait(&desktop, ready);
+    assert!(restored.persistence.error.is_none());
+    assert_eq!(
+        restored
+            .model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| p.surfaces.iter())
+            .filter(|s| s.file.is_some())
+            .count(),
+        zmux_desktop_runtime::MAX_FILE_SURFACES
+    );
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
 }

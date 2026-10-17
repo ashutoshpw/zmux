@@ -3,16 +3,19 @@
 //! V1 preserves selections; V2 adds browser profiles; V3 adds immutable local tmux
 //! descriptors; V4 adds canonical window membership; V5 adds workspace todos;
 //! V6 adds attach-only local Zellij identity; V7 adds bounded completed history;
-//! V8 adds explicit admitted-lifetime execution history while retaining V7 reads.
+//! V8 adds explicit admitted-lifetime execution history while retaining V7 reads;
+//! V9 adds workspace groups; V10 adds file surfaces (absolute path and mode only).
 //! Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
+//! A file surface persists its canonical path like a terminal persists its cwd; file
+//! content, hashes, the dirty bit and any view state are never saved.
 //! Page state and native split ratios need their own future schema version.
 use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 9;
+pub const SESSION_DOCUMENT_VERSION: u32 = 10;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -159,6 +162,11 @@ pub enum SavedContent {
         #[serde(default, skip_serializing_if = "SavedBrowserProfile::is_missing")]
         profile_id: SavedBrowserProfile,
     },
+    /// Session version 10 and later.
+    File {
+        path: String,
+        mode: FileMode,
+    },
 }
 
 /// Presence distinguishes a v1 descriptor from a v2 descriptor without discarding
@@ -237,6 +245,7 @@ impl From<&SavedSshConnection> for SshConnectionConfig {
 pub struct RestoreLimits {
     pub terminals: usize,
     pub browsers: usize,
+    pub files: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -244,6 +253,7 @@ pub struct ValidatedSessionDocument {
     document: SessionDocument,
     terminals: usize,
     browsers: usize,
+    files: usize,
 }
 impl ValidatedSessionDocument {
     /// The persistence worker reserves this ID with the fresh runtime IDs.
@@ -255,6 +265,9 @@ impl ValidatedSessionDocument {
     }
     pub fn browser_count(&self) -> usize {
         self.browsers
+    }
+    pub fn file_count(&self) -> usize {
+        self.files
     }
     pub fn next_id(&self) -> u64 {
         self.document.next_id
@@ -281,6 +294,8 @@ struct Validation {
     ids: HashSet<u64>,
     terminals: usize,
     browsers: usize,
+    files: usize,
+    file_paths: HashSet<String>,
     next_id: u64,
     version: u32,
     limits: RestoreLimits,
@@ -418,9 +433,21 @@ impl Validation {
                             }
                             self.browsers += 1;
                         }
+                        SavedContent::File { path, .. } => {
+                            if self.version < 10 {
+                                return Err(invalid("file surfaces require session version 10"));
+                            }
+                            surfaces::validate_file_path(path)
+                                .map_err(|e| invalid(e.to_string()))?;
+                            if !self.file_paths.insert(path.clone()) {
+                                return Err(invalid("file is already open in another tab"));
+                            }
+                            self.files += 1;
+                        }
                     }
                     if self.terminals > self.limits.terminals
                         || self.browsers > self.limits.browsers
+                        || self.files > self.limits.files
                     {
                         return Err(invalid("runtime surface capacity exceeded"));
                     }
@@ -470,6 +497,8 @@ impl SessionDocument {
             ids: HashSet::new(),
             terminals: 0,
             browsers: 0,
+            files: 0,
+            file_paths: HashSet::new(),
             next_id: self.next_id,
             version: self.version,
             limits,
@@ -511,7 +540,7 @@ impl SessionDocument {
             }
         }
         match (&self.workspace_groups, self.version) {
-            (Some(groups), 9) => {
+            (Some(groups), 9..=SESSION_DOCUMENT_VERSION) => {
                 workspace_groups::validate(
                     groups,
                     &self
@@ -528,7 +557,7 @@ impl SessionDocument {
             (None, 1..=8) => {}
             _ => {
                 return Err(invalid(
-                    "workspace groups are required only in session version 9",
+                    "workspace groups are required in session version 9 and later",
                 ));
             }
         }
@@ -536,6 +565,7 @@ impl SessionDocument {
             document: self,
             terminals: validation.terminals,
             browsers: validation.browsers,
+            files: validation.files,
         })
     }
 }
@@ -607,6 +637,14 @@ impl SavedTree {
                                         cwd: surface.cwd.clone(),
                                     },
                                 },
+                                SurfaceKind::File => {
+                                    let file =
+                                        surface.file.as_ref().expect("validated file descriptor");
+                                    SavedContent::File {
+                                        path: file.path.clone(),
+                                        mode: file.mode,
+                                    }
+                                }
                                 SurfaceKind::Browser => SavedContent::Browser {
                                     profile_id: surface.browser_profile_id.into(),
                                     url: surface
@@ -658,6 +696,26 @@ impl SavedTree {
                             local_tmux: None,
                             local_zellij: None,
                             local_zellij_completion: None,
+                            file: None,
+                        },
+                        SavedContent::File { path, mode } => Surface {
+                            id: saved.id,
+                            kind: SurfaceKind::File,
+                            session_id: None,
+                            url: None,
+                            navigation: 0,
+                            browser_profile_id: None,
+                            title: saved.title,
+                            cwd: None,
+                            remote: None,
+                            local_tmux: None,
+                            local_zellij: None,
+                            local_zellij_completion: None,
+                            file: Some(FileSurface {
+                                path,
+                                mode,
+                                dirty: false,
+                            }),
                         },
                         SavedContent::CompletedLocalZellijTerminal {
                             profile_id,
@@ -679,6 +737,7 @@ impl SavedTree {
                                 owner_uuid,
                             }),
                             local_zellij_completion: Some(history),
+                            file: None,
                         },
                         content => {
                             let session_id = ids.next().expect("validated injected session count");
@@ -803,6 +862,7 @@ impl WorkspaceStore {
         document.clone().validate(RestoreLimits {
             terminals: usize::MAX,
             browsers: usize::MAX,
+            files: usize::MAX,
         })?;
         Ok(document)
     }

@@ -49,6 +49,13 @@ dir="{dir}"
 case "$*" in
 *kill-session*)
     if [ -e "$dir/refuse-kill" ]; then echo "injected kill-session failure" >&2; exit 1; fi ;;
+*new-session*)
+    if [ -e "$dir/stall-created" ]; then
+        "{real}" "$@" || exit $?
+        touch "$dir/created"
+        sleep 60
+        exit 0
+    fi ;;
 *list-sessions*)
     if [ -e "$dir/slow-queries" ]; then
         n=$(cat "$dir/slow-queries")
@@ -58,6 +65,10 @@ case "$*" in
     if [ -e "$dir/clean-queries" ]; then
         n=$(cat "$dir/clean-queries")
         if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$dir/clean-queries"; exec "{real}" "$@"; fi
+        if [ -e "$dir/replace-created" ]; then
+            "{real}" -S "$dir/profile/server.sock" kill-session -t =dev || exit $?
+            "{real}" -S "$dir/profile/server.sock" new-session -d -s dev 'exec sleep 60' || exit $?
+        fi
         out=$("{real}" "$@"); rc=$?
         printf '%s\n' "$out" | tr '\t' '_'
         exit $rc
@@ -517,6 +528,56 @@ fn failed_rollback_reports_both_failures_and_leaves_the_session_visible_as_unman
     let list = f.owner.list().unwrap();
     assert!(list.sessions.is_empty());
     assert_eq!(list.unmanaged[0].name, "dev");
+}
+
+#[test]
+fn rollback_preserves_a_foreign_session_that_reused_the_created_name() {
+    let f = Fixture::faulty();
+    let kept = f.start("kept");
+    f.corrupt_queries_after(1);
+    fs::write(f.root.join("replace-created"), "").unwrap();
+    let error = f
+        .owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid session metadata"), "{error}");
+    f.restore_queries();
+    let list = f.owner.list().unwrap();
+    assert_eq!(list.sessions.len(), 1);
+    assert_eq!(list.sessions[0].id, kept.id);
+    assert_eq!(list.sessions[0].state, "live");
+    assert_eq!(list.unmanaged.len(), 1, "replacement must survive rollback");
+    assert_eq!(list.unmanaged[0].name, "dev");
+}
+
+#[test]
+fn cancellation_during_create_rolls_back_the_session() {
+    let f = Fixture::faulty();
+    fs::write(f.root.join("stall-created"), "").unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let owner = LocalTmux::new(f.root.join("profile"), f.wrapper())
+        .unwrap()
+        .with_cancellation(cancel.clone());
+    let created = f.root.join("created");
+    let trigger = thread::spawn(move || {
+        wait(|| created.exists());
+        cancel.store(true, Ordering::Release);
+    });
+    let error = owner
+        .start("dev", &f.root, Some("exec sleep 60"))
+        .unwrap_err()
+        .to_string();
+    trigger.join().unwrap();
+    assert!(error.contains("cancelled"), "{error}");
+    assert!(!error.contains("rollback"), "{error}");
+    let list = f.owner.list().unwrap();
+    assert!(
+        !list.server_running,
+        "cancelled create must remove its server"
+    );
+    assert!(list.sessions.is_empty());
+    assert!(list.unmanaged.is_empty());
 }
 
 #[test]

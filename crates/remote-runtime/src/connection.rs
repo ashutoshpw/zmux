@@ -7,7 +7,9 @@
 use crate::{MAX_COMMAND_BYTES, ProcessSpec, SSH_PROGRAM, SshDescriptor};
 use std::{
     fs, io,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
@@ -59,6 +61,7 @@ pub enum ConnectionError {
 #[derive(Debug)]
 pub struct ManagedConnection {
     descriptor: SshDescriptor,
+    integrate_shell: bool,
     root: PathBuf,
     control_path: PathBuf,
 }
@@ -77,10 +80,12 @@ impl ManagedConnection {
         #[cfg(unix)]
         {
             cleanup_sender().map_err(ConnectionError::CleanupWorker)?;
+            let integrate_shell = shell_integration_enabled(&descriptor);
             let root = create_private_root()?;
             let control_path = root.join(SOCKET_NAME);
             Ok(Self {
                 descriptor,
+                integrate_shell,
                 root,
                 control_path,
             })
@@ -108,6 +113,9 @@ impl ManagedConnection {
             "-tt".into(),
         ];
         args.extend(original.args);
+        if self.integrate_shell {
+            args.push(zmux_session_runtime::shell_integration::remote_command());
+        }
         ProcessSpec {
             program: SSH_PROGRAM.into(),
             args,
@@ -178,6 +186,40 @@ impl ManagedConnection {
             .to_str()
             .expect("generated SSH control path must be UTF-8")
             .into()
+    }
+}
+
+/// Resolve only whether OpenSSH already owns the remote command. This bounded
+/// probe runs on the launch worker; terminal_spec remains pure. In particular,
+/// never override a configured RemoteCommand or append a conflicting command.
+fn shell_integration_enabled(descriptor: &SshDescriptor) -> bool {
+    if descriptor.command().is_some()
+        || std::env::var_os("ZMUX_SHELL_INTEGRATION_DISABLED").as_deref()
+            == Some(std::ffi::OsStr::new("1"))
+    {
+        return false;
+    }
+    let mut command = Command::new("/usr/bin/ssh");
+    command
+        .arg("-G")
+        .args(descriptor.process_spec().args)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match crate::bounded_command::run(command, None) {
+        Ok(output) if output.success => !output.stdout.lines().any(|line| {
+            line.split_once(' ')
+                .is_some_and(|(key, value)| key == "remotecommand" && value != "none")
+        }),
+        _ => {
+            // Keep the ordinary SSH launch and its own config diagnostics when
+            // config cannot be resolved. Do not guess or print config secrets.
+            eprintln!(
+                "zmux: SSH config probe unavailable; automatic shell notifications disabled for this connection"
+            );
+            false
+        }
     }
 }
 

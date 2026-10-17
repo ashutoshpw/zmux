@@ -1,7 +1,7 @@
 import Foundation
 
-struct GridSize: Decodable, Sendable { let rows: Int; let cols: Int }
-struct TerminalColor: Decodable, Sendable {
+struct GridSize: Decodable, Sendable, Equatable { let rows: Int; let cols: Int }
+struct TerminalColor: Decodable, Sendable, Hashable {
     let kind: String
     let index: Int?
     let rgb: [Int]?
@@ -14,11 +14,11 @@ struct TerminalColor: Decodable, Sendable {
         else { index = nil; rgb = nil }
     }
 }
-struct TerminalStyle: Decodable, Sendable {
+struct TerminalStyle: Decodable, Sendable, Hashable {
     let foreground: TerminalColor; let background: TerminalColor
     let bold: Bool; let italic: Bool; let underline: Bool; let inverse: Bool
 }
-struct TerminalRun: Decodable, Sendable {
+struct TerminalRun: Decodable, Sendable, Equatable {
     let column: Int; let width: Int; let text: String; let style: TerminalStyle
 }
 struct TerminalRowCopy: Decodable, Sendable {
@@ -41,8 +41,8 @@ struct TerminalPointerEvent: Sendable {
     let modifiers: Int
 }
 struct Viewport: Decodable, Sendable {
-    let size: GridSize; let contents: String; let cursorRow: Int; let cursorCol: Int
-    let lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
+    let size: GridSize; var contents: String; let cursorRow: Int; var cursorCol: Int
+    var lines: [[TerminalRun]]; let applicationCursor: Bool; let bracketedPaste: Bool; let hideCursor: Bool
     let title: String?; let workingDirectory: String?
     let scrollbackOffset: Int; let scrollbackLines: Int; let alternateScreen: Bool
     let rowCopy: [TerminalRowCopy]?
@@ -205,7 +205,36 @@ struct CompletedLocalZellijHistory: Decodable, Sendable {
     let receipt: Receipt
     let viewport: CapturedViewport?
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory? }
+/// Identity and a trusted dirty mirror only; file content never travels in the snapshot.
+struct FileSurface: Decodable, Sendable { let path: String; let mode: String; let dirty: Bool }
+/// Rust-owned file worker state. It names what changed on disk, never the file bytes or hashes.
+struct FileOperationReceipt: Decodable, Sendable {
+    let opId: UInt64; let kind: String
+    /// `pending`, `completed`, `failed` or `outcome_unknown`.
+    let state: String
+    let code: String?
+}
+struct FileEntrySnapshot: Decodable, Sendable {
+    let surfaceId: UInt64
+    /// `unattached`, `in_sync`, `changed`, `deleted` or `unreadable`.
+    let state: String
+    let attached: Bool
+    let generation: UInt64; let diskGeneration: UInt64
+    let size: UInt64; let mtimeNs: Int64
+    let errorCode: String?
+    let lastOp: FileOperationReceipt?
+}
+struct FileWorkerSnapshot: Decodable, Sendable {
+    /// `ok` or `stalled`.
+    let state: String
+    let stalledMs: UInt64
+}
+struct FilesSnapshot: Decodable, Sendable {
+    let epoch: UUID
+    let worker: FileWorkerSnapshot
+    let entries: [FileEntrySnapshot]
+}
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory?; let file: FileSurface? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
@@ -229,7 +258,9 @@ indirect enum PaneTree: Decodable, Sendable {
             let surfaces = pane.surfaces.map { surface in
                 let session = surface.sessionId.map(String.init) ?? "none"
                 let completion = surface.localZellijCompletion?.receipt.bindingDigest ?? "live"
-                return "\(surface.id):\(session):\(completion)"
+                // Dirty state and file mode are deliberately not part of this key: a pane rebuild on the
+                // first keystroke of an editor would resign its first responder.
+                return "\(surface.id):\(surface.kind):\(session):\(completion)"
             }.joined(separator: ",")
             return "p\(pane.id):\(pane.selectedSurface):" + surfaces
         case .split(let axis, let a, let b): return "\(axis)(\(a.key),\(b.key))"
@@ -342,6 +373,7 @@ struct BrowserProfileState: Decodable, Sendable {
 struct WorkspaceIdentity: Decodable, Sendable { let workspaceId: UInt64; let uuid: UUID }
 struct DesktopSnapshot: Decodable, Sendable {
     let workspaceIdentities: [WorkspaceIdentity]
+    let files: FilesSnapshot
     let windowEpoch: UUID
     let windowRequests: [NativeWindowRequest]
     let windowHosts: [WindowHostToken]
@@ -357,7 +389,7 @@ struct DesktopSnapshot: Decodable, Sendable {
     let uploads: [UploadProgress]
     let workspaceMetadata: [WorkspaceMetadata]?
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
-    let revision: UInt64; var model: Model; let frames: [Frame]
+    let revision: UInt64; var model: Model; var frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool
     var workspace: Workspace? { model.workspaces.first { $0.id == model.focusedWorkspace } }
 }

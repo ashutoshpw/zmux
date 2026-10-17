@@ -984,3 +984,63 @@ fn scroll_history_updates_idle_snapshots_and_input_returns_to_live_output() {
     });
     desktop.shutdown(Duration::from_secs(5)).unwrap();
 }
+
+#[test]
+fn public_action_rejects_create_and_observe_file() {
+    use zmux_desktop_runtime::targets::{TargetOperation, TargetRequest};
+    use zmux_workspace_core::{
+        FileMode,
+        targets::{CallerContext, TargetAction, TargetScope},
+    };
+    let desktop = desktop();
+    let initial = wait(&desktop, ready);
+    let pane = initial.model.workspaces[0].focused_pane;
+    let terminal = initial.model.workspaces[0].root.panes()[0].selected_surface;
+    let before = desktop_snapshot::read(&desktop);
+    let create = Action::CreateFile {
+        pane_id: pane,
+        path: "/tmp/zmux-public.txt".into(),
+        mode: FileMode::Text,
+        focus: true,
+    };
+    let observe = Action::ObserveFile {
+        surface_id: terminal,
+        dirty: true,
+    };
+    for (id, action) in [(1, create.clone()), (2, observe)] {
+        send(&desktop, id, Command::Action { action });
+        let rejected = wait(&desktop, |s| s.last_request_id == id);
+        let error = rejected.last_error.as_deref().unwrap();
+        assert!(error.contains("trusted file opener"), "{error}");
+        assert_eq!(rejected.model, before.model);
+    }
+    // The targeted wire form carries the same action and is refused after resolution.
+    send(
+        &desktop,
+        3,
+        Command::Targeted {
+            request: TargetRequest {
+                scope: TargetScope::default(),
+                caller: CallerContext::default(),
+                expected_model_revision: None,
+                operation: TargetOperation::Action {
+                    action: TargetAction::CreateFile {
+                        path: "/tmp/zmux-public.txt".into(),
+                        mode: FileMode::Text,
+                        focus: true,
+                    },
+                },
+            },
+        },
+    );
+    let rejected = wait(&desktop, |s| s.last_request_id == 3);
+    assert!(
+        rejected
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("trusted file opener")
+    );
+    assert_eq!(rejected.model, before.model);
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}

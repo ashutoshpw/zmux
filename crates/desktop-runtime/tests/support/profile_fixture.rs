@@ -29,6 +29,7 @@ impl Fixture {
             RestoreLimits {
                 terminals: 8,
                 browsers: 4,
+                files: 16,
             },
         )
         .unwrap();
