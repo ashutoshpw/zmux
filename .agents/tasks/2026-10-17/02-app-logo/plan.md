@@ -23,15 +23,18 @@ Correct the existing asset provenance without inferring an upstream license.
 - [x] Inventory image consumers, packaging, notices, and existing validation.
 - [x] Replace the canonical asset and wire native, cloud, and README branding.
 - [x] Validate assets, cloud behavior, and `scripts/check`; record native limitations.
-- [ ] Commit only this task's files, push `main`, and verify remote SHA parity.
+- [x] Commit only this task's files, push `main`, and verify remote SHA parity.
 
 ## Acceptance criteria
 - [x] Native packaging retains transparency and generates its existing icon sizes.
 - [x] Menu, cloud header/favicon/touch icon, and README use the supplied artwork.
 - [x] Required available checks pass; unavailable macOS gates are explicit.
-- [ ] The validated commit is published to `origin/main`.
+- [x] The validated commit is published to `origin/main`.
 
 ## Validation notes
+- Implementation commit `fe29bf0b4e430641e85ccc0dfde3d2eb0854881a` was pushed to
+  `origin/main`; `git ls-remote` confirmed parity. Unrelated untracked work remains
+  untouched. This completion record is a documentation-only follow-up.
 - `RUST_TEST_THREADS=2 scripts/check` passes: formatting, workspace tests, Clippy,
   license inventory, native bridge and profile-lease C ABI checks.
 - Existing native status smoke checks the rendered status button and captures a
