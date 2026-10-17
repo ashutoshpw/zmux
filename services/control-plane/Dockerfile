@@ -11,6 +11,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY src ./src
+COPY public ./public
 COPY scripts ./scripts
 COPY migrations ./migrations
 USER bun

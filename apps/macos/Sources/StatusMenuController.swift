@@ -134,22 +134,29 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         return String(line.prefix(limit)) + (line.count > limit ? "…" : "")
     }
 
+    private static let appIcon: NSImage = {
+        guard let image = NSImage(named: "AppIcon") else {
+            preconditionFailure("The application bundle is missing AppIcon.icns")
+        }
+        return image
+    }()
+
     private static func icon(attention: Bool) -> NSImage {
-        // Original compact terminal mark. Template rendering follows the macOS
-        // menu bar appearance without baking either a dark or light background.
+        // Reuse the packaged app artwork at native/Retina resolution. Keep its
+        // colors rather than treating the rounded-square alpha as a template.
+        let appIcon = Self.appIcon
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.black.setStroke(); NSColor.black.setFill()
-            let chevron = NSBezierPath()
-            chevron.lineWidth = 1.8; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
-            chevron.move(to: NSPoint(x: 3, y: 13)); chevron.line(to: NSPoint(x: 8, y: 9))
-            chevron.line(to: NSPoint(x: 3, y: 5)); chevron.stroke()
-            let cursor = NSBezierPath()
-            cursor.lineWidth = 1.6; cursor.lineCapStyle = .round
-            cursor.move(to: NSPoint(x: 10, y: 5)); cursor.line(to: NSPoint(x: 15, y: 5)); cursor.stroke()
-            if attention { NSBezierPath(ovalIn: NSRect(x: 12, y: 11, width: 5, height: 5)).fill() }
+            appIcon.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18))
+            if attention {
+                NSColor.systemOrange.setFill()
+                NSColor.white.setStroke()
+                let badge = NSBezierPath(ovalIn: NSRect(x: 12, y: 12, width: 5, height: 5))
+                badge.lineWidth = 1
+                badge.fill(); badge.stroke()
+            }
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = false
         return image
     }
 
@@ -232,7 +239,7 @@ extension StatusMenuController {
               let selected = initial.model.focusedWorkspace,
               let other = initial.model.workspaces.first(where: { $0.id != selected }),
               let item = statusItem, let button = item.button, button.window != nil,
-              button.bounds.width > 0, button.image?.isTemplate == true else {
+              button.bounds.width > 0, button.image?.isTemplate == false else {
             throw BridgeFailure(message: "No visible native status button or inactive notification workspace")
         }
         let identity = ObjectIdentifier(self)

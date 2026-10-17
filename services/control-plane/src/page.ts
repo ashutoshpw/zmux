@@ -5,7 +5,7 @@ body { margin: 0; min-height: 100vh; background: #0d0e0c; color: var(--ink); fon
 body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(circle at 68% 18%, rgba(214,255,116,.07), transparent 32rem); }
 main { width: min(92vw, 430px); margin: 11vh auto 4rem; position: relative; }
 .mark { display: flex; align-items: center; gap: .7rem; margin-bottom: 2rem; letter-spacing: .08em; }
-.prompt { color: var(--accent); }
+.logo { width: 48px; height: 48px; flex: none; }
 .card { background: color-mix(in srgb, var(--panel) 94%, transparent); border: 1px solid var(--line); border-radius: 14px; padding: 1.5rem; box-shadow: 0 24px 80px rgba(0,0,0,.3); }
 h1 { font: 500 1.35rem/1.3 inherit; margin: 0 0 .45rem; }
 p { color: var(--muted); margin: 0 0 1.3rem; }
@@ -278,8 +278,8 @@ submit.disabled = false;
 
 export function appPage(): string {
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>zmux cloud</title><link rel="stylesheet" href="/app.css"></head>
-<body><main><div class="mark"><span class="prompt">▸_</span><span>zmux cloud</span></div><section class="card">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>zmux cloud</title><link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 64x64"><link rel="icon" type="image/png" href="/logo.png" sizes="256x256"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180"><link rel="stylesheet" href="/app.css"></head>
+<body><main><div class="mark"><img class="logo" src="/logo.png" width="48" height="48" alt=""><span>zmux cloud</span></div><section class="card">
 <div id="signed-out"><h1 id="auth-title">Sign in to zmux</h1><p id="intro">Continue to your devices and native sessions.</p>
 <form id="auth-form"><div id="name-row" class="hidden"><label for="name">Name</label><input id="name" name="name" maxlength="80" autocomplete="name"></div>
 <label for="email">Email</label><input id="email" name="email" type="email" maxlength="254" autocomplete="email" required>
