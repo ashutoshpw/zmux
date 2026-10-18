@@ -18,7 +18,9 @@ macOS development build through the existing GitHub Actions workflow.
 ## Approach
 Update active source/configuration/docs and the existing callback fixture inputs.
 Retain dated historical evidence under older tasks. Correct only the independently
-confirmed stale native acceptance expectation. Validate a clean exported snapshot
+confirmed stale native acceptance expectation. Reuse the bounded file-channel retry policy
+for the close-time dirty write if native acceptance exposes a known busy refusal.
+Validate a clean exported snapshot
 containing HEAD plus this task, commit scoped files on main, and push for Actions.
 Build the cloud image package as well; it remains a package, not a deployment.
 Do not change Cloudflare routing or restart the serving local service in this task.

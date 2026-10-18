@@ -1067,14 +1067,35 @@ final class FilePanelView: BackgroundView, NSTextViewDelegate {
         // already have finished with its write landed but not yet visible in `lastModelDirty`.
         guard DirtyMirrorGate.closeWriteNeeded(wanted: wanted, modelDirty: lastModelDirty,
                                                loopMayHaveWritten: running != nil || assumingDiscarded) else { return true }
-        switch await send(.observe(token, dirty: wanted)) {
-        case .success:
-            lastModelDirty = wanted
-            return true
-        case .failure(let failure):
-            owner?.filePanelReport("Could not record unsaved changes: " + failure.message + " (" + failure.code + "); the tab was not closed.")
-            return false
+        // Keep close observations outside the whole-file load queue. A bridge refusal can
+        // mean a snapshot briefly owns the registry, so reuse the bounded retry policy while
+        // preserving direct dispatch. Unknown outcomes and permanent errors are never replayed.
+        var attempt = 1
+        while !closed && !Task.isCancelled {
+            guard assumingDiscarded || isDirty == wanted else {
+                owner?.filePanelReport("The file changed while closing; try closing it again.")
+                return false
+            }
+            switch await send(.observe(token, dirty: wanted)) {
+            case .success:
+                lastModelDirty = wanted
+                guard assumingDiscarded || isDirty == wanted else {
+                    owner?.filePanelReport("The file changed while closing; try closing it again.")
+                    return false
+                }
+                return true
+            case .failure(let failure):
+                switch FileLoadPolicy.standard.decision(code: failure.code, outcomeUnknown: failure.outcomeUnknown, attempt: attempt) {
+                case .retry(let milliseconds):
+                    do { try await Task.sleep(for: .milliseconds(milliseconds)) } catch { return false }
+                    attempt += 1
+                case .giveUp:
+                    owner?.filePanelReport("Could not record unsaved changes: " + failure.message + " (" + failure.code + "); the tab was not closed.")
+                    return false
+                }
+            }
         }
+        return false
     }
 
     /// Restarts the dirty-mirror observation after a close was aborted part way through
