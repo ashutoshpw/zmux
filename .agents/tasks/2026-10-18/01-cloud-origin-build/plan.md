@@ -27,7 +27,7 @@ Do not change Cloudflare routing or restart the serving local service in this ta
 - [x] Inspect hostname consumers, existing task evidence and build failures.
 - [x] Update active hostname consumers and stale native schema expectation.
 - [x] Run required portable checks against the scoped snapshot.
-- [ ] Commit/push scoped changes and verify exact remote revision.
+- [x] Commit/push scoped changes and verify exact remote revision.
 - [ ] Obtain GitHub native and cloud build results and artifact links.
 
 ## Acceptance criteria
