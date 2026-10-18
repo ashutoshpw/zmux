@@ -63,7 +63,7 @@ use zmux_workspace_core::{
     Action, Effect, SessionId, Snapshot as Model, SurfaceId, WorkspaceStore,
 };
 
-pub const MAX_TERMINALS: usize = 8;
+pub const MAX_TERMINALS: usize = 32;
 pub const MAX_BROWSERS: usize = 4;
 /// Desktop-wide cap on file tabs, beside the terminal and browser caps.
 pub const MAX_FILE_SURFACES: usize = 16;

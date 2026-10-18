@@ -53,7 +53,7 @@ address bar. Use the Browser menu for page find/zoom/navigation. Use the Edit me
 Use Shift-PageUp/PageDown for history pages and Command-Home/End for oldest/live output.
 Hold Shift while scrolling to bypass application mouse tracking.
 
-Initial limits: eight terminals and four browser tabs per app context, 16 KiB per paste, 1,000 retained terminal
+Initial limits: 32 terminals and four browser tabs per app context, 16 KiB per paste, 1,000 retained terminal
 scrollback lines, and bounded command/input buffers. Saved layouts, search, full terminal-protocol coverage,
 remote SSH sessions and iOS are not delivered by this build. Cloud browser sign-in and
 account/device management are integrated, but production service deployment remains pending

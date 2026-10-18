@@ -1,9 +1,15 @@
 # Status
 
 - **State:** done
-- **Updated:** 2026-10-14
+- **Updated:** 2026-10-18
 
 ## Notes
+- 2026-10-18: raised the desktop terminal limit from 8 to 32 at the user's request. The
+  shared limit also governs restoration, multiplexer admission and CLI capabilities;
+  pending launches and retiring processes remain counted. `RUST_TEST_THREADS=2 scripts/check`
+  passed on Linux, including real 32-session admission, overflow rejection and cleanup.
+  Capacity fixtures now avoid unrelated split-depth/workspace limits and reject a saved
+  session with 33 terminals. Native macOS build/dogfood at the higher limit remains pending.
 - Delivered universal macOS development artifact for source `ee2599abc05b51f8459b7a0395c2bfa9e78c336f`.
 - [Native workflow run 38630706232](https://github.com/ashutoshpw/zmux/actions/runs/38630706232) passed Rust/C checks, universal Swift/Rust compilation, ad-hoc signing and packaged native smoke.
 - [Download artifact 11926235790](https://github.com/ashutoshpw/zmux/actions/runs/38630706232/artifacts/11926235790), retained until 2026-10-28. Manual workflow dispatch creates fresh builds.

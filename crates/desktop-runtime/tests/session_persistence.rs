@@ -1153,12 +1153,18 @@ fn corrupt_unsafe_versioned_and_overcapacity_startup_files_are_retained_and_prot
     let mut future = document.clone();
     future["version"] = 999.into();
     let mut oversized = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
-    for i in 0..9 {
-        oversized
-            .apply(Action::CreateWorkspace {
+    for i in 0..=zmux_desktop_runtime::MAX_TERMINALS {
+        // Stay within topology limits so restore rejects terminal capacity itself.
+        let action = if i % zmux_workspace_core::MAX_SURFACES_PER_PANE == 0 {
+            Action::CreateWorkspace {
                 name: format!("Workspace {i}"),
-            })
-            .unwrap();
+            }
+        } else {
+            Action::CreateSurface {
+                pane_id: oversized.snapshot().workspaces.last().unwrap().focused_pane,
+            }
+        };
+        oversized.apply(action).unwrap();
     }
     for (label, bytes, mode) in [
         ("corrupt", b"{incomplete".to_vec(), 0o600),

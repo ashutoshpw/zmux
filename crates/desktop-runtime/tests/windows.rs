@@ -344,10 +344,11 @@ fn close_before_open_ack_drains_both_requests_and_late_open_cannot_revive_the_ho
             }
             assert_eq!(outcome.model.windows.len(), 1);
             assert_eq!(
-                outcome.last_error.as_deref(),
-                Some(
-                    "development build supports at most 8 terminals; close a tab and wait for cleanup first"
-                )
+                outcome.last_error,
+                Some(format!(
+                    "development build supports at most {} terminals; close a tab and wait for cleanup first",
+                    zmux_desktop_runtime::MAX_TERMINALS
+                ))
             );
             assert!(
                 Instant::now() < deadline,
