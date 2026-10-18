@@ -73,7 +73,7 @@ automatic attention plugin. Explicit SSH remote commands retain their original a
 
 ## Cloud
 
-The intended origin is `https://zmux.w3dev.app`. Deployment runs through GitHub Actions
+The intended origin is `https://zmux.w3api.dev`. Deployment runs through GitHub Actions
 only, after hosting selection. See [deployment status and handoff](docs/cloud-deployment.md)
 and the [service contract](services/control-plane/README.md).
 

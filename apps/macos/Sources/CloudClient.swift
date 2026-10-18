@@ -26,7 +26,7 @@ private struct StoredCloudToken: Codable, Sendable { let accessToken: String; le
 struct CloudEndpoint: Sendable {
     let origin: URL
     static var configured: String {
-        Bundle.main.object(forInfoDictionaryKey: "ZmuxCloudOrigin") as? String ?? "https://zmux.w3dev.app"
+        Bundle.main.object(forInfoDictionaryKey: "ZmuxCloudOrigin") as? String ?? "https://zmux.w3api.dev"
     }
     init(_ value: String) throws {
         guard let parts = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),

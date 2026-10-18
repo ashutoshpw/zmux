@@ -38,7 +38,7 @@ enum AppStartup {
     }
 
     static func validateCloudCallbackContract() throws {
-        let endpoint = try CloudEndpoint("https://zmux.w3dev.app")
+        let endpoint = try CloudEndpoint("https://zmux.w3api.dev")
         let authorization = try CloudAuthorization(endpoint: endpoint)
         var callback = URLComponents(string: CloudAuthorization.callback)!
         callback.queryItems = [URLQueryItem(name: "state", value: authorization.state), URLQueryItem(name: "code", value: "native-smoke-code")]
@@ -46,7 +46,7 @@ enum AppStartup {
             throw BridgeFailure(message: "Native cloud callback could not consume a valid authorization code")
         }
         let invalidCallbacks = ["zmux-dev://oauth/callback?state=incorrect&code=x",
-                                "https://zmux.w3dev.app/callback?state=\(authorization.state)&code=x",
+                                "https://zmux.w3api.dev/callback?state=\(authorization.state)&code=x",
                                 "zmux-dev://oauth/callback?state=\(authorization.state)&state=\(authorization.state)&code=x",
                                 "zmux-dev://oauth/callback?state=\(authorization.state)&code=x&access_token=forbidden"]
         for value in invalidCallbacks {
