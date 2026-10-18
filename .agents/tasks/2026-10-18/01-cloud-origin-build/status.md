@@ -1,7 +1,30 @@
 # Status
 
-- **State:** in-progress
+- **State:** done
 - **Updated:** 2026-10-18
+
+## Delivery
+- Native run [39169304133](https://github.com/ashutoshpw/zmux/actions/runs/39169304133)
+  passed all configured gates, including packaged native rendering/file panels and
+  sidebar/status-menu acceptance. Saved-session version assertion and the actual
+  close/reopen journey pass; the transient dirty-state close refusal is repaired.
+- Download: [universal native artifact 12152507440](https://github.com/ashutoshpw/zmux/actions/runs/39169304133/artifacts/12152507440).
+  Contains `zmux-dev-universal-380c6f7.zip`: macOS 14+, arm64/x86_64,
+  ad-hoc signed and not notarized. Existing workflow explicitly defers accessibility
+  Save-panel tests; no authenticated production browser/native login is claimed.
+- Downloaded the artifact and verified its checksum, exact source revision
+  `380c6f7f218ae83b1c64e33954caa99554f94ca8`, architecture metadata and the embedded
+  Info.plist `ZmuxCloudOrigin=https://zmux.w3api.dev`.
+  ZIP SHA-256: `43917c138c1a401ad178d289801c6bc06b30b3c4a942c6dd20e4c48fc50e6335`.
+- Matching [cloud package run 39169308074](https://github.com/ashutoshpw/zmux/actions/runs/39169308074)
+  passed; [artifact 12152216031](https://github.com/ashutoshpw/zmux/actions/runs/39169308074/artifacts/12152216031)
+  was downloaded and checksum/receipt verified for the same source revision and
+  new origin, with `deployed: false`.
+- Final live read-only check: both public `https://zmux.w3api.dev/v1/config` and
+  loopback `http://127.0.0.1:3530/v1/config` still advertise the old origin.
+  Serving Compose app recreation remains necessary for activation; no service,
+  database, tunnel or running cmux configuration was modified.
+- This completion record is a documentation-only follow-up to the validated source.
 
 ## Evidence
 - `RUST_TEST_THREADS=2 scripts/check` passed against an isolated HEAD export plus
@@ -59,3 +82,8 @@
   isolated `RUST_TEST_THREADS=2 scripts/check` pass (workspace tests, Clippy,
   license inventory, C ABI/profile lease). Swift/AppKit execution needs the hosted
   macOS run; the local host has no Swift/Apple SDK.
+- Repair commit `380c6f7f218ae83b1c64e33954caa99554f94ca8` pushed and exact
+  remote SHA verified. Native retry:
+  https://github.com/ashutoshpw/zmux/actions/runs/39169304133
+- Matching cloud package:
+  https://github.com/ashutoshpw/zmux/actions/runs/39169308074
