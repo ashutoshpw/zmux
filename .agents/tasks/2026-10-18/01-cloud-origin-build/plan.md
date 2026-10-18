@@ -17,11 +17,10 @@ macOS development build through the existing GitHub Actions workflow.
 
 ## Approach
 Update active source/configuration/docs and the existing callback fixture inputs.
-Retain dated historical evidence under older tasks. Correct only the independently
-confirmed stale native acceptance expectation. Reuse the bounded file-channel retry policy
-for the close-time dirty write if native acceptance exposes a known busy refusal.
-Validate a clean exported snapshot
-containing HEAD plus this task, commit scoped files on main, and push for Actions.
+Retain dated historical evidence under older tasks. Correct the confirmed stale
+native schema expectation and reuse the bounded retry policy for the observed
+close-time busy refusal, preserving direct observation dispatch. Validate an isolated
+snapshot, commit scoped files on main, and push for Actions.
 Build the cloud image package as well; it remains a package, not a deployment.
 Do not change Cloudflare routing or restart the serving local service in this task.
 
@@ -30,10 +29,10 @@ Do not change Cloudflare routing or restart the serving local service in this ta
 - [x] Update active hostname consumers and stale native schema expectation.
 - [x] Run required portable checks against the scoped snapshot.
 - [x] Commit/push scoped changes and verify exact remote revision.
-- [ ] Obtain GitHub native and cloud build results and artifact links.
+- [x] Obtain GitHub native and cloud build results and artifact links.
 
 ## Acceptance criteria
 - [x] Active product/configuration/docs use `https://zmux.w3api.dev`.
 - [x] Portable checks pass and unrelated dirty work remains intact.
-- [ ] GitHub Actions produces the requested downloadable build at the new SHA.
-- [ ] Signing, native validation and live service activation limits are recorded.
+- [x] GitHub Actions produces the requested downloadable build at the new SHA.
+- [x] Signing, native validation and live service activation limits are recorded.
