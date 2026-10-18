@@ -36,7 +36,8 @@ jobs:
   development:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
     runs-on: macos-15
-    timeout-minutes: 25
+    # Cold universal builds plus native acceptance can exceed 25 minutes.
+    timeout-minutes: 45
     steps:
       - name: Validate requested native suite
         if: github.event_name == 'workflow_dispatch'
