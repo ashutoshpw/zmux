@@ -261,10 +261,11 @@ fn workspace_switch_keeps_hidden_session_alive_and_close_reaps_only_its_pane() {
 #[test]
 fn split_creates_a_real_independent_session_and_limits_reject_before_mutation() {
     let desktop = desktop();
-    wait(&desktop, ready);
+    let initial = wait(&desktop, ready);
+    // Split breadth-first so terminal capacity, rather than split depth, is reached.
+    let mut panes = std::collections::VecDeque::from([initial.model.workspaces[0].focused_pane]);
     for request in 1..MAX_TERMINALS {
-        let before = desktop_snapshot::read(&desktop);
-        let pane = before.model.workspaces[0].focused_pane;
+        let pane = panes.pop_front().unwrap();
         send(
             &desktop,
             request as u64,
@@ -275,7 +276,9 @@ fn split_creates_a_real_independent_session_and_limits_reject_before_mutation() 
                 },
             },
         );
-        wait(&desktop, |s| s.frames.len() == request + 1 && ready(s));
+        let after = wait(&desktop, |s| s.frames.len() == request + 1 && ready(s));
+        panes.push_back(pane);
+        panes.push_back(after.model.workspaces[0].focused_pane);
     }
     let before = desktop_snapshot::read(&desktop);
     let pids: std::collections::HashSet<_> = before

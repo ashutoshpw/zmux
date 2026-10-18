@@ -92,7 +92,7 @@ The additional `zmux_desktop_*` exports own a real Rust desktop coordinator and 
 Dispatch accepts versioned requests with `request_id` and `payload` (action/input/resize).
 Acceptance means queued; revisioned snapshots carry model, visible terminal frames and errors.
 Snapshots return OK/value=0 when unchanged. Desktop destruction joins cleanup off the UI thread.
-There are at most four desktop contexts and eight terminals per desktop, including pending or
+There are at most four desktop contexts and 32 terminals per desktop, including pending or
 retiring processes. The pure `zmux_core_*` API retains its model-only behavior.
 
 `zmux_desktop_dispatch_acknowledged` executes one `action` or `windows` command and replies with
