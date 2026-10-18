@@ -40,7 +40,7 @@ services:
       NODE_ENV: production
       HOST: 127.0.0.1
       PORT: ${ZMUX_LOCAL_PORT:?run bunx path-to-port}
-      ZMUX_CLOUD_ORIGIN: https://zmux.w3dev.app
+      ZMUX_CLOUD_ORIGIN: https://zmux.w3api.dev
       DATABASE_URL: ${DATABASE_URL:?private environment file required}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?private environment file required}
       NODE_EXTRA_CA_CERTS: /opt/zmux/ca.crt

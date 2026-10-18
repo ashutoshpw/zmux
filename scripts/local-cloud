@@ -122,7 +122,7 @@ def check():
     if evidence["ready"]["body"].get("status") != "ready":
         raise RuntimeError("Database readiness failed")
     receipt = {"checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-               "local_origin": origin, "public_origin": "https://zmux.w3dev.app",
+               "local_origin": origin, "public_origin": "https://zmux.w3api.dev",
                "public_tunnel_verified": False, "checks": evidence}
     (STATE / "health.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt, indent=2))

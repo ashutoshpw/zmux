@@ -106,7 +106,7 @@ docker run --rm --env-file /secure/path/zmux-control.env \
 
 Required production values are `DATABASE_URL`, `BETTER_AUTH_SECRET` (at least 32 random
 bytes), and `ZMUX_CLOUD_ORIGIN`. The selected official origin is
-`https://zmux.w3dev.app`; DNS, TLS, and hosting are deliberately not provisioned here.
+`https://zmux.w3api.dev`; DNS, TLS, and hosting are deliberately not provisioned here.
 Production rejects HTTP origins. PostgreSQL TLS certificate validation is enabled in
 production, so the connection endpoint must present a certificate trusted by the image.
 Set `TRUST_PROXY=true` only behind a trusted proxy that replaces `X-Forwarded-For`.

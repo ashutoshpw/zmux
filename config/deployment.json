@@ -1,5 +1,5 @@
 {
-  "cloud_origin": "https://zmux.w3dev.app",
+  "cloud_origin": "https://zmux.w3api.dev",
   "native_client_id": "zmux-macos-dev",
   "native_callback": "zmux-dev://oauth/callback",
   "bundle_id": "app.w3dev.zmux.dev"

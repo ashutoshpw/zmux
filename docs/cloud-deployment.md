@@ -1,6 +1,6 @@
 # Cloud deployment
 
-The owned production origin is **https://zmux.w3dev.app**. All production cloud
+The owned production origin is **https://zmux.w3api.dev**. All production cloud
 deployments are postponed. The current authorized setup runs locally in Docker;
 the owner will map the origin with Cloudflare Tunnel after local health checks.
 No public deployment or tunnel is claimed by the local setup.
@@ -29,11 +29,15 @@ scripts/local-cloud status
 
 `start` runs `bunx path-to-port` in `services/control-plane`; the current result is
 **3530**. The tunnel target is **http://127.0.0.1:3530**. Map the public hostname
-`zmux.w3dev.app` to that target using a Cloudflare Tunnel agent on the same host.
+`zmux.w3api.dev` to that target using a Cloudflare Tunnel agent on the same host.
 A tunnel agent in its own network namespace must reach the host loopback explicitly;
 its container's `127.0.0.1` addresses that container. The app uses
-`https://zmux.w3dev.app` for auth origins and secure cookies. External HTTPS, tunnel
+`https://zmux.w3api.dev` for auth origins and secure cookies. External HTTPS, tunnel
 access policy, and browser/native callback checks remain owner setup and validation.
+
+Changing the hostname in Git does not update an already running container. Apply
+the updated Compose app configuration when activating the new origin, then verify
+that `/v1/config` reports `cloud_origin: https://zmux.w3api.dev` before testing login.
 
 The `zmux-local-cloud` Compose project uses Linux host networking because this host's
 outbound firewall blocks newly created Docker bridge subnets. Both services explicitly
