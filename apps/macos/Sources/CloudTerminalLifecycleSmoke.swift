@@ -275,9 +275,9 @@ enum CloudTerminalLifecycleSmoke {
     private static func runRejectedStartCanRetry(endpoint: CloudEndpoint, client: CloudClient,
                                                  owner: CloudTerminalHost, bridge: NativeBridge) async throws
         -> RejectedStartEvidence {
-        try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
-        try await fixtureRequest(endpoint: endpoint, path: "/__fixture/fail-next-presence", method: "POST",
-                                 body: ["sharing": true, "status": 409])
+        _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
+        _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/fail-next-presence", method: "POST",
+                                     body: ["sharing": true, "status": 409])
 
         var rejection: String?
         do { try await owner.setSharingEnabled(true) }
@@ -338,7 +338,7 @@ enum CloudTerminalLifecycleSmoke {
                                          viewerClient: CloudClient, oldHostDevice: CloudDevice,
                                          owner: CloudTerminalHost, bridge: NativeBridge) async throws
         -> AccountSwitchEvidence {
-        try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
+        _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
         try await owner.setSharingEnabled(true)
         guard owner.sharingState.isSharing else {
             throw BridgeFailure(message: "The old account could not enable sharing before the account-switch exercise.")
@@ -351,8 +351,8 @@ enum CloudTerminalLifecycleSmoke {
             throw BridgeFailure(message: "The old account's registered host did not match this installation.")
         }
 
-        try await fixtureRequest(endpoint: endpoint, path: "/__fixture/fail-next-presence", method: "POST",
-                                 body: ["sharing": false, "status": 401])
+        _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/fail-next-presence", method: "POST",
+                                     body: ["sharing": false, "status": 401])
         var failedStop: String?
         do { try await owner.setSharingEnabled(false) }
         catch { failedStop = error.localizedDescription }
@@ -498,9 +498,9 @@ enum CloudTerminalLifecycleSmoke {
         var start: Task<Void, Error>?
         var stop: Task<String?, Error>?
         do {
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/arm", method: "POST",
-                                     body: ["point": holdPoint])
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/arm", method: "POST",
+                                         body: ["point": holdPoint])
             let starting = Task { try await host.setSharingEnabled(true) }
             start = starting
             try await waitForHeldRequest(endpoint: endpoint)
@@ -508,7 +508,7 @@ enum CloudTerminalLifecycleSmoke {
                 throw BridgeFailure(message: "Sharing was not starting while Cloud held the \(holdPoint) request.")
             }
 
-            let stopping = Task { @MainActor throws -> String? in
+            let stopping = Task<String?, Error> { @MainActor () throws -> String? in
                 switch path {
                 case .explicitDisable:
                     try await host.setSharingEnabled(false)
@@ -520,7 +520,7 @@ enum CloudTerminalLifecycleSmoke {
             stop = stopping
             try await waitForStopping(host)
             try await assertPending(stopping)
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
 
             switch await starting.result {
             case .failure(let error) where error is CancellationError: break
@@ -546,7 +546,7 @@ enum CloudTerminalLifecycleSmoke {
                             presenceAttempts: fixtureState.presenceAttempts,
                             localGateConfirmedDisabled: true, postStopGateErrorCode: disabledCode)
         } catch {
-            try? await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
+            _ = try? await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
             _ = await host.stopForCredentialChange()
             if let stop { _ = await stop.result }
             if let start { _ = await start.result }
@@ -559,9 +559,9 @@ enum CloudTerminalLifecycleSmoke {
         let host = CloudTerminalHost(client: client, bridge: bridge, reportError: { _ in })
         var starting: Task<Void, Error>?
         do {
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/arm", method: "POST",
-                                     body: ["point": "presence"])
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/reset", method: "POST")
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/arm", method: "POST",
+                                         body: ["point": "presence"])
             let task = Task { try await host.setSharingEnabled(true) }
             starting = task
             try await waitForHeldRequest(endpoint: endpoint)
@@ -572,10 +572,10 @@ enum CloudTerminalLifecycleSmoke {
 
             // Presence=true has reached the fixture but remains unacknowledged. Make its first
             // presence=false cleanup attempt fail so the queued namespace stop must retry it.
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/fail-next-presence-clear", method: "POST")
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/fail-next-presence-clear", method: "POST")
             host.desktopNamespaceDidChange()
             try await waitForStopping(host)
-            try await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
+            _ = try await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
 
             switch await task.result {
             case .success:
@@ -608,7 +608,7 @@ enum CloudTerminalLifecycleSmoke {
                             presenceAttempts: fixtureState.presenceAttempts,
                             localGateConfirmedDisabled: true, postStopGateErrorCode: disabledCode)
         } catch {
-            try? await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
+            _ = try? await fixtureRequest(endpoint: endpoint, path: "/__fixture/release", method: "POST")
             _ = await host.stopForCredentialChange()
             if let starting { _ = await starting.result }
             throw error

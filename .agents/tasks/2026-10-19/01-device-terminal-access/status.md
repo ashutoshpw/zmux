@@ -41,6 +41,12 @@
   source-review receipt only, not native execution evidence. This Linux environment has no
   Swift/Xcode, so native compilation, packaged execution and the universal artifact remain
   pending hosted macOS gates. Physical two-Mac behavior is unverified.
+- The first hosted native compile attempts, workflow runs `39228357371` and `39228357624`, failed.
+  Scoped follow-up repairs in `CloudClient.swift` remove unreachable post-request flags while
+  preserving unknown-outcome handling and no-replay behavior; `CloudTerminalLifecycleSmoke.swift`
+  explicitly types its `Task` result and discards unused fixture responses. Independent review of
+  this delta found no blocking source findings. A hosted native compile rerun is pending; no native
+  compile or execution success is claimed.
 
 ## Remaining gates
 
