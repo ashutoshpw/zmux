@@ -7,17 +7,30 @@ import { FixedWindowRateLimiter } from "./rate-limit";
 import {
   NATIVE_CLIENT_ID,
   NATIVE_REDIRECT_URI,
-  bearerToken,
   hashOpaque,
   randomOpaque,
-  validDeviceName,
   validPkceChallenge,
-  validPlatform,
   validState,
   verifyPkce,
 } from "./security";
+import {
+  createDeviceTerminalApi,
+  expirePendingRelayRequestsForToken,
+  lockRelayAccount,
+  terminalRelaySchemaReady,
+} from "./device-terminal";
+import { requireNativeIdentity } from "./native-identity";
+import {
+  clientAddress,
+  enforceSameOrigin,
+  exactString,
+  HttpError,
+  json,
+  MAX_BODY_BYTES,
+  readJsonObject,
+  type RequestContext,
+} from "./http";
 
-const MAX_BODY_BYTES = 16 * 1024;
 const AUTHORIZATION_CODE_TTL_SECONDS = 5 * 60;
 const NATIVE_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const REQUIRED_TABLES = [
@@ -32,37 +45,9 @@ const REQUIRED_TABLES = [
   "native_authorization_code",
   "native_access_token",
   "device",
+  "terminal_relay_request",
   "zmux_schema_migration",
 ];
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-type RequestContext = { ip?: string | undefined };
-type NativeIdentity = {
-  tokenId: string;
-  userId: string;
-  name: string;
-  email: string;
-};
-
-function json(data: unknown, status = 200, extraHeaders?: HeadersInit): Response {
-  return Response.json(data, {
-    status,
-    headers: {
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-      ...extraHeaders,
-    },
-  });
-}
 
 function text(body: string, contentType: string): Response {
   return new Response(body, {
@@ -74,65 +59,6 @@ function text(body: string, contentType: string): Response {
       "referrer-policy": "no-referrer",
     },
   });
-}
-
-async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-    throw new HttpError(415, "unsupported_media_type", "content-type must be application/json");
-  }
-  const declaredLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    throw new HttpError(413, "payload_too_large", "request body exceeds 16 KiB");
-  }
-  const bytes = await request.arrayBuffer();
-  if (bytes.byteLength > MAX_BODY_BYTES) throw new HttpError(413, "payload_too_large", "request body exceeds 16 KiB");
-  let value: unknown;
-  try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new HttpError(400, "invalid_json", "request body must be valid JSON");
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "invalid_request", "request body must be a JSON object");
-  }
-  return value as Record<string, unknown>;
-}
-
-function exactString(body: Record<string, unknown>, key: string): string {
-  const value = body[key];
-  if (typeof value !== "string") throw new HttpError(400, "invalid_request", `${key} must be a string`);
-  return value;
-}
-
-function enforceSameOrigin(request: Request, config: ControlPlaneConfig): void {
-  const origin = request.headers.get("origin");
-  if (origin && origin !== config.origin) throw new HttpError(403, "origin_rejected", "request origin is not allowed");
-}
-
-function clientAddress(request: Request, context: RequestContext, config: ControlPlaneConfig): string {
-  if (config.trustProxy) return request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim() || context.ip || "unknown";
-  if (context.ip) return context.ip;
-  return "unknown";
-}
-
-async function requireNativeIdentity(request: Request, pool: Pool): Promise<NativeIdentity> {
-  const token = bearerToken(request);
-  if (!token) throw new HttpError(401, "invalid_token", "a valid bearer token is required");
-  const result = await pool.query<NativeIdentity>(
-    `SELECT token.id AS "tokenId", token.user_id AS "userId", account.name, account.email
-       FROM native_access_token token
-       JOIN "session" auth_session ON auth_session.id = token.auth_session_id
-       JOIN "user" account ON account.id = token.user_id
-      WHERE token.token_hash = $1
-        AND token.revoked_at IS NULL
-        AND token.expires_at > now()
-        AND auth_session."expiresAt" > now()
-        AND auth_session."userId" = token.user_id`,
-    [hashOpaque(token)],
-  );
-  const identity = result.rows[0];
-  if (!identity) throw new HttpError(401, "invalid_token", "a valid bearer token is required");
-  return identity;
 }
 
 async function exchangeAuthorizationCode(body: Record<string, unknown>, pool: Pool): Promise<Response> {
@@ -226,14 +152,21 @@ async function createAuthorizationCode(request: Request, url: URL, auth: ZmuxAut
 
 export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig) {
   const nativeLimiter = new FixedWindowRateLimiter(60, 60_000);
+  const deviceApi = createDeviceTerminalApi(pool, config);
 
   return async function fetch(request: Request, context: RequestContext = {}): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
     try {
       if (path.startsWith("/api/auth/")) {
-        if (request.body && Number(request.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) {
-          throw new HttpError(413, "payload_too_large", "request body exceeds 16 KiB");
+        if (request.body) {
+          const declaredLength = Number(request.headers.get("content-length") ?? "0");
+          if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+            throw new HttpError(413, "payload_too_large", "request body exceeds 16 KiB");
+          }
+          if ((await request.clone().arrayBuffer()).byteLength > MAX_BODY_BYTES) {
+            throw new HttpError(413, "payload_too_large", "request body exceeds 16 KiB");
+          }
         }
         const headers = new Headers(request.headers);
         headers.delete("x-zmux-client-ip");
@@ -256,7 +189,14 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
       if (request.method === "GET" && path === "/health") return json({ status: "ok" });
       if (request.method === "GET" && path === "/ready") {
         try {
-          const schema = await pool.query<{ tableCount: number; migrationApplied: boolean; mfaColumn: boolean }>(
+          const schema = await pool.query<{
+            tableCount: number;
+            identityMigrationApplied: boolean;
+            relayMigrationApplied: boolean;
+            deviceColumnsReady: boolean;
+            deviceIdentityIndexReady: boolean;
+            mfaColumn: boolean;
+          }>(
             `SELECT
                (SELECT count(*)::int
                   FROM information_schema.tables
@@ -264,27 +204,60 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
                    AND table_name = ANY($1::text[])) AS "tableCount",
                EXISTS (
                  SELECT 1 FROM zmux_schema_migration WHERE name = '001_native_identity.sql'
-               ) AS "migrationApplied",
+               ) AS "identityMigrationApplied",
+               EXISTS (
+                 SELECT 1 FROM zmux_schema_migration WHERE name = '003_device_terminal_relay.sql'
+               ) AS "relayMigrationApplied",
+               (
+                 SELECT count(*)::int = 5 FROM information_schema.columns
+                  WHERE table_schema = current_schema() AND table_name = 'device'
+                    AND column_name = ANY($2::text[])
+               ) AS "deviceColumnsReady",
+               EXISTS (
+                 SELECT 1 FROM pg_indexes
+                  WHERE schemaname = current_schema() AND tablename = 'device'
+                    AND indexname = 'device_user_installation_unique_idx'
+               ) AS "deviceIdentityIndexReady",
                EXISTS (
                  SELECT 1 FROM information_schema.columns
                  WHERE table_schema = current_schema() AND table_name = 'user'
                    AND column_name = 'twoFactorEnabled' AND data_type = 'boolean'
                ) AS "mfaColumn"`,
-            [REQUIRED_TABLES],
+            [REQUIRED_TABLES, ["installation_id", "device_secret_hash", "public_key", "sharing_enabled", "sharing_epoch"]],
           );
           const state = schema.rows[0];
-          if (!state || state.tableCount !== REQUIRED_TABLES.length || !state.migrationApplied || !state.mfaColumn) {
-            return json({ status: "unavailable", capabilities: { identity: "unavailable", devices: "unavailable" } }, 503);
+          const terminalRelayReady = Boolean(state?.relayMigrationApplied && state.deviceColumnsReady && state.deviceIdentityIndexReady);
+          if (!state || state.tableCount !== REQUIRED_TABLES.length || !state.identityMigrationApplied || !state.mfaColumn) {
+            return json({ status: "unavailable", capabilities: {
+              identity: "unavailable",
+              devices: "unavailable",
+              stable_device_identity: "unavailable",
+              terminal_relay: "unavailable",
+            } }, 503);
           }
           return json({
             status: "ready",
-            capabilities: { identity: "ready", devices: "ready", organizations: "ready", vm: "unavailable", relay: "unavailable", email: "unavailable" },
+            capabilities: {
+              identity: "ready",
+              devices: "ready",
+              stable_device_identity: terminalRelayReady ? "ready" : "unavailable",
+              organizations: "ready",
+              vm: "unavailable",
+              terminal_relay: terminalRelayReady ? "ready" : "unavailable",
+              email: "unavailable",
+            },
           });
         } catch {
-          return json({ status: "unavailable", capabilities: { identity: "unavailable", devices: "unavailable" } }, 503);
+          return json({ status: "unavailable", capabilities: {
+            identity: "unavailable",
+            devices: "unavailable",
+            stable_device_identity: "unavailable",
+            terminal_relay: "unavailable",
+          } }, 503);
         }
       }
       if (request.method === "GET" && path === "/v1/config") {
+        const deviceIdentityReady = await terminalRelaySchemaReady(pool);
         return json({
           name: "zmux",
           cloud_origin: config.origin,
@@ -295,11 +268,19 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
             token_endpoint: `${config.origin}/v1/native/token`,
             code_challenge_methods_supported: ["S256"],
           },
-          capabilities: { identity: true, devices: true, organizations: true, vm: false, relay: false, email: false },
+          capabilities: {
+            identity: true,
+            devices: true,
+            stable_device_identity: deviceIdentityReady,
+            organizations: true,
+            vm: false,
+            terminal_relay: deviceIdentityReady,
+            email: false,
+          },
         });
       }
 
-      if (path.startsWith("/v1/") && !nativeLimiter.allow(`${clientAddress(request, context, config)}:${path}`)) {
+      if (path.startsWith("/v1/") && !deviceApi.isFrequentRoute(request) && !nativeLimiter.allow(`${clientAddress(request, context, config)}:${path}`)) {
         return json({ error: "rate_limited", message: "too many requests" }, 429, { "retry-after": "60" });
       }
 
@@ -324,80 +305,25 @@ export function createApp(pool: Pool, auth: ZmuxAuth, config: ControlPlaneConfig
         return json({ user: { id: identity.userId, name: identity.name, email: identity.email }, organizations: memberships.rows });
       }
 
-      if (request.method === "GET" && path === "/v1/devices") {
-        const identity = await requireNativeIdentity(request, pool);
-        const devices = await pool.query<{ id: string; name: string; platform: string; last_seen_at: Date; revoked_at: Date | null }>(
-          `SELECT id, name, platform, last_seen_at, revoked_at
-             FROM device WHERE user_id = $1 ORDER BY created_at DESC, id`,
-          [identity.userId],
-        );
-        return json({
-          devices: devices.rows.map((device) => ({
-            id: device.id,
-            name: device.name,
-            platform: device.platform,
-            last_seen_at: device.last_seen_at.toISOString(),
-            ...(device.revoked_at ? { revoked_at: device.revoked_at.toISOString() } : {}),
-          })),
-        });
-      }
-
-      if (request.method === "POST" && path === "/v1/devices") {
-        enforceSameOrigin(request, config);
-        const identity = await requireNativeIdentity(request, pool);
-        const body = await readJsonObject(request);
-        const name = exactString(body, "name");
-        const platform = exactString(body, "platform");
-        if (!validDeviceName(name) || !validPlatform(platform)) {
-          throw new HttpError(400, "invalid_device", "device name or platform is invalid");
-        }
-        const id = crypto.randomUUID();
-        const result = await pool.query<{ last_seen_at: Date }>(
-          `INSERT INTO device (id, user_id, name, platform, last_seen_at)
-           VALUES ($1, $2, $3, $4, now()) RETURNING last_seen_at`,
-          [id, identity.userId, name, platform],
-        );
-        return json({ id, name, platform, last_seen_at: result.rows[0]!.last_seen_at.toISOString() }, 201);
-      }
-
-      const heartbeat = /^\/v1\/devices\/([0-9a-f-]{36})\/heartbeat$/.exec(path);
-      if (request.method === "POST" && heartbeat) {
-        enforceSameOrigin(request, config);
-        const identity = await requireNativeIdentity(request, pool);
-        const result = await pool.query<{ last_seen_at: Date }>(
-          `UPDATE device SET last_seen_at = now()
-            WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-          RETURNING last_seen_at`,
-          [heartbeat[1], identity.userId],
-        );
-        if (!result.rowCount) throw new HttpError(404, "device_not_found", "device was not found");
-        return json({ id: heartbeat[1], last_seen_at: result.rows[0]!.last_seen_at.toISOString() });
-      }
-
-      const device = /^\/v1\/devices\/([0-9a-f-]{36})$/.exec(path);
-      if (request.method === "DELETE" && device) {
-        enforceSameOrigin(request, config);
-        const identity = await requireNativeIdentity(request, pool);
-        const result = await pool.query(
-          `UPDATE device SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 AND user_id = $2`,
-          [device[1], identity.userId],
-        );
-        if (!result.rowCount) throw new HttpError(404, "device_not_found", "device was not found");
-        return new Response(null, { status: 204 });
-      }
+      const deviceResponse = await deviceApi.handle(request, context);
+      if (deviceResponse) return deviceResponse;
 
       if (request.method === "POST" && path === "/v1/native/revoke") {
         enforceSameOrigin(request, config);
         const identity = await requireNativeIdentity(request, pool);
         await withTransaction(pool, async (client) => {
+          await lockRelayAccount(client, identity.userId);
           await client.query("UPDATE native_access_token SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1", [identity.tokenId]);
+          await expirePendingRelayRequestsForToken(client, identity.userId, identity.tokenId);
         });
         return new Response(null, { status: 204 });
       }
 
       return json({ error: "not_found", message: "endpoint was not found" }, 404);
     } catch (error) {
-      if (error instanceof HttpError) return json({ error: error.code, message: error.message }, error.status);
+      if (error instanceof HttpError) {
+        return json({ error: error.code, message: error.message }, error.status, error.status === 429 ? { "retry-after": "60" } : undefined);
+      }
       console.error("control-plane request failed", { method: request.method, path, error });
       return json({ error: "internal_error", message: "request could not be completed" }, 500);
     }

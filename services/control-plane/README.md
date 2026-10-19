@@ -78,17 +78,49 @@ not globally revoked by deploying this feature; ordinary session revocation stil
   registered callback with an authorization code and the unchanged `state`.
 - `POST /v1/native/token`, `POST /v1/native/revoke`, and `GET /v1/me` implement native
   token exchange, revocation, and identity.
-- `GET|POST /v1/devices`, `POST /v1/devices/:id/heartbeat`, and
-  `DELETE /v1/devices/:id` implement the owner-scoped registry.
+- `GET|POST /v1/devices`, `POST /v1/devices/:id/heartbeat`,
+  `POST /v1/devices/:id/presence`, and `DELETE /v1/devices/:id` implement the
+  owner-scoped registry. New registrations require `installation_id` (UUID),
+  `device_secret` (32 random bytes as unpadded base64url), and `public_key` (32-byte
+  X25519 public key). The same account, installation, proof and key update one row;
+  changing the proof or key is rejected. Historical rows remain separate and only those
+  rows can use the legacy bearer-only heartbeat route. Device listing adds the optional
+  stable identity fields plus `online`, `sharing`, and `sharing_epoch`.
+- Before registering, native clients must see
+  `capabilities.stable_device_identity: true` from `GET /v1/config`; terminal clients
+  also require `capabilities.terminal_relay: true`. The control plane advertises these
+  after migration `003_device_terminal_relay.sql`, its device columns/index and relay
+  table are present. Revoking a stable registration permanently reserves that installation
+  identity; re-enrollment or recovery under the same identity is not supported yet.
+- `POST /v1/devices/:id/presence` accepts `{ "sharing": boolean, "epoch": UUID }` and
+  requires the registered device proof headers. Sharing is opt-in. A new grant must use a
+  fresh epoch; an active grant rejects other epochs, while a fresh epoch may replace a
+  grant whose 15-second presence lease has expired after a host restart.
+- The encrypted relay uses `POST /v1/terminal-relay/requests`,
+  `GET /v1/terminal-relay/inbox`, `POST /v1/terminal-relay/requests/:id/begin`,
+  `POST /v1/terminal-relay/requests/:id/response`, and
+  `GET /v1/terminal-relay/requests/:id`. Every relay call requires the original valid
+  OAuth bearer token plus `X-Zmux-Device-Id` and `X-Zmux-Device-Secret`. The service
+  stores opaque encrypted payloads, claims each request once, and rechecks the sender's
+  token/session and the target's current sharing grant before begin. An executing request
+  can finish after sender revocation while the target proof, grant and expiry remain valid.
+  Status reads require the original sender device and original still-valid token.
+- Relay JSON bodies are capped at 384 KiB, envelopes at 350,000 base64url characters,
+  and payloads at 256 KiB plus envelope overhead. Requests expire after 20 seconds; at
+  most 16 active requests per device, 128 per account and 512 retained rows per account
+  are admitted. The frequent device-authenticated routes have a bounded per-device,
+  per-route limit of 2,000 requests per minute.
 
-JSON bodies are capped at 16 KiB. Browser auth and state-changing API calls enforce
-same-origin policy. Better Auth and native endpoints use bounded per-process rate limits.
-A multi-replica production deployment should add an edge rate limit because each process
-intentionally owns its local counters.
+Non-relay JSON endpoints use a 16 KiB body limit. Encrypted terminal-relay JSON bodies
+allow up to 384 KiB; the Bun server enforces that as the overall request-body ceiling.
+Browser auth and state-changing API calls enforce same-origin policy. Better Auth and
+native endpoints use bounded per-process rate limits. A multi-replica production
+deployment should add an edge rate limit because each process intentionally owns its
+local counters.
 
 ## Production image and configuration
 
-For the authorized local Docker service and Cloudflare Tunnel handoff, use
+For the local Docker service and Cloudflare Tunnel handoff, use
 [`scripts/local-cloud`](../../scripts/local-cloud) as described in
 [cloud deployment](../../docs/cloud-deployment.md#local-docker-service-and-tunnel-handoff).
 It derives the port with `bunx path-to-port`, preserves production PostgreSQL TLS,
@@ -114,7 +146,8 @@ Set `TRUST_PROXY=true` only behind a trusted proxy that replaces `X-Forwarded-Fo
 Docker setup sets `HOST=127.0.0.1` explicitly.
 
 For future hosted rollouts, run migrations as a protected GitHub Actions deployment step
-before starting a new image. The authorized local script backs up and migrates locally.
+before starting a new image. The local script backs up and migrates the persistent local
+database; activation still requires separate approval.
 Do not run them in image build or server startup. The runtime user is non-root, listens on
 `PORT` (default 3000), and the image health check calls `/health`. Route external traffic
 through an HTTPS reverse proxy to the same origin configured in `ZMUX_CLOUD_ORIGIN`.
@@ -127,12 +160,16 @@ zero does not prove that another transaction holds no expired rows. Repeat later
 a backlog. Live credentials, browser sessions, accounts and devices are retained. This
 command has no automatic schedule and does not implement broader audit/device retention.
 
-VM provisioning, relay/tunnel service, transactional email delivery, invite/recovery
-mail journeys, billing, public hosting, DNS, TLS certificates and production observability
-remain open. Authenticator MFA and one-use recovery codes are implemented as described
-above. The local Docker workflow includes database backup and disposable restore
-verification; public deployment and callback acceptance remain separate gates. `/ready`
-reports VM, relay and email capabilities as unavailable.
+VM provisioning, production tunnel ownership and verification, a standalone terminal host/daemon,
+transactional email delivery, invite/recovery mail journeys, billing, public hosting,
+DNS, TLS ownership and production observability remain open. The control-plane terminal
+relay is implemented as opt-in encrypted RPC through the database to a currently running,
+online macOS app; it does not allocate a VM or start a terminal daemon. Packaged native
+end-to-end proof remains pending. Authenticator MFA and one-use recovery codes are
+implemented as described above. The local Docker workflow includes database backup and
+disposable restore verification; public deployment and callback acceptance remain
+separate gates. `/ready` reports stable device identity and terminal relay as ready only
+after migration 003 and its schema checks pass; VM and email remain unavailable.
 
 ### Native credential transactions
 
