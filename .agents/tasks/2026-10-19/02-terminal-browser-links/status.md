@@ -1,161 +1,102 @@
 # Status
 
-- **State:** in progress
+- **State:** complete
 - **Updated:** 2026-10-19
 
-## Current delivery gate
-- Native delta metadata repair is complete: `WireViewport` now forwards bounded link spans and
-  viewport generation on full and changed native packets. Swift's existing merge retains these
-  fields. The new real-ABI regression failed before the fix at the absent-generation assertion,
-  then passed with exact plain/OSC 8 spans, same-size resize with no changed text rows, replacement,
-  and clear. Both native-frame tests pass with two test threads; test-local setup serialization
-  avoids racing the real registry's `try_lock` without ignoring any ABI failures.
-- All temporary diagnostic traces are removed. Mounted smoke prerequisites now require the link
-  spans, nonzero generation, and installed callback before gesture assertions. Independent review
-  of the final repair found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
-  `/tmp/zmux-browser-native-frame-repair-check.log`; formatting and diff checks pass. Hosted
-  validation and a verified universal artifact remain the delivery gate.
-- Validation repair commit `eed5bd048174627303d777a8d6b596f3b8c4be21` is pushed to
-  `origin/main`, with remote parity confirmed. Focused run
-  [39271066715](https://github.com/ashutoshpw/zmux/actions/runs/39271066715) passed metadata
-  compilation/contracts and the preceding mounted selection cases, then failed the far mouse-up
-  clipboard assertion: clipboard retained its sentinel; no browser opened. Full run
-  [39271019599](https://github.com/ashutoshpw/zmux/actions/runs/39271019599) was canceled during
-  Rust validation to avoid rebuilding the same known failing native case.
-- Temporary smoke-only event traces are added for a focused diagnostic run. They record delivery,
-  hit-test identity, pointer mode/route, and selection ranges without terminal text, URLs, or
-  nonces. Behavior and acceptance assertions are unchanged; traces must be removed after diagnosis.
-  Independent review found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
-  `/tmp/zmux-browser-diagnostic-check.log`; portable input validation and diff checks pass.
-  This Linux host cannot compile AppKit; native diagnostic compilation remains pending.
-- Diagnostic run [39273979536](https://github.com/ashutoshpw/zmux/actions/runs/39273979536)
-  compiled and ran successfully through its metadata checks, then reproduced the native failure.
-  Its event traces prove down/up delivery and local selection routing, with no pending link and
-  viewport generation zero. Source investigation identified the native delta serializer's
-  `WireViewport`: it omitted `viewport_generation` and `links` even though the full core snapshots
-  contain them. The native bridge projection is being repaired with a real ABI regression;
-  temporary traces are being removed. No further diagnostic run is needed.
-- Source commit `53bac2cdaee02bee2b59851fd8bf110d855d11b5` is pushed to `origin/main`; `git
-  ls-remote` confirmed remote parity. Unrelated older status and profile files were preserved.
-- Contract, implementation, focused regressions, and source-independent review are complete.
-  Review cleared after fixes for balanced URL trimming, far-away mouse-up handling, and the
-  unregistered/wrong-nonce burst P2; the later `Box<SessionError>` cleanup handoff also cleared
-  targeted review.
-- Hosted Swift checks on both architectures passed, including native persistence, cloud
-  credentials, device, relay, callback, browser-download, and file-panel checks. This does not
-  establish physical-Mac behavior or a delivered browser effect.
-- Focused green results: terminal adapter 18 tests; session runtime 25 tests; managed SSH 7 tests;
-  core URL policy 1 test and browser integration 2 tests. The desktop integration asserts an actual
-  browser surface and URL in the intended pane, including same-size viewport generation.
-- Full workspace test phase: 619 passed across 84 passing suites, with 2 existing tests ignored.
-  Workspace Clippy, format, license inventory, diff checks, C ABI, and native profile-lease ABI
-  passed. Portable native-input checks (341), Ruby/YAML checks, whitespace checks, and the
-  `TerminalSelectionSmoke` audit table with three browser-kind classifications passed; the CU14
-  receipt is green.
-- Final `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
-  `/tmp/zmux-terminal-browser-check-clean-20261019.log`. Dependency review covered 112 resolved
-  dependencies, 76 notice texts, and 3 unbundled license packages; the latter are unchanged
-  Windows/UEFI-specific baseline items, not new dependencies.
-- Full macOS run [39268201123](https://github.com/ashutoshpw/zmux/actions/runs/39268201123)
-  failed in the desktop Command-click regression: the valid-click assertion used a viewport
-  generation captured before asynchronous shell output could settle after resize. The fixture now
-  prints its ready marker and executes a silent `cat`, avoiding interactive prompt redraws.
-  Production revalidation remains strict. The repaired Command-click test passed 10 consecutive
-  runs; independent review found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0
-  at `/tmp/zmux-terminal-browser-ci-repair-check.log`, including Rust, lint, license and ABI gates.
-- Focused terminal-selection run [39268249169](https://github.com/ashutoshpw/zmux/actions/runs/39268249169)
-  built and signed the host app, then failed compiling its decoder probe because its input list
-  omitted `FileHostClient.swift` and `FileLoadGate.swift`. Both real source files are now included;
-  portable input validation passes. Independent review found no issues. Mounted interaction did
-  not run on this attempt; hosted replacement runs remain necessary.
-- Universal build, native interaction, and artifact verification remain pending. Physical-Mac
-  behavior and provider login are unverified. After CI and artifact verification, a final delivery
-  receipt commit remains; unsupported integrations remain exclusions, not acceptance results.
+## Delivery
 
-## Notes
-- The accepted cross-layer contract is recorded in
-  [browser-open-contract.md](references/browser-open-contract.md).
-- The Swift/AppKit Command-click request now carries the displayed pane ID alongside namespace,
-  surface, session, viewport generation, cell, and URL. The native-bridge decode fixture checks
-  that pane ownership is required and that `column` uses the expected wire key.
-- `git diff --check` passes for the shared checkout. At this initial checkpoint, the focused Rust
-  test awaited the matching `desktop-runtime` command; that focused desktop regression now passes
-  below. Native macOS compilation and mounted-view smoke remain pending.
-- Terminal-adapter slice: explicit OSC open requests use a bounded one-shot queue; visible OSC 8
-  and plain HTTP(S) spans carry cell coordinates; viewport generations advance on output, scroll,
-  and resize. A focused resize/scroll regression covers shorter historical rows after width growth.
-- An earlier `cargo test -p zmux-terminal-adapter --tests` run passed 17 tests, including all five
-  focused link/open-request tests; the later 18-test run is recorded below.
-- `cargo test -p zmux-terminal-adapter --features ghostty --tests` needs an explicit
-  `ZMUX_GHOSTTY_ARTIFACT_ROOT`, unavailable in this environment.
-- Added pinned `url = "=2.5.8"` to the desktop-runtime dependency graph and refreshed
-  `THIRD_PARTY_NOTICES.md`; `scripts/license-inventory --check` passes.
-- At this earlier checkpoint, shell/core regressions, full scoped checks, review, and artifact
-  verification were pending. Later focused passes and review clearance are recorded above/below;
-  the final full check and delivery gates remain pending.
-- Ownership boundary: the session worker checks nonce, strict encoding, UTF-8, and size. Desktop
-  runtime owns canonical HTTP(S) URL policy and SSH loopback rejection. URL-only OSC requests bind
-  to the session's live pane at core admission; this does not claim the pane at PTY emission time.
-  Click requests require `pane_id`, which core revalidates against the live session-to-pane map.
-- Bounds: the request queue holds at most 8 URLs of 8 KiB each; published links are capped at 512
-  spans and 64 KiB; `vt100` retains at most 64 OSC 8 targets and 256 KiB total (8 KiB per target).
-  Vendored dependency provenance is recorded in `vendor/vt100/UPSTREAM.md`.
-- Portable native-input checks (341), Ruby/YAML checks, and whitespace checks passed. The helper
-  has no program-acknowledgment wire, so OSC emission alone is not proof of opening; the desktop
-  regression must assert the actual browser surface and URL in the intended pane.
-- At this earlier checkpoint, full Rust checks, native macOS compile and mounted-view smoke, SSH
-  integration, review, and artifact verification were pending. Later SSH integration and review
-  results are recorded above/below; final full checks and native/artifact gates remain pending.
-- Session-runtime PTY regression: with `prepare_with_nonce(launch, &nonce)` and a matching
-  `OpenRequestRegistration::new(nonce, Local)`, malformed and wrong-nonce OSC events preceding
-  two helper-generated requests do not enter `take_open_urls()`. A valid OSC event is also ignored
-  when the session has no registration, even when the caller supplies a reserved nonce variable.
-  `cargo test -p zmux-session-runtime --test shell_integration -- --nocapture` passes (5 tests).
-- Managed SSH regression uses generated temporary Ed25519 host/client keys, a pinned temporary
-  known-hosts file, key-only authentication, and isolated loopback `sshd`. It passes the same nonce
-  to `ManagedConnection::terminal_spec(&nonce)` and
-  `Session::spawn_with_open_requests(..., Some(OpenRequestRegistration::new(nonce, ManagedSsh)),
-  connection)`, then verifies the actual remote shell opener URL arrives through the SSH PTY.
-  `cargo test -p zmux-remote-runtime --test connection -- --nocapture` passes (7 tests). Explicit
-  SSH command and configured `RemoteCommand` bypass remain covered by the connection/config tests.
-- The opener emits to `/dev/tty`; nested tmux/screen can consume the OSC and remains unsupported
-  without a tested relay. Initial session-boundary assertions had no captured red; the later
-  unregistered/wrong-nonce burst regression did capture the overflow before the fix, with the
-  corrected focused green runs recorded below. The host provided `/usr/sbin/sshd`, `ssh`, and
-  `ssh-keygen`, so the authenticated fixture ran without an external server or user SSH config.
-- Desktop-runtime owner admission is now implemented: the worker drains each live session's
-  bounded opener queue independently of frame changes, binds URL-only events to the current
-  terminal pane, enforces a four-opens-per-origin rolling ten-second limit, and sends accepted
-  URLs through the same `open_terminal_url` path as `zmux open`. Open requests, nonces, and rate
-  history remain worker-local and are not published.
-- Terminal Command-click admission rechecks the namespace, unique live terminal surface, pane and
-  session mapping, running session state, current viewport generation, hit cell, and exact link URL
-  against a fresh session snapshot. Same-size resize generations now trigger frame publication.
-  Focused coverage also rejects wrong namespace/session/pane, stale generation, moved panes, and
-  closed origins before asserting a current-generation click opens in the originating pane.
-- Desktop URL admission uses `url::Url` after raw HTTP(S), credential, backslash, whitespace, and
-  length checks. Managed SSH loopback/unspecified IPs and localhost names (including trailing-dot
-  and IPv4-mapped IPv6 forms) fail closed because the current `ManagedConnection` API exposes no
-  applicable-forward proof; local loopback remains allowed and no DNS lookup is made.
-- The initial focused desktop regression reached `GH_FIXTURE_READY` and timed out waiting for the
-  browser surface, confirming the missing desktop drain/routing behavior. After the core change,
-  `cargo test -p zmux-desktop-runtime --test terminal_browser_links -- --nocapture` passes (2 tests),
-  and `cargo test -p zmux-desktop-runtime --lib strict_http_validation_rejects_malformed_authorities_and_ssh_loopback_hosts -- --nocapture`
-  passes. `cargo check -p zmux-desktop-runtime --tests`, scoped rustfmt check, and `git diff --check`
-  pass. At that checkpoint, full workspace checks and native/macOS validation remained with the
-  parent task; see Current delivery gate for latest results.
-- Session parser overflow regression (2026-10-19): before nonce filtering, the registered and
-  unregistered real-PTY burst tests both failed with `terminal open-request parser overflow or
-  failure; session recovery required`. The adapter now installs the expected nonce from the
-  session registration before PTY creation; missing or mismatched nonces are discarded before URL
-  decoding and queue accounting, while session-side nonce matching remains defense in depth. The
-  registered test confirms later matching helper requests still drain. After the fix,
-  `cargo test -p zmux-terminal-adapter --tests` passes (18 tests) and
-  `cargo test -p zmux-session-runtime --tests` passes (25 tests). Scoped rustfmt and
-  `git diff --check` pass. The Ghostty-feature artifact limitation above remains unchanged.
-- Follow-up workspace lint gate: private local-tmux and local-Zellij launch failures now box the
-  retained cleanup session and unbox it at the completion handoff, preserving cleanup ownership
-  while keeping the error payload small. Two literal-only `format!` calls were replaced with
-  owned strings. `cargo clippy --workspace --all-targets --locked -- -D warnings`,
-  `cargo fmt --all -- --check`, and `git diff --check` pass. The final `scripts/check` rerun passed;
-  see Current delivery gate.
+Source `8098580de9f8eb38ce6d0ce1e499c1700b604ec0` is pushed to `origin/main` with
+remote parity confirmed. The implementation began in `53bac2c`; the final source includes the
+native frame repair and removes all temporary diagnostic tracing. This receipt update changes
+documentation only. Unrelated task and profile-lifecycle work remains untouched.
+
+[Download the verified universal development artifact](https://github.com/ashutoshpw/zmux/actions/runs/39277527877/artifacts/12199759438).
+Extract the outer artifact, then `zmux-dev-universal-8098580.zip`. The app requires macOS 14+;
+app, CLI and native bridge each contain arm64 and x86_64 slices. Signing is ad-hoc, not notarized.
+
+Archive SHA256:
+`608bfdff13d457ca79f50571f5c2c66f38946937e8e1fd59e00217e190ef03b5`.
+
+The outer and embedded build metadata agree with the source SHA. The archive checksum matches,
+and both slices of each executable carry ad-hoc CodeDirectory flags. Hosted strict/deep codesign
+verification passed. All 340 retained source files match both their recorded hashes and the
+committed source bytes. See [artifact-verification.json](references/artifact-verification.json).
+
+## Verification
+
+- Final `RUST_TEST_THREADS=2 scripts/check` exited 0 at
+  `/tmp/zmux-browser-native-frame-repair-check.log`: 620 passing tests across 84 passing suite
+  summaries, 2 existing ignored tests, format, workspace Clippy with warnings denied, dependency
+  notice inventory, C ABI, and native profile-lease ABI checks. License inventory covers 112
+  packages and 76 distinct notice texts. Three missing upstream license-text warnings are unchanged
+  Windows/UEFI baseline items, not newly introduced dependencies.
+- The documentation delivery receipt passed independent evidence review. Its required pre-commit
+  `RUST_TEST_THREADS=2 scripts/check` also exited 0 at
+  `/tmp/zmux-browser-delivery-receipt-check.log`; source remained unchanged from the verified build.
+- Focused hosted run [39277504464](https://github.com/ashutoshpw/zmux/actions/runs/39277504464),
+  artifact `12197779210`: receipt and native result complete, 41 cases with zero mismatches.
+  Source compilation, decoder compilation/contract and mounted native execution exited 0 without
+  timeout. Plain HTTP and OSC 8 Command-clicks loaded the exact fixture page/title in the original
+  pane; both HTTP requests were independently captured. Drag and release-only movement preserved
+  selection without opening a browser. This was automated arm64-host execution.
+- Full hosted run [39277527877](https://github.com/ashutoshpw/zmux/actions/runs/39277527877),
+  artifact `12199759438`: universal build, native selection/link smoke against the existing package,
+  broader packaged app smoke, cloud-terminal lifecycle and native sidebar/status-menu checks passed.
+  The universal selection receipt is complete with all 41 cases matching and both fixture requests
+  recorded. The broader smoke retains its existing exclusions: native browser downloads are false
+  and save-dialog accessibility is `skipped_user_deferred`; those are not link acceptance claims.
+- GitHub run/job status endpoints were stale and intermittently returned 502, even after successful
+  uploads. Acceptance uses the downloaded source-bound receipts and completed job log, which records
+  successful artifact finalization at 15:52:00 UTC, rather than those stale progress fields.
+- Adapter tests: 18 passed. Session runtime: 25 passed. Managed SSH connection suite: 7 passed,
+  including a real key-authenticated isolated loopback sshd with pinned host key. Desktop browser
+  integration: 2 passed, including a helper-driven browser surface in the original pane and strict
+  stale/moved/closed owner rejection. The Command-click test passed 10 consecutive runs after its
+  quiet-fixture repair. URL policy and Swift request decoding checks passed.
+- Independent implementation and final repair reviews found no remaining issues. No real GitHub
+  login/provider action, physical user-Mac interaction, VoiceOver or Intel-host execution was done.
+
+## Hosted findings and repairs
+
+1. Full run `39268201123` caught a test race: interactive shell output after resize could stale the
+   captured generation before the valid click. The fixture now prints its marker then executes a
+   silent `cat`; production generation equality remains strict. Focused run `39268249169` built and
+   signed the host app but exposed missing real FileHostClient/FileLoadGate inputs in the decoder
+   probe. The input list now includes both, with retained source hashes.
+2. Focused run `39271066715` compiled the probe, then failed the far mouse-up clipboard assertion.
+   Full run `39271019599` was canceled to avoid redundant validation of that known failure.
+   Diagnostic run `39273979536` proved event delivery and ordinary selection routing, but a zero
+   viewport generation and no pending link. The automatically triggered diagnostic full run was
+   intentionally canceled. All temporary event tracing was subsequently removed.
+3. The actual product defect was the native poll-frame projection: `WireViewport` omitted link spans
+   and viewport generation, although full core snapshots contained them. It now borrows the bounded
+   links and forwards the generation on full and changed native packets; existing Swift delta merge
+   retains the metadata. A real ABI regression failed before the fix at the absent-generation
+   assertion, then passed exact plain/OSC 8 spans, same-size resize with no changed rows, link
+   replacement and clearing. The two ABI tests use test-local setup serialization to avoid racing
+   the real registry try_lock; command failures are never retried or ignored. Native smoke now
+   requires exact link spans, nonzero generation and the installed callback before gestures.
+
+Earlier portable regressions also caught wrong/missing-nonce bursts overflowing the opener queue,
+balanced URL punctuation truncation, and historical short-row resize/scroll indexing. These were
+repaired at their owners with red/green evidence. Nonce filtering occurs before decoding/queue
+accounting; the private nonce and opener events remain absent from published snapshots.
+
+## Scope and limits
+
+The accepted wire, ownership and bounded resource contract is in
+[browser-open-contract.md](references/browser-open-contract.md). Local and managed SSH shell
+integration installs private HTTP(S) opener helpers while preserving explicit BROWSER/GH_BROWSER
+and startup overrides. Desktop runtime validates URLs, live owners and rate limits, then shares the
+existing browser action with deliberate Command-clicks. Plain URL output and paste never request
+an automatic open. Visible plain HTTP(S) and OSC 8 spans use fresh pane/session/generation checks.
+
+Automatic opener routing through nested tmux/screen, integration-disabled or unsupported shells,
+explicit SSH commands and configured RemoteCommand is unsupported. SSH loopback/local callback URLs
+are rejected because no applicable-forward proof API exists; generic OAuth callback forwarding is
+not claimed. The optional Ghostty backend supports plain visible links only, not OSC 8 or automatic
+opener metadata. Cloud viewers retain their existing nil-callback behavior. Physical Mac/provider
+login testing remains separate from the passing fixture and hosted evidence.
+
+Original Zmux implementation remains MIT. The minimal vt100 0.16.2 patch retains its upstream MIT
+license and archive provenance in `vendor/vt100/UPSTREAM.md`; no cmux implementation was imported.
