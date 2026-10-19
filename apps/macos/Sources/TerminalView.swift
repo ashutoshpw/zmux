@@ -65,50 +65,6 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
-    private var selectionSmokeTraceEnabled: Bool {
-        CommandLine.arguments.contains("--terminal-selection-smoke")
-    }
-    private var selectionSmokeRange: String {
-        guard let range = selection.range else { return "nil" }
-        return "\(range.lower.row):\(range.lower.column)-\(range.upper.row):\(range.upper.column)"
-    }
-    private var selectionSmokePendingLink: String {
-        guard let pendingTerminalLink else { return "false" }
-        return "true@\(pendingTerminalLink.hit.row):\(pendingTerminalLink.hit.column)"
-    }
-    private func traceSelectionSmoke(_ name: String, event: NSEvent? = nil, details: String = "") {
-        guard selectionSmokeTraceEnabled else { return }
-        let responder = window?.firstResponder
-        let windowIdentity = window.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
-        let responderIdentity = responder.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
-        let responderType = responder.map { String(describing: type(of: $0)) } ?? "nil"
-        let coordinates = event.map {
-            let viewPoint = convert($0.locationInWindow, from: nil)
-            let grid = gridPoint($0)
-            return "window=\($0.locationInWindow.x),\($0.locationInWindow.y) view=\(viewPoint.x),\(viewPoint.y) grid=\(grid.0),\(grid.1) modifiers=\($0.modifierFlags.rawValue)"
-        } ?? "coordinates=none"
-        print("[terminal-selection-smoke] \(name) view=\(ObjectIdentifier(self)) window=\(windowIdentity)#\(window?.windowNumber ?? -1) firstResponder=\(responderType):\(responderIdentity) pendingLink=\(selectionSmokePendingLink) pointerTracking=\(viewport?.pointerTracking?.rawValue ?? "nil") selection=\(selectionSmokeRange) \(coordinates) \(details)")
-    }
-    private func selectionSmokeTraceState() -> (pending: String, selection: String)? {
-        guard selectionSmokeTraceEnabled else { return nil }
-        return (selectionSmokePendingLink, selectionSmokeRange)
-    }
-    private func traceSelectionSmokeIfChanged(_ name: String, before: (pending: String, selection: String)?,
-                                               event: NSEvent? = nil, details: String = "") {
-        guard let before,
-              before.pending != selectionSmokePendingLink || before.selection != selectionSmokeRange else { return }
-        traceSelectionSmoke(name, event: event,
-            details: "beforePending=\(before.pending) beforeSelection=\(before.selection) \(details)")
-    }
-    private func pointerRouteDescription(_ route: PointerRoute?) -> String {
-        guard let route else { return "none" }
-        switch route {
-        case .selection: return "selection"
-        case .application: return "application"
-        case .refused: return "refused"
-        }
-    }
-
     init(pane: Pane? = nil) {
         self.pane = pane
         super.init(frame: .zero)
@@ -126,10 +82,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
     override func resignFirstResponder() -> Bool {
-        let before = selectionSmokeTraceState()
-        semanticKeysDown.removeAll(); pendingTerminalLink = nil; cancelPointerGestures(); needsDisplay = true
-        traceSelectionSmokeIfChanged("resignFirstResponder", before: before, details: "cancelled=true")
-        return true
+        semanticKeysDown.removeAll(); pendingTerminalLink = nil; cancelPointerGestures(); needsDisplay = true; return true
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if motionWindow !== newWindow {
@@ -160,8 +113,6 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var requestedSize: (Int, Int) { lastSize }
     func update(_ frame: Frame) {
         let oldState = frameState
-        let before = selectionSmokeTraceState()
-        let previousViewport = viewport
         frameState = frame.failure ?? frame.snapshot?.failure ?? (frame.starting ? "Starting shell…" : frame.snapshot?.state ?? "Unavailable")
         if oldState == "running", frameState != "running" {
             pendingTerminalLink = nil
@@ -199,13 +150,6 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
                 }
             } else { needsDisplay = true }
         } else { updateTrackingAreas(); needsDisplay = true }
-        let currentViewport = viewport
-        let viewportChanged = previousViewport?.size != currentViewport?.size
-            || previousViewport?.scrollbackOffset != currentViewport?.scrollbackOffset
-            || previousViewport?.pointerTracking != currentViewport?.pointerTracking
-            || previousViewport?.alternateScreen != currentViewport?.alternateScreen
-        traceSelectionSmokeIfChanged("update", before: before,
-            details: "stateChanged=\(oldState != frameState) viewportChanged=\(viewportChanged) rows=\(currentViewport?.size.rows ?? -1) cols=\(currentViewport?.size.cols ?? -1) scrollback=\(currentViewport?.scrollbackOffset ?? -1)")
     }
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.current?.shouldAntialias = true
@@ -289,69 +233,39 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
 
     override func mouseDown(with event: NSEvent) {
-        traceSelectionSmoke("mouseDown.entry", event: event)
-        let before = selectionSmokeTraceState()
-        if beginTerminalLink(event) {
-            traceSelectionSmokeIfChanged("mouseDown", before: before, event: event, details: "path=pending-link")
-            return
-        }
+        if beginTerminalLink(event) { return }
         beginPointer(event, button: .left)
-        traceSelectionSmokeIfChanged("mouseDown", before: before, event: event,
-            details: "path=pointer route=\(pointerRouteDescription(pointerGestures[.left]?.route))")
     }
     override func mouseDragged(with event: NSEvent) {
-        let before = selectionSmokeTraceState()
-        var threshold: String = "not-applicable"
         if let pending = pendingTerminalLink {
-            let exceeded = terminalLinkMovementExceedsThreshold(event, from: pending.startLocation)
-            threshold = exceeded ? "exceeded" : "not-exceeded"
-            guard exceeded else { return }
+            guard terminalLinkMovementExceedsThreshold(event, from: pending.startLocation) else { return }
             pendingTerminalLink = nil
             beginPointer(pending.downEvent, button: .left, focus: false)
             dragPointer(event, button: .left)
-            traceSelectionSmokeIfChanged("mouseDragged", before: before, event: event,
-                details: "threshold=\(threshold) route=\(pointerRouteDescription(pointerGestures[.left]?.route))")
             return
         }
         dragPointer(event, button: .left)
-        traceSelectionSmokeIfChanged("mouseDragged", before: before, event: event,
-            details: "threshold=\(threshold) route=\(pointerRouteDescription(pointerGestures[.left]?.route))")
     }
     override func mouseUp(with event: NSEvent) {
-        traceSelectionSmoke("mouseUp.entry", event: event)
-        let before = selectionSmokeTraceState()
-        var threshold = "not-applicable"
-        var path = "pointer"
         if let pending = pendingTerminalLink {
             pendingTerminalLink = nil
-            let exceeded = terminalLinkMovementExceedsThreshold(event, from: pending.startLocation)
-            threshold = exceeded ? "exceeded" : "not-exceeded"
-            if exceeded {
+            if terminalLinkMovementExceedsThreshold(event, from: pending.startLocation) {
                 // AppKit can coalesce away mouseDragged. Preserve the ordinary
                 // pointer/selection gesture when mouse-up itself proves motion.
-                path = "far-drag"
                 beginPointer(pending.downEvent, button: .left, focus: false)
                 dragPointer(event, button: .left)
                 endPointer(event, button: .left)
-                traceSelectionSmokeIfChanged("mouseUp", before: before, event: event,
-                    details: "threshold=\(threshold) path=\(path)")
                 return
             }
             if onOpenTerminalLink?(pending.hit) == true {
                 lastHover = nil
-                path = "opened-link"
-                traceSelectionSmokeIfChanged("mouseUp", before: before, event: event,
-                    details: "threshold=\(threshold) path=\(path)")
                 return
             }
             // Admission can fail if the owner disappeared or its queue is full.
             // Re-run the original click through the normal selection/mouse route.
-            path = "link-fallback"
             beginPointer(pending.downEvent, button: .left, focus: false)
         }
         endPointer(event, button: .left)
-        traceSelectionSmokeIfChanged("mouseUp", before: before, event: event,
-            details: "threshold=\(threshold) path=\(path)")
     }
     private func terminalLinkMovementExceedsThreshold(_ event: NSEvent, from start: NSPoint) -> Bool {
         let deltaX = event.locationInWindow.x - start.x
@@ -402,7 +316,6 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         return lowercased.hasPrefix("http://") || lowercased.hasPrefix("https://")
     }
     private func beginPointer(_ event: NSEvent, button: TerminalPointerEvent.Button, focus: Bool = true) {
-        let before = selectionSmokeTraceState()
         if focus { window?.makeFirstResponder(self); onFocus?() }
         guard let viewport else { return }
         // A route is latched at press, including Shift override and refused input.
@@ -426,8 +339,6 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         pointerGestures[button] = PointerGesture(route: route, last: sample)
         lastHover = nil
         needsDisplay = true
-        traceSelectionSmokeIfChanged("beginPointer", before: before, event: event,
-            details: "button=\(button.rawValue) route=\(pointerRouteDescription(route)) local=\(local) clickCount=\(event.clickCount)")
     }
     private func dragPointer(_ event: NSEvent, button: TerminalPointerEvent.Button) {
         guard var gesture = pointerGestures[button] else { return }
@@ -455,14 +366,12 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     // Focus loss ends native ownership. Releases use the same admission/error
     // path; a full queue remains explicit failure, with no unbounded retry task.
     func cancelPointerGestures() {
-        let before = selectionSmokeTraceState()
         for button in [TerminalPointerEvent.Button.left, .middle, .right] {
             if let gesture = pointerGestures.removeValue(forKey: button), gesture.route == .application {
                 _ = sendPointer(.release, button: button, sample: gesture.last)
             }
         }
         lastHover = nil
-        traceSelectionSmokeIfChanged("cancelPointerGestures", before: before, details: "cancelled=true")
     }
     private func pointerSample(_ event: NSEvent) -> PointerSample {
         let (row, col) = gridPoint(event)

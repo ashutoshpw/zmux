@@ -4,6 +4,17 @@
 - **Updated:** 2026-10-19
 
 ## Current delivery gate
+- Native delta metadata repair is complete: `WireViewport` now forwards bounded link spans and
+  viewport generation on full and changed native packets. Swift's existing merge retains these
+  fields. The new real-ABI regression failed before the fix at the absent-generation assertion,
+  then passed with exact plain/OSC 8 spans, same-size resize with no changed text rows, replacement,
+  and clear. Both native-frame tests pass with two test threads; test-local setup serialization
+  avoids racing the real registry's `try_lock` without ignoring any ABI failures.
+- All temporary diagnostic traces are removed. Mounted smoke prerequisites now require the link
+  spans, nonzero generation, and installed callback before gesture assertions. Independent review
+  of the final repair found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
+  `/tmp/zmux-browser-native-frame-repair-check.log`; formatting and diff checks pass. Hosted
+  validation and a verified universal artifact remain the delivery gate.
 - Validation repair commit `eed5bd048174627303d777a8d6b596f3b8c4be21` is pushed to
   `origin/main`, with remote parity confirmed. Focused run
   [39271066715](https://github.com/ashutoshpw/zmux/actions/runs/39271066715) passed metadata
@@ -17,6 +28,13 @@
   Independent review found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
   `/tmp/zmux-browser-diagnostic-check.log`; portable input validation and diff checks pass.
   This Linux host cannot compile AppKit; native diagnostic compilation remains pending.
+- Diagnostic run [39273979536](https://github.com/ashutoshpw/zmux/actions/runs/39273979536)
+  compiled and ran successfully through its metadata checks, then reproduced the native failure.
+  Its event traces prove down/up delivery and local selection routing, with no pending link and
+  viewport generation zero. Source investigation identified the native delta serializer's
+  `WireViewport`: it omitted `viewport_generation` and `links` even though the full core snapshots
+  contain them. The native bridge projection is being repaired with a real ABI regression;
+  temporary traces are being removed. No further diagnostic run is needed.
 - Source commit `53bac2cdaee02bee2b59851fd8bf110d855d11b5` is pushed to `origin/main`; `git
   ls-remote` confirmed remote parity. Unrelated older status and profile files were preserved.
 - Contract, implementation, focused regressions, and source-independent review are complete.
