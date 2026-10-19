@@ -430,13 +430,16 @@ enum TerminalSelectionSmoke {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("ZMUX_SELECTION_SENTINEL", forType: .string)
         try pointerEvent(.leftMouseDown, cell: (0, releaseSelectionStart), modifiers: [.command],
-                         view: view, window: window, viewport: links)
+                         view: view, window: window, viewport: links,
+                         diagnosticLabel: "far-mouse-down", coordinator: coordinator, sessionID: frame.sessionId)
         try pointerEvent(.leftMouseUp, cell: (0, plainEnd), modifiers: [.command],
-                         view: view, window: window, viewport: links)
+                         view: view, window: window, viewport: links,
+                         diagnosticLabel: "far-mouse-up", coordinator: coordinator, sessionID: frame.sessionId)
         var releaseSelectionCopyError: String?
         do { try copy(window: window) }
         catch { releaseSelectionCopyError = String(describing: error) }
         let releaseSelectionObserved = NSPasteboard.general.string(forType: .string)
+        trace("copy sentinelUnchanged=\(releaseSelectionObserved?.utf8.elementsEqual("ZMUX_SELECTION_SENTINEL".utf8) == true)")
         let releaseSelectionMatches = releaseSelectionCopyError == nil
             && releaseSelectionObserved?.utf8.elementsEqual(releaseSelection.utf8) == true
         let releaseSelectionReport = releaseSelectionCopyError.map { "copy failed: \($0)" } ?? releaseSelectionObserved
@@ -691,7 +694,9 @@ enum TerminalSelectionSmoke {
     }
 
     private static func pointerEvent(_ type: NSEvent.EventType, cell: (Int, Int), modifiers: NSEvent.ModifierFlags,
-                                     view: TerminalView, window: NSWindow, viewport: Viewport, allowOutside: Bool = false) throws {
+                                     view: TerminalView, window: NSWindow, viewport: Viewport, allowOutside: Bool = false,
+                                     diagnosticLabel: String? = nil, coordinator: ApplicationCoordinator? = nil,
+                                     sessionID: UInt64? = nil) throws {
         let grid = try gridGeometry(view, viewport: viewport)
         let location: NSPoint
         if allowOutside {
@@ -720,7 +725,35 @@ enum TerminalSelectionSmoke {
             }
             event = middle
         }
+        if let diagnosticLabel, let coordinator, let sessionID {
+            traceHitTest(diagnosticLabel, location: location, view: view, window: window,
+                         viewport: coordinator.snapshot?.frames.first(where: { $0.sessionId == sessionID })?.snapshot?.viewport)
+        }
         window.sendEvent(event)
+    }
+
+    private static func trace(_ message: String) {
+        guard CommandLine.arguments.contains("--terminal-selection-smoke") else { return }
+        print("[terminal-selection-smoke] \(message)")
+    }
+
+    private static func traceHitTest(_ label: String, location: NSPoint, view: TerminalView,
+                                     window: NSWindow, viewport: Viewport?) {
+        guard CommandLine.arguments.contains("--terminal-selection-smoke") else { return }
+        let root = window.contentView
+        let hit = root?.hitTest(root?.convert(location, from: nil) ?? .zero)
+        let identity: (AnyObject?) -> String = { object in
+            guard let object else { return "nil" }
+            return "\(String(describing: type(of: object))):\(ObjectIdentifier(object))"
+        }
+        let responder = window.firstResponder
+        let viewportMetadata: String
+        if let viewport {
+            viewportMetadata = "rows=\(viewport.size.rows) cols=\(viewport.size.cols) scrollback=\(viewport.scrollbackOffset) pointerTracking=\(viewport.pointerTracking?.rawValue ?? "nil") alternateScreen=\(viewport.alternateScreen) generation=\(viewport.viewportGeneration)"
+        } else {
+            viewportMetadata = "unavailable"
+        }
+        print("[terminal-selection-smoke] hitTest event=\(label) view=\(identity(view)) hit=\(identity(hit)) window=\(identity(window)) windowNumber=\(window.windowNumber) firstResponder=\(identity(responder)) windowPoint=\(location.x),\(location.y) viewport=\(viewportMetadata)")
     }
 
     private static func gridGeometry(_ view: TerminalView, viewport: Viewport) throws -> NSRect {
