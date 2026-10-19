@@ -4,6 +4,19 @@
 - **Updated:** 2026-10-19
 
 ## Current delivery gate
+- Validation repair commit `eed5bd048174627303d777a8d6b596f3b8c4be21` is pushed to
+  `origin/main`, with remote parity confirmed. Focused run
+  [39271066715](https://github.com/ashutoshpw/zmux/actions/runs/39271066715) passed metadata
+  compilation/contracts and the preceding mounted selection cases, then failed the far mouse-up
+  clipboard assertion: clipboard retained its sentinel; no browser opened. Full run
+  [39271019599](https://github.com/ashutoshpw/zmux/actions/runs/39271019599) was canceled during
+  Rust validation to avoid rebuilding the same known failing native case.
+- Temporary smoke-only event traces are added for a focused diagnostic run. They record delivery,
+  hit-test identity, pointer mode/route, and selection ranges without terminal text, URLs, or
+  nonces. Behavior and acceptance assertions are unchanged; traces must be removed after diagnosis.
+  Independent review found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
+  `/tmp/zmux-browser-diagnostic-check.log`; portable input validation and diff checks pass.
+  This Linux host cannot compile AppKit; native diagnostic compilation remains pending.
 - Source commit `53bac2cdaee02bee2b59851fd8bf110d855d11b5` is pushed to `origin/main`; `git
   ls-remote` confirmed remote parity. Unrelated older status and profile files were preserved.
 - Contract, implementation, focused regressions, and source-independent review are complete.
