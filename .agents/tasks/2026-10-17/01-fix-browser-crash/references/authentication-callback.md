@@ -55,3 +55,12 @@
   runs, `start` is suppressed, and methods/captured blocks are reset on completion.
 - Production fix is unchanged; portable validation still applies to that source.
   New fixture Objective-C compilation and baseline/current proof need hosted macOS.
+
+## Successful native proof and delivery
+- Run 39212506138, build 220, source d595a903cc53bc1c012197e9d67ede8a97698bec
+  passed. The callback step logs both the baseline trap and the fixed controller's
+  successful MainActor UI recovery/error presentation. Full configured native gates
+  passed and artifact 12169401068 was downloaded and inspected.
+- Embedded Info.plist confirms build 220 and https://zmux.w3api.dev; the ZIP
+  checksum matches its manifest. Real Safari launch and authenticated production
+  sign-in on the affected Mac remain a retry, distinct from the deterministic test.
