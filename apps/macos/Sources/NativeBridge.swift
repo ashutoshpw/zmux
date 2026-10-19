@@ -13,6 +13,15 @@ private struct NativeFramePacket: Decodable {
     let contentsStart: Int
     let contentsEnd: Int
 }
+private struct NativeTerminalSharingReceipt: Decodable {
+    struct Failure: Decodable {
+        let message: String
+    }
+
+    let ok: Bool?
+    let grant: UUID?
+    let error: Failure?
+}
 
 struct BridgeFailure: Error, LocalizedError, Sendable {
     let message: String
@@ -195,6 +204,53 @@ actor NativeBridge {
         frameCache = next; frameNamespace = snapshot.model.identityNamespace
         revision = snapshot.revision
         return snapshot
+    }
+    /// Installs or revokes the Rust-owned gate for Cloud terminal sharing. The returned UUID is
+    /// also the Cloud presence epoch; a stale relay request cannot outlive a local disable.
+    func setTerminalSharing(enabled: Bool) async throws -> UUID? {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        let desktop = handle
+        let result = await Task.detached(priority: .userInitiated) {
+            zmux_desktop_terminal_sharing(desktop, enabled)
+        }.value
+        guard result.status == 0 else { throw Self.failure(result.status) }
+        let receipt = try JSONDecoder().decode(NativeTerminalSharingReceipt.self, from: Self.consume(result.value))
+        if let error = receipt.error {
+            throw BridgeFailure(message: error.message)
+        }
+        guard receipt.ok != false else {
+            throw BridgeFailure(message: "The native terminal sharing gate rejected the request")
+        }
+        if enabled {
+            guard let grant = receipt.grant else { throw BridgeFailure(message: "The terminal sharing grant was not returned") }
+            return grant
+        }
+        guard receipt.grant == nil else { throw BridgeFailure(message: "The terminal sharing gate did not close") }
+        return nil
+    }
+    /// Dispatches one typed, already-decrypted terminal operation through the existing Rust
+    /// session owner. Rust validates the grant and exact namespace/surface/session binding.
+    func sharedTerminalOperation(request: Data, grant: UUID) async throws -> Data {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        guard request.count <= 131_072,
+              (try? JSONSerialization.jsonObject(with: request)) is [String: Any] else {
+            throw BridgeFailure(message: "Terminal sharing operation exceeds its size limit or is not an object")
+        }
+        // Preserve the exact request bytes so Rust's strict decoder can reject duplicate fields
+        // and retain its deny-unknown-fields behavior. This owner is the grant authority.
+        var envelope = Data("{\"grant\":\"\(grant.uuidString.lowercased())\",\"request\":".utf8)
+        envelope.append(request)
+        envelope.append(0x7D)
+        guard envelope.count <= 131_072 else { throw BridgeFailure(message: "Terminal sharing envelope exceeds its size limit") }
+        let envelopeData = envelope
+        let desktop = handle
+        return try await Task.detached(priority: .userInitiated) {
+            let result = envelopeData.withUnsafeBytes { bytes in
+                zmux_desktop_shared_terminal(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else { throw Self.failure(result.status) }
+            return try Self.consume(result.value)
+        }.value
     }
     func selectWorkspaceNumber(_ digit: Int, window: UUID) async throws {
         try await send(["command":"targeted", "request":[
@@ -471,7 +527,7 @@ actor NativeBridge {
         try await send(["command": "transfer", "action": ["operation": "cancel", "id": id]])
     }
     func input(session: UInt64, text: String) async throws {
-        guard text.utf8.count <= 16_384 else { throw BridgeFailure(message: "Development build pastes are limited to 16 KiB") }
+        guard text.utf8.count <= 4_096 else { throw BridgeFailure(message: "Terminal input is limited to 4096 UTF-8 bytes per operation") }
         // Split only at Unicode scalar boundaries; each JSON request stays below the ABI limit.
         var chunk = ""
         for scalar in text.unicodeScalars {

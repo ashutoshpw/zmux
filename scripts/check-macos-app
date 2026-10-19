@@ -18,6 +18,12 @@ from importlib.util import module_from_spec, spec_from_file_location
 fixture_spec = spec_from_file_location("native_ssh_fixture", Path(__file__).with_name("native-ssh-fixture.py"))
 fixture_module = module_from_spec(fixture_spec)
 fixture_spec.loader.exec_module(fixture_module)
+cloud_fixture_spec = spec_from_file_location(
+    "native_cloud_client_http_fixture",
+    Path(__file__).resolve().parents[1] / "tools/native-fixtures/cloud-client-http.py",
+)
+cloud_fixture_module = module_from_spec(cloud_fixture_spec)
+cloud_fixture_spec.loader.exec_module(cloud_fixture_module)
 resource_spec = spec_from_file_location("native_resource_sampler", Path(__file__).with_name("native-resource-sampler.py"))
 resource_module = module_from_spec(resource_spec)
 resource_spec.loader.exec_module(resource_module)
@@ -189,7 +195,211 @@ def browser_fixture():
         server.server_close()
         worker.join(timeout=2)
 
-with local_tmux_fixture() as native_environment, browser_fixture(), fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
+@contextlib.contextmanager
+def cloud_terminal_fixture():
+    state = cloud_fixture_module.FixtureState()
+    state.cloud_terminal_presence_attempts = []
+
+    class LifecycleHandler(cloud_fixture_module.Handler):
+        def read_body(self):
+            body = super().read_body()
+            if self.path.startswith("/v1/devices/") and self.path.endswith("/presence"):
+                self.cloud_terminal_presence_sharing = bool(body.get("sharing")) if body else False
+            return body
+
+        def reply(self, status, value):
+            if (self.path.startswith("/v1/devices/") and self.path.endswith("/presence")
+                    and hasattr(self, "cloud_terminal_presence_sharing")):
+                with self.server.state.lock:
+                    self.server.state.cloud_terminal_presence_attempts.append(
+                        {"sharing": self.cloud_terminal_presence_sharing, "status": status})
+            super().reply(status, value)
+
+        def do_GET(self):
+            if self.path == "/__fixture/held":
+                with self.server.state.lock:
+                    gate = self.server.state.gates.get("cloud-terminal-lifecycle")
+                    is_held = bool(gate and gate["entered"].is_set())
+                self.reply(200, {"held": is_held})
+                return
+            if self.path == "/__fixture/state":
+                with self.server.state.lock:
+                    attempts = list(self.server.state.cloud_terminal_presence_attempts)
+                    updates = [attempt["sharing"] for attempt in attempts]
+                self.reply(200, {"presence_updates": updates, "presence_attempts": attempts})
+                return
+            super().do_GET()
+
+        def do_POST(self):
+            if self.path == "/__fixture/arm":
+                body = self.read_body()
+                point = body.get("point") if body else None
+                if point not in {"devices", "presence"}:
+                    self.reply(400, {"error": "invalid fixture hold point"})
+                    return
+                gate = {"entered": threading.Event(), "release": threading.Event(), "status": 200}
+                with self.server.state.lock:
+                    old = self.server.state.gates.get("cloud-terminal-lifecycle")
+                    if old:
+                        old["release"].set()
+                    self.server.state.gates["cloud-terminal-lifecycle"] = gate
+                    self.server.state.pending[(point, "relay-host")] = gate
+                self.reply(200, {"armed": True})
+                return
+            if self.path == "/__fixture/release":
+                with self.server.state.lock:
+                    gate = self.server.state.gates.get("cloud-terminal-lifecycle")
+                    if gate:
+                        gate["release"].set()
+                self.reply(200, {"released": True})
+                return
+            if self.path == "/__fixture/reset":
+                with self.server.state.lock:
+                    self.server.state.presence_updates.clear()
+                    self.server.state.cloud_terminal_presence_attempts.clear()
+                self.reply(200, {"reset": True})
+                return
+            if self.path in {"/__fixture/fail-next-presence-clear", "/__fixture/fail-next-presence"}:
+                body = self.read_body()
+                sharing = body.get("sharing", False) if body else False
+                status = body.get("status", 503) if body else 503
+                if type(sharing) is not bool or type(status) is not int or status not in {401, 409, 503}:
+                    self.reply(400, {"error": "invalid presence failure fixture"})
+                    return
+                gate = {"entered": threading.Event(), "release": threading.Event(), "status": status}
+                gate["release"].set()
+                with self.server.state.lock:
+                    key = ("presence", "relay-host")
+                    if key in self.server.state.pending:
+                        self.reply(409, {"error": "a presence gate is already armed"})
+                        return
+                    self.server.state.pending[key] = gate
+                self.reply(200, {"armed": True})
+                return
+            super().do_POST()
+
+    class CloudTerminalServer(cloud_fixture_module.FixtureServer):
+        def __init__(self, fixture_state):
+            http.server.ThreadingHTTPServer.__init__(self, ("127.0.0.1", 0), LifecycleHandler)
+            self.state = fixture_state
+
+    servers = [CloudTerminalServer(state) for _ in range(2)]
+    workers = [threading.Thread(target=server.serve_forever, daemon=True) for server in servers]
+    for worker in workers:
+        worker.start()
+    origins = [f"http://127.0.0.1:{server.server_port}" for server in servers]
+    (dist / "native-cloud-terminal-fixture.json").write_text(
+        json.dumps({"host_origin": origins[0], "viewer_origin": origins[1]}))
+    try:
+        yield {"host": origins[0], "viewer": origins[1]}
+    finally:
+        with state.lock:
+            for gate in state.gates.values():
+                gate["release"].set()
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for worker in workers:
+            worker.join(timeout=2)
+
+with local_tmux_fixture() as native_environment, browser_fixture(), cloud_terminal_fixture() as cloud_origins, fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
+    lifecycle_report = dist / "native-cloud-terminal-lifecycle.json"
+    lifecycle_stdout = dist / "native-cloud-terminal-lifecycle.stdout.log"
+    lifecycle_stderr = dist / "native-cloud-terminal-lifecycle.stderr.log"
+    if lifecycle_report.exists(): lifecycle_report.unlink()
+    try:
+        subprocess.run(["/usr/bin/open", "-n", "-W", "--stdout", str(lifecycle_stdout), "--stderr", str(lifecycle_stderr),
+                        str(dist / "zmux.app"), "--args", "--cloud-terminal-lifecycle-smoke",
+                        str(lifecycle_report), cloud_origins["host"], cloud_origins["viewer"]], check=True, timeout=120)
+    except Exception as error:
+        for path in [lifecycle_stdout, lifecycle_stderr]:
+            if path.exists(): print(path.read_text())
+        if isinstance(error, subprocess.TimeoutExpired):
+            print("Cloud terminal lifecycle smoke timed out; its app may remain alive.")
+        diagnose_failure()
+        raise
+    if not lifecycle_report.exists():
+        for path in [lifecycle_stdout, lifecycle_stderr]:
+            if path.exists(): print(path.read_text())
+        diagnose_failure()
+        raise SystemExit("The packaged app did not produce Cloud terminal lifecycle evidence")
+    lifecycle_evidence = json.loads(lifecycle_report.read_text())
+    if lifecycle_evidence.get("scope") != "cloud_terminal_lifecycle_two_peer_access_and_account_switch" or lifecycle_evidence.get("state") != "passed":
+        raise SystemExit("Cloud terminal lifecycle and two-peer evidence has an invalid scope or state")
+    scenarios = lifecycle_evidence.get("scenarios", [])
+    expected_scenarios = {"toggle_off_during_local_device_lookup", "credential_stop_during_presence_publish"}
+    expected_presence = {
+        "toggle_off_during_local_device_lookup": [],
+        "credential_stop_during_presence_publish": [True, False],
+        "namespace_change_retries_failed_presence_clear": [True, False, False],
+    }
+    expected_attempts = {
+        "toggle_off_during_local_device_lookup": [],
+        "credential_stop_during_presence_publish": [
+            {"sharing": True, "status": 200}, {"sharing": False, "status": 200}],
+        "namespace_change_retries_failed_presence_clear": [
+            {"sharing": True, "status": 200},
+            {"sharing": False, "status": 503},
+            {"sharing": False, "status": 200}],
+    }
+    expected_scenarios.add("namespace_change_retries_failed_presence_clear")
+    if len(scenarios) != 3 or {item.get("name") for item in scenarios} != expected_scenarios or any(
+            item.get("host_state") != "off"
+            or item.get("presence_updates") != expected_presence.get(item.get("name"))
+            or item.get("presence_attempts") != expected_attempts.get(item.get("name"))
+            or item.get("local_gate_confirmed_disabled") is not True
+            or item.get("post_stop_gate_error_code") != "sharing_disabled" for item in scenarios):
+        raise SystemExit("Cloud terminal lifecycle stop race did not match its observed presence sequence")
+    relay = lifecycle_evidence.get("relay")
+    if not isinstance(relay, dict) or relay.get("same_device_after_repeated_registration") is not True \
+            or type(relay.get("listed_sessions")) is not int or relay["listed_sessions"] < 1 \
+            or relay.get("read_existing_frame") is not True \
+            or relay.get("input_marker_observed") is not True \
+            or relay.get("resize_rows") != 18 or relay.get("resize_cols") != 72 \
+            or relay.get("viewport_rows") != 18 or relay.get("viewport_cols") != 72 \
+            or relay.get("kernel_size_output") != "18 72" \
+            or relay.get("presence_cleared") is not True \
+            or relay.get("post_stop_gate_error_code") != "sharing_disabled":
+        raise SystemExit("Cloud terminal two-peer relay evidence did not prove list/frame/input/resize and Rust gate revocation")
+
+    rejected_start = lifecycle_evidence.get("rejected_start")
+    if not isinstance(rejected_start, dict) \
+            or rejected_start.get("presence_updates") != [True, True, False] \
+            or rejected_start.get("presence_attempts") != [
+                {"sharing": True, "status": 409},
+                {"sharing": True, "status": 200},
+                {"sharing": False, "status": 200}] \
+            or rejected_start.get("owner_off_after_rejection") is not True \
+            or rejected_start.get("local_gate_closed_after_rejection") is not True \
+            or rejected_start.get("retry_enabled") is not True \
+            or rejected_start.get("retry_stopped") is not True \
+            or rejected_start.get("post_stop_gate_error_code") != "sharing_disabled":
+        raise SystemExit("A rejected sharing=true request did not leave the gate closed for a clean retry")
+
+    account_switch = lifecycle_evidence.get("account_switch")
+    if not isinstance(account_switch, dict) \
+            or account_switch.get("presence_updates") != [True, False, True, False] \
+            or account_switch.get("presence_attempts") != [
+                {"sharing": True, "status": 200},
+                {"sharing": False, "status": 401},
+                {"sharing": True, "status": 200},
+                {"sharing": False, "status": 200}] \
+            or account_switch.get("old_stop_warning_returned") is not True \
+            or account_switch.get("old_presence_clear_confirmed") is not False \
+            or account_switch.get("old_device_still_sharing_after_expired_session") is not True \
+            or account_switch.get("old_device_still_sharing_after_account_switch") is not True \
+            or account_switch.get("local_gate_closed_after_401") is not True \
+            or account_switch.get("old_cleanup_context_retired_with_unresolved_warning") is not True \
+            or account_switch.get("same_installation_after_account_switch") is not True \
+            or account_switch.get("new_account_device_is_different") is not True \
+            or account_switch.get("first_new_account_enable_required_separate_action") is not True \
+            or account_switch.get("local_gate_closed_after_rejected_enable") is not True \
+            or account_switch.get("new_account_enabled") is not True \
+            or account_switch.get("new_account_stop_confirmed") is not True \
+            or account_switch.get("post_old_stop_gate_error_code") != "sharing_disabled" \
+            or account_switch.get("post_new_stop_gate_error_code") != "sharing_disabled":
+        raise SystemExit("The expired-session account switch did not retain old presence truth and require a separate new-account enable")
+
     sampler = resource_module.NativeResourceSampler(
         bundle / "MacOS/zmux-app", bundle / "Resources/bin/zmux",
         dist / "native-resources.json", info.get("ZmuxSourceSHA"),

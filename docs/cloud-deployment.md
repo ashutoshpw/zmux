@@ -1,9 +1,11 @@
 # Cloud deployment
 
 The owned production origin is **https://zmux.w3api.dev**. All production cloud
-deployments are postponed. The current authorized setup runs locally in Docker;
-the owner will map the origin with Cloudflare Tunnel after local health checks.
-No public deployment or tunnel is claimed by the local setup.
+deployments are postponed. The documented local setup runs in Docker; activating it
+against the persistent serving database still requires separate approval.
+The local setup neither creates nor verifies a public route. The owner may already have
+mapped the hostname; inspect the existing route before making any tunnel or DNS changes.
+The local setup alone does not claim that public deployment is complete.
 
 The native app uses the validated origin in `config/deployment.json`. A running local
 cloud service is useful for development and integration testing; it does not replace
@@ -28,12 +30,13 @@ scripts/local-cloud status
 ```
 
 `start` runs `bunx path-to-port` in `services/control-plane`; the current result is
-**3530**. The tunnel target is **http://127.0.0.1:3530**. Map the public hostname
-`zmux.w3api.dev` to that target using a Cloudflare Tunnel agent on the same host.
+**3530**. The tunnel target is **http://127.0.0.1:3530**. Check whether the owner already
+maps the public hostname `zmux.w3api.dev` to that target before changing tunnel settings.
 A tunnel agent in its own network namespace must reach the host loopback explicitly;
 its container's `127.0.0.1` addresses that container. The app uses
 `https://zmux.w3api.dev` for auth origins and secure cookies. External HTTPS, tunnel
-access policy, and browser/native callback checks remain owner setup and validation.
+access policy, and browser/native callback checks remain owner-controlled and require
+independent validation.
 
 Changing the hostname in Git does not update an already running container. Apply
 the updated Compose app configuration when activating the new origin, then verify
@@ -87,9 +90,14 @@ check, not an off-host recovery or browser authentication rehearsal. The develop
 failure-path check `scripts/test-local-cloud-restore` also uses only disposable databases.
 
 `check` records `/health` and database-backed `/ready` results in private `health.json`.
-It records public tunnel verification as false. Identity, devices and organizations may
-be ready while VM, relay and email remain unavailable. Local readiness does not establish
-an authenticated public browser/native flow.
+It records `public_tunnel_verified: false` because the script does not probe the public
+route; that value does not establish whether a route already exists. After migration 003
+and its schema checks pass, `/ready` reports identity, devices, organizations, stable
+device identity and terminal relay ready; VM and email remain unavailable. The relay
+carries encrypted requests through PostgreSQL to a currently running, online Mac that has
+explicitly enabled sharing. It does not provision a VM or a separate terminal daemon.
+Local readiness does not verify an existing public route or an authenticated public
+browser/native flow.
 
 ## Host-selection handoff
 
@@ -104,15 +112,26 @@ If hosted deployment is resumed, extend the package workflow with a deployment j
 7. Records image/source, origin, migration result and health evidence in the Actions receipt.
 
 Remote host credentials, hosted database provisioning, public DNS/TLS and production mail
-configuration remain decisions for that discussion. The current local Docker setup is
-authorized separately; no hosted Actions deployment workflow has been added.
+configuration remain decisions for that discussion. Local Docker operations are separate
+from hosted deployment; activation against the persistent serving database still requires
+separate approval. No hosted Actions deployment workflow has been added.
 
-Account/device APIs do not yet provide remote PTY transport, VMs or relay services. Their
-availability must remain explicit in both the service readiness response and native UI.
+The account/device service now provides an encrypted database relay for terminal requests
+to explicitly shared, online Macs. The Mac app owns the terminal sessions. This does not
+provision VMs or a standalone terminal daemon, and it does not verify any Cloudflare Tunnel
+route. Keep the implemented capability states explicit in `/v1/config`, `/ready`, and the
+native UI; the relay does not imply that a public route or remote VM is available.
 
 ## Remaining service operations
 
 Before production rollout, add scheduled cleanup for expired authorization codes and
-expired/revoked native tokens and device records, plus backups and monitoring. Native
-registration currently updates `last_seen_at` once; periodic native heartbeats are a
-separate device-presence feature. The account/device UI does not imply a live connection.
+expired/revoked native tokens and device records, plus backups and monitoring. Device
+presence uses an authenticated 15-second lease refreshed by the running app while terminal
+sharing is active; registration alone does not establish that a Mac is currently online.
+
+The current service requires stable installation identity fields on `POST /v1/devices`.
+Older native clients that send only a device name and platform receive `400 invalid_device`
+from the updated service. Keep updated clients and the service rollout coordinated; the
+legacy bearer-only heartbeat remains limited to historical rows. See the device-terminal
+task's [rollout plan](../.agents/tasks/2026-10-19/01-device-terminal-access/references/rollout.md)
+for the local migration sequence, capability checks and rollback limits.

@@ -1,0 +1,61 @@
+name: Native cloud terminal transport
+
+on:
+  pull_request:
+    paths:
+      - 'apps/macos/Sources/CloudClient.swift'
+      - 'apps/macos/Sources/CloudDeviceIdentity.swift'
+      - 'apps/macos/Sources/CloudTerminalTransport.swift'
+      - 'tools/native-fixtures/cloud-client-http.py'
+      - 'tools/native-fixtures/cloud-client.swift'
+      - 'tools/native-fixtures/cloud-terminal.swift'
+      - 'scripts/check-native-cloud-client'
+      - '.github/workflows/native-cloud-terminal.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/macos/Sources/CloudClient.swift'
+      - 'apps/macos/Sources/CloudDeviceIdentity.swift'
+      - 'apps/macos/Sources/CloudTerminalTransport.swift'
+      - 'tools/native-fixtures/cloud-client-http.py'
+      - 'tools/native-fixtures/cloud-client.swift'
+      - 'tools/native-fixtures/cloud-terminal.swift'
+      - 'scripts/check-native-cloud-client'
+      - '.github/workflows/native-cloud-terminal.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-cloud-terminal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud-terminal:
+    runs-on: macos-15
+    timeout-minutes: 8
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Compile native CloudClient and exercise two-peer terminal relay
+        run: |
+          mkdir -p dist
+          set -o pipefail
+          scripts/check-native-cloud-client 2>&1 | tee dist/native-cloud-terminal.log
+      - name: Retain probe source and result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-cloud-terminal-${{ github.sha }}
+          path: |
+            apps/macos/Sources/CloudClient.swift
+            apps/macos/Sources/CloudDeviceIdentity.swift
+            apps/macos/Sources/CloudTerminalTransport.swift
+            tools/native-fixtures/cloud-client-http.py
+            tools/native-fixtures/cloud-client.swift
+            tools/native-fixtures/cloud-terminal.swift
+            dist/native-cloud-terminal.log
+          if-no-files-found: error
+          retention-days: 7

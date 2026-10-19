@@ -4,7 +4,7 @@ import AppKit
 // The macOS 15 SDK's legacy input protocol lacks actor annotations. AppKit calls it
 // on the UI thread; preserve MainActor isolation and runtime checking at this boundary.
 final class TerminalView: NSView, @preconcurrency NSTextInputClient {
-    var pane: Pane
+    var pane: Pane?
     var onFiles: (([String]) -> Void)?
     var onImage: ((Data) -> Bool)?
     var onPasteError: ((String) -> Void)?
@@ -12,6 +12,8 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var onInput: ((String) -> Void)?
     var onKey: ((TerminalKeyEvent) -> Void)?
     var onPaste: ((String) -> Void)?
+    /// Remote viewers do not forward terminal mouse protocols, so pointer input remains local selection.
+    var localPointerSelectionOnly = false
     private var semanticKeysDown: Set<UInt16> = []
     var onScroll: ((Int) -> Void)?
     var onWheel: ((Int, Int, Int, Int, Bool) -> Void)?
@@ -53,7 +55,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
 
-    init(pane: Pane) {
+    init(pane: Pane? = nil) {
         self.pane = pane
         super.init(frame: .zero)
         registerForDraggedTypes(TerminalPasteboardContent.dragTypes)
@@ -86,7 +88,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     override func updateTrackingAreas() {
         if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
         pointerTrackingArea = nil
-        let enabled = frameState == "running" && viewport?.pointerTracking == .some(.anyMotion) && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty
+        let enabled = !localPointerSelectionOnly && frameState == "running" && viewport?.pointerTracking == .some(.anyMotion) && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty
         if enabled {
             let area = NSTrackingArea(rect: .zero,
                 options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
@@ -247,7 +249,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             _ = sendPointer(.release, button: button, sample: previous.last)
         }
         let sample = pointerSample(event)
-        let local = frameState != "running" || viewport.pointerTracking == nil || viewport.pointerTracking == .some(.none) || event.modifierFlags.contains(.shift)
+        let local = localPointerSelectionOnly || frameState != "running" || viewport.pointerTracking == nil || viewport.pointerTracking == .some(.none) || event.modifierFlags.contains(.shift)
         let route: PointerRoute
         if local {
             route = button == .left ? .selection : .refused

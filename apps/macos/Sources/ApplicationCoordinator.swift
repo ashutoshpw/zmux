@@ -67,6 +67,28 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     private var shutdownImagesReleased = false
     private var shutdownNativeIssues: [String] = []
     let bridge = NativeBridge()
+    private var storedCloudConnection: (endpoint: CloudEndpoint, client: CloudClient)?
+    private var storedCloudTerminalHost: CloudTerminalHost?
+    private var cloudTerminalViewers: [String: CloudTerminalViewerWindowController] = [:]
+    var cloudEndpoint: CloudEndpoint { cloudConnection.endpoint }
+    var cloudClient: CloudClient { cloudConnection.client }
+    var cloudTerminalHost: CloudTerminalHost {
+        if let storedCloudTerminalHost { return storedCloudTerminalHost }
+        let host = CloudTerminalHost(client: cloudClient, bridge: bridge, reportError: { [weak self] in self?.reportError($0) })
+        storedCloudTerminalHost = host
+        return host
+    }
+    private var cloudConnection: (endpoint: CloudEndpoint, client: CloudClient) {
+        if let storedCloudConnection { return storedCloudConnection }
+        do {
+            let endpoint = try CloudEndpoint(CloudEndpoint.configured)
+            let connection = (endpoint: endpoint, client: CloudClient(endpoint: endpoint))
+            storedCloudConnection = connection
+            return connection
+        } catch {
+            preconditionFailure("Invalid packaged cloud origin: \(error.localizedDescription)")
+        }
+    }
     let splitLayouts = WorkspaceSplitPreferences()
     lazy var browserDownloads = BrowserDownloads(owner: self, bridge: bridge)
     lazy var notificationDelivery = makeNotificationDelivery()
@@ -251,6 +273,11 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     }
 
     private func performShutdown() async throws {
+        for viewer in Array(cloudTerminalViewers.values) { viewer.close() }
+        cloudTerminalViewers.removeAll()
+        if let storedCloudTerminalHost, let issue = await storedCloudTerminalHost.stopForCredentialChange() {
+            shutdownNativeIssues.append("Cloud terminal sharing shutdown: \(issue)")
+        }
         statusMenu?.remove()
         statusMenu = nil
         pendingStatusNotifications = nil
@@ -363,6 +390,29 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         // so the delegate's asynchronous shutdown can acquire the main actor.
         NSApp.perform(#selector(NSApplication.terminate(_:)), with: nil,
                       afterDelay: 0, inModes: [.common])
+    }
+
+    @discardableResult
+    func openCloudTerminal(_ session: CloudTerminalSessionDescriptor) -> Bool {
+        if let existing = cloudTerminalViewers[session.id] {
+            existing.showWindow(nil)
+            existing.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+            return true
+        }
+        guard cloudTerminalViewers.count < 4 else {
+            reportError("At most four Cloud terminal viewers can be open at once.")
+            return false
+        }
+        let id = session.id
+        let viewer = CloudTerminalViewerWindowController(session: session, host: cloudTerminalHost) { [weak self] in
+            self?.cloudTerminalViewers.removeValue(forKey: id)
+        }
+        cloudTerminalViewers[id] = viewer
+        viewer.showWindow(nil)
+        viewer.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        return true
     }
 
     func shutdown() async throws {
@@ -562,6 +612,10 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
 
     private func reconcile(_ snapshot: DesktopSnapshot) throws {
         guard shutdownTask == nil else { return }
+        if let previousNamespace = self.snapshot?.model.identityNamespace,
+           previousNamespace != snapshot.model.identityNamespace {
+            storedCloudTerminalHost?.desktopNamespaceDidChange()
+        }
         // Validate canonical ownership before touching native registries. The
         // Reject inconsistent membership before touching any native presenter.
         if self.snapshot == nil { WindowLifecycleSmoke.trace("first snapshot windows=\(snapshot.model.windows.count) requests=\(snapshot.windowRequests.count)") }
