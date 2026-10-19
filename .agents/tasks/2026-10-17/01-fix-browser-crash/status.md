@@ -31,3 +31,7 @@
 - The revised fixture captures the real SDK-typed Objective-C completion while
   suppressing browser launch. The product fix is unchanged; portable checks remain
   passed. Native fixture compilation and before/after execution are pending.
+- Run 39212106241 again passed production type-checking, then stopped compiling
+  the Objective-C fixture because NS_METHOD_FAMILY was not defined by this SDK.
+  Replaced it with Clang's objc_method_family(init) attribute; also aligned the
+  fixture's target/debug options with the packaged macOS 14 app. Product unchanged.
