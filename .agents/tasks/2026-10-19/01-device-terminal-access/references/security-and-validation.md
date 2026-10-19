@@ -25,9 +25,16 @@
 - Real Rust PTYs prove list/frame on background tabs without focus mutation, ordered input,
   resize, stale scope rejection, grant revocation and unchanged general remote socket denial.
 - C caller proves actual exported sharing/operation wire contract and bounds.
-- Native executable fixture proves real CryptoKit request/response authentication and context
-  separation; native source compilation and app rendering remain hosted macOS gates.
-- Packaged native two-peer path must be exercised before claiming physical two-Mac acceptance.
-  Linux/runtime/HTTP evidence is not a MacBook dogfood receipt.
+- Final hosted macOS workflow `39238746402` and Foundation run `39238746676` succeeded on source
+  SHA `633347ff33dce806ad99dc3e8662e0be306060c2`. The corrected packaged lifecycle report passed
+  the two-origin CloudClient/CryptoKit, CloudTerminalHost, NativeBridge and Rust PTY path,
+  including registration identity, terminal I/O, resize, sharing denial, cleanup races and
+  account-switch recovery. The source-pinned universal artifact `12181162700` was independently
+  verified with SHA-256
+  `2bf2fe16965952bebe32106bee1b444e9e4b355b816cc132fd640e8ce444ce4e`. Strict codesign passed;
+  signatures are ad-hoc and notarization is incomplete.
+- Hosted runner execution establishes packaged-path coverage, not physical two-Mac acceptance.
+  Two physical Macs and an authenticated public-route journey remain separate unverified gates;
+  Linux/runtime/HTTP evidence alone is not a MacBook dogfood receipt.
 - Production migration/deployment is a separate final gate after concrete validated artifacts;
   no production DB, serving service, tunnel, or user's running cmux is changed during development.
