@@ -388,7 +388,7 @@ with local_tmux_fixture() as native_environment, browser_fixture(), cloud_termin
             or account_switch.get("old_presence_clear_confirmed") is not False \
             or account_switch.get("old_device_still_sharing_after_expired_session") is not True \
             or account_switch.get("old_device_still_sharing_after_account_switch") is not True \
-            or account_switch.get("local_gate_closed_after_401") is not True \
+            or account_switch.get("local_gate_closed_after401") is not True \
             or account_switch.get("old_cleanup_context_retired_with_unresolved_warning") is not True \
             or account_switch.get("same_installation_after_account_switch") is not True \
             or account_switch.get("new_account_device_is_different") is not True \
