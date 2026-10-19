@@ -57,7 +57,7 @@ enum CloudTerminalProbe {
         return stats.deviceReads[subject] ?? 0
     }
 
-    static func fixtureStats(_ endpoint: CloudEndpoint) async throws -> FixtureStats {
+    private static func fixtureStats(_ endpoint: CloudEndpoint) async throws -> FixtureStats {
         let request = URLRequest(url: endpoint.url("fixture/stats"))
         let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
