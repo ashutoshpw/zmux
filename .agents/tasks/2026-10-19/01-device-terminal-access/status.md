@@ -42,11 +42,21 @@
   Swift/Xcode, so native compilation, packaged execution and the universal artifact remain
   pending hosted macOS gates. Physical two-Mac behavior is unverified.
 - The first hosted native compile attempts, workflow runs `39228357371` and `39228357624`, failed.
-  Scoped follow-up repairs in `CloudClient.swift` remove unreachable post-request flags while
-  preserving unknown-outcome handling and no-replay behavior; `CloudTerminalLifecycleSmoke.swift`
-  explicitly types its `Task` result and discards unused fixture responses. Independent review of
-  this delta found no blocking source findings. A hosted native compile rerun is pending; no native
-  compile or execution success is claimed.
+  Scoped repairs in `CloudClient.swift` removed unreachable post-request flags while preserving
+  unknown-outcome handling and no-replay behavior; `CloudTerminalLifecycleSmoke.swift` explicitly
+  types its `Task` result and discards unused fixture responses. Independent review found no
+  blocking source findings. The follow-up full macOS run `39229640506` passed production
+  both-architecture typechecking and Cloud credential/terminal checks, but the old auth-callback
+  probe lacked its dependency manifest and blocked the run. The current-source focused transport
+  run `39229640535` passed on `b4105c3`.
+- After three hosted Mac attempts, review traced the remaining failure to stale auth-callback test
+  wiring, not product-source behavior. The fixture now explicitly compiles the real CloudClient,
+  device-identity and terminal-transport sources with the selected CloudSettings and unchanged
+  Objective-C SDK shim. Callback-only terminal stand-ins fail fast if used; historical trap checks
+  remain intact, and the intended callback-failure path performs no Keychain or network work.
+  Independent fixture review found no blockers; portable AST and diff checks passed. A full native
+  auth-callback rerun is pending, so no callback or packaged-native success is claimed. The owned
+  disposable PostgreSQL container was removed; the serving database was untouched.
 
 ## Remaining gates
 
