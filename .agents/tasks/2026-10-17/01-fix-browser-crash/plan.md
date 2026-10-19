@@ -1,34 +1,40 @@
-# Diagnose and fix Safari/WebKit crash
+# Diagnose and fix the desktop sign-in crash
 
 **Date:** 2026-10-17
 **Task:** 01-fix-browser-crash
 
 ## Objective
-Identify the Zmux code path implicated in the SafariLaunchAgent crash report, implement a targeted fix, validate it, and push the fix to `origin/main`.
+Fix the reported desktop authentication callback crash, validate it at its native
+owner, and publish a replacement macOS build through GitHub Actions.
 
 ## Context
-The provided report excerpt omits Thread 17's backtrace. The existing checkout is behind `origin/main` and contains unrelated untracked profile-lifecycle work that must be preserved.
+- The 2026-10-17 report omitted the crashed thread. The retained-window guard was
+  published as `4b9c4b8`; the new full report identifies a different, exact cause.
+- On 2026-10-19, build 217 (source `380c6f7`) traps in signIn's completion handler
+  on SafariLaunchAgent's XPC queue, before its inner main-actor Task can start.
+- Preserve the existing cloud activation status edit and profile-lifecycle work.
+- The running cloud server is healthy at the new origin; this fix is desktop-only.
 
 ## Approach
-Update source context from `origin/main`, inspect browser lifecycle and recent WebKit changes, and only implement a fix supported by source or crash evidence. Keep the commit scoped to this task.
+Make the legacy SDK completion explicitly Sendable, retaining the main-actor hop
+and generation fencing. Display the SDK error instead of hiding its explanation.
+Compile the actual controller against a foreign-queue SDK transport stand-in;
+prove the reported build's source traps and the current source recovers its UI.
+No production-only test seam, browser session, credentials or HTTP requests needed.
 
 ## Steps
-- [x] Refresh source and correlate browser lifecycle with the crash.
-- [x] Correlate the reported login action with `ASWebAuthenticationSession` and its Safari LaunchAgent presentation callback.
-- [x] Retain and return the Cloud settings window directly as the authentication presentation anchor, removing the force unwrap of `NSWindowController.window`.
-- [x] Run required portable validation and inspect the scoped diff; record that native Swift/WebKit checks require macOS.
-- [ ] Commit the fix on `main` and push to `origin/main`.
+- [x] Correlate build 217, full crashed stack and current production callback.
+- [x] Fix callback isolation and add a native owner regression with baseline proof.
+- [ ] Validate portable checks, hosted baseline/current regression and native app.
+- [ ] Commit/push scoped files and deliver a verified replacement build.
 
 ## Acceptance criteria
-- [x] The reported Cloud login path and Safari LaunchAgent queue are connected to the presentation anchor callback; that callback no longer force-unwraps an optional window.
-- [x] `RUST_TEST_THREADS=2 scripts/check` passes, with native gates recorded if unavailable.
-- [ ] The scoped commit is present on `origin/main`; unrelated untracked work remains untouched.
-- [ ] Hosted macOS build validates the Swift change and packaged login flow is dogfooded.
+- [ ] Pre-fix callback reproduces the executor trap on a background queue.
+- [ ] Fixed callback restores UI safely and reports the SDK failure on MainActor.
+- [ ] Required portable and hosted native checks pass; source/build receipt verified.
+- [ ] Real Safari launch and authenticated login remain clearly distinguished from
+      deterministic callback regression coverage and require the affected Mac retry.
 
-## Evidence so far
-- Build `0.2.0 (209)` is macOS development workflow run `38948679333`, built from `1f122f423dabd3a7cd3a94381523eb957334d4b4`; the hosted run passed.
-- The report excerpt omits Thread 17's frames and Binary Images. The trigger was opening the cloud account login browser. Cloud login uses `ASWebAuthenticationSession`, whose presentation callback is requested while the Safari authentication UI launches.
-- Source at that SHA uses `ASWebAuthenticationSession` for cloud account login; the provider returns the presentation window during Safari's authentication UI launch.
-- The directly implicated app callback force-unwrapped `NSWindowController.window`; it now returns a strongly retained, exact Cloud settings window instead.
-- Focused audit of build 209's browser navigation, download, automation, and profile-store code found no app-authored `fatalError`, `precondition`, `try!`, or obvious force unwrap on those paths. This does not rule out an OS/WebKit trap or a timing-dependent lifecycle defect.
-- Local `main` was fast-forwarded to `origin/main` (`30ed3c1`). Existing untracked profile-lifecycle files and the new plan remain uncommitted and untouched.
+## References
+- [Callback crash evidence](references/authentication-callback.md) — full-stack
+  diagnosis, test boundary and validation evidence.

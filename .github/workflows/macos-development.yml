@@ -57,6 +57,8 @@ jobs:
         run: scripts/check-native-storage-paths
       - name: Verify native cloud credential cancellation and ownership
         run: scripts/check-native-cloud-client --baseline-ref c25c4c631bb4917ee496f9caed39b42e843bb78d
+      - name: Verify native authentication callbacks from foreign queues
+        run: scripts/check-native-cloud-auth-callback --baseline-ref 380c6f7f218ae83b1c64e33954caa99554f94ca8
       - name: Check Swift fixture cleanup boundary
         run: scripts/check-swift-fixture-cleanup
       - name: Verify native browser download file ownership
