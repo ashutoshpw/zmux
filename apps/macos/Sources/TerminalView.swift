@@ -12,6 +12,9 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     var onInput: ((String) -> Void)?
     var onKey: ((TerminalKeyEvent) -> Void)?
     var onPaste: ((String) -> Void)?
+    /// Installed only for local terminal panes. Cloud viewers leave this unset so
+    /// Command-click continues through their local selection route.
+    var onOpenTerminalLink: ((TerminalLinkHit) -> Bool)?
     /// Remote viewers do not forward terminal mouse protocols, so pointer input remains local selection.
     var localPointerSelectionOnly = false
     private var semanticKeysDown: Set<UInt16> = []
@@ -29,6 +32,13 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         let route: PointerRoute
         var last: PointerSample
     }
+    private struct PendingTerminalLink {
+        let downEvent: NSEvent
+        let startLocation: NSPoint
+        let hit: TerminalLinkHit
+    }
+    private static let terminalLinkDragThreshold: CGFloat = 3
+    private var pendingTerminalLink: PendingTerminalLink?
     private var pointerGestures: [TerminalPointerEvent.Button: PointerGesture] = [:]
     private var lastHover: PointerSample?
     private var pointerTrackingArea: NSTrackingArea?
@@ -72,7 +82,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
     override func resignFirstResponder() -> Bool {
-        semanticKeysDown.removeAll(); cancelPointerGestures(); needsDisplay = true; return true
+        semanticKeysDown.removeAll(); pendingTerminalLink = nil; cancelPointerGestures(); needsDisplay = true; return true
     }
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if motionWindow !== newWindow {
@@ -104,12 +114,22 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     func update(_ frame: Frame) {
         let oldState = frameState
         frameState = frame.failure ?? frame.snapshot?.failure ?? (frame.starting ? "Starting shell…" : frame.snapshot?.state ?? "Unavailable")
-        if oldState == "running", frameState != "running" { pointerGestures.removeAll(); lastHover = nil }
+        if oldState == "running", frameState != "running" {
+            pendingTerminalLink = nil
+            pointerGestures.removeAll(); lastHover = nil
+        }
         if let snapshot = frame.snapshot {
             let previous = viewport
             let oldTracking = viewport?.pointerTracking
             if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection.clear() }
             viewport = snapshot.viewport
+            if oldTracking != snapshot.viewport.pointerTracking
+                || previous?.alternateScreen != snapshot.viewport.alternateScreen
+                || previous?.scrollbackOffset != snapshot.viewport.scrollbackOffset
+                || previous?.size != snapshot.viewport.size
+                || oldState != frameState {
+                pendingTerminalLink = nil
+            }
             if oldTracking != viewport?.pointerTracking || oldState != frameState { lastHover = nil; updateTrackingAreas() }
             if previous?.title != snapshot.viewport.title {
                 setAccessibilityLabel(snapshot.viewport.title?.isEmpty == false ? snapshot.viewport.title : "Terminal")
@@ -213,12 +233,45 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if beginTerminalLink(event) { return }
         beginPointer(event, button: .left)
     }
     override func mouseDragged(with event: NSEvent) {
+        if let pending = pendingTerminalLink {
+            guard terminalLinkMovementExceedsThreshold(event, from: pending.startLocation) else { return }
+            pendingTerminalLink = nil
+            beginPointer(pending.downEvent, button: .left, focus: false)
+            dragPointer(event, button: .left)
+            return
+        }
         dragPointer(event, button: .left)
     }
-    override func mouseUp(with event: NSEvent) { endPointer(event, button: .left) }
+    override func mouseUp(with event: NSEvent) {
+        if let pending = pendingTerminalLink {
+            pendingTerminalLink = nil
+            if terminalLinkMovementExceedsThreshold(event, from: pending.startLocation) {
+                // AppKit can coalesce away mouseDragged. Preserve the ordinary
+                // pointer/selection gesture when mouse-up itself proves motion.
+                beginPointer(pending.downEvent, button: .left, focus: false)
+                dragPointer(event, button: .left)
+                endPointer(event, button: .left)
+                return
+            }
+            if onOpenTerminalLink?(pending.hit) == true {
+                lastHover = nil
+                return
+            }
+            // Admission can fail if the owner disappeared or its queue is full.
+            // Re-run the original click through the normal selection/mouse route.
+            beginPointer(pending.downEvent, button: .left, focus: false)
+        }
+        endPointer(event, button: .left)
+    }
+    private func terminalLinkMovementExceedsThreshold(_ event: NSEvent, from start: NSPoint) -> Bool {
+        let deltaX = event.locationInWindow.x - start.x
+        let deltaY = event.locationInWindow.y - start.y
+        return hypot(deltaX, deltaY) > Self.terminalLinkDragThreshold
+    }
     override func rightMouseDown(with event: NSEvent) { beginPointer(event, button: .right) }
     override func rightMouseDragged(with event: NSEvent) { dragPointer(event, button: .right) }
     override func rightMouseUp(with event: NSEvent) { endPointer(event, button: .right) }
@@ -240,8 +293,30 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         guard sample != lastHover else { return }
         if sendPointer(.motion, button: .none, sample: sample) { lastHover = sample }
     }
-    private func beginPointer(_ event: NSEvent, button: TerminalPointerEvent.Button) {
+    private func beginTerminalLink(_ event: NSEvent) -> Bool {
+        let relevantModifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard relevantModifiers == .command, onOpenTerminalLink != nil,
+              let viewport, let link = terminalLink(at: gridPoint(event), viewport: viewport) else { return false }
         window?.makeFirstResponder(self); onFocus?()
+        pendingTerminalLink = PendingTerminalLink(downEvent: event, startLocation: event.locationInWindow,
+                                                  hit: TerminalLinkHit(viewportGeneration: viewport.viewportGeneration,
+                                                                       row: link.row, column: link.column,
+                                                                       expectedURL: link.url))
+        lastHover = nil
+        return true
+    }
+    private func terminalLink(at point: (Int, Int), viewport: Viewport) -> (row: Int, column: Int, url: String)? {
+        guard let span = viewport.links.first(where: {
+            $0.row == point.0 && point.1 >= $0.startColumn && point.1 < $0.endColumn
+        }), isHTTPURLCandidate(span.url) else { return nil }
+        return (point.0, point.1, span.url)
+    }
+    private func isHTTPURLCandidate(_ value: String) -> Bool {
+        let lowercased = value.lowercased()
+        return lowercased.hasPrefix("http://") || lowercased.hasPrefix("https://")
+    }
+    private func beginPointer(_ event: NSEvent, button: TerminalPointerEvent.Button, focus: Bool = true) {
+        if focus { window?.makeFirstResponder(self); onFocus?() }
         guard let viewport else { return }
         // A route is latched at press, including Shift override and refused input.
         // Modifier/mode changes cannot turn the remainder into another gesture.

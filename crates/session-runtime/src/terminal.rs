@@ -1,7 +1,10 @@
 use crate::{EngineKind, EngineOptions, SessionError};
 #[cfg(feature = "ghostty")]
 use zmux_terminal_adapter::Engine;
-use zmux_terminal_adapter::{EngineBatch, Pointer, Size, Terminal, Viewport, Wheel};
+use zmux_terminal_adapter::{
+    EngineBatch, Pointer, ProgramOpenRequest, ProgramOpenRequestError, Size, Terminal, Viewport,
+    Wheel,
+};
 
 // Default sessions retain their existing immediate vt100 path and frame cadence.
 // The larger worker-bound owner stays inline to avoid an extra infallible Box.
@@ -30,12 +33,19 @@ impl TerminalOwner {
             Self::Ghostty(terminal) => terminal.encode_paste(text).map_err(failure),
         }
     }
-    pub(crate) fn new(size: Size, options: Option<EngineOptions>) -> Result<Self, SessionError> {
+    pub(crate) fn new(
+        size: Size,
+        options: Option<EngineOptions>,
+        expected_open_nonce: Option<[u8; 16]>,
+    ) -> Result<Self, SessionError> {
         let kind = options.map_or(EngineKind::Vt100, |options| options.kind);
         match kind {
-            EngineKind::Vt100 => Terminal::new(size).map(Self::Vt100).map_err(failure),
+            EngineKind::Vt100 => Terminal::new_with_open_request_nonce(size, expected_open_nonce)
+                .map(Self::Vt100)
+                .map_err(failure),
             #[cfg(feature = "ghostty")]
             EngineKind::Ghostty(limits) => {
+                // Ghostty currently has no OSC opener metadata support.
                 Engine::new(size, zmux_terminal_adapter::EngineKind::Ghostty(limits))
                     .map(Self::Ghostty)
                     .map_err(failure)
@@ -63,6 +73,15 @@ impl TerminalOwner {
             Self::Ghostty(terminal) => terminal.stage_process(bytes).map(Some).map_err(failure),
         }
     }
+    pub(crate) fn take_open_requests(
+        &mut self,
+    ) -> Result<Vec<ProgramOpenRequest>, ProgramOpenRequestError> {
+        match self {
+            Self::Vt100(terminal) => terminal.take_open_requests(),
+            #[cfg(feature = "ghostty")]
+            Self::Ghostty(terminal) => terminal.take_open_requests(),
+        }
+    }
     pub(crate) fn resize(&mut self, size: Size) -> Result<Option<EngineBatch>, SessionError> {
         match self {
             Self::Vt100(terminal) => terminal.resize(size).map(|()| None).map_err(failure),
@@ -72,10 +91,7 @@ impl TerminalOwner {
     }
     pub(crate) fn scroll(&mut self, lines: i32) -> Result<Option<EngineBatch>, SessionError> {
         match self {
-            Self::Vt100(terminal) => {
-                terminal.scroll(lines);
-                Ok(None)
-            }
+            Self::Vt100(terminal) => terminal.scroll(lines).map(|()| None).map_err(failure),
             #[cfg(feature = "ghostty")]
             Self::Ghostty(terminal) => terminal.stage_scroll(lines).map(Some).map_err(failure),
         }

@@ -52,7 +52,9 @@ impl Terminal {
         };
         let code = button + modifiers + if motion { 32 } else { 0 };
         let report = self.mouse_report(code, event.row, event.col, release);
-        self.scroll(0);
+        if self.scroll(0).is_err() {
+            return Vec::new();
+        }
         report
     }
     pub(crate) fn mouse_report(&self, code: u8, row: u16, col: u16, release: bool) -> Vec<u8> {

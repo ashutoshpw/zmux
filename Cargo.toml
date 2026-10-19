@@ -1,10 +1,11 @@
 [workspace]
 resolver = "3"
 members = ["crates/workspace-core", "crates/terminal-adapter", "crates/session-runtime", "crates/session-runtime/test-support", "apps/cli", "crates/native-bridge", "crates/desktop-runtime", "crates/remote-runtime", "crates/ghostty-vt"]
-exclude = ["vendor/darwin-libproc"]
+exclude = ["vendor/darwin-libproc", "vendor/vt100"]
 
 [patch.crates-io]
 darwin-libproc = { path = "vendor/darwin-libproc" }
+vt100 = { path = "vendor/vt100" }
 
 [workspace.package]
 version = "0.1.0"
@@ -27,6 +28,7 @@ nix = { version = "0.28", features = ["signal", "process"] }
 rustix = { version = "=1.1.5", features = ["process"] }
 signal-hook = { version = "=0.4.5", default-features = false, features = ["iterator"] }
 sha2 = "=0.10.9"
+url = "=2.5.8"
 zmux-terminal-adapter = { path = "crates/terminal-adapter" }
 zmux-session-runtime = { path = "crates/session-runtime" }
 zmux-desktop-runtime = { path = "crates/desktop-runtime" }

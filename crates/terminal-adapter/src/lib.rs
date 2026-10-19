@@ -10,6 +10,14 @@ pub use input::{ENCODED_PASTE_BYTES, Key, KeyAction, KeyEvent, PASTE_BYTES};
 pub use zmux_ghostty_vt::Limits as GhosttyLimits;
 
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use subtle::ConstantTimeEq as _;
+
+pub const MAX_PROGRAM_OPEN_REQUESTS: usize = 8;
+pub const MAX_PROGRAM_OPEN_URL_BYTES: usize = 8_192;
+const MAX_PROGRAM_OPEN_URL_BASE64_BYTES: usize = 10_923;
+const MAX_LINK_SPANS: usize = 512;
+const MAX_LINK_SPAN_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -36,6 +44,39 @@ pub struct Run {
     pub text: String,
     pub style: Style,
 }
+
+/// A visible terminal link. Columns are zero-based, with an exclusive end.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LinkSpan {
+    pub row: u16,
+    pub start_column: u16,
+    pub end_column: u16,
+    pub url: String,
+}
+
+/// A parsed explicit opener event. The nonce and URL exist only in the
+/// session-owned event queue; this type is intentionally not serializable or
+/// printable through `Debug`.
+pub struct ProgramOpenRequest {
+    nonce: [u8; 16],
+    url: String,
+}
+
+#[derive(Debug, Error)]
+pub enum ProgramOpenRequestError {
+    #[error("terminal opener request queue exceeded its bound")]
+    QueueOverflow,
+}
+
+impl ProgramOpenRequest {
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn matches_nonce(&self, expected: &[u8; 16]) -> bool {
+        bool::from(self.nonce.ct_eq(expected))
+    }
+}
 use thiserror::Error;
 
 pub const MAX_ROWS: u16 = 120;
@@ -49,6 +90,12 @@ pub enum TerminalError {
         "terminal control string exceeded {MAX_CONTROL_STRING_BYTES} bytes; session recovery required"
     )]
     ControlStringTooLong,
+    #[error("terminal viewport generation is exhausted; session recovery required")]
+    ViewportGenerationExhausted,
+    #[error("terminal owner failed; session recovery required")]
+    Failed,
+    #[error(transparent)]
+    InvalidSize(#[from] InvalidSize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -89,6 +136,8 @@ pub struct RowCopy {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Viewport {
+    pub viewport_generation: u64,
+    pub links: Vec<LinkSpan>,
     pub notices: Vec<TerminalNotice>,
     pub title: String,
     pub working_directory: Option<String>,
@@ -145,6 +194,7 @@ pub struct Terminal {
     control: ControlMode,
     failed: bool,
     scrollback_lines: usize,
+    viewport_generation: u64,
     _worker_owned: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
@@ -154,6 +204,9 @@ struct Metadata {
     notices: Vec<TerminalNotice>,
     next_notice: u64,
     working_directory: Option<String>,
+    expected_open_nonce: Option<[u8; 16]>,
+    open_requests: VecDeque<ProgramOpenRequest>,
+    open_requests_overflowed: bool,
 }
 
 fn display_text(bytes: &[u8], limit: usize) -> String {
@@ -167,6 +220,34 @@ fn display_text(bytes: &[u8], limit: usize) -> String {
 }
 
 impl Metadata {
+    fn open_request(&mut self, nonce: &[u8], encoded_url: &[u8]) {
+        let Some(expected_nonce) = self.expected_open_nonce else {
+            return;
+        };
+        let Some(nonce) = decode_open_nonce(nonce) else {
+            return;
+        };
+        if !bool::from(nonce.ct_eq(&expected_nonce)) {
+            return;
+        }
+        if self.open_requests_overflowed {
+            return;
+        }
+        let Some(bytes) = decode_base64url(encoded_url) else {
+            return;
+        };
+        let Ok(url) = String::from_utf8(bytes) else {
+            return;
+        };
+        if self.open_requests.len() == MAX_PROGRAM_OPEN_REQUESTS {
+            self.open_requests.clear();
+            self.open_requests_overflowed = true;
+            return;
+        }
+        self.open_requests
+            .push_back(ProgramOpenRequest { nonce, url });
+    }
+
     fn notice(&mut self, source: &str, title: &[u8], body: &[u8]) {
         let title = display_text(title, 128);
         if title.is_empty() {
@@ -199,6 +280,9 @@ impl vt100::Callbacks for Metadata {
         match params {
             [b"9", message] => self.notice("osc9", b"Terminal notification", message),
             [b"777", b"notify", title, body] => self.notice("osc777", title, body),
+            [b"777", b"zmux-open", b"v1", nonce, encoded_url] => {
+                self.open_request(nonce, encoded_url)
+            }
             _ => {}
         }
         if let [b"7", value] = params {
@@ -240,25 +324,39 @@ impl vt100::Callbacks for Metadata {
 
 impl Terminal {
     pub fn new(size: Size) -> Result<Self, InvalidSize> {
+        Self::new_with_open_request_nonce(size, None)
+    }
+
+    /// Construct a terminal that accepts explicit opener requests only for the
+    /// private nonce bound to its owning session. With no nonce, opener OSCs are ignored.
+    pub fn new_with_open_request_nonce(
+        size: Size,
+        expected_open_nonce: Option<[u8; 16]>,
+    ) -> Result<Self, InvalidSize> {
         let size = size.validate()?;
+        let metadata = Metadata {
+            expected_open_nonce,
+            ..Metadata::default()
+        };
         Ok(Self {
             parser: vt100::Parser::new_with_callbacks(
                 size.rows,
                 size.cols,
                 MAX_SCROLLBACK_LINES,
-                Metadata::default(),
+                metadata,
             ),
             size,
             control: ControlMode::Ground,
             failed: false,
             scrollback_lines: 0,
+            viewport_generation: 0,
             _worker_owned: std::marker::PhantomData,
         })
     }
 
     pub fn process(&mut self, bytes: &[u8]) -> Result<(), TerminalError> {
         if self.failed {
-            return Err(TerminalError::ControlStringTooLong);
+            return Err(TerminalError::Failed);
         }
         // An original conservative resource guard, not a second escape-sequence parser.
         // ESC introduces control strings; UTF-8 continuation bytes are never treated as C1.
@@ -281,15 +379,41 @@ impl Terminal {
         }
         self.parser.process(bytes);
         self.measure_history();
+        self.advance_viewport_generation()?;
         Ok(())
     }
 
-    pub fn resize(&mut self, size: Size) -> Result<(), InvalidSize> {
+    fn advance_viewport_generation(&mut self) -> Result<(), TerminalError> {
+        let Some(generation) = self.viewport_generation.checked_add(1) else {
+            self.failed = true;
+            return Err(TerminalError::ViewportGenerationExhausted);
+        };
+        self.viewport_generation = generation;
+        Ok(())
+    }
+
+    /// Drain private one-shot requests for the owning session worker. These values never cross
+    /// the serialized viewport boundary.
+    pub fn take_open_requests(
+        &mut self,
+    ) -> Result<Vec<ProgramOpenRequest>, ProgramOpenRequestError> {
+        let metadata = self.parser.callbacks_mut();
+        if std::mem::take(&mut metadata.open_requests_overflowed) {
+            metadata.open_requests.clear();
+            return Err(ProgramOpenRequestError::QueueOverflow);
+        }
+        Ok(metadata.open_requests.drain(..).collect())
+    }
+
+    pub fn resize(&mut self, size: Size) -> Result<(), TerminalError> {
+        if self.failed {
+            return Err(TerminalError::Failed);
+        }
         let size = size.validate()?;
         self.parser.screen_mut().set_size(size.rows, size.cols);
         self.size = size;
         self.measure_history();
-        Ok(())
+        self.advance_viewport_generation()
     }
 
     // Probe the parser's bounded extent without copying stored history. Restore the
@@ -303,8 +427,12 @@ impl Terminal {
     }
 
     /// Positive lines move toward older output; zero returns to the live screen.
-    pub fn scroll(&mut self, lines: i32) {
+    pub fn scroll(&mut self, lines: i32) -> Result<(), TerminalError> {
+        if self.failed {
+            return Err(TerminalError::Failed);
+        }
         let screen = self.parser.screen_mut();
+        let prior = screen.scrollback();
         let offset = if lines == 0 {
             0
         } else {
@@ -313,6 +441,10 @@ impl Terminal {
                 .saturating_add_signed(lines.clamp(-1000, 1000) as isize)
         };
         screen.set_scrollback(offset);
+        if screen.scrollback() != prior {
+            self.advance_viewport_generation()?;
+        }
+        Ok(())
     }
 
     /// Resolve wheel routing against the authoritative parser mode, not a stale UI
@@ -326,7 +458,9 @@ impl Terminal {
         if !event.history && screen.mouse_protocol_mode() != vt100::MouseProtocolMode::None {
             let code = (if event.lines > 0 { 64 } else { 65 }) + (event.modifiers & 28);
             let report = self.mouse_report(code, event.row, event.col, false);
-            self.scroll(0);
+            if self.scroll(0).is_err() {
+                return Vec::new();
+            }
             report.repeat(count)
         } else if !event.history && screen.alternate_screen() {
             let report = [
@@ -340,7 +474,7 @@ impl Terminal {
             ];
             report.repeat(count)
         } else {
-            self.scroll(event.lines);
+            let _ = self.scroll(event.lines);
             Vec::new()
         }
     }
@@ -351,30 +485,40 @@ impl Terminal {
                 let mut runs: Vec<Run> = Vec::new();
                 let mut written_end = 0;
                 for col in 0..self.size.cols {
-                    let cell = self
-                        .parser
-                        .screen()
-                        .cell(row, col)
-                        .expect("validated screen geometry");
-                    if cell.is_wide_continuation() {
+                    // Scrollback rows retain their original width after a resize. Within the
+                    // current geometry, missing cells in those rows are blank cells.
+                    let cell = self.parser.screen().cell(row, col);
+                    if cell.is_some_and(vt100::Cell::is_wide_continuation) {
                         continue;
                     }
-                    let text = if cell.contents().is_empty() {
-                        " "
-                    } else {
-                        cell.contents()
-                    };
-                    let width = if cell.is_wide() { 2 } else { 1 };
-                    if cell.has_contents() {
+                    let text = cell.map_or(" ", |cell| {
+                        if cell.contents().is_empty() {
+                            " "
+                        } else {
+                            cell.contents()
+                        }
+                    });
+                    let width = cell.map_or(1, |cell| if cell.is_wide() { 2 } else { 1 });
+                    if cell.is_some_and(vt100::Cell::has_contents) {
                         written_end = (col + width).min(self.size.cols);
                     }
-                    let style = Style {
-                        foreground: color(cell.fgcolor()),
-                        background: color(cell.bgcolor()),
-                        bold: cell.bold(),
-                        italic: cell.italic(),
-                        underline: cell.underline(),
-                        inverse: cell.inverse(),
+                    let style = match cell {
+                        Some(cell) => Style {
+                            foreground: color(cell.fgcolor()),
+                            background: color(cell.bgcolor()),
+                            bold: cell.bold(),
+                            italic: cell.italic(),
+                            underline: cell.underline(),
+                            inverse: cell.inverse(),
+                        },
+                        None => Style {
+                            foreground: Color::Default,
+                            background: Color::Default,
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            inverse: false,
+                        },
                     };
                     // ASCII runs share a draw call; isolate Unicode glyphs at their actual grid origin.
                     if text.is_ascii()
@@ -405,11 +549,115 @@ impl Terminal {
             .unzip()
     }
 
+    fn links(&self) -> Vec<LinkSpan> {
+        let screen = self.parser.screen();
+        let mut links = Vec::new();
+        let mut retained_bytes = 0;
+
+        // Preserve explicit OSC 8 targets exactly. Only HTTP(S) destinations enter the native
+        // click surface; the desktop still applies the authoritative URL policy at admission.
+        for row in 0..self.size.rows {
+            let mut active: Option<(u16, u16, String)> = None;
+            for column in 0..self.size.cols {
+                let cell = screen.cell(row, column);
+                if cell.is_some_and(vt100::Cell::is_wide_continuation) {
+                    continue;
+                }
+                let target = screen
+                    .cell_hyperlink(row, column)
+                    .filter(|url| has_http_scheme(url));
+                let width = cell.map_or(1, |cell| if cell.is_wide() { 2 } else { 1 });
+                match (active.as_mut(), target) {
+                    (Some((_, end, current)), Some(url)) if current == url && *end == column => {
+                        *end = column.saturating_add(width).min(self.size.cols);
+                    }
+                    (Some(_), _) => {
+                        push_active_link(&mut links, &mut retained_bytes, row, active.take());
+                        if let Some(url) = target {
+                            active = Some((
+                                column,
+                                column.saturating_add(width).min(self.size.cols),
+                                url.to_owned(),
+                            ));
+                        }
+                    }
+                    (None, Some(url)) => {
+                        active = Some((
+                            column,
+                            column.saturating_add(width).min(self.size.cols),
+                            url.to_owned(),
+                        ));
+                    }
+                    (None, None) => {}
+                }
+            }
+            push_active_link(&mut links, &mut retained_bytes, row, active.take());
+            if links.len() >= MAX_LINK_SPANS || retained_bytes >= MAX_LINK_SPAN_BYTES {
+                return links;
+            }
+        }
+
+        // Plain URL recognition follows each logical line across terminal autowrap, while each
+        // returned span remains in physical-row cell coordinates for precise hit testing.
+        let mut logical_line = Vec::new();
+        for row in 0..self.size.rows {
+            if row > 0 && !screen.row_wrapped(row - 1) {
+                scan_plain_links(&logical_line, &mut links, &mut retained_bytes);
+                logical_line.clear();
+            }
+            let written_end = (0..self.size.cols)
+                .rev()
+                .find(|column| {
+                    screen
+                        .cell(row, *column)
+                        .is_some_and(vt100::Cell::has_contents)
+                })
+                .map_or(0, |column| column + 1);
+            for column in 0..written_end {
+                let Some(cell) = screen.cell(row, column) else {
+                    continue;
+                };
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                let width = if cell.is_wide() { 2 } else { 1 };
+                let explicit = screen.cell_hyperlink(row, column).is_some();
+                let text = if cell.contents().is_empty() {
+                    " "
+                } else {
+                    cell.contents()
+                };
+                for character in text.chars() {
+                    logical_line.push(MappedChar {
+                        character,
+                        row,
+                        column,
+                        width,
+                        explicit,
+                    });
+                }
+            }
+            if !screen.row_wrapped(row) {
+                scan_plain_links(&logical_line, &mut links, &mut retained_bytes);
+                logical_line.clear();
+            }
+            if links.len() >= MAX_LINK_SPANS || retained_bytes >= MAX_LINK_SPAN_BYTES {
+                return links;
+            }
+        }
+        if !logical_line.is_empty() {
+            scan_plain_links(&logical_line, &mut links, &mut retained_bytes);
+        }
+        links
+    }
+
     /// Only the visible screen crosses the bridge, never a clone of complete scrollback.
     pub fn viewport(&self) -> Viewport {
         let (cursor_row, cursor_col) = self.parser.screen().cursor_position();
         let (lines, row_copy) = self.runs();
         Viewport {
+            viewport_generation: self.viewport_generation,
+            links: self.links(),
             notices: self.parser.callbacks().notices.clone(),
             title: self.parser.callbacks().title.clone(),
             working_directory: self.parser.callbacks().working_directory.clone(),
@@ -436,10 +684,358 @@ impl Terminal {
     }
 }
 
+#[cfg(feature = "ghostty")]
+pub(crate) fn plain_links_from_runs(lines: &[Vec<Run>]) -> Vec<LinkSpan> {
+    let mut links = Vec::new();
+    let mut retained_bytes = 0;
+    for (row, runs) in lines.iter().enumerate() {
+        let Ok(row) = u16::try_from(row) else {
+            break;
+        };
+        let mut mapped = Vec::new();
+        let mut next_column = 0;
+        for run in runs {
+            while next_column < run.column {
+                mapped.push(MappedChar {
+                    character: ' ',
+                    row,
+                    column: next_column,
+                    width: 1,
+                    explicit: false,
+                });
+                next_column += 1;
+            }
+            if run.text.is_ascii() {
+                for (offset, character) in run.text.chars().enumerate() {
+                    let Ok(offset) = u16::try_from(offset) else {
+                        break;
+                    };
+                    mapped.push(MappedChar {
+                        character,
+                        row,
+                        column: run.column.saturating_add(offset),
+                        width: 1,
+                        explicit: false,
+                    });
+                }
+            } else {
+                for character in run.text.chars() {
+                    mapped.push(MappedChar {
+                        character,
+                        row,
+                        column: run.column,
+                        width: run.width,
+                        explicit: false,
+                    });
+                }
+            }
+            next_column = run.column.saturating_add(run.width);
+        }
+        scan_plain_links(&mapped, &mut links, &mut retained_bytes);
+        if links.len() >= MAX_LINK_SPANS || retained_bytes >= MAX_LINK_SPAN_BYTES {
+            break;
+        }
+    }
+    links
+}
+
 fn color(value: vt100::Color) -> Color {
     match value {
         vt100::Color::Default => Color::Default,
         vt100::Color::Idx(index) => Color::Indexed(index),
         vt100::Color::Rgb(r, g, b) => Color::Rgb([r, g, b]),
     }
+}
+
+#[derive(Clone, Copy)]
+struct MappedChar {
+    character: char,
+    row: u16,
+    column: u16,
+    width: u16,
+    explicit: bool,
+}
+
+fn push_active_link(
+    links: &mut Vec<LinkSpan>,
+    retained_bytes: &mut usize,
+    row: u16,
+    active: Option<(u16, u16, String)>,
+) {
+    let Some((start_column, end_column, url)) = active else {
+        return;
+    };
+    if links.len() >= MAX_LINK_SPANS
+        || retained_bytes.saturating_add(url.len()) > MAX_LINK_SPAN_BYTES
+    {
+        return;
+    }
+    push_link(links, retained_bytes, row, start_column, end_column, &url);
+}
+
+fn has_http_scheme(url: &str) -> bool {
+    url.get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
+        || url
+            .get(..8)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
+}
+
+fn decode_open_nonce(value: &[u8]) -> Option<[u8; 16]> {
+    if value.len() != 32 {
+        return None;
+    }
+    let mut nonce = [0; 16];
+    for (index, pair) in value.chunks_exact(2).enumerate() {
+        let high = lower_hex(pair[0])?;
+        let low = lower_hex(pair[1])?;
+        nonce[index] = (high << 4) | low;
+    }
+    Some(nonce)
+}
+
+fn lower_hex(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn decode_base64url(value: &[u8]) -> Option<Vec<u8>> {
+    if value.is_empty() || value.len() > MAX_PROGRAM_OPEN_URL_BASE64_BYTES || value.len() % 4 == 1 {
+        return None;
+    }
+    let remainder = value.len() % 4;
+    let decoded_length = (value.len() / 4) * 3
+        + match remainder {
+            0 => 0,
+            2 => 1,
+            3 => 2,
+            _ => return None,
+        };
+    if decoded_length > MAX_PROGRAM_OPEN_URL_BYTES {
+        return None;
+    }
+    let mut decoded = Vec::new();
+    decoded.try_reserve_exact(decoded_length).ok()?;
+    let mut offset = 0;
+    while value.len() - offset >= 4 {
+        let a = base64url_value(value[offset])?;
+        let b = base64url_value(value[offset + 1])?;
+        let c = base64url_value(value[offset + 2])?;
+        let d = base64url_value(value[offset + 3])?;
+        decoded.extend_from_slice(&[(a << 2) | (b >> 4), (b << 4) | (c >> 2), (c << 6) | d]);
+        offset += 4;
+    }
+    match value.len() - offset {
+        0 => {}
+        2 => {
+            let a = base64url_value(value[offset])?;
+            let b = base64url_value(value[offset + 1])?;
+            if b & 0x0f != 0 {
+                return None;
+            }
+            decoded.push((a << 2) | (b >> 4));
+        }
+        3 => {
+            let a = base64url_value(value[offset])?;
+            let b = base64url_value(value[offset + 1])?;
+            let c = base64url_value(value[offset + 2])?;
+            if c & 0x03 != 0 {
+                return None;
+            }
+            decoded.extend_from_slice(&[(a << 2) | (b >> 4), (b << 4) | (c >> 2)]);
+        }
+        _ => return None,
+    }
+    (decoded.len() == decoded_length).then_some(decoded)
+}
+
+fn base64url_value(value: u8) -> Option<u8> {
+    match value {
+        b'A'..=b'Z' => Some(value - b'A'),
+        b'a'..=b'z' => Some(value - b'a' + 26),
+        b'0'..=b'9' => Some(value - b'0' + 52),
+        b'-' => Some(62),
+        b'_' => Some(63),
+        _ => None,
+    }
+}
+
+fn scheme_length(chars: &[MappedChar], start: usize) -> Option<usize> {
+    fn matches(chars: &[MappedChar], start: usize, pattern: &str) -> bool {
+        chars
+            .get(start..start + pattern.len())
+            .is_some_and(|actual| {
+                actual
+                    .iter()
+                    .zip(pattern.chars())
+                    .all(|(actual, expected)| actual.character.eq_ignore_ascii_case(&expected))
+            })
+    }
+    if matches(chars, start, "https://") {
+        Some(8)
+    } else if matches(chars, start, "http://") {
+        Some(7)
+    } else {
+        None
+    }
+}
+
+fn url_start_boundary(chars: &[MappedChar], start: usize) -> bool {
+    start == 0
+        || !chars[start - 1].character.is_ascii_alphanumeric()
+            && !matches!(chars[start - 1].character, '+' | '-' | '.')
+}
+
+fn is_url_delimiter(character: char) -> bool {
+    character.is_whitespace()
+        || character.is_control()
+        || matches!(character, '<' | '>' | '"' | '\'' | '`')
+}
+
+fn is_trailing_url_punctuation(character: char) -> bool {
+    matches!(character, '.' | ',' | ';' | ':' | '!' | '?')
+}
+
+fn wrapper_delimiter(character: char) -> Option<(usize, bool)> {
+    match character {
+        '(' => Some((0, true)),
+        ')' => Some((0, false)),
+        '[' => Some((1, true)),
+        ']' => Some((1, false)),
+        '{' => Some((2, true)),
+        '}' => Some((2, false)),
+        _ => None,
+    }
+}
+
+fn trimmed_plain_url_end(chars: &[MappedChar], start: usize, raw_end: usize) -> usize {
+    let mut open_delimiters = [0; 3];
+    let mut trim_start = raw_end;
+    let mut trimming_suffix = false;
+
+    // Keep paired path delimiters, while treating unmatched closing wrappers and the existing
+    // terminal punctuation set as removable suffix characters.
+    for (offset, mapped) in chars[start..raw_end].iter().enumerate() {
+        let position = start + offset;
+        let unmatched_closer = match wrapper_delimiter(mapped.character) {
+            Some((kind, true)) => {
+                open_delimiters[kind] += 1;
+                false
+            }
+            Some((kind, false)) if open_delimiters[kind] > 0 => {
+                open_delimiters[kind] -= 1;
+                false
+            }
+            Some((_, false)) => true,
+            None => false,
+        };
+        if is_trailing_url_punctuation(mapped.character) || unmatched_closer {
+            if !trimming_suffix {
+                trim_start = position;
+            }
+            trimming_suffix = true;
+        } else {
+            trim_start = position + 1;
+            trimming_suffix = false;
+        }
+    }
+
+    trim_start
+}
+
+fn scan_plain_links(chars: &[MappedChar], links: &mut Vec<LinkSpan>, retained_bytes: &mut usize) {
+    let mut index = 0;
+    while index < chars.len()
+        && links.len() < MAX_LINK_SPANS
+        && *retained_bytes < MAX_LINK_SPAN_BYTES
+    {
+        let Some(scheme_length) = scheme_length(chars, index) else {
+            index += 1;
+            continue;
+        };
+        if !url_start_boundary(chars, index) {
+            index += scheme_length;
+            continue;
+        }
+        let mut end = index + scheme_length;
+        while end < chars.len() && !is_url_delimiter(chars[end].character) {
+            end += 1;
+        }
+        let raw_end = end;
+        end = trimmed_plain_url_end(chars, index, raw_end);
+        if end <= index + scheme_length || chars[index..end].iter().any(|mapped| mapped.explicit) {
+            index = raw_end.max(index + scheme_length);
+            continue;
+        }
+        let byte_length = chars[index..end]
+            .iter()
+            .map(|mapped| mapped.character.len_utf8())
+            .sum::<usize>();
+        if byte_length > MAX_PROGRAM_OPEN_URL_BYTES {
+            index = raw_end.max(index + scheme_length);
+            continue;
+        }
+        let mut url = String::with_capacity(byte_length);
+        for mapped in &chars[index..end] {
+            url.push(mapped.character);
+        }
+        if !has_http_scheme(&url) {
+            index = raw_end.max(index + scheme_length);
+            continue;
+        }
+        push_mapped_spans(&chars[index..end], url, links, retained_bytes);
+        index = raw_end.max(index + scheme_length);
+    }
+}
+
+fn push_mapped_spans(
+    mapped: &[MappedChar],
+    url: String,
+    links: &mut Vec<LinkSpan>,
+    retained_bytes: &mut usize,
+) {
+    let mut active: Option<(u16, u16, u16)> = None;
+    for cell in mapped {
+        let cell_end = cell.column.saturating_add(cell.width);
+        match active.as_mut() {
+            Some((row, _, end)) if *row == cell.row && cell.column <= *end => {
+                *end = (*end).max(cell_end);
+            }
+            Some(_) => {
+                if let Some((row, start_column, end_column)) = active.take() {
+                    push_link(links, retained_bytes, row, start_column, end_column, &url);
+                }
+                active = Some((cell.row, cell.column, cell_end));
+            }
+            None => active = Some((cell.row, cell.column, cell_end)),
+        }
+    }
+    if let Some((row, start_column, end_column)) = active {
+        push_link(links, retained_bytes, row, start_column, end_column, &url);
+    }
+}
+
+fn push_link(
+    links: &mut Vec<LinkSpan>,
+    retained_bytes: &mut usize,
+    row: u16,
+    start_column: u16,
+    end_column: u16,
+    url: &str,
+) {
+    if links.len() >= MAX_LINK_SPANS
+        || retained_bytes.saturating_add(url.len()) > MAX_LINK_SPAN_BYTES
+    {
+        return;
+    }
+    links.push(LinkSpan {
+        row,
+        start_column,
+        end_column,
+        url: url.to_owned(),
+    });
+    *retained_bytes += url.len();
 }

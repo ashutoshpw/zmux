@@ -572,6 +572,11 @@ fn every_browser_kind_test_in_the_swift_sources_is_audited() {
             1,
             "smoke fixture selects the browser surface it created",
         ),
+        (
+            "TerminalSelectionSmoke.swift",
+            3,
+            "link smoke checks only fixture-created browser surfaces for its exact URLs; file surfaces are neither counted nor rerouted",
+        ),
     ];
     let mut found = Vec::new();
     for entry in std::fs::read_dir(sources()).unwrap() {

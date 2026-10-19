@@ -126,7 +126,7 @@ fn history_is_bounded_anchored_during_output_and_separate_from_alternate_screen(
             .process(format!("ROW_{index:04}\r\n").as_bytes())
             .unwrap();
     }
-    terminal.scroll(5);
+    terminal.scroll(5).unwrap();
     assert_eq!(terminal.viewport().scrollback_offset, 5);
     let anchored = terminal.viewport().contents;
     terminal.process(b"LATER\r\n").unwrap();
@@ -136,24 +136,24 @@ fn history_is_bounded_anchored_during_output_and_separate_from_alternate_screen(
     assert!(terminal.viewport().contents.contains("ROW_0005"));
     terminal.process(b"\x1b[?1049hALT").unwrap();
     assert!(terminal.viewport().alternate_screen);
-    terminal.scroll(1000);
+    terminal.scroll(1000).unwrap();
     assert_eq!(terminal.viewport().scrollback_offset, 0);
     assert_eq!(terminal.viewport().scrollback_lines, 0);
     assert!(!terminal.viewport().contents.contains("ROW_"));
     terminal.process(b"\x1b[?1049l").unwrap();
     assert!(!terminal.viewport().alternate_screen);
-    terminal.scroll(0);
+    terminal.scroll(0).unwrap();
     for index in 0..1200 {
         terminal
             .process(format!("CAP_{index:04}\r\n").as_bytes())
             .unwrap();
     }
-    terminal.scroll(i32::MAX);
+    terminal.scroll(i32::MAX).unwrap();
     let oldest = terminal.viewport();
     assert_eq!(oldest.scrollback_offset, 1000);
     assert_eq!(oldest.scrollback_lines, 1000);
     assert!(!oldest.contents.contains("ROW_"));
-    terminal.scroll(i32::MIN);
+    terminal.scroll(i32::MIN).unwrap();
     assert_eq!(terminal.viewport().scrollback_offset, 0);
     assert!(terminal.viewport().contents.contains("CAP_1199"));
 }
@@ -287,7 +287,7 @@ fn copy_row_metadata_matches_parked_history_and_refreshes_after_resize() {
     use zmux_terminal_adapter::RowCopy;
     let mut terminal = Terminal::new(Size { rows: 3, cols: 4 }).unwrap();
     terminal.process(b"abc T\r\n1\r\n2\r\n3\r\n4").unwrap();
-    terminal.scroll(1000);
+    terminal.scroll(1000).unwrap();
     let parked = terminal.viewport();
     assert!(parked.scrollback_offset > 0);
     assert_eq!(parked.contents, "abc T\n1");
@@ -317,7 +317,7 @@ fn copy_row_metadata_matches_parked_history_and_refreshes_after_resize() {
 
     // vt100 does not reflow on a width change. Require actual new geometry and
     // refreshed flags, without claiming recovery of truncated logical text.
-    terminal.scroll(0);
+    terminal.scroll(0).unwrap();
     terminal.resize(Size { rows: 4, cols: 6 }).unwrap();
     terminal.process(b"\x1b[2J\x1b[H123456Z").unwrap();
     let resized = terminal.viewport();

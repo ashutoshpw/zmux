@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
+use zmux_terminal_adapter::ProgramOpenRequest;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const FILES: &[&str] = &[
@@ -20,8 +21,84 @@ const FILES: &[&str] = &[
     "attention",
     "plugin/.claude-plugin/plugin.json",
     "plugin/hooks/hooks.json",
+    "bin/zmux-open-url",
+    "bin/open",
+    "bin/xdg-open",
+    "bin/sensible-browser",
 ];
-const DIRECTORIES: &[&str] = &["plugin/.claude-plugin", "plugin/hooks", "plugin"];
+const DIRECTORIES: &[&str] = &["plugin/.claude-plugin", "plugin/hooks", "plugin", "bin"];
+
+/// Fresh per-PTY correlation token. It is deliberately neither printable via
+/// Debug nor serializable; only the local shell bootstrap and SSH command encode it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct OpenRequestNonce([u8; 16]);
+
+impl OpenRequestNonce {
+    /// Generate on a launch worker, never on the UI/core executor.
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::new_v4().into_bytes())
+    }
+
+    pub(crate) fn protocol_value(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut value = String::with_capacity(32);
+        for byte in self.0 {
+            value.push(HEX[(byte >> 4) as usize] as char);
+            value.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        value
+    }
+
+    pub(crate) fn adapter_value(self) -> [u8; 16] {
+        self.0
+    }
+
+    pub(crate) fn matches_request(&self, request: &ProgramOpenRequest) -> bool {
+        request.matches_nonce(&self.0)
+    }
+}
+
+/// Whether a request originated in a local shell or the managed SSH shell.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OpenRequestSource {
+    Local,
+    ManagedSsh,
+}
+
+/// Private, in-memory owner binding for one shell integration lease.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct OpenRequestRegistration {
+    nonce: OpenRequestNonce,
+    source: OpenRequestSource,
+}
+
+impl OpenRequestRegistration {
+    pub fn new(nonce: OpenRequestNonce, source: OpenRequestSource) -> Self {
+        Self { nonce, source }
+    }
+
+    pub fn nonce(self) -> OpenRequestNonce {
+        self.nonce
+    }
+
+    pub fn source(self) -> OpenRequestSource {
+        self.source
+    }
+}
+
+/// Accepted URL-only notice. It never enters a serialized snapshot or log value.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OpenUrl(String);
+
+impl OpenUrl {
+    pub(crate) fn new(url: String) -> Self {
+        Self(url)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Owned by the actual session worker; cleanup never recursively removes unknown
 /// files and also runs when the shell is killed without executing its EXIT trap.
@@ -51,7 +128,23 @@ impl Drop for ShellIntegrationLease {
 
 /// Recognized interactive shells only. Commands, scripts and application PTYs
 /// retain their exact argv. Run on the launch worker, before child creation.
-pub fn prepare(mut launch: Launch) -> io::Result<(Launch, Option<ShellIntegrationLease>)> {
+pub fn prepare(launch: Launch) -> io::Result<(Launch, Option<ShellIntegrationLease>)> {
+    prepare_inner(launch, false)
+}
+
+/// Install the opener helper into an eligible interactive shell. The nonce is
+/// injected by Session from the matching private registration, not placed in argv.
+pub fn prepare_with_nonce(
+    launch: Launch,
+    _nonce: &OpenRequestNonce,
+) -> io::Result<(Launch, Option<ShellIntegrationLease>)> {
+    prepare_inner(launch, true)
+}
+
+fn prepare_inner(
+    mut launch: Launch,
+    install_openers: bool,
+) -> io::Result<(Launch, Option<ShellIntegrationLease>)> {
     let shell = Path::new(&launch.program)
         .file_name()
         .and_then(|n| n.to_str());
@@ -95,7 +188,7 @@ pub fn prepare(mut launch: Launch) -> io::Result<(Launch, Option<ShellIntegratio
         .to_string();
     let mut args = vec![
         "-c".into(),
-        bootstrap_script(),
+        bootstrap_script(install_openers),
         "zmux-shell".into(),
         root,
         launch.program,
@@ -108,12 +201,15 @@ pub fn prepare(mut launch: Launch) -> io::Result<(Launch, Option<ShellIntegratio
 
 /// Original remote shell code, carried in the already authenticated PTY. No
 /// local socket/password is forwarded; OSC notices are bound to that exact PTY.
-pub fn remote_command() -> String {
-    let script = bootstrap_script().replace('\'', "'\\''");
-    format!("/bin/sh -c '{script}' zmux-shell '' \"${{SHELL:-/bin/sh}}\" -l")
+pub fn remote_command(nonce: &OpenRequestNonce) -> String {
+    let script = bootstrap_script(true).replace('\'', "'\\''");
+    format!(
+        "ZMUX_OPEN_URL_NONCE={} /bin/sh -c '{script}' zmux-shell '' \"${{SHELL:-/bin/sh}}\" -l",
+        nonce.protocol_value()
+    )
 }
 
-fn bootstrap_script() -> String {
+fn bootstrap_script(install_openers: bool) -> String {
     let mut generated = String::new();
     let files = [
         ("claude.sh", include_str!("shell/claude.sh")),
@@ -165,6 +261,22 @@ if [ -n "$ENV" ] && [ -r "$ENV" ]; then . "$ENV"; fi
 "#,
         ),
     ];
+    if install_openers {
+        generated.push_str("mkdir \"$zmux_private_root/bin\" || exit 70\n");
+        for name in ["zmux-open-url", "open", "xdg-open", "sensible-browser"] {
+            let contents = if name == "zmux-open-url" {
+                include_str!("shell/open-url.sh")
+            } else {
+                include_str!("shell/open-wrapper.sh")
+            };
+            generated.push_str(&format!(
+                "cat >\"$zmux_private_root/bin/{name}\" <<'ZMUX_SHELL_FILE_END'\n{contents}\nZMUX_SHELL_FILE_END\n"
+            ));
+            generated.push_str(&format!(
+                "chmod 700 \"$zmux_private_root/bin/{name}\" || exit 70\n"
+            ));
+        }
+    }
     for (name, contents) in files {
         generated.push_str(&format!("cat >\"$zmux_private_root/{name}\" <<'ZMUX_SHELL_FILE_END'\n{contents}\nZMUX_SHELL_FILE_END\n"));
     }

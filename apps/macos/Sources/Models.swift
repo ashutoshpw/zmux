@@ -25,6 +25,28 @@ struct TerminalRowCopy: Decodable, Sendable {
     let wrapsToNext: Bool
     let writtenEnd: Int
 }
+struct TerminalLinkSpan: Decodable, Sendable, Equatable {
+    let row: Int
+    let startColumn: Int
+    let endColumn: Int
+    let url: String
+}
+struct TerminalLinkHit: Sendable {
+    let viewportGeneration: UInt64
+    let row: Int
+    let column: Int
+    let expectedURL: String
+}
+struct TerminalLinkRequest: Sendable {
+    let identityNamespace: UUID
+    let surfaceID: UInt64
+    let paneID: UInt64
+    let sessionID: UInt64
+    let viewportGeneration: UInt64
+    let row: Int
+    let column: Int
+    let expectedURL: String
+}
 enum TerminalPointerTracking: String, Decodable, Sendable {
     case none, press
     case pressRelease = "press_release"
@@ -47,9 +69,12 @@ struct Viewport: Decodable, Sendable {
     let scrollbackOffset: Int; let scrollbackLines: Int; let alternateScreen: Bool
     let rowCopy: [TerminalRowCopy]?
     let pointerTracking: TerminalPointerTracking?
+    let viewportGeneration: UInt64
+    let links: [TerminalLinkSpan]
     enum CodingKeys: String, CodingKey {
         case size, contents, cursorRow, cursorCol, lines, applicationCursor, bracketedPaste, hideCursor
         case title, workingDirectory, scrollbackOffset, scrollbackLines, alternateScreen, rowCopy, pointerTracking
+        case viewportGeneration, links
     }
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -68,6 +93,8 @@ struct Viewport: Decodable, Sendable {
         alternateScreen = try c.decode(Bool.self, forKey: .alternateScreen)
         rowCopy = try c.decodeIfPresent([TerminalRowCopy].self, forKey: .rowCopy)
         pointerTracking = try c.decodeIfPresent(TerminalPointerTracking.self, forKey: .pointerTracking)
+        viewportGeneration = try c.decodeIfPresent(UInt64.self, forKey: .viewportGeneration) ?? 0
+        links = try c.decodeIfPresent([TerminalLinkSpan].self, forKey: .links) ?? []
         if let rowCopy {
             guard (1...120).contains(size.rows), (1...240).contains(size.cols),
                   lines.count == size.rows, rowCopy.count == size.rows, rowCopy.allSatisfy({ (0...size.cols).contains($0.writtenEnd) }) else {

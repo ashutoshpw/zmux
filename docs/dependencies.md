@@ -13,6 +13,7 @@ permissive licenses; retain upstream notices rather than relabeling them as MIT.
 | `filedescriptor` 0.8.3 | Safe descriptor duplication/nonblocking I/O/poll | MIT | <https://github.com/wezterm/wezterm> |
 | `socket2` 0.6.3 | Safe Darwin wake-socket SIGPIPE suppression | MIT OR Apache-2.0 | <https://github.com/rust-lang/socket2> |
 | `nix` 0.28.0 | Terminate owned Unix PTY process groups | MIT | <https://github.com/nix-rust/nix> |
+| `url` 2.5.8 | Parse and validate browser destinations | MIT OR Apache-2.0 | <https://github.com/servo/rust-url> |
 | `thiserror` | Explicit domain errors | MIT OR Apache-2.0 | <https://github.com/dtolnay/thiserror> |
 
 Resolved package versions and available license texts are inventoried and bundled in the

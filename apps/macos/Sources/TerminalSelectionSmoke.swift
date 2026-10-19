@@ -395,6 +395,130 @@ enum TerminalSelectionSmoke {
             expected: "\u{1b}[<35;2;1M\u{1b}[<43;2;1M\u{1b}[<35;3;2M", name: "application_hover_capture", viewport: hover,
             coordinator: coordinator, window: window, result: &result, report: report)
         result.hoverPointerCapture = hoverCapture
+        let links = try await beginCopyPhase(key: "l", code: 37, marker: "TERMINAL_LINK_READY_",
+            coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        guard let plainURL = ProcessInfo.processInfo.environment["ZMUX_TERMINAL_LINK_PLAIN_URL"],
+              let osc8URL = ProcessInfo.processInfo.environment["ZMUX_TERMINAL_LINK_OSC8_URL"],
+              links.size.rows >= 2, links.size.cols >= 64,
+              links.contents.contains(plainURL), links.contents.contains("OSC8 LINK") else {
+            throw failure("Local HTTP and OSC 8 fixture links were not visible in the production viewport")
+        }
+        let linkURLs = Set([plainURL, osc8URL])
+        let openedBeforeClick = coordinator.snapshot?.model.workspaces.flatMap({ $0.root.panes })
+            .flatMap(\.surfaces).filter { $0.kind == "browser" && $0.url.map(linkURLs.contains) == true } ?? []
+        let noAutomaticOpen = SelectionNativeCase(name: "printed_links_do_not_auto_open", expected: "no matching browser surface",
+                                                  observed: openedBeforeClick.isEmpty ? "no matching browser surface" : "matching browser surface already exists")
+        result.cases.append(noAutomaticOpen)
+        guard openedBeforeClick.isEmpty else {
+            result.state = "failed"
+            try await save(result, to: report)
+            throw failure("Printing fixture URLs opened a browser before Command-click")
+        }
+        let plainStart = 6
+        let plainEnd = plainStart + (plainURL as NSString).length
+        guard plainEnd < links.size.cols else { throw failure("Plain fixture URL does not fit on its specified row") }
+        let releaseSelectionOffset = 4
+        let releaseSelectionStart = plainStart + releaseSelectionOffset
+        let releaseSelection = (plainURL as NSString).substring(from: releaseSelectionOffset)
+        try await check("command_link_drag_selection", expected: plainURL, window: window, result: &result, report: report) {
+            try pointerEvent(.leftMouseDown, cell: (0, plainStart), modifiers: [.command], view: view, window: window, viewport: links)
+            try pointerEvent(.leftMouseDragged, cell: (0, plainEnd), modifiers: [.command], view: view, window: window, viewport: links)
+            try pointerEvent(.leftMouseUp, cell: (0, plainEnd), modifiers: [.command], view: view, window: window, viewport: links)
+        }
+        // No dragged event is delivered. The suffix differs from the previous selection so a
+        // swallowed down or stale selection cannot satisfy this clipboard assertion.
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("ZMUX_SELECTION_SENTINEL", forType: .string)
+        try pointerEvent(.leftMouseDown, cell: (0, releaseSelectionStart), modifiers: [.command],
+                         view: view, window: window, viewport: links)
+        try pointerEvent(.leftMouseUp, cell: (0, plainEnd), modifiers: [.command],
+                         view: view, window: window, viewport: links)
+        var releaseSelectionCopyError: String?
+        do { try copy(window: window) }
+        catch { releaseSelectionCopyError = String(describing: error) }
+        let releaseSelectionObserved = NSPasteboard.general.string(forType: .string)
+        let releaseSelectionMatches = releaseSelectionCopyError == nil
+            && releaseSelectionObserved?.utf8.elementsEqual(releaseSelection.utf8) == true
+        let releaseSelectionReport = releaseSelectionCopyError.map { "copy failed: \($0)" } ?? releaseSelectionObserved
+        result.cases.append(SelectionNativeCase(
+            name: "command_link_far_mouse_up_selection",
+            expected: releaseSelection, observed: releaseSelectionReport))
+
+        let noOpenDeadline = ContinuousClock.now + .seconds(2)
+        var matchingLinkBrowsers: Int?
+        while ContinuousClock.now < noOpenDeadline {
+            if let snapshot = coordinator.snapshot {
+                matchingLinkBrowsers = snapshot.model.workspaces.flatMap({ $0.root.panes })
+                    .flatMap(\.surfaces).filter { $0.kind == "browser" && $0.url.map(linkURLs.contains) == true }.count
+                if let matchingLinkBrowsers, matchingLinkBrowsers > 0 { break }
+            }
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        let noOpenObserved = matchingLinkBrowsers.map { "\($0) matching browser surfaces" } ?? "snapshot unavailable"
+        result.cases.append(SelectionNativeCase(name: "command_link_far_mouse_up_no_open",
+            expected: "0 matching browser surfaces", observed: noOpenObserved))
+        try await save(result, to: report)
+        guard releaseSelectionMatches, matchingLinkBrowsers == 0 else {
+            result.state = "failed"
+            try await save(result, to: report)
+            throw failure("Far Command mouse-up selection was \(releaseSelectionReport ?? "empty"); \(noOpenObserved)")
+        }
+
+        let linkCases = [
+            (name: "command_click_plain_http", url: plainURL, visibleText: plainURL,
+             title: "ZMUX_TERMINAL_LINK_PLAIN_" + nonce, row: 0,
+             column: plainStart + (plainEnd - plainStart) / 2),
+            (name: "command_click_osc8", url: osc8URL, visibleText: "OSC8 LINK",
+             title: "ZMUX_TERMINAL_LINK_OSC8_" + nonce, row: 1, column: 5)
+        ]
+        for link in linkCases {
+            guard let current = coordinator.snapshot,
+                  let terminalPane = current.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.id == pane.id }),
+                  terminalPane.surfaces.contains(where: { $0.id == pane.selectedSurface && $0.sessionId == frame.sessionId }) else {
+                throw failure("Clicked terminal no longer belongs to its original pane")
+            }
+            if terminalPane.selectedSurface != pane.selectedSurface {
+                guard coordinator.enqueue(.surface("select_surface", pane.selectedSurface, nil, nil, nil)) else {
+                    throw failure("Could not restore the originating terminal tab for the next link click")
+                }
+                let selectionDeadline = ContinuousClock.now + .seconds(5)
+                while ContinuousClock.now < selectionDeadline,
+                      coordinator.snapshot?.model.workspaces.flatMap({ $0.root.panes }).first(where: { $0.id == pane.id })?.selectedSurface != pane.selectedSurface {
+                    try await Task.sleep(for: .milliseconds(32))
+                }
+            }
+            guard let mounted = view.window, mounted === window, window.isKeyWindow,
+                  window.makeFirstResponder(view), window.firstResponder === view else {
+                throw failure("Originating terminal did not return to its mounted native view")
+            }
+            let viewport = coordinator.snapshot?.frames.first(where: { $0.sessionId == frame.sessionId })?.snapshot?.viewport
+            guard let viewport, viewport.contents.contains(link.visibleText), viewport.size.rows > link.row,
+                  viewport.size.cols > link.column else { throw failure("Expected terminal link was absent before Command-click") }
+            try pointerEvent(.leftMouseDown, cell: (link.row, link.column), modifiers: [.command], view: view, window: window, viewport: viewport)
+            try pointerEvent(.leftMouseUp, cell: (link.row, link.column), modifiers: [.command], view: view, window: window, viewport: viewport)
+
+            let browserDeadline = ContinuousClock.now + .seconds(10)
+            var observed: (paneID: UInt64, surface: Surface)?
+            while ContinuousClock.now < browserDeadline {
+                if let snapshot = coordinator.snapshot {
+                    observed = snapshot.model.workspaces.flatMap({ $0.root.panes }).compactMap { candidatePane in
+                        candidatePane.surfaces.first(where: { $0.kind == "browser" && $0.url == link.url })
+                            .map { (paneID: candidatePane.id, surface: $0) }
+                    }.first
+                    if observed?.surface.title == link.title { break }
+                }
+                try await Task.sleep(for: .milliseconds(32))
+            }
+            let expected = "\(link.url)|\(link.title)|pane=\(pane.id)"
+            let actual = observed.map { "\($0.surface.url ?? "<missing-url>")|\($0.surface.title)|pane=\($0.paneID)" }
+                ?? "no browser surface after Command-click"
+            result.cases.append(SelectionNativeCase(name: link.name, expected: expected, observed: actual))
+            if observed?.surface.title != link.title || observed?.paneID != pane.id {
+                result.state = "failed"
+                try await save(result, to: report)
+                throw failure("\(link.name) did not load the exact URL in the clicked terminal's pane; observed \(actual)")
+            }
+        }
         result.state = "completed_cases"
         try await save(result, to: report)
         try await coordinator.shutdown()

@@ -7,9 +7,11 @@ fn size() -> Size {
 #[test]
 fn default_backend_stages_zero_reply_frames_and_abort_preserves_last_publication() {
     let mut engine = Engine::new(size(), EngineKind::default()).unwrap();
+    assert_eq!(engine.viewport().viewport_generation, 0);
     let batch = engine.stage_process(b"first").unwrap();
     assert!(batch.replies().is_empty());
     assert_eq!(engine.viewport().contents, "");
+    assert_eq!(engine.viewport().viewport_generation, 0);
     assert!(matches!(
         engine.stage_process(b"later"),
         Err(EngineError::Pending)
@@ -17,10 +19,15 @@ fn default_backend_stages_zero_reply_frames_and_abort_preserves_last_publication
     assert!(engine.commit(batch.generation() + 1).is_err());
     engine.commit(batch.generation()).unwrap();
     assert_eq!(engine.viewport().contents, "first");
+    assert_eq!(engine.viewport().viewport_generation, batch.generation());
     let batch = engine.stage_process(b"\rsecond").unwrap();
     engine.abort();
     engine.abort();
     assert_eq!(engine.viewport().contents, "first");
+    assert_eq!(
+        engine.viewport().viewport_generation,
+        batch.generation() - 1
+    );
     assert!(engine.commit(batch.generation()).is_err());
     assert!(engine.stage_scroll(1).is_err());
 }

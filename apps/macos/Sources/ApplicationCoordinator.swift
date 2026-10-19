@@ -29,6 +29,7 @@ enum UICommand: Sendable {
     case scroll(UInt64, Int)
     case wheel(UInt64, Int, Int, Int, Int, Bool)
     case pointer(UInt64, TerminalPointerEvent)
+    case terminalLink(TerminalLinkRequest)
     /// Runs the wrapped window, action or surface command and reports whether the core executed
     /// it (the executor's own result, not queue acceptance). Used by closes that discard unsaved
     /// file text only once the tab is really gone.
@@ -470,6 +471,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             try await bridge.wheel(session: session, lines: lines, row: row, col: col, modifiers: modifiers, history: history)
         case .pointer(let session, let event):
             try await bridge.pointer(session: session, event: event)
+        case .terminalLink(let request):
+            try await bridge.openTerminalLink(request)
         case .scroll(let session, let lines):
             try await bridge.scroll(session: session, lines: lines)
         case .resize(let session, let rows, let cols):

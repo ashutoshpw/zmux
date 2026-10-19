@@ -425,7 +425,7 @@ pub(crate) fn launch_client(
             }
             Err(ClientLaunchFailure {
                 error,
-                cleanup: Some(session),
+                cleanup: Some(Box::new(session)),
                 observer: Some(observer),
             })
         }

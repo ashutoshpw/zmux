@@ -13,7 +13,11 @@ ghostty = ["dep:zmux-ghostty-vt"]
 zmux-ghostty-vt = { path = "../ghostty-vt", optional = true, features = ["linked"] }
 vt100.workspace = true
 serde.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

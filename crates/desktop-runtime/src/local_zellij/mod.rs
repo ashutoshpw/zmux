@@ -149,6 +149,6 @@ pub(crate) struct ClientReady {
 }
 pub(crate) struct ClientLaunchFailure {
     pub error: SessionError,
-    pub cleanup: Option<Session>,
+    pub cleanup: Option<Box<Session>>,
     pub observer: Option<ObserverHandle>,
 }

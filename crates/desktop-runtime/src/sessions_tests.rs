@@ -162,6 +162,7 @@ fn worker(directory: &Directory) -> Worker {
         app_active: false,
         slots: HashMap::new(),
         retired: Vec::new(),
+        automatic_open_history: VecDeque::new(),
         shell,
         terminal_engine,
         shared: worker_shared,

@@ -36,9 +36,11 @@ zmux_shell_cleanup() {
         "$zmux_private_root/.zshenv" "$zmux_private_root/.zprofile" \
         "$zmux_private_root/.zshrc" "$zmux_private_root/env" \
         "$zmux_private_root/attention" \
+        "$zmux_private_root/bin/zmux-open-url" "$zmux_private_root/bin/open" \
+        "$zmux_private_root/bin/xdg-open" "$zmux_private_root/bin/sensible-browser" \
         "$zmux_private_root/plugin/.claude-plugin/plugin.json" \
         "$zmux_private_root/plugin/hooks/hooks.json"
-    rmdir "$zmux_private_root/plugin/.claude-plugin" "$zmux_private_root/plugin/hooks" \
+    rmdir "$zmux_private_root/bin" "$zmux_private_root/plugin/.claude-plugin" "$zmux_private_root/plugin/hooks" \
         "$zmux_private_root/plugin" "$zmux_private_root" 2>/dev/null || :
 }
 trap 'zmux_shell_cleanup' 0
@@ -47,6 +49,16 @@ trap 'exit 143' TERM
 mkdir "$zmux_private_root/plugin" "$zmux_private_root/plugin/.claude-plugin" \
     "$zmux_private_root/plugin/hooks" || exit 70
 # ZMUX_GENERATED_FILES
+if [ -n "${ZMUX_OPEN_URL_NONCE-}" ]; then
+    PATH="$zmux_private_root/bin${PATH:+:$PATH}"
+    export PATH
+    # GH_BROWSER has command precedence over BROWSER. Keep it unset so a user
+    # startup file can choose GH_BROWSER, or override the default BROWSER later.
+    if [ "${GH_BROWSER+x}" != x ] && [ "${BROWSER+x}" != x ]; then
+        BROWSER="$zmux_private_root/bin/zmux-open-url"
+        export BROWSER
+    fi
+fi
 # Keep notification ingress outside any nested tmux/screen PTY. Only fixed event
 # names cross this private FIFO; the relay retains this session's original TTY,
 # never a device pathname that could later belong to another session. The outer
@@ -98,7 +110,7 @@ case "${zmux_shell##*/}" in
         # A private noninteractive helper exports only our function before exec.
         # The real interactive Bash retains its original argv and startup policy.
         # -p prevents the helper from sourcing an inherited BASH_ENV.
-        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude; exec "$@"' zmux "$zmux_shell" "$@"
+        zmux_exec_shell "$zmux_shell" -p -c '. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"; export -f claude zmux_refresh_openers; exec "$@"' zmux "$zmux_shell" "$@"
         ;;
     zsh)
         ZMUX_USER_ZDOTDIR=${ZDOTDIR-$HOME}

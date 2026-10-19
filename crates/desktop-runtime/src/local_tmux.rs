@@ -378,7 +378,7 @@ impl Drop for Runtime {
 
 pub(crate) struct ClientLaunchFailure {
     pub error: crate::SessionError,
-    pub cleanup: Option<crate::Session>,
+    pub cleanup: Option<Box<crate::Session>>,
 }
 impl From<crate::SessionError> for ClientLaunchFailure {
     fn from(error: crate::SessionError) -> Self {
@@ -469,7 +469,7 @@ pub(crate) fn launch_client(
         Ok(()) => Ok(session),
         Err(error) => Err(ClientLaunchFailure {
             error,
-            cleanup: Some(session),
+            cleanup: Some(Box::new(session)),
         }),
     }
 }

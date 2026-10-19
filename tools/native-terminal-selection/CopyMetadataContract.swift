@@ -10,22 +10,31 @@ enum CopyMetadataContract {
         func row(_ end: Int) -> [String: Any] {
             ["wraps_to_next": true, "written_end": end]
         }
-        func decode(_ metadata: Any?, rows: Int = 2, cols: Int = 4) throws -> Viewport {
+        func decode(_ metadata: Any?, rows: Int = 2, cols: Int = 4,
+                    generation: UInt64? = nil, links: [[String: Any]]? = nil) throws -> Viewport {
             var value: [String: Any] = [
                 "size": ["rows": rows, "cols": cols], "contents": "", "cursor_row": 0, "cursor_col": 0,
                 "lines": Array(repeating: [Any](), count: rows), "application_cursor": false, "bracketed_paste": false,
                 "hide_cursor": false, "scrollback_offset": 0, "scrollback_lines": 0, "alternate_screen": false
             ]
             if let metadata { value["row_copy"] = metadata }
+            if let generation { value["viewport_generation"] = generation }
+            if let links { value["links"] = links }
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             return try decoder.decode(Viewport.self, from: JSONSerialization.data(withJSONObject: value))
         }
         let valid = try decode([row(4), row(1)])
+        let linked = try decode([row(4), row(1)], generation: 73, links: [[
+            "row": 1, "start_column": 1, "end_column": 4, "url": "https://example.test/path"
+        ]])
         guard let records = valid.rowCopy, records.count == 2, records[0].wrapsToNext,
               records[0].writtenEnd == 4, records[1].writtenEnd == 1,
+              valid.viewportGeneration == 0, valid.links.isEmpty,
+              linked.viewportGeneration == 73, linked.links == [TerminalLinkSpan(
+                row: 1, startColumn: 1, endColumn: 4, url: "https://example.test/path")],
               try decode(nil).rowCopy == nil, try decode(NSNull()).rowCopy == nil else {
-            throw ContractFailure(message: "Valid or explicitly unavailable copy metadata failed decoding")
+            throw ContractFailure(message: "Valid copy, link, generation, or explicitly unavailable metadata failed decoding")
         }
         let invalid: [(String, Any, Int, Int)] = [
             ("row_count", [row(4)], 2, 4),
@@ -43,7 +52,8 @@ enum CopyMetadataContract {
                 rejected.append(name)
             }
         }
-        let result: [String: Any] = ["valid_metadata": true, "unavailable_metadata": true, "rejected": rejected]
+        let result: [String: Any] = ["valid_metadata": true, "link_generation": true,
+                                     "unavailable_metadata": true, "rejected": rejected]
         print(String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self))
     }
 }

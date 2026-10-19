@@ -537,7 +537,7 @@ impl Worker {
                         ),
                         Err(failure) => (
                             Err(failure.error),
-                            failure.cleanup,
+                            failure.cleanup.map(|session| *session),
                             ZellijCompletion {
                                 tag: completion_tag,
                                 observer: failure.observer,
