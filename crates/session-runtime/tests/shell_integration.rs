@@ -7,8 +7,10 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use zmux_session_runtime::{Launch, Session, State, shell_integration};
-use zmux_terminal_adapter::Size;
+use zmux_session_runtime::{
+    Launch, Session, SessionError, ShutdownPolicy, State, shell_integration,
+};
+use zmux_terminal_adapter::{MAX_PROGRAM_OPEN_REQUESTS, Size};
 
 struct Directory(PathBuf);
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -123,6 +125,320 @@ printf 'PROVIDER_ARGUMENTS_PRESERVED\n'
         wait("VERSION_PASSTHROUGH");
         session.shutdown(Duration::from_secs(3)).unwrap();
     }
+}
+
+#[test]
+fn opener_survives_startup_path_rebuild_and_routes_only_explicit_requests() {
+    let directory = Directory::new();
+    let startup = directory.0.join("bashrc");
+    let report = directory.0.join("opener-report");
+    let fake_bin = directory.0.join("fake-bin");
+    fs::create_dir(&fake_bin).unwrap();
+    let delegate_report = directory.0.join("delegate-report");
+    let fake_open = fake_bin.join("open");
+    fs::write(
+        &fake_open,
+        "#!/bin/sh\nprintf '<%s>\\n' \"$@\" > \"$ZMUX_DELEGATE_REPORT\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake_open, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        &startup,
+        "PATH=\"$ZMUX_FAKE_BIN:/usr/bin:/bin\"\nexport PATH\nPS1=\nprintf 'USER_STARTUP_READY\\n'\n",
+    )
+    .unwrap();
+    let nonce = shell_integration::OpenRequestNonce::generate();
+    let (launch, lease) = shell_integration::prepare_with_nonce(
+        Launch {
+            program: "/bin/bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                startup.to_str().unwrap().into(),
+                "-i".into(),
+            ],
+            cwd: Some(directory.0.clone()),
+            size: Size {
+                rows: 12,
+                cols: 100,
+            },
+        },
+        &nonce,
+    )
+    .unwrap();
+    let mut session = Session::spawn_with_open_requests(
+        launch,
+        &[
+            ("ZMUX_OPENER_REPORT".into(), report.to_str().unwrap().into()),
+            ("ZMUX_FAKE_BIN".into(), fake_bin.to_str().unwrap().into()),
+            (
+                "ZMUX_DELEGATE_REPORT".into(),
+                delegate_report.to_str().unwrap().into(),
+            ),
+        ],
+        &[],
+        ShutdownPolicy::Kill,
+        None,
+        Some(shell_integration::OpenRequestRegistration::new(
+            nonce,
+            shell_integration::OpenRequestSource::Local,
+        )),
+        lease,
+    )
+    .unwrap();
+    assert!(session.open_request_registration().is_some());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
+        if snapshot.viewport.contents.contains("USER_STARTUP_READY") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "shell startup marker was not printed"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    session
+        .send_input(
+            b"printf '%s\\n' \"$BROWSER\" \"$(command -v open)\" > \"$ZMUX_OPENER_REPORT\"\n",
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !report.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "shell did not report opener paths"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let report_text = fs::read_to_string(report).unwrap();
+    let mut report_lines = report_text.lines();
+    let browser = report_lines.next().unwrap();
+    let open_path = report_lines.next().unwrap();
+    assert!(browser.ends_with("/bin/zmux-open-url"), "BROWSER={browser}");
+    assert!(
+        open_path.ends_with("/bin/open"),
+        "open resolved to {open_path}"
+    );
+
+    session
+        .send_input(b"open --fixture 'literal ; argument'\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !delegate_report.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "unsupported opener arguments were not delegated"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        fs::read_to_string(delegate_report).unwrap(),
+        "<--fixture>\n<literal ; argument>\n"
+    );
+
+    // A mismatched nonce burst must be discarded before parser queue admission.
+    // The PTY stays live and the burst cannot consume the bounded matching-request queue.
+    let mismatched_requests =
+        "\\033]777;zmux-open;v1;00000000000000000000000000000000;aHR0cHM6Ly9leGFtcGxlLmNvbQ\\007"
+            .repeat(MAX_PROGRAM_OPEN_REQUESTS + 1);
+    let mismatched_burst = format!(
+        "printf '{}'\nprintf 'MISMATCHED_NONCE_BURST_SENT\\n'\n",
+        mismatched_requests
+    );
+    session.send_input(mismatched_burst.as_bytes()).unwrap();
+    wait_for_contents(&session, "MISMATCHED_NONCE_BURST_SENT");
+    assert_eq!(session.snapshot().unwrap().state, State::Running);
+    assert!(session.take_open_urls().unwrap().is_empty());
+
+    // Malformed and mismatched single events also remain ignored before valid helpers.
+    let open_commands =
+        "printf '\\033]777;zmux-open;v1;%s;aHR0cHM6Ly9leGFtcGxlLmNvbQ=\\007' \"$ZMUX_OPEN_URL_NONCE\"\n\
+         printf '\\033]777;zmux-open;v1;00000000000000000000000000000000;aHR0cHM6Ly9leGFtcGxlLmNvbQ\\007'\n\
+         open https://open.example.test/path\n\
+         \"$BROWSER\" https://browser.example.test/login\n"
+            .to_owned();
+    session.send_input(open_commands.as_bytes()).unwrap();
+    let mut opened = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while opened.len() < 2 {
+        match session.take_open_urls() {
+            Ok(urls) => opened.extend(urls.into_iter().map(|url| url.as_str().to_owned())),
+            Err(SessionError::Busy) => {}
+            Err(error) => {
+                panic!("session stopped before accepting explicit opener requests: {error}")
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "explicit opener requests were not drained"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        opened,
+        [
+            "https://open.example.test/path",
+            "https://browser.example.test/login"
+        ]
+    );
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+#[test]
+fn opener_requests_without_session_registration_are_ignored() {
+    let directory = Directory::new();
+    let startup = directory.0.join("bashrc");
+    fs::write(&startup, "PS1=\nprintf 'USER_STARTUP_READY\\n'\n").unwrap();
+    let nonce = "00000000000000000000000000000000";
+    let (launch, lease) = shell_integration::prepare_with_nonce(
+        Launch {
+            program: "/bin/bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                startup.to_str().unwrap().into(),
+                "-i".into(),
+            ],
+            cwd: Some(directory.0.clone()),
+            size: Size {
+                rows: 12,
+                cols: 100,
+            },
+        },
+        &shell_integration::OpenRequestNonce::generate(),
+    )
+    .unwrap();
+    // A caller-supplied nonce cannot stand in for the missing in-memory binding.
+    let mut session = Session::spawn_with_open_requests(
+        launch,
+        &[
+            ("ZMUX_OPEN_URL_NONCE".into(), nonce.into()),
+            (
+                "ZMUX_OUTPUT_MARKER".into(),
+                "UNREGISTERED_REQUEST_SENT".into(),
+            ),
+        ],
+        &[],
+        ShutdownPolicy::Kill,
+        None,
+        None,
+        lease,
+    )
+    .unwrap();
+    assert!(session.open_request_registration().is_none());
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
+        if snapshot.viewport.contents.contains("USER_STARTUP_READY") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "shell startup marker was not printed"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let unregistered_requests =
+        format!("\\033]777;zmux-open;v1;{nonce};aHR0cHM6Ly9leGFtcGxlLmNvbQ\\007")
+            .repeat(MAX_PROGRAM_OPEN_REQUESTS + 1);
+    let unregistered_burst = format!(
+        "printf '{}'\nprintf '%s\\n' \"$ZMUX_OUTPUT_MARKER\"\n",
+        unregistered_requests
+    );
+    session.send_input(unregistered_burst.as_bytes()).unwrap();
+    wait_for_contents(&session, "UNREGISTERED_REQUEST_SENT");
+    assert_eq!(session.snapshot().unwrap().state, State::Running);
+    assert!(session.take_open_urls().unwrap().is_empty());
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+fn wait_for_contents(session: &Session, marker: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
+        if snapshot.viewport.contents.contains(marker) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "shell did not print {marker}");
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn opener_preserves_browser_values_set_by_user_startup() {
+    let directory = Directory::new();
+    let startup = directory.0.join("bashrc");
+    let report = directory.0.join("browser-overrides");
+    fs::write(
+        &startup,
+        "PATH=/usr/bin:/bin\nBROWSER=''\nGH_BROWSER='startup-browser'\nexport PATH BROWSER GH_BROWSER\nPS1=\nprintf 'USER_STARTUP_READY\\n'\n",
+    )
+    .unwrap();
+    let nonce = shell_integration::OpenRequestNonce::generate();
+    let (launch, lease) = shell_integration::prepare_with_nonce(
+        Launch {
+            program: "/bin/bash".into(),
+            args: vec![
+                "--noprofile".into(),
+                "--rcfile".into(),
+                startup.to_str().unwrap().into(),
+                "-i".into(),
+            ],
+            cwd: Some(directory.0.clone()),
+            size: Size {
+                rows: 12,
+                cols: 100,
+            },
+        },
+        &nonce,
+    )
+    .unwrap();
+    let mut session = Session::spawn_with_open_requests(
+        launch,
+        &[("ZMUX_OPENER_REPORT".into(), report.to_str().unwrap().into())],
+        &[],
+        ShutdownPolicy::Kill,
+        None,
+        Some(shell_integration::OpenRequestRegistration::new(
+            nonce,
+            shell_integration::OpenRequestSource::Local,
+        )),
+        lease,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
+        if snapshot.viewport.contents.contains("USER_STARTUP_READY") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "shell startup marker was not printed"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    session
+        .send_input(b"printf '%s\\n' \"$BROWSER\" \"$GH_BROWSER\" > \"$ZMUX_OPENER_REPORT\"\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !report.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "shell did not report browser overrides"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fs::read_to_string(report).unwrap(), "\nstartup-browser\n");
+    session.shutdown(Duration::from_secs(3)).unwrap();
 }
 
 #[test]

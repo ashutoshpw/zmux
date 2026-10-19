@@ -557,6 +557,18 @@ actor NativeBridge {
             "action": event.action.rawValue, "button": event.button.rawValue,
             "row": event.row, "col": event.col, "modifiers": event.modifiers]])
     }
+    func openTerminalLink(_ request: TerminalLinkRequest) async throws {
+        try await send(["command": "open_terminal_link", "request": [
+            "identity_namespace": request.identityNamespace.uuidString.lowercased(),
+            "surface_id": request.surfaceID,
+            "pane_id": request.paneID,
+            "session_id": request.sessionID,
+            "viewport_generation": request.viewportGeneration,
+            "row": request.row,
+            "column": request.column,
+            "expected_url": request.expectedURL
+        ]])
+    }
     func scroll(session: UInt64, lines: Int) async throws {
         try await send(["command": "scroll", "session_id": session, "lines": lines])
     }

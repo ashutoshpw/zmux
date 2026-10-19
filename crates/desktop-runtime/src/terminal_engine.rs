@@ -2,6 +2,9 @@
 use crate::DesktopError;
 use serde::Deserialize;
 use zmux_session_runtime::EngineOptions;
+use zmux_session_runtime::shell_integration::{
+    OpenRequestNonce, OpenRequestRegistration, OpenRequestSource,
+};
 
 /// Opt-in host policy. Candidate limits are supplied by the caller and are not
 /// default application budgets. Ordinary hosts continue using vt100.
@@ -118,4 +121,61 @@ pub(crate) fn spawn_with_policy(
             resource,
         ),
     }
+}
+
+/// Spawn an ordinary local shell or an eligible managed SSH shell with one
+/// launch-worker-minted opener token. Local helper files are installed only
+/// for a supported interactive shell; managed SSH already carries its helper
+/// in the authenticated RemoteCommand.
+pub(crate) fn spawn_with_open_requests(
+    launch: zmux_session_runtime::Launch,
+    environment: &[(String, String)],
+    removals: &[std::ffi::OsString],
+    engine: Option<EngineOptions>,
+    nonce: OpenRequestNonce,
+    source: Option<OpenRequestSource>,
+    resource: impl Send + 'static,
+) -> Result<zmux_session_runtime::Session, zmux_session_runtime::SessionError> {
+    let (launch, integration, registration) = match source {
+        Some(OpenRequestSource::Local) => {
+            let (launch, integration) =
+                zmux_session_runtime::shell_integration::prepare_with_nonce(launch, &nonce)
+                    .map_err(|error| {
+                        zmux_session_runtime::SessionError::Failure(format!(
+                            "prepare shell integration: {error}"
+                        ))
+                    })?;
+            let registration = integration
+                .as_ref()
+                .map(|_| OpenRequestRegistration::new(nonce, OpenRequestSource::Local));
+            (launch, integration, registration)
+        }
+        Some(OpenRequestSource::ManagedSsh) => (
+            launch,
+            None,
+            Some(OpenRequestRegistration::new(
+                nonce,
+                OpenRequestSource::ManagedSsh,
+            )),
+        ),
+        None => {
+            let (launch, integration) = zmux_session_runtime::shell_integration::prepare(launch)
+                .map_err(|error| {
+                    zmux_session_runtime::SessionError::Failure(format!(
+                        "prepare shell integration: {error}"
+                    ))
+                })?;
+            (launch, integration, None)
+        }
+    };
+    let resource = (resource, integration);
+    zmux_session_runtime::Session::spawn_with_open_requests(
+        launch,
+        environment,
+        removals,
+        zmux_session_runtime::ShutdownPolicy::Kill,
+        engine,
+        registration,
+        resource,
+    )
 }

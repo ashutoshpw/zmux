@@ -1105,6 +1105,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 terminal.onPaste = { [weak self] text in self?.enqueue(.paste(session, text)) }
                 terminal.onWheel = { [weak self] lines, row, col, modifiers, history in self?.enqueue(.wheel(session, lines, row, col, modifiers, history)) }
                 terminal.onPointer = { [weak self] event in self?.coordinator.enqueue(.pointer(session, event)) ?? false }
+                terminal.onOpenTerminalLink = { [weak self] hit in
+                    guard let self else { return false }
+                    return self.coordinator.enqueue(.terminalLink(TerminalLinkRequest(
+                        identityNamespace: namespace, surfaceID: pane.selectedSurface, paneID: pane.id, sessionID: session,
+                        viewportGeneration: hit.viewportGeneration, row: hit.row, column: hit.column,
+                        expectedURL: hit.expectedURL)))
+                }
                 terminal.onScroll = { [weak self] lines in self?.enqueue(.scroll(session, lines)) }
                 terminal.onResize = { [weak self] rows, cols in self?.enqueue(.resize(session, rows, cols)) }
                 terminal.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }

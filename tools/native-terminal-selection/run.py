@@ -4,6 +4,7 @@ import argparse
 import ast
 import importlib.util
 import hashlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from threading import Thread
 import uuid
 import zipfile
 
@@ -33,7 +35,7 @@ with (root/'child.json').open('x') as out:
  json.dump({'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce},out)
 rows=['alpha beta','alpha.beta  value_name /tmp/file','A界 e\\u0301🙂 Z','ab\\x1b[31mcd\\x1b[0mef','NATIVE_SELECTION_READY_'+nonce]
 os.write(1,('\\x1b[2J\\x1b[H'+'\\r\\n'.join(rows)+'\\r\\n').encode())
-for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_'),('c','WORD_UNICODE_READY_'),('t','POINTER_READY_'),('y','HOVER_READY_')]:
+for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_'),('c','WORD_UNICODE_READY_'),('t','POINTER_READY_'),('y','HOVER_READY_'),('l','TERMINAL_LINK_READY_')]:
  ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
  if not ready:break
  assert os.read(0,1)==key.encode()
@@ -50,6 +52,13 @@ for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_')
  if key=='u':payload='X'*(columns-1)+'e\\u0301🙂Z'
  if key=='h':payload='HARD_A\\r\\n\\r\\nHARD_B'
  if key in ('t','y'):payload='pointer line\\r\\nsecond pointer line'
+ if key=='l':
+  plain_url=os.environ['ZMUX_TERMINAL_LINK_PLAIN_URL']
+  osc8_url=os.environ['ZMUX_TERMINAL_LINK_OSC8_URL']
+  esc=chr(27)
+  osc8_start=esc+']8;;'
+  osc8_end=esc+'\\\\'
+  payload='PLAIN '+plain_url+'\\r\\n'+osc8_start+osc8_url+osc8_end+'OSC8 LINK'+osc8_start+osc8_end
  if key=='p':payload+='\\r\\n'+'\\r\\n'.join('FILLER_'+str(n) for n in range(rows_count+4))
  mode=('\\x1b[?1002h' if key=='t' else '\\x1b[?1003h')+'\\x1b[?1006h' if key in ('t','y') else ''
  os.write(1,(mode+'\\x1b[2J\\x1b[H'+payload+'\\r\\n'+marker+nonce+'\\r\\n').encode())
@@ -79,10 +88,47 @@ def load(name, path):
     return module
 
 
+def start_terminal_link_fixture(nonce):
+    token = nonce.replace('-', '')[:16]
+    plain_path = '/p-' + token
+    osc8_path = '/o-' + token
+    titles = {
+        plain_path: 'ZMUX_TERMINAL_LINK_PLAIN_' + nonce,
+        osc8_path: 'ZMUX_TERMINAL_LINK_OSC8_' + nonce,
+    }
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            title = titles.get(self.path)
+            if title is None:
+                self.send_error(404)
+                return
+            requests.append(self.path)
+            body = ('<!doctype html><title>' + title + '</title><p>' + self.path + '</p>').encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            return
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = 'http://127.0.0.1:' + str(server.server_port)
+    return server, thread, base + plain_path, base + osc8_path, requests
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--check-inputs', action='store_true')
+    parser.add_argument('--skip-build', action='store_true',
+                        help='Exercise the existing packaged app and archive without rebuilding')
     args = parser.parse_args()
     native = load('selection_native_inputs', REPO / 'tools/native-idle-workloads/run.py')
 
@@ -120,6 +166,9 @@ def main():
                        ZMUX_SELECTION_NONCE=nonce, ZMUX_SOCKET=str(root / 'control.socket'),
                        ZMUX_SOCKET_PATH=str(root / 'control.socket'))
     runner = load('selection_owned_process_runner', REPO / 'tools/terminal-feasibility/run.py')
+    link_server = None
+    link_thread = None
+    link_requests = []
     try:
         for name, wanted in frozen.items():
             target = root / 'source' / name
@@ -127,27 +176,63 @@ def main():
             shutil.copy2(REPO / name, target)
             if native.digest(target) != wanted:
                 raise RuntimeError('Selection retained source differs')
-        runner.run([sys.executable, 'scripts/build-macos-dev', '--architecture', 'host'],
-                   'build', root, receipt['phases'], timeout=600, cwd=REPO, env=environment)
+        runner.run([str(REPO / 'scripts/check-macos-sources')], 'swift-source-check', root,
+                   receipt['phases'], timeout=240, cwd=REPO, env=environment)
+        if args.skip_build:
+            receipt['build_mode'] = 'reused_existing_package'
+        else:
+            runner.run([sys.executable, 'scripts/build-macos-dev', '--architecture', 'host'],
+                       'build', root, receipt['phases'], timeout=600, cwd=REPO, env=environment)
+            receipt['build_mode'] = 'host_cold_build'
         info = native.document(REPO / 'dist/build-info.json')
         if (info['source_sha'] != source or info['optional_ghostty_linked']
                 or info['default_terminal_engine'] != 'vt100'):
             raise RuntimeError('Selection native baseline build identity/default differs')
-        archive = REPO / 'dist' / ('zmux-dev-arm64-' + source[:7] + '.zip')
+        architectures = info.get('architectures')
+        if architectures == ['arm64', 'x86_64']:
+            archive_architecture = 'universal'
+        elif architectures in (['arm64'], ['x86_64']):
+            archive_architecture = architectures[0]
+        else:
+            raise RuntimeError('Selection package has unsupported architecture metadata')
+        if not args.skip_build and archive_architecture != 'arm64':
+            raise RuntimeError('Selection host build did not produce the runner-architecture package')
+        archive = REPO / 'dist' / ('zmux-dev-' + archive_architecture + '-' + source[:7] + '.zip')
+        bundle = REPO / 'dist/zmux.app'
+        app_binary = bundle / 'Contents/MacOS/zmux-app'
+        bridge_binary = bundle / 'Contents/Frameworks/libzmux_native_bridge.dylib'
+        bundled_info = bundle / 'Contents/Resources/build-info.json'
+        if any(path.is_symlink() or not path.is_file() for path in (app_binary, bridge_binary, bundled_info)):
+            raise RuntimeError('Selection package is missing a regular app, bridge or build receipt')
+        if json.loads(bundled_info.read_text()) != info:
+            raise RuntimeError('Selection bundle build receipt differs from dist/build-info.json')
+        expected_architectures = set(architectures)
+        for path in (app_binary, bridge_binary):
+            actual_architectures = set(subprocess.check_output(
+                ['/usr/bin/lipo', '-archs', str(path)], text=True, timeout=10).split())
+            if actual_architectures != expected_architectures:
+                raise RuntimeError('Selection app or native bridge architectures differ from build-info.json')
         if archive.stat().st_size > 64 * 1024 * 1024:
             raise RuntimeError('Selection app archive exceeds its byte bound')
         shutil.copy2(archive, root / archive.name)
-        receipt.update(build_info=info, archive={'name': archive.name, 'sha256': native.digest(archive)})
+        receipt.update(build_info=info, archive={'name': archive.name, 'architecture': archive_architecture,
+                                                 'sha256': native.digest(archive)})
         decoder_probe = root / 'copy-metadata-contract'
-        frameworks = REPO / 'dist/zmux.app/Contents/Frameworks'
+        frameworks = bundle / 'Contents/Frameworks'
         receipt['metadata_probe_inputs'] = {name: frozen[name] for name in METADATA_INPUTS}
         receipt['metadata_bridge_sha256'] = native.digest(frameworks / 'libzmux_native_bridge.dylib')
         with zipfile.ZipFile(archive) as packaged:
-            bridge_entry = packaged.getinfo('zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib')
-            if bridge_entry.file_size > 64 * 1024 * 1024:
-                raise RuntimeError('Selection archived decoder bridge exceeds its byte bound')
-            if hashlib.sha256(packaged.read(bridge_entry)).hexdigest() != receipt['metadata_bridge_sha256']:
-                raise RuntimeError('Selection decoder bridge differs from the archived app build')
+            for path, entry_name in (
+                (app_binary, 'zmux.app/Contents/MacOS/zmux-app'),
+                (bridge_binary, 'zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib'),
+                (bundled_info, 'zmux.app/Contents/Resources/build-info.json'),
+            ):
+                entry = packaged.getinfo(entry_name)
+                if entry.file_size > 64 * 1024 * 1024:
+                    raise RuntimeError('Selection archive member exceeds its byte bound: ' + entry_name)
+                archived_sha = hashlib.sha256(packaged.read(entry)).hexdigest()
+                if archived_sha != native.digest(path):
+                    raise RuntimeError('Selection bundle member differs from its archive: ' + entry_name)
         runner.run(['/usr/bin/xcrun', 'swiftc', '-parse-as-library', '-swift-version', '6', '-warnings-as-errors',
                     '-strict-concurrency=complete', '-target', 'arm64-apple-macos14.0',
                     '-import-objc-header', str(REPO / 'crates/native-bridge/include/zmux.h'),
@@ -158,11 +243,14 @@ def main():
                    'metadata-compile', root, receipt['phases'], timeout=60, cwd=REPO, env=environment)
         runner.run([str(decoder_probe)], 'metadata-contract', root, receipt['phases'],
                    timeout=5, cwd=REPO, env=environment)
+        link_server, link_thread, plain_url, osc8_url, link_requests = start_terminal_link_fixture(nonce)
+        environment['ZMUX_TERMINAL_LINK_PLAIN_URL'] = plain_url
+        environment['ZMUX_TERMINAL_LINK_OSC8_URL'] = osc8_url
         child = root / 'selection-child.py'
         child.write_text(CHILD)
         child.chmod(0o700)
         environment['SHELL'] = str(child)
-        runner.run([str(REPO / 'dist/zmux.app/Contents/MacOS/zmux-app'), '--terminal-selection-smoke',
+        runner.run([str(app_binary), '--terminal-selection-smoke',
                     str(root / 'native-selection.json')], 'native-selection', root,
                    receipt['phases'], timeout=45, cwd=REPO, env=environment)
         result = native.document(root / 'native-selection.json')
@@ -171,6 +259,9 @@ def main():
                 or registration != {'pid': result['childPID'], 'parent_pid': result['appPID'], 'nonce': nonce}
                 or not result['cases'] or any(case['expected'] != case['observed'] for case in result['cases'])):
             raise RuntimeError('Selection native source, real child, cases or shared shutdown differs')
+        link_token = nonce.replace('-', '')[:16]
+        if not all(path in link_requests for path in ('/p-' + link_token, '/o-' + link_token)):
+            raise RuntimeError('Embedded browser did not request both loopback-only terminal-link pages')
         for filename, phase, field in [('pointer-child.json', 't', 'pointerCapture'),
                                        ('pointer-hover-child.json', 'y', 'hoverPointerCapture')]:
             pointer = native.document(root / filename)
@@ -182,12 +273,18 @@ def main():
             receipt[field] = pointer
         receipt['native_report'] = result
         receipt['registration'] = registration
+        receipt['terminal_link_requests'] = link_requests
         if sources() != frozen:
             raise RuntimeError('Selection inputs changed during the run')
         receipt['state'] = 'complete'
     except Exception as error:
         receipt.update(state='failed', error=f'{type(error).__name__}: {error}')
     finally:
+        if link_server is not None:
+            link_server.shutdown()
+            link_server.server_close()
+        if link_thread is not None:
+            link_thread.join(timeout=2)
         if any(phase['log_bytes_seen'] != phase['log_bytes_retained'] for phase in receipt['phases']):
             receipt.update(state='failed', error='Selection log exceeded its retained byte bound')
         native.save(root / 'receipt.json', receipt)

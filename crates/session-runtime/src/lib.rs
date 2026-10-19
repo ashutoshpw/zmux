@@ -16,7 +16,9 @@ use nix::{
 };
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
+use shell_integration::{OpenRequestRegistration, OpenUrl};
 use std::{
+    collections::VecDeque,
     io::{self, Read, Write},
     os::fd::{AsRawFd, RawFd},
     os::unix::net::UnixStream,
@@ -33,7 +35,9 @@ use terminal::TerminalOwner;
 use thiserror::Error;
 #[cfg(feature = "ghostty")]
 pub use zmux_terminal_adapter::GhosttyLimits;
-use zmux_terminal_adapter::{EngineBatch, Pointer, Size, Viewport, Wheel};
+use zmux_terminal_adapter::{
+    EngineBatch, MAX_PROGRAM_OPEN_REQUESTS, Pointer, Size, Viewport, Wheel,
+};
 pub use zmux_terminal_adapter::{Key, KeyAction, KeyEvent, PASTE_BYTES};
 
 pub const INPUT_CHUNK_BYTES: usize = 4_096;
@@ -281,6 +285,7 @@ struct Shared {
     cleanup_failed: AtomicBool,
     resize: Mutex<Option<Size>>,
     snapshot: Mutex<Arc<Snapshot>>,
+    open_urls: Mutex<VecDeque<OpenUrl>>,
 }
 
 pub struct Session {
@@ -291,6 +296,7 @@ pub struct Session {
     process_id: u32,
     shutdown_policy: ShutdownPolicy,
     application_wheel_supported: bool,
+    open_request_registration: Option<OpenRequestRegistration>,
 }
 
 // Borrows a live PTY only long enough for FileDescriptor to duplicate its descriptor.
@@ -473,6 +479,7 @@ impl Session {
             removals,
             shutdown_policy,
             None,
+            None,
             resource,
         )
     }
@@ -495,6 +502,30 @@ impl Session {
             removals,
             shutdown_policy,
             Some(engine),
+            None,
+            resource,
+        )
+    }
+
+    /// Spawn with a private opener registration owned by this exact PTY session.
+    /// The registration is never included in snapshots or child argv; the worker
+    /// installs its nonce directly into the child environment.
+    pub fn spawn_with_open_requests(
+        launch: Launch,
+        environment: &[(String, String)],
+        removals: &[std::ffi::OsString],
+        shutdown_policy: ShutdownPolicy,
+        engine: Option<EngineOptions>,
+        registration: Option<OpenRequestRegistration>,
+        resource: impl Send + 'static,
+    ) -> Result<Self, SessionError> {
+        Self::spawn_configured(
+            launch,
+            environment,
+            removals,
+            shutdown_policy,
+            engine,
+            registration,
             resource,
         )
     }
@@ -505,6 +536,7 @@ impl Session {
         removals: &[std::ffi::OsString],
         shutdown_policy: ShutdownPolicy,
         engine: Option<EngineOptions>,
+        registration: Option<OpenRequestRegistration>,
         resource: impl Send + 'static,
     ) -> Result<Self, SessionError> {
         if engine.is_some_and(|options| {
@@ -534,6 +566,7 @@ impl Session {
                         removals,
                         shutdown_policy,
                         engine,
+                        registration,
                         input_rx,
                     )
                 }));
@@ -564,6 +597,7 @@ impl Session {
                 process_id: ready.process_id,
                 shutdown_policy,
                 application_wheel_supported,
+                open_request_registration: registration,
             }),
             result => {
                 // A startup failure is not a running Session. Join its ended worker
@@ -590,6 +624,24 @@ impl Session {
 
     pub fn process_id(&self) -> u32 {
         self.process_id
+    }
+
+    /// Private in-memory owner binding for this PTY's explicit browser requests.
+    pub fn open_request_registration(&self) -> Option<OpenRequestRegistration> {
+        self.open_request_registration
+    }
+
+    /// Drain URL-only requests accepted by the worker after terminal commit.
+    /// Closed sessions fail closed even if a request was waiting in the queue.
+    pub fn take_open_urls(&self) -> Result<Vec<OpenUrl>, SessionError> {
+        self.ensure_running()?;
+        let mut queue = self.shared.open_urls.try_lock().map_err(lock_error)?;
+        let mut urls = Vec::new();
+        urls.try_reserve_exact(queue.len()).map_err(|_| {
+            SessionError::Failure("cannot reserve bounded open-request drain".into())
+        })?;
+        urls.extend(queue.drain(..));
+        Ok(urls)
     }
 
     /// Explicit raw byte injection; semantic key/paste APIs encode on the worker.
@@ -864,6 +916,7 @@ struct Worker {
     close_deadline: Option<Instant>,
     engine_reply_timeout: Option<Duration>,
     causal_reply: Option<CausalReply>,
+    open_request_registration: Option<OpenRequestRegistration>,
 }
 
 struct CausalReply {
@@ -879,6 +932,7 @@ impl Worker {
         removals: Vec<std::ffi::OsString>,
         shutdown_policy: ShutdownPolicy,
         engine: Option<EngineOptions>,
+        open_request_registration: Option<OpenRequestRegistration>,
         input_rx: Receiver<Input>,
     ) -> Result<(Self, StartupReady), SessionError> {
         if let ShutdownPolicy::Graceful { timeout } = shutdown_policy
@@ -904,7 +958,9 @@ impl Worker {
                 )));
             }
         }
-        let terminal = TerminalOwner::new(launch.size, engine)?;
+        let expected_open_nonce =
+            open_request_registration.map(|registration| registration.nonce().adapter_value());
+        let terminal = TerminalOwner::new(launch.size, engine, expected_open_nonce)?;
         // Export the first frame before a child can produce any terminal output.
         let viewport = terminal.viewport();
         let pair = native_pty_system()
@@ -941,6 +997,12 @@ impl Worker {
         for (name, value) in &environment {
             command.env(name, value);
         }
+        // This reserved nonce is always scrubbed from inherited/user context;
+        // only the matching private session registration may install it.
+        command.env_remove("ZMUX_OPEN_URL_NONCE");
+        if let Some(registration) = open_request_registration {
+            command.env("ZMUX_OPEN_URL_NONCE", registration.nonce().protocol_value());
+        }
         command.env_remove("ZMUX_SOCKET_PASSWORD");
         if let Some(cwd) = launch.cwd {
             command.cwd(cwd);
@@ -975,6 +1037,7 @@ impl Worker {
                 exit_code: None,
                 failure: None,
             })),
+            open_urls: Mutex::new(VecDeque::with_capacity(MAX_PROGRAM_OPEN_REQUESTS)),
         });
         let worker = Self {
             master: Some(pair.master),
@@ -996,6 +1059,7 @@ impl Worker {
             close_deadline: None,
             engine_reply_timeout: engine.map(|options| options.reply_timeout),
             causal_reply: None,
+            open_request_registration,
         };
         Ok((
             worker,
@@ -1477,6 +1541,7 @@ impl Worker {
 
     fn accept_batch(&mut self, batch: Option<EngineBatch>) -> Result<bool, SessionError> {
         let Some(batch) = batch else {
+            self.collect_open_requests()?;
             return Ok(true);
         };
         if batch.replies().is_empty() {
@@ -1538,7 +1603,65 @@ impl Worker {
             return Ok(false);
         }
         self.terminal.commit(batch)?;
+        self.collect_open_requests()?;
         Ok(true)
+    }
+
+    /// Move only requests belonging to this live PTY into its URL-only drain.
+    /// Parsing/queue failures and either bounded queue overflowing fail closed.
+    fn collect_open_requests(&mut self) -> Result<(), SessionError> {
+        let requests = match self.terminal.take_open_requests() {
+            Ok(requests) => requests,
+            Err(_) => {
+                if let Ok(mut queue) = self.shared.open_urls.lock() {
+                    queue.clear();
+                }
+                return Err(SessionError::Failure(
+                    "terminal open-request parser overflow or failure; session recovery required"
+                        .into(),
+                ));
+            }
+        };
+        let Some(registration) = self.open_request_registration else {
+            return Ok(());
+        };
+        let mut accepted = Vec::new();
+        accepted.try_reserve_exact(requests.len()).map_err(|_| {
+            SessionError::Failure("cannot reserve bounded open-request batch".into())
+        })?;
+        for request in requests {
+            if registration.nonce().matches_request(&request) {
+                let source = request.url();
+                let mut url = String::new();
+                url.try_reserve_exact(source.len()).map_err(|_| {
+                    SessionError::Failure("cannot reserve bounded open-request URL".into())
+                })?;
+                url.push_str(source);
+                accepted.push(OpenUrl::new(url));
+            }
+        }
+        if accepted.is_empty() {
+            return Ok(());
+        }
+        let mut queue = self
+            .shared
+            .open_urls
+            .lock()
+            .map_err(|_| SessionError::Failure("open-request queue poisoned".into()))?;
+        if queue.len().saturating_add(accepted.len()) > MAX_PROGRAM_OPEN_REQUESTS {
+            queue.clear();
+            return Err(SessionError::Failure(
+                "session open-request queue overflow; session recovery required".into(),
+            ));
+        }
+        if queue.try_reserve(accepted.len()).is_err() {
+            queue.clear();
+            return Err(SessionError::Failure(
+                "cannot reserve bounded session open-request queue".into(),
+            ));
+        }
+        queue.extend(accepted);
+        Ok(())
     }
 
     fn reply_failure(&self, reason: &str) -> SessionError {

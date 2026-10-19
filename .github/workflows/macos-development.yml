@@ -21,6 +21,7 @@ on:
       - 'rust-toolchain.toml'
       - 'scripts/**'
       - 'tools/native-fixtures/**'
+      - 'tools/native-terminal-selection/**'
       - 'LICENSE'
       - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/macos-development.yml'
@@ -53,6 +54,8 @@ jobs:
           fetch-depth: 0
       - name: Type-check native sources before compiling Rust
         run: scripts/check-macos-sources
+      - name: Validate native terminal selection and link smoke inputs
+        run: python3 -B tools/native-terminal-selection/run.py --check-inputs
       - name: Verify native persistence directory paths
         run: scripts/check-native-storage-paths
       - name: Verify native cloud credentials, device registration and encrypted terminal relay
@@ -79,6 +82,8 @@ jobs:
         run: scripts/check
       - name: Build universal native development app
         run: scripts/build-macos-dev
+      - name: Exercise terminal selection and browser links in the universal app
+        run: python3 -B tools/native-terminal-selection/run.py --skip-build --output dist/native-terminal-selection-universal
       - name: Exercise packaged app and native rendering
         run: scripts/check-macos-app --skip-accessibility-save-tests
       - name: Exercise native sidebar and system status menu
@@ -109,6 +114,16 @@ jobs:
             dist/native-status-menu.json
             dist/zmux-sidebar*.png
             dist/zmux-status-icon.png
+            dist/native-terminal-selection-universal/receipt.json
+            dist/native-terminal-selection-universal/native-selection.json
+            dist/native-terminal-selection-universal/pointer*-child.json
+            dist/native-terminal-selection-universal/child.json
+            dist/native-terminal-selection-universal/wrap-child.json
+            dist/native-terminal-selection-universal/copy-child-*.json
+            dist/native-terminal-selection-universal/selection-child.py
+            dist/native-terminal-selection-universal/*.log
+            dist/native-terminal-selection-universal/source/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
       - name: Upload diagnostics on failure
@@ -138,6 +153,11 @@ jobs:
             dist/native-status-menu.json
             dist/zmux-sidebar*.png
             dist/zmux-status-icon.png
+            dist/native-terminal-selection-universal/receipt.json
+            dist/native-terminal-selection-universal/native-selection.json
+            dist/native-terminal-selection-universal/*.log
+            dist/native-terminal-selection-universal/source/
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
 

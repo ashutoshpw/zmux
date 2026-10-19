@@ -1608,12 +1608,33 @@ impl Worker {
     ) -> Result<serde_json::Value, ItemError> {
         let fail =
             |code: &str, message: String| ItemError::new("url", url.to_owned(), code, message);
+        let created = self
+            .open_terminal_url(url, pane, *focus)
+            .map_err(|failure| fail(&failure.code, failure.message))?;
+        *focus = false;
+        let model = self.model.snapshot();
+        Ok(serde_json::json!({
+            "index": index, "kind": "url", "ok": true, "url": url,
+            "surface": surface_receipt(&model, created),
+        }))
+    }
+
+    /// The single owner path for every local embedded-browser open. It preserves
+    /// `zmux open` placement and capacity rules for CLI, shell, and terminal-link
+    /// requests before applying the existing workspace browser action.
+    pub(super) fn open_terminal_url(
+        &mut self,
+        url: &str,
+        pane: PaneId,
+        focus: bool,
+    ) -> Result<SurfaceId, FileFailure> {
+        let canonical = classify_url(url, None)?;
         let model = self.model.snapshot();
         let browsers = surfaces(&model)
-            .filter(|(_, _, s)| s.kind == SurfaceKind::Browser)
+            .filter(|(_, _, surface)| surface.kind == SurfaceKind::Browser)
             .count();
         if browsers >= crate::MAX_BROWSERS {
-            return Err(fail(
+            return Err(FileFailure::new(
                 "browser_capacity",
                 format!(
                     "at most {} browser tabs can be open; close one first",
@@ -1621,30 +1642,22 @@ impl Worker {
                 ),
             ));
         }
-        check_pane_room(&model, pane).map_err(|(code, message)| fail(code, message))?;
-        let before: HashSet<_> = surfaces(&model).map(|(_, _, s)| s.id).collect();
+        check_pane_room(&model, pane).map_err(|(code, message)| FileFailure::new(code, message))?;
+        let before: HashSet<_> = surfaces(&model).map(|(_, _, surface)| surface.id).collect();
         self.action(Action::CreateBrowser {
             profile_id: None,
             pane_id: pane,
-            url: url.to_owned(),
-            focus: *focus,
+            url: canonical,
+            focus,
         })
-        .map_err(|error| fail("rejected", error.to_string()))?;
-        *focus = false;
+        .map_err(|error| FileFailure::new("rejected", error.to_string()))?;
         let model = self.model.snapshot();
-        let created = surfaces(&model)
-            .map(|(_, _, s)| s.id)
-            .find(|id| !before.contains(id))
+        surfaces(&model)
+            .map(|(_, _, surface)| surface.id)
+            .find(|surface_id| !before.contains(surface_id))
             .ok_or_else(|| {
-                fail(
-                    "rejected",
-                    "the browser tab disappeared while opening".into(),
-                )
-            })?;
-        Ok(serde_json::json!({
-            "index": index, "kind": "url", "ok": true, "url": url,
-            "surface": surface_receipt(&model, created),
-        }))
+                FileFailure::new("rejected", "the browser tab disappeared while opening")
+            })
     }
 }
 

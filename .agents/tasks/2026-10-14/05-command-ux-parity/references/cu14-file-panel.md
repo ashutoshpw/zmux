@@ -875,6 +875,7 @@ terminal, so they reach the file text views unchanged.
 | `App.swift` `focusedBrowser`, `focusBrowserAddress` | browser dictionary lookups | a file tab is not in `browsers`; Cmd-L on a file tab opens a new browser tab like it does on a terminal |
 | `ApplicationCoordinator.swift` (4 sites: live set, view creation, profile `isNeeded`, update loop) | browser only | unchanged, correct: file surfaces are reconciled by `reconcileFilePanels` |
 | `App.swift` smoke wait and `SurfaceOrderSmoke`, `WorkspaceNumberSmoke`, `WorkspaceOrderSmoke` | select the browser the smoke created | unchanged: fixtures |
+| `TerminalSelectionSmoke.swift` (three browser-kind checks) | count or locate the browser opened by the link fixture | only fixture-created browser surfaces matching the exact target URLs are counted; file tabs are neither counted nor rerouted |
 | `Models.swift` `PaneTree.key` | surface id, session, completion digest | adds the kind; no dirty state, no mode |
 | `Pane.sessionId`, `focusedViewport`, `retainedHistories`, `NotificationDelivery` session checks | nil session means "not a terminal" | already correct for files (no session, no history) |
 

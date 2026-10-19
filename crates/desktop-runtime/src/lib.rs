@@ -46,7 +46,7 @@ use zmux_workspace_core::targets::TargetError;
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{
         Arc, Mutex, RwLock,
@@ -57,12 +57,13 @@ use std::{
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use url::{Host, Url};
 use zmux_session_runtime::{
     INPUT_CHUNK_BYTES, Launch, Session, SessionError, Snapshot as TerminalSnapshot,
 };
 use zmux_terminal_adapter::Size;
 use zmux_workspace_core::{
-    Action, Effect, SessionId, Snapshot as Model, SurfaceId, WorkspaceStore,
+    Action, Effect, PaneId, SessionId, Snapshot as Model, SurfaceId, WorkspaceStore,
 };
 
 pub const MAX_TERMINALS: usize = 32;
@@ -70,6 +71,16 @@ pub const MAX_BROWSERS: usize = 4;
 /// Desktop-wide cap on file tabs, beside the terminal and browser caps.
 pub const MAX_FILE_SURFACES: usize = 16;
 const MAX_COMMANDS: usize = 32;
+const MAX_AUTOMATIC_OPENS_PER_ORIGIN: usize = 4;
+const AUTOMATIC_OPEN_WINDOW: Duration = Duration::from_secs(10);
+const MAX_AUTOMATIC_OPEN_HISTORY: usize = MAX_TERMINALS * MAX_AUTOMATIC_OPENS_PER_ORIGIN;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TerminalOpenOrigin {
+    identity_namespace: uuid::Uuid,
+    surface_id: SurfaceId,
+    session_id: SessionId,
+}
 
 /// File tabs name local paths that only a canonicalising opener may choose, and their
 /// dirty bit may only come from the native view that holds the unsaved text.
@@ -141,6 +152,84 @@ fn ensure_surface_caps(model: &Model) -> Result<(), DesktopError> {
     }
     Ok(())
 }
+
+fn canonical_http_url(value: &str) -> Result<Url, DesktopError> {
+    if value.is_empty()
+        || value.len() > zmux_terminal_adapter::MAX_PROGRAM_OPEN_URL_BYTES
+        || value.contains('\\')
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(DesktopError::Failure(
+            "terminal link is not a valid HTTP(S) URL".into(),
+        ));
+    }
+    let classified = files::classify_url(value, None)
+        .map_err(|_| DesktopError::Failure("terminal link is not a valid HTTP(S) URL".into()))?;
+    let authority = classified
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split(['/', '?', '#']).next())
+        .unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') || authority.contains('\\') {
+        return Err(DesktopError::Failure(
+            "terminal link is not a valid HTTP(S) URL".into(),
+        ));
+    }
+    let parsed = Url::parse(&classified)
+        .map_err(|_| DesktopError::Failure("terminal link is not a valid HTTP(S) URL".into()))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.as_str().len() > zmux_terminal_adapter::MAX_PROGRAM_OPEN_URL_BYTES
+        || zmux_workspace_core::validate_browser_url(parsed.as_str()).is_err()
+    {
+        return Err(DesktopError::Failure(
+            "terminal link is not a valid HTTP(S) URL".into(),
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Remote loopback is rejected unless the desktop can prove an applicable
+/// managed local-forward. No DNS lookup is performed, and no forwarding proof
+/// is currently exposed by ManagedConnection, so fail closed for these hosts.
+fn is_managed_ssh_loopback_url(url: &Url) -> bool {
+    match url.host() {
+        Some(Host::Ipv4(address)) => address.is_loopback() || address.is_unspecified(),
+        Some(Host::Ipv6(address)) => {
+            address.is_loopback()
+                || address.is_unspecified()
+                || address
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback() || mapped.is_unspecified())
+        }
+        Some(Host::Domain(host)) => {
+            let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+            normalized == "localhost" || normalized.ends_with(".localhost")
+        }
+        None => true,
+    }
+}
+
+fn terminal_owner_for_session(model: &Model, session_id: SessionId) -> Option<(PaneId, SurfaceId)> {
+    let mut owners = model
+        .workspaces
+        .iter()
+        .flat_map(|workspace| workspace.root.panes())
+        .flat_map(|pane| {
+            pane.surfaces
+                .iter()
+                .filter(move |surface| {
+                    surface.kind == zmux_workspace_core::SurfaceKind::Terminal
+                        && surface.session_id == Some(session_id)
+                })
+                .map(move |surface| (pane.id, surface.id))
+        });
+    let owner = owners.next()?;
+    owners.next().is_none().then_some(owner)
+}
 const UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 const TRANSFER_RECEIPT_TIMEOUT: Duration = Duration::from_secs(2);
 const NATIVE_COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
@@ -208,6 +297,9 @@ pub enum Command {
     },
     Browser {
         request: BrowserRequest,
+    },
+    OpenTerminalLink {
+        request: TerminalLinkRequest,
     },
     Downloads {
         request: downloads::DownloadRequest,
@@ -283,6 +375,21 @@ pub enum Command {
         rows: u16,
         cols: u16,
     },
+}
+
+/// A native Command-click tied to the exact terminal owner and visible cell
+/// that produced the click. The desktop rechecks every field on its executor.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalLinkRequest {
+    pub identity_namespace: uuid::Uuid,
+    pub surface_id: SurfaceId,
+    pub pane_id: PaneId,
+    pub session_id: SessionId,
+    pub viewport_generation: u64,
+    pub row: u16,
+    pub column: u16,
+    pub expected_url: String,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -651,6 +758,7 @@ impl Desktop {
                     app_active: false,
                     slots: HashMap::new(),
                     retired: Vec::new(),
+                    automatic_open_history: VecDeque::new(),
                     shell,
                     terminal_engine,
                     shared: worker_shared,
@@ -1439,6 +1547,7 @@ struct Worker {
     app_active: bool,
     slots: HashMap<SessionId, Slot>,
     retired: Vec<RetiredSession>,
+    automatic_open_history: VecDeque<(Instant, TerminalOpenOrigin)>,
     shell: Shell,
     terminal_engine: Option<zmux_session_runtime::EngineOptions>,
     shared: Arc<Shared>,
@@ -1473,8 +1582,17 @@ impl Worker {
                 dirty = true;
             }
             let mut notices = Vec::new();
+            let mut open_requests = Vec::new();
             for (id, slot) in &mut self.slots {
                 if let Some(session) = &slot.session {
+                    if let Some(registration) = session.open_request_registration()
+                        && let Ok(urls) = session.take_open_urls()
+                    {
+                        open_requests.extend(
+                            urls.into_iter()
+                                .map(|url| (*id, registration.source(), url.as_str().to_owned())),
+                        );
+                    }
                     if let Some(size) = slot.resize {
                         match session.resize(size) {
                             Ok(()) => slot.resize = None,
@@ -1503,6 +1621,8 @@ impl Worker {
                                         != snapshot.viewport.scrollback_offset
                                     || old.state != snapshot.state
                                     || old.viewport.size != snapshot.viewport.size
+                                    || old.viewport.viewport_generation
+                                        != snapshot.viewport.viewport_generation
                             });
                             if changed {
                                 slot.cached = Some(snapshot);
@@ -1517,6 +1637,7 @@ impl Worker {
                     }
                 }
             }
+            dirty |= self.poll_terminal_open_requests(open_requests, Instant::now());
             for (session, notice) in notices {
                 let model = self.model.snapshot();
                 if let Some(surface_id) = model
@@ -1578,6 +1699,112 @@ impl Worker {
             }
         }
         self.run_shutdown(receiver);
+    }
+
+    fn poll_terminal_open_requests(
+        &mut self,
+        requests: Vec<(
+            SessionId,
+            zmux_session_runtime::shell_integration::OpenRequestSource,
+            String,
+        )>,
+        now: Instant,
+    ) -> bool {
+        let mut dirty = false;
+        for (session_id, source, requested_url) in requests {
+            let model = self.model.snapshot();
+            let Some((pane_id, surface_id)) = terminal_owner_for_session(&model, session_id) else {
+                continue;
+            };
+            let origin = TerminalOpenOrigin {
+                identity_namespace: model.identity_namespace,
+                surface_id,
+                session_id,
+            };
+            let (session_is_running, managed_ssh) = match self.slots.get(&session_id) {
+                Some(slot) => {
+                    let Some(session) = slot.session.as_ref() else {
+                        continue;
+                    };
+                    let registration_matches = session
+                        .open_request_registration()
+                        .is_some_and(|registration| registration.source() == source);
+                    if !registration_matches {
+                        continue;
+                    }
+                    let running = session.snapshot().is_ok_and(|snapshot| {
+                        snapshot.state == zmux_session_runtime::State::Running
+                    });
+                    (running, slot.connection.is_some())
+                }
+                None => continue,
+            };
+            if !session_is_running {
+                continue;
+            }
+            let url = match canonical_http_url(&requested_url) {
+                Ok(url) => url,
+                Err(_) => continue,
+            };
+            if (managed_ssh
+                || source == zmux_session_runtime::shell_integration::OpenRequestSource::ManagedSsh)
+                && is_managed_ssh_loopback_url(&url)
+            {
+                continue;
+            }
+            if !self.admit_automatic_open(origin, now) {
+                continue;
+            }
+            if self.open_terminal_url(url.as_str(), pane_id, true).is_ok() {
+                dirty = true;
+            }
+        }
+        dirty
+    }
+
+    fn admit_automatic_open(&mut self, origin: TerminalOpenOrigin, now: Instant) -> bool {
+        let model = self.model.snapshot();
+        let mut live_origins = Vec::new();
+        for workspace in &model.workspaces {
+            for pane in workspace.root.panes() {
+                for surface in &pane.surfaces {
+                    let Some(session_id) = surface.session_id else {
+                        continue;
+                    };
+                    let Some(session) = self
+                        .slots
+                        .get(&session_id)
+                        .and_then(|slot| slot.session.as_ref())
+                    else {
+                        continue;
+                    };
+                    if session.open_request_registration().is_some() {
+                        live_origins.push(TerminalOpenOrigin {
+                            identity_namespace: model.identity_namespace,
+                            surface_id: surface.id,
+                            session_id,
+                        });
+                    }
+                }
+            }
+        }
+        self.automatic_open_history.retain(|(opened_at, prior)| {
+            now.saturating_duration_since(*opened_at) < AUTOMATIC_OPEN_WINDOW
+                && live_origins.contains(prior)
+        });
+        let recent_count = self
+            .automatic_open_history
+            .iter()
+            .filter(|(_, prior)| *prior == origin)
+            .count();
+        if recent_count >= MAX_AUTOMATIC_OPENS_PER_ORIGIN {
+            return false;
+        }
+        if self.automatic_open_history.len() >= MAX_AUTOMATIC_OPEN_HISTORY {
+            self.automatic_open_history.pop_front();
+        }
+        self.automatic_open_history.push_back((now, origin));
+        true
     }
 
     fn retire_owned(&mut self, session: Session, id: SessionId, launch_id: u64) {
@@ -1948,6 +2175,7 @@ impl Worker {
                 )?);
                 Ok(())
             }
+            Command::OpenTerminalLink { request } => self.open_terminal_link(request),
             Command::BrowserHost { event } => {
                 let detached = if let BrowserHostEvent::Detach { owner } = &event {
                     Some(owner.host_id)
@@ -2072,6 +2300,70 @@ impl Worker {
             .get(&id)
             .and_then(|slot| slot.session.as_ref())
             .ok_or_else(|| DesktopError::Failure("terminal is starting or no longer exists".into()))
+    }
+    fn open_terminal_link(&mut self, request: TerminalLinkRequest) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        if request.identity_namespace != model.identity_namespace {
+            return Err(DesktopError::Failure("terminal link owner changed".into()));
+        }
+        let mut owners = model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| {
+                pane.surfaces
+                    .iter()
+                    .filter(move |surface| {
+                        surface.id == request.surface_id
+                            && surface.kind == zmux_workspace_core::SurfaceKind::Terminal
+                    })
+                    .map(move |surface| (pane.id, surface.session_id))
+            });
+        let owner = owners.next();
+        if owners.next().is_some()
+            || !matches!(
+                owner,
+                Some((pane_id, Some(session_id)))
+                    if pane_id == request.pane_id && session_id == request.session_id
+            )
+        {
+            return Err(DesktopError::Failure("terminal link owner changed".into()));
+        }
+        let (snapshot, managed_ssh) = {
+            let slot = self
+                .slots
+                .get(&request.session_id)
+                .ok_or_else(|| DesktopError::Failure("terminal link owner changed".into()))?;
+            let session = slot
+                .session
+                .as_ref()
+                .ok_or_else(|| DesktopError::Failure("terminal link owner changed".into()))?;
+            let snapshot = session.snapshot().map_err(|_| {
+                DesktopError::Failure("terminal link viewport is unavailable".into())
+            })?;
+            (snapshot, slot.connection.is_some())
+        };
+        if snapshot.state != zmux_session_runtime::State::Running
+            || snapshot.viewport.viewport_generation != request.viewport_generation
+            || !snapshot.viewport.links.iter().any(|link| {
+                link.row == request.row
+                    && request.column >= link.start_column
+                    && request.column < link.end_column
+                    && link.url == request.expected_url
+            })
+        {
+            return Err(DesktopError::Failure(
+                "terminal link is stale or no longer visible".into(),
+            ));
+        }
+        let url = canonical_http_url(&request.expected_url)?;
+        if managed_ssh && is_managed_ssh_loopback_url(&url) {
+            return Err(DesktopError::Failure(
+                "managed SSH terminal links cannot open loopback addresses without a proven forward".into(),
+            ));
+        }
+        self.open_terminal_url(url.as_str(), request.pane_id, true)?;
+        Ok(())
     }
     fn targeted(&mut self, mut request: TargetRequest) -> Result<(), DesktopError> {
         let model = self.model.snapshot();
@@ -2872,11 +3164,16 @@ impl Worker {
                                     ) {
                                         Ok(session) => Ok((session, None)),
                                         Err(failure) => {
-                                            failed_client = failure.cleanup;
+                                            failed_client = failure.cleanup.map(|session| *session);
                                             Err(failure.error)
                                         }
                                     };
                                 }
+                                // Opener correlation is per PTY and belongs to this
+                                // launch worker, before any managed SSH specification is
+                                // constructed. It never enters the UI/core executor.
+                                let open_nonce =
+                                    zmux_session_runtime::shell_integration::OpenRequestNonce::generate();
                                 let connection = remote
                                     .map(|remote| {
                                         let descriptor = remote.validate().map_err(|e| {
@@ -2889,8 +3186,19 @@ impl Worker {
                                             .map_err(|e| SessionError::Failure(e.to_string()))
                                     })
                                     .transpose()?;
+                                let open_source = match &connection {
+                                    Some(connection) if connection.shell_integration_enabled() => {
+                                        Some(
+                                            zmux_session_runtime::shell_integration::OpenRequestSource::ManagedSsh,
+                                        )
+                                    }
+                                    Some(_) => None,
+                                    None => Some(
+                                        zmux_session_runtime::shell_integration::OpenRequestSource::Local,
+                                    ),
+                                };
                                 if let Some(connection) = &connection {
-                                    let process = connection.terminal_spec();
+                                    let process = connection.terminal_spec(&open_nonce);
                                     shell.program = "/usr/bin/ssh".into();
                                     shell.args = process.args;
                                 }
@@ -2904,7 +3212,7 @@ impl Worker {
                                     "ZMUX_LOCAL_TMUX_PROFILE",
                                 ]
                                 .map(std::ffi::OsString::from);
-                                let session = terminal_engine::spawn(
+                                let session = terminal_engine::spawn_with_open_requests(
                                     Launch {
                                         program: shell.program,
                                         args: shell.args,
@@ -2914,6 +3222,8 @@ impl Worker {
                                     &context,
                                     &removals,
                                     terminal_engine,
+                                    open_nonce,
+                                    open_source,
                                     connection.clone(),
                                 )?;
                                 Ok((session, connection))
@@ -3162,5 +3472,42 @@ mod tests {
             error.to_string().contains("at most 16 file tabs"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn strict_http_validation_rejects_malformed_authorities_and_ssh_loopback_hosts() {
+        for malformed in [
+            "file:///tmp/document",
+            "https://user:password@example.test/",
+            "https://@example.test/",
+            "https://example.test\\@evil.test/",
+            "https://example.test/a b",
+        ] {
+            assert!(canonical_http_url(malformed).is_err(), "{malformed}");
+        }
+
+        for loopback in [
+            "http://localhost/",
+            "http://localhost./",
+            "https://service.localhost./",
+            "http://127.0.0.1/",
+            "http://0.0.0.0/",
+            "http://[::1]/",
+            "http://[::]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:0.0.0.0]/",
+        ] {
+            let parsed = canonical_http_url(loopback).expect("valid loopback HTTP URL");
+            assert!(is_managed_ssh_loopback_url(&parsed), "{loopback}");
+        }
+
+        for public in [
+            "https://example.test/",
+            "http://192.0.2.10/",
+            "http://[2001:db8::10]/",
+        ] {
+            let parsed = canonical_http_url(public).expect("valid HTTP URL");
+            assert!(!is_managed_ssh_loopback_url(&parsed), "{public}");
+        }
     }
 }

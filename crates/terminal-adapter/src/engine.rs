@@ -1,4 +1,7 @@
-use crate::{InvalidSize, Size, Terminal, TerminalError, Viewport};
+use crate::{
+    InvalidSize, ProgramOpenRequest, ProgramOpenRequestError, Size, Terminal, TerminalError,
+    Viewport,
+};
 use thiserror::Error;
 
 /// Explicit backend selection. Existing runtime callers continue using Terminal;
@@ -109,10 +112,20 @@ impl Engine {
     /// Construct and export the initial frame on its worker before PTY spawn.
     /// Ghostty mapping limits are explicit caller policy, with no production default.
     pub fn new(size: Size, kind: EngineKind) -> Result<Self, EngineError> {
+        Self::new_with_open_request_nonce(size, kind, None)
+    }
+
+    /// Construct an engine with an optional session-bound opener nonce. Ghostty
+    /// currently has no OSC opener metadata support and ignores this value.
+    pub fn new_with_open_request_nonce(
+        size: Size,
+        kind: EngineKind,
+        expected_open_nonce: Option<[u8; 16]>,
+    ) -> Result<Self, EngineError> {
         size.validate()?;
         let (backend, published, generation) = match kind {
             EngineKind::Vt100 => {
-                let terminal = Terminal::new(size)?;
+                let terminal = Terminal::new_with_open_request_nonce(size, expected_open_nonce)?;
                 let published = terminal.viewport();
                 (Backend::Vt100(terminal), published, 0)
             }
@@ -125,7 +138,7 @@ impl Engine {
                     limits,
                 )?;
                 let generation = terminal.stage_process(&[])?;
-                let published = ghostty_viewport(&terminal)?;
+                let published = ghostty_viewport(&terminal, generation)?;
                 if !terminal.replies()?.is_empty() {
                     return Err(EngineError::Invalid);
                 }
@@ -154,6 +167,18 @@ impl Engine {
 
     pub fn viewport(&self) -> &Viewport {
         &self.published
+    }
+
+    /// Drain one-shot events from the selected parser. Ghostty currently has no OSC metadata
+    /// callback; its link export is limited to visible plain HTTP(S) text.
+    pub fn take_open_requests(
+        &mut self,
+    ) -> Result<Vec<ProgramOpenRequest>, ProgramOpenRequestError> {
+        match &mut self.backend {
+            Backend::Vt100(terminal) => terminal.take_open_requests(),
+            #[cfg(feature = "ghostty")]
+            Backend::Ghostty(_) => Ok(Vec::new()),
+        }
     }
 
     /// At most one bounded worker read quantum; successful zero-reply stages
@@ -198,10 +223,7 @@ impl Engine {
             return Err(EngineError::Invalid);
         }
         let result = match &mut self.backend {
-            Backend::Vt100(terminal) => {
-                terminal.scroll(lines);
-                Ok(())
-            }
+            Backend::Vt100(terminal) => terminal.scroll(lines).map_err(EngineError::from),
             #[cfg(feature = "ghostty")]
             Backend::Ghostty(terminal) => terminal
                 .stage_scroll(lines)
@@ -230,9 +252,11 @@ impl Engine {
                     .try_reserve_exact(terminal.replies()?.len())
                     .map_err(|_| EngineError::Allocation)?;
                 replies.extend_from_slice(terminal.replies()?);
-                (ghostty_viewport(terminal)?, replies)
+                (ghostty_viewport(terminal, generation)?, replies)
             }
         };
+        let mut candidate = candidate;
+        candidate.viewport_generation = generation;
         self.candidate = Some(candidate);
         Ok(EngineBatch {
             generation,
@@ -286,7 +310,10 @@ fn owned(text: &str) -> Result<String, EngineError> {
 }
 
 #[cfg(feature = "ghostty")]
-fn ghostty_viewport(engine: &zmux_ghostty_vt::Engine) -> Result<Viewport, EngineError> {
+fn ghostty_viewport(
+    engine: &zmux_ghostty_vt::Engine,
+    generation: u64,
+) -> Result<Viewport, EngineError> {
     use crate::{Color, Run, Style, TerminalNotice};
     fn color(c: zmux_ghostty_vt::RawColor) -> Color {
         match c.kind {
@@ -373,6 +400,8 @@ fn ghostty_viewport(engine: &zmux_ghostty_vt::Engine) -> Result<Viewport, Engine
         });
     }
     Ok(Viewport {
+        viewport_generation: generation,
+        links: crate::plain_links_from_runs(&lines),
         notices,
         title: owned(engine.title())?,
         working_directory: engine.cwd().map(owned).transpose()?,

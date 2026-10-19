@@ -97,9 +97,18 @@ impl ManagedConnection {
         &self.control_path
     }
 
+    /// Whether the validated descriptor can safely use Zmux's managed login
+    /// shell hook rather than an explicit/configured remote command.
+    pub fn shell_integration_enabled(&self) -> bool {
+        self.integrate_shell
+    }
+
     /// Build the sole master process, retaining the descriptor's route,
     /// forwarding, destination, and remote command exactly as validated.
-    pub fn terminal_spec(&self) -> ProcessSpec {
+    pub fn terminal_spec(
+        &self,
+        nonce: &zmux_session_runtime::shell_integration::OpenRequestNonce,
+    ) -> ProcessSpec {
         let original = self.descriptor.process_spec();
         let mut args = vec![
             "-S".into(),
@@ -114,7 +123,9 @@ impl ManagedConnection {
         ];
         args.extend(original.args);
         if self.integrate_shell {
-            args.push(zmux_session_runtime::shell_integration::remote_command());
+            args.push(zmux_session_runtime::shell_integration::remote_command(
+                nonce,
+            ));
         }
         ProcessSpec {
             program: SSH_PROGRAM.into(),
@@ -216,7 +227,7 @@ fn shell_integration_enabled(descriptor: &SshDescriptor) -> bool {
             // Keep the ordinary SSH launch and its own config diagnostics when
             // config cannot be resolved. Do not guess or print config secrets.
             eprintln!(
-                "zmux: SSH config probe unavailable; automatic shell notifications disabled for this connection"
+                "zmux: SSH config probe unavailable; automatic shell integration disabled for this connection"
             );
             false
         }

@@ -291,6 +291,76 @@ mod shared_terminal_response_tests {
     }
 }
 
+#[cfg(test)]
+mod terminal_link_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_accepts_the_swift_owner_and_cell_contract() {
+        let wire_request = json!({
+            "version": ABI_VERSION,
+            "request_id": 7,
+            "payload": {
+                "command": "open_terminal_link",
+                "request": {
+                    "identity_namespace": "123e4567-e89b-12d3-a456-426614174000",
+                    "surface_id": 41,
+                    "pane_id": 17,
+                    "session_id": 52,
+                    "viewport_generation": 73,
+                    "row": 2,
+                    "column": 5,
+                    "expected_url": "https://example.test/path"
+                }
+            }
+        });
+        let decoded: DesktopRequest = serde_json::from_value(wire_request.clone()).unwrap();
+        let DesktopCommand::OpenTerminalLink {
+            request: decoded_request,
+        } = decoded.payload
+        else {
+            panic!("native bridge did not decode open_terminal_link as a terminal-link command");
+        };
+        assert_eq!(
+            decoded_request.identity_namespace.to_string(),
+            "123e4567-e89b-12d3-a456-426614174000"
+        );
+        assert_eq!(decoded_request.surface_id.0, 41);
+        assert_eq!(decoded_request.pane_id.0, 17);
+        assert_eq!(decoded_request.session_id.0, 52);
+        assert_eq!(decoded_request.viewport_generation, 73);
+        assert_eq!(decoded_request.row, 2);
+        assert_eq!(decoded_request.column, 5);
+        assert_eq!(decoded_request.expected_url, "https://example.test/path");
+
+        let malformed = json!({
+            "version": ABI_VERSION,
+            "request_id": 8,
+            "payload": {
+                "command": "open_terminal_link",
+                "request": {
+                    "identity_namespace": "123e4567-e89b-12d3-a456-426614174000",
+                    "surface_id": 41,
+                    "pane_id": 17,
+                    "session_id": 52,
+                    "viewport_generation": 73,
+                    "row": 2,
+                    "col": 5,
+                    "expected_url": "https://example.test/path"
+                }
+            }
+        });
+        assert!(serde_json::from_value::<DesktopRequest>(malformed).is_err());
+
+        let mut missing_pane = wire_request;
+        missing_pane["payload"]["request"]
+            .as_object_mut()
+            .expect("request payload must be an object")
+            .remove("pane_id");
+        assert!(serde_json::from_value::<DesktopRequest>(missing_pane).is_err());
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn zmux_abi_version() -> u32 {
     ABI_VERSION
