@@ -1,0 +1,40 @@
+{
+  "source_sha": "8098580de9f8eb38ce6d0ce1e499c1700b604ec0",
+  "run_id": 39277527877,
+  "artifact_id": 12199759438,
+  "archive": "zmux-dev-universal-8098580.zip",
+  "sha256": "608bfdff13d457ca79f50571f5c2c66f38946937e8e1fd59e00217e190ef03b5",
+  "architectures": {
+    "zmux.app/Contents/MacOS/zmux-app": [
+      "x86_64",
+      "arm64"
+    ],
+    "zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib": [
+      "x86_64",
+      "arm64"
+    ],
+    "zmux.app/Contents/Resources/bin/zmux": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "signing": "ad-hoc",
+  "notarized": false,
+  "native_selection_cases": 41,
+  "terminal_link_requests": [
+    "/p-343edb73818b4b91",
+    "/o-343edb73818b4b91"
+  ],
+  "retained_source_files_verified": 340,
+  "packaged_native_smoke": "passed",
+  "cloud_terminal_lifecycle": "passed",
+  "binary_ad_hoc_code_directory_flags": "verified in both slices of app, CLI and native bridge",
+  "physical_mac_verified": false,
+  "provider_login_verified": false,
+  "download_url": "https://github.com/ashutoshpw/zmux/actions/runs/39277527877/artifacts/12199759438",
+  "signature_validation": "Hosted codesign --verify --deep --strict passed; downloaded app, CLI and bridge each have ad-hoc CodeDirectory flags in both slices.",
+  "broader_smoke_exclusions": {
+    "browser_downloads_native": false,
+    "native_save_dialog_accessibility": "skipped_user_deferred"
+  }
+}

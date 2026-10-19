@@ -41,26 +41,26 @@ CLI subcommand. Unsupported commands and integrations remain out of scope.
   intended pane. Helper emission alone does not prove an open effect.
 - [x] Complete the final full `RUST_TEST_THREADS=2 scripts/check` run; do not use a real GitHub
   login or account.
-- [ ] Complete hosted Swift/macOS compilation and mounted-view validation, plus packaged app and
+- [x] Complete hosted Swift/macOS compilation and mounted-view validation, plus packaged app and
   universal artifact verification.
 - [x] Obtain source-independent review, fix findings, and clear review on the final cleanup-only
   delta.
-- [ ] Commit and push cohesive validated slices on `main`.
-- [ ] Verify a downloadable existing Zmux universal development build against its source SHA,
+- [x] Commit and push cohesive validated slices on `main`.
+- [x] Verify a downloadable existing Zmux universal development build against its source SHA,
   without replacing the user's running app.
 
 ## Acceptance criteria
-- [ ] The supported fixture browser request opens the local embedded browser; configured opener
+- [x] The supported fixture browser request opens the local embedded browser; configured opener
   overrides continue to work.
-- [ ] In the default `vt100` development artifact, Command-click on a visible plain HTTP(S) or
+- [x] In the default `vt100` development artifact, Command-click on a visible plain HTTP(S) or
   OSC 8 link opens only its validated destination. The optional Ghostty backend supports plain
   HTTP(S) spans only; OSC 8 and automatic opener requests are unsupported there. Ordinary click,
   drag, and paste remain terminal interaction; printing or pasting a URL never opens it.
-- [ ] Invalid or unsupported URLs and stale or unowned origins cannot cause browser effects.
-- [ ] Opening links preserves terminal selection, mouse tracking, and PTY byte ordering.
-- [ ] SSH loopback URLs are rejected unless the relevant forwarding is proven.
+- [x] Invalid or unsupported URLs and stale or unowned origins cannot cause browser effects.
+- [x] Opening links preserves terminal selection, mouse tracking, and PTY byte ordering.
+- [x] SSH loopback URLs are rejected unless the relevant forwarding is proven.
 - [x] Focused regressions, scoped checks, and review pass without a real GitHub login.
-- [ ] A verified downloadable existing Zmux universal development artifact is tied to its source
+- [x] A verified downloadable existing Zmux universal development artifact is tied to its source
   SHA. Physical-device behavior is reported separately from fixture and hosted evidence.
 
 Unsupported integrations above are exclusions, not acceptance results.
