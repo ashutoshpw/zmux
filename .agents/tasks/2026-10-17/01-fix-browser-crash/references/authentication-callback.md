@@ -22,10 +22,13 @@
 - Credible regression: an actor-inherited legacy callback traps before enqueuing UI.
 - Existing native CloudClient HTTP/Keychain checks never invoke the browser-session
   callback, and full app smoke does not initiate real cloud authentication.
-- The fixture compiles actual CloudSettings.swift and CloudClient.swift unchanged.
-  Only the SDK transport and unrelated app-shell owner are local stand-ins. It
-  dispatches the stored actual completion on a background queue and inspects the
-  real sign-in button and message. No production test seam or duplicated auth logic.
+- The fixture compiles actual CloudSettings.swift and CloudClient.swift unchanged,
+  against the real imported AuthenticationServices class and API annotations.
+  A fixture-only Objective-C category captures the callback in the real initializer
+  and suppresses `start`; no browser or HTTP authentication session is launched.
+  It invokes that actual Objective-C block on a background queue and inspects the
+  real sign-in button and message. Only the unrelated app-shell owner is a stand-in.
+  No production test seam or duplicated authentication implementation is added.
 - The pinned baseline is the actual reported build's CloudSettings.swift. The driver
   requires a fatal trap after its foreign-invocation marker and before the callback
   returns (macOS may log the dispatch assertion only to CrashReporter);
@@ -41,3 +44,14 @@
   parsing, shell syntax and `git diff --check` pass.
 - Hosted macOS compilation/baseline-current execution and replacement build pending;
   no local Apple SDK is available.
+
+## First hosted regression result
+- Native run 39211112615 passed production source type-checking and existing cloud
+  credential checks, then correctly rejected the first regression harness: its
+  Swift replacement of the framework initializer did not reproduce the actor trap.
+- That replacement omitted the actual imported Objective-C block boundary, changing
+  Swift's dynamic isolation enforcement. Replaced it with capture of the real SDK
+  completion via a fixture-only initializer exchange. The original initializer
+  runs, `start` is suppressed, and methods/captured blocks are reset on completion.
+- Production fix is unchanged; portable validation still applies to that source.
+  New fixture Objective-C compilation and baseline/current proof need hosted macOS.

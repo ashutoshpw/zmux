@@ -18,7 +18,8 @@ owner, and publish a replacement macOS build through GitHub Actions.
 ## Approach
 Make the legacy SDK completion explicitly Sendable, retaining the main-actor hop
 and generation fencing. Display the SDK error instead of hiding its explanation.
-Compile the actual controller against a foreign-queue SDK transport stand-in;
+Compile the actual controller against the real SDK; capture its Objective-C
+completion with browser launch suppressed and invoke it on a foreign queue;
 prove the reported build's source traps and the current source recovers its UI.
 No production-only test seam, browser session, credentials or HTTP requests needed.
 
