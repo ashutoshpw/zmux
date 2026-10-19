@@ -19,6 +19,7 @@ pub mod profile_native;
 pub mod profiles;
 mod replies;
 pub mod sessions;
+pub mod shared_terminals;
 pub mod shutdown;
 pub mod surface_order;
 pub mod targets;
@@ -37,6 +38,7 @@ use attention::{
 use browser::{
     BrowserDispatchBatch, BrowserHostEvent, BrowserReceipt, BrowserRequest, BrowserRuntime,
 };
+use shared_terminals::{SharedTerminalAuthorization, TerminalSharingError, TerminalSharingGrant};
 use targets::{TargetOperation, TargetRequest};
 use transfers::{TransferCommand, TransferSlot, TransferSnapshot};
 use zmux_remote_runtime::connection::ManagedConnection;
@@ -47,7 +49,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
@@ -320,6 +322,8 @@ pub enum DesktopError {
     Busy,
     #[error("desktop command acknowledgement timed out; outcome is unknown")]
     Timeout,
+    #[error(transparent)]
+    TerminalSharing(#[from] TerminalSharingError),
     #[error("{0}")]
     Failure(String),
 }
@@ -402,6 +406,7 @@ struct Shared {
     stop: AtomicBool,
     shutdown: Mutex<Option<shutdown::Operation>>,
     snapshot: Mutex<Arc<Snapshot>>,
+    terminal_sharing: RwLock<Option<TerminalSharingGrant>>,
     profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
     files: Arc<files::FileService>,
 }
@@ -416,6 +421,7 @@ struct Envelope {
     acknowledgement: Option<SyncSender<Execution>>,
     authorization: Option<control_policy::ControlAdmission>,
     reply_deadline: Option<Instant>,
+    shared_terminal: Option<SharedTerminalAuthorization>,
 }
 
 pub(crate) struct Execution {
@@ -565,6 +571,7 @@ impl Desktop {
             profile_native,
             stop: AtomicBool::new(false),
             shutdown: Mutex::new(None),
+            terminal_sharing: RwLock::new(None),
             snapshot: Mutex::new(Arc::new(Snapshot {
                 revision: 0,
                 model: model.snapshot(),
@@ -678,6 +685,7 @@ impl Desktop {
             acknowledgement: None,
             authorization: None,
             reply_deadline: None,
+            shared_terminal: None,
         })
     }
 
@@ -694,6 +702,7 @@ impl Desktop {
             acknowledgement: Some(sender),
             authorization: Some(authorization),
             reply_deadline: None,
+            shared_terminal: None,
         })?;
         receiver.recv_timeout(timeout).map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
@@ -744,6 +753,7 @@ impl Desktop {
             acknowledgement: Some(sender),
             authorization: None,
             reply_deadline: None,
+            shared_terminal: None,
         })
         .map_err(|error| TransferExecutionError {
             error,
@@ -799,6 +809,7 @@ impl Desktop {
             acknowledgement: Some(sender),
             authorization: None,
             reply_deadline: None,
+            shared_terminal: None,
         })
         .map_err(refused)?;
         let execution = receiver
@@ -1204,6 +1215,7 @@ impl Desktop {
             acknowledgement: Some(sender),
             authorization: None,
             reply_deadline,
+            shared_terminal: None,
         })?;
         receiver.recv_timeout(timeout).map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => DesktopError::Timeout,
@@ -1599,6 +1611,7 @@ impl Worker {
     }
     fn command(&mut self, envelope: Envelope) {
         let request = envelope.request;
+        let shared_terminal = envelope.shared_terminal;
         self.agent_message_result = None;
         let message_previous = self.model.snapshot();
         self.agent_messages
@@ -1637,38 +1650,61 @@ impl Worker {
             .as_ref()
             .map(|admission| admission.try_check())
             .transpose();
-        let result = match guard {
-            _ if self.shared.stop.load(Ordering::Acquire)
-                && !shutdown::cleanup_command(&request.payload) =>
-            {
-                Err(DesktopError::Closed)
-            }
-            Err(error) => Err(error.into()),
-            Ok(_guard) => match request.payload {
-                Command::NativeAttention {
-                    action: NativeAttentionAction::Reply { target, text },
-                } => self.admit_reply(target, text, envelope.reply_deadline, &mut acknowledgement),
-                Command::AgentMessages { .. }
-                    if self.windows.terminating() || self.session_transition_pending() =>
+        let shared_state = Arc::clone(&self.shared);
+        let shared_terminal_guard = shared_terminal
+            .as_ref()
+            .map(|_| shared_state.terminal_sharing.read());
+        let shared_terminal_check = match (shared_terminal.as_ref(), shared_terminal_guard.as_ref())
+        {
+            (None, None) => Ok(()),
+            (Some(admission), Some(Ok(scope))) => shared_terminals::authorize_at_executor(
+                scope.as_ref(),
+                *admission,
+                &self.model.snapshot(),
+            ),
+            (Some(_), Some(Err(_))) => Err(TerminalSharingError::Unavailable.into()),
+            _ => Err(TerminalSharingError::Unavailable.into()),
+        };
+        let result = match shared_terminal_check {
+            Err(error) => Err(error),
+            Ok(()) => match guard {
+                _ if self.shared.stop.load(Ordering::Acquire)
+                    && !shutdown::cleanup_command(&request.payload) =>
                 {
-                    Err(DesktopError::Failure(
-                        "agent messages unavailable during session or application transition"
-                            .into(),
-                    ))
+                    Err(DesktopError::Closed)
                 }
-                Command::AgentMessages { request } => self
-                    .agent_messages
-                    .admit(request, authorization.clone())
-                    .map(|receipt| {
-                        self.agent_message_result = Some(receipt);
-                    }),
-                Command::AgentMessagesStatus { request_id } => self
-                    .agent_messages
-                    .status(request_id, authorization.clone())
-                    .map(|receipt| {
-                        self.agent_message_result = Some(receipt);
-                    }),
-                command => self.execute_command(command),
+                Err(error) => Err(error.into()),
+                Ok(_guard) => match request.payload {
+                    Command::NativeAttention {
+                        action: NativeAttentionAction::Reply { target, text },
+                    } => self.admit_reply(
+                        target,
+                        text,
+                        envelope.reply_deadline,
+                        &mut acknowledgement,
+                    ),
+                    Command::AgentMessages { .. }
+                        if self.windows.terminating() || self.session_transition_pending() =>
+                    {
+                        Err(DesktopError::Failure(
+                            "agent messages unavailable during session or application transition"
+                                .into(),
+                        ))
+                    }
+                    Command::AgentMessages { request } => self
+                        .agent_messages
+                        .admit(request, authorization.clone())
+                        .map(|receipt| {
+                            self.agent_message_result = Some(receipt);
+                        }),
+                    Command::AgentMessagesStatus { request_id } => self
+                        .agent_messages
+                        .status(request_id, authorization.clone())
+                        .map(|receipt| {
+                            self.agent_message_result = Some(receipt);
+                        }),
+                    command => self.execute_command(command),
+                },
             },
         };
         self.agent_messages
@@ -1941,6 +1977,9 @@ impl Worker {
             Command::NativeAttention { action } => self.native_attention_action(action),
             Command::Session { action } => {
                 let restore = matches!(&action, sessions::SessionCommand::Restore { .. });
+                if restore {
+                    self.shared.revoke_terminal_sharing()?;
+                }
                 self.session_command(action)?;
                 if restore {
                     self.browser
@@ -2946,6 +2985,9 @@ impl Worker {
                 self.retire_owned(session, completion.id, completion.launch_id);
             }
             self.commit_session_restore();
+            if let Err(error) = self.shared.revoke_terminal_sharing() {
+                self.last_error = Some(error.to_string());
+            }
             return;
         }
         let success = completion.result.is_ok();

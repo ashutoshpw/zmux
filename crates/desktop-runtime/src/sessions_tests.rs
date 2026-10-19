@@ -88,6 +88,7 @@ fn worker(directory: &Directory) -> Worker {
         profile_native: None,
         stop: AtomicBool::new(false),
         shutdown: Mutex::new(None),
+        terminal_sharing: RwLock::new(None),
         snapshot: Mutex::new(Arc::new(Snapshot {
             revision: 0,
             model: model.snapshot(),

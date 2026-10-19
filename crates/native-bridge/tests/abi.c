@@ -89,6 +89,11 @@ static char *consume(uint64_t buffer) {
     assert(zmux_buffer_length(buffer).status == ZMUX_INVALID_HANDLE);
     return text;
 }
+static char *shared_terminal_call(uint64_t desktop, const char *request) {
+    ZmuxResult result = zmux_desktop_shared_terminal(desktop, (const uint8_t *)request, strlen(request));
+    assert(result.status == ZMUX_OK);
+    return consume(result.value);
+}
 static void emit(uint64_t buffer) {
     char *text = consume(buffer);
     puts(text);
@@ -260,6 +265,164 @@ static void native_transfer_receipts_are_session_bound(void) {
     }
     assert(inserted);
     assert(unlink(path) == 0);
+    assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
+}
+
+static void native_shared_terminal_access_is_strict_and_grant_scoped(void) {
+    ZmuxResult desktop = zmux_desktop_create();
+    assert(desktop.status == ZMUX_OK);
+    uint64_t surface = 0;
+    uint64_t session = 0;
+    char identity_namespace[37] = {0};
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        char *namespace_field = strstr(text, "\"identity_namespace\":\"");
+        char *surfaces = strstr(text, "\"surfaces\":[");
+        char *surface_field = surfaces == NULL ? NULL : strstr(surfaces, "\"id\":");
+        char *session_field = surface_field == NULL ? NULL : strstr(surface_field, "\"session_id\":");
+        if (namespace_field != NULL && surface_field != NULL && session_field != NULL &&
+            strstr(text, "\"state\":\"running\"") != NULL) {
+            namespace_field += strlen("\"identity_namespace\":\"");
+            assert(strlen(namespace_field) >= 37 && namespace_field[36] == '"');
+            memcpy(identity_namespace, namespace_field, 36);
+            surface = strtoull(surface_field + strlen("\"id\":"), NULL, 10);
+            session = strtoull(session_field + strlen("\"session_id\":"), NULL, 10);
+        }
+        free(text);
+        if (surface != 0 && session != 0 && identity_namespace[0] != '\0') { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(surface != 0 && session != 0 && identity_namespace[0] != '\0');
+
+    assert(zmux_desktop_shared_terminal(desktop.value, NULL, 1).status == ZMUX_INVALID_ARGUMENT);
+    uint8_t *oversized = calloc(128 * 1024 + 1, 1);
+    assert(oversized != NULL);
+    assert(zmux_desktop_shared_terminal(desktop.value, oversized, 128 * 1024 + 1).status == ZMUX_INVALID_ARGUMENT);
+    free(oversized);
+    const char *unknown_field = "{\"grant\":\"00000000-0000-0000-0000-000000000000\",\"request\":{\"operation\":\"list\",\"unexpected\":true}}";
+    char *reply = shared_terminal_call(desktop.value, unknown_field);
+    assert(strstr(reply, "\"code\":\"invalid_request\"") != NULL);
+    free(reply);
+    const char *wrong_variant_field = "{\"grant\":\"00000000-0000-0000-0000-000000000000\",\"request\":{\"operation\":\"list\",\"namespace\":\"00000000-0000-0000-0000-000000000001\"}}";
+    reply = shared_terminal_call(desktop.value, wrong_variant_field);
+    assert(strstr(reply, "\"code\":\"invalid_request\"") != NULL);
+    free(reply);
+    const char *duplicate_operation = "{\"grant\":\"00000000-0000-0000-0000-000000000000\",\"request\":{\"operation\":\"list\",\"operation\":\"frame\"}}";
+    reply = shared_terminal_call(desktop.value, duplicate_operation);
+    assert(strstr(reply, "\"code\":\"invalid_request\"") != NULL);
+    free(reply);
+    const char *duplicate_key = "{\"grant\":\"00000000-0000-0000-0000-000000000000\",\"request\":{\"operation\":\"key\",\"namespace\":\"00000000-0000-0000-0000-000000000001\",\"surface_id\":1,\"session_id\":1,\"event\":{\"key\":\"enter\",\"key\":\"escape\"}}}";
+    reply = shared_terminal_call(desktop.value, duplicate_key);
+    assert(strstr(reply, "\"code\":\"invalid_request\"") != NULL);
+    free(reply);
+
+    ZmuxResult sharing = zmux_desktop_terminal_sharing(desktop.value, true);
+    assert(sharing.status == ZMUX_OK);
+    reply = consume(sharing.value);
+    char *grant_field = strstr(reply, "\"grant\":\"");
+    assert(grant_field != NULL);
+    grant_field += strlen("\"grant\":\"");
+    assert(strlen(grant_field) >= 37 && grant_field[36] == '"');
+    char grant[37];
+    memcpy(grant, grant_field, 36);
+    grant[36] = '\0';
+    free(reply);
+
+    sharing = zmux_desktop_terminal_sharing(desktop.value, true);
+    assert(sharing.status == ZMUX_OK);
+    reply = consume(sharing.value);
+    assert(strstr(reply, grant) != NULL);
+    free(reply);
+
+    char request[2048];
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"list\"}}", grant);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"ok\":true") != NULL);
+    assert(strstr(reply, identity_namespace) != NULL);
+    char expected_surface[64];
+    char expected_session[64];
+    snprintf(expected_surface, sizeof expected_surface, "\"surface_id\":%llu", (unsigned long long)surface);
+    snprintf(expected_session, sizeof expected_session, "\"session_id\":%llu", (unsigned long long)session);
+    assert(strstr(reply, expected_surface) != NULL && strstr(reply, expected_session) != NULL);
+    assert(strstr(reply, "\"pane_id\":") != NULL);
+    free(reply);
+
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"frame\",\"namespace\":\"%s\",\"surface_id\":%llu,\"session_id\":%llu}}",
+             grant, identity_namespace, (unsigned long long)surface, (unsigned long long)session);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"ok\":true") != NULL && strstr(reply, "\"frame\":{") != NULL);
+    assert(strstr(reply, expected_session) != NULL);
+    free(reply);
+
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"input\",\"namespace\":\"%s\",\"surface_id\":%llu,\"session_id\":%llu,\"text\":\"printf '\\\\nNATIVE_ABI_SHARED_ACCESS\\\\n'\\r\"}}",
+             grant, identity_namespace, (unsigned long long)surface, (unsigned long long)session);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"accepted\":true") != NULL);
+    free(reply);
+    int input_observed = 0;
+    for (int attempt = 0; attempt < 500; attempt++) {
+        char *text = desktop_snapshot(desktop.value);
+        input_observed = strstr(text, "NATIVE_ABI_SHARED_ACCESS") != NULL;
+        free(text);
+        if (input_observed) { break; }
+        nanosleep(&(struct timespec){.tv_nsec = 10000000}, NULL);
+    }
+    assert(input_observed);
+
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"resize\",\"namespace\":\"%s\",\"surface_id\":%llu,\"session_id\":%llu,\"rows\":19,\"cols\":71}}",
+             grant, identity_namespace, (unsigned long long)surface, (unsigned long long)session);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"accepted\":true") != NULL);
+    free(reply);
+
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"frame\",\"namespace\":\"%s\",\"surface_id\":%llu,\"session_id\":%llu}}",
+             grant, identity_namespace, (unsigned long long)(surface + 9999), (unsigned long long)session);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"code\":\"stale_target\"") != NULL);
+    assert(strstr(reply, "\"outcome_unknown\":false") != NULL);
+    free(reply);
+
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"frame\",\"namespace\":\"00000000-0000-0000-0000-000000000001\",\"surface_id\":%llu,\"session_id\":%llu}}",
+             grant, (unsigned long long)surface, (unsigned long long)session);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"code\":\"stale_namespace\"") != NULL);
+    free(reply);
+
+    sharing = zmux_desktop_terminal_sharing(desktop.value, false);
+    assert(sharing.status == ZMUX_OK);
+    reply = consume(sharing.value);
+    assert(strstr(reply, "\"grant\":null") != NULL);
+    free(reply);
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"list\"}}", grant);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"code\":\"sharing_disabled\"") != NULL);
+    free(reply);
+
+    sharing = zmux_desktop_terminal_sharing(desktop.value, true);
+    assert(sharing.status == ZMUX_OK);
+    reply = consume(sharing.value);
+    grant_field = strstr(reply, "\"grant\":\"");
+    assert(grant_field != NULL);
+    grant_field += strlen("\"grant\":\"");
+    assert(strlen(grant_field) >= 37 && grant_field[36] == '"');
+    char replacement_grant[37];
+    memcpy(replacement_grant, grant_field, 36);
+    replacement_grant[36] = '\0';
+    assert(strcmp(grant, replacement_grant) != 0);
+    free(reply);
+    snprintf(request, sizeof request,
+             "{\"grant\":\"%s\",\"request\":{\"operation\":\"list\"}}", grant);
+    reply = shared_terminal_call(desktop.value, request);
+    assert(strstr(reply, "\"code\":\"invalid_grant\"") != NULL);
+    free(reply);
+
     assert(zmux_desktop_destroy(desktop.value) == ZMUX_OK);
 }
 
@@ -609,6 +772,7 @@ int main(void) {
     command(replacement.value, snapshot);
     assert(zmux_core_destroy(replacement.value) == ZMUX_OK);
     native_transfer_receipts_are_session_bound();
+    native_shared_terminal_access_is_strict_and_grant_scoped();
     exited_desktop_survives_close();
     native_file_channel_round_trip();
     return 0;

@@ -1337,6 +1337,7 @@ fn desktop_error(error: DesktopError) -> (&'static str, String) {
         DesktopError::Timeout => "outcome_unknown",
         DesktopError::Target(ref error) => error.code(),
         DesktopError::Browser(ref error) => error.code(),
+        DesktopError::TerminalSharing(ref error) => error.code(),
         DesktopError::Failure(_) => "desktop_error",
         DesktopError::Download(ref error) => error.code,
         DesktopError::File(_) => "file_error",

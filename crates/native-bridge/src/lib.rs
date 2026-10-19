@@ -6,17 +6,23 @@ mod native_frames;
 mod profile_leases;
 mod profile_operations;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::HashMap,
+    io::{self, Write},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock, TryLockError},
 };
 use zmux_desktop_runtime::{
     Command as DesktopCommand, Desktop, DesktopError, Request as DesktopRequest, Shell,
-    control::ControlServer, transfers::TransferCommand,
+    control::ControlServer,
+    shared_terminals::{
+        MAX_SHARED_TERMINAL_REQUEST_BYTES, MAX_SHARED_TERMINAL_RESPONSE_BYTES,
+        SharedTerminalEnvelope, SharedTerminalResponse,
+    },
+    transfers::TransferCommand,
 };
 use zmux_workspace_core::{Action, WorkspaceStore};
 
@@ -193,6 +199,96 @@ fn transfer_error_reply(message: String, outcome_unknown: bool) -> serde_json::V
         "error": {"message": message.chars().take(256).collect::<String>()},
         "outcome_unknown": outcome_unknown,
     })
+}
+
+struct BoundedJsonWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+impl Write for BoundedJsonWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "serialized shared terminal response exceeds its limit",
+            ));
+        }
+        self.bytes
+            .try_reserve(bytes.len())
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn bounded_shared_json<T: Serialize>(value: &T) -> Result<Vec<u8>, bool> {
+    let mut writer = BoundedJsonWriter {
+        bytes: Vec::new(),
+        limit: MAX_SHARED_TERMINAL_RESPONSE_BYTES,
+        exceeded: false,
+    };
+    match serde_json::to_writer(&mut writer, value) {
+        Ok(()) => Ok(writer.bytes),
+        Err(_) => Err(writer.exceeded),
+    }
+}
+
+fn shared_terminal_error_reply(
+    code: &str,
+    message: String,
+    outcome_unknown: bool,
+) -> serde_json::Value {
+    json!({
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message.chars().take(256).collect::<String>(),
+        },
+        "outcome_unknown": outcome_unknown,
+    })
+}
+
+fn shared_terminal_error_code(error: &DesktopError) -> &'static str {
+    match error {
+        DesktopError::TerminalSharing(error) => error.code(),
+        DesktopError::QueueFull => "busy",
+        DesktopError::Busy => "busy",
+        DesktopError::Closed => "closed",
+        DesktopError::Timeout => "timeout",
+        _ => "rejected",
+    }
+}
+
+#[cfg(test)]
+mod shared_terminal_response_tests {
+    use super::*;
+
+    #[test]
+    fn serialized_shared_terminal_response_is_bounded_without_truncation() {
+        let small = json!({"ok": true});
+        let bytes = bounded_shared_json(&small).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            small
+        );
+
+        let oversized = json!({
+            "frame": {
+                "snapshot": {
+                    "viewport": {
+                        "contents": "x".repeat(MAX_SHARED_TERMINAL_RESPONSE_BYTES)
+                    }
+                }
+            }
+        });
+        assert!(matches!(bounded_shared_json(&oversized), Err(true)));
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -521,6 +617,92 @@ pub unsafe extern "C" fn zmux_desktop_dispatch(
                 Ok(()) => json!({"version": ABI_VERSION, "ok": true}),
                 Err(DesktopError::QueueFull) => return Err(BUSY),
                 Err(error) => error_reply("command_rejected", error.to_string()),
+            },
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Toggle host-side terminal sharing. The returned buffer is `{"grant":UUID}` while enabled
+/// and `{"grant":null}` while disabled. An enable call while already enabled returns the same
+/// UUID; disable revokes it. This call must run off the native UI thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn zmux_desktop_terminal_sharing(id: u64, enabled: bool) -> ZmuxResult {
+    guard(|| {
+        let desktop = native_desktop(id)?;
+        let reservation = Reservation::new()?;
+        let reply = match desktop.runtime.set_terminal_sharing(enabled) {
+            Ok(grant) => json!({"grant": grant}),
+            Err(error) => {
+                let mut reply = shared_terminal_error_reply(
+                    shared_terminal_error_code(&error),
+                    error.to_string(),
+                    false,
+                );
+                if let serde_json::Value::Object(fields) = &mut reply {
+                    fields.insert("grant".into(), serde_json::Value::Null);
+                }
+                reply
+            }
+        };
+        reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
+    })
+}
+
+/// Execute one strict grant-scoped terminal request. The request is at most 128 KiB and the
+/// serialized response is capped at 256 KiB. Mutations wait up to two seconds off the UI thread;
+/// `{accepted:true}` means the terminal owner queued the operation, not that the child consumed
+/// it. `outcome_unknown:true` is final and must never be replayed automatically.
+///
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_shared_terminal(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length > MAX_SHARED_TERMINAL_REQUEST_BYTES || (request.is_null() && length != 0) {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = native_desktop(id)?;
+        // Reserve the only fallible response resource before any operation can reach a PTY.
+        let reservation = Reservation::new()?;
+        // SAFETY: the caller guarantees readable storage; null/length bounds were checked above.
+        let bytes = if length == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(request, length) }
+        };
+        let reply = match serde_json::from_slice::<SharedTerminalEnvelope>(bytes) {
+            Err(_) => shared_terminal_error_reply(
+                "invalid_request",
+                "invalid shared terminal request".into(),
+                false,
+            ),
+            Ok(envelope) => match desktop.runtime.shared_terminal_operation(envelope) {
+                Ok(response) => match bounded_shared_json(&response) {
+                    Ok(bytes) => return reservation.publish(bytes),
+                    Err(oversized) => shared_terminal_error_reply(
+                        if oversized {
+                            "response_too_large"
+                        } else {
+                            "response_serialization_failed"
+                        },
+                        if oversized {
+                            "serialized terminal response exceeds 256 KiB".into()
+                        } else {
+                            "could not serialize shared terminal response".into()
+                        },
+                        matches!(response, SharedTerminalResponse::Accepted { .. }),
+                    ),
+                },
+                Err(error) => shared_terminal_error_reply(
+                    shared_terminal_error_code(&error.error),
+                    error.error.to_string(),
+                    error.outcome_unknown,
+                ),
             },
         };
         reservation.publish(serde_json::to_vec(&reply).map_err(|_| INTERNAL)?)
