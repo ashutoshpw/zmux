@@ -1,35 +1,8 @@
 import AppKit
 import AuthenticationServices
 
-// Replace only the framework transport. CloudSettings.swift and CloudClient.swift
-// are compiled unchanged, so this drives the real controller's sign-in callback.
-// The unchecked box models Objective-C invoking a legacy completion on any queue.
-struct ForeignAuthenticationCompletion: @unchecked Sendable {
-    let invoke: (URL?, (any Error)?) -> Void
-}
-
-typealias ASPresentationAnchor = NSWindow
-
-@MainActor
-protocol ASWebAuthenticationPresentationContextProviding: AnyObject {
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor
-}
-
-@MainActor
-final class ASWebAuthenticationSession {
-    static var latest: ASWebAuthenticationSession?
-    let completion: ForeignAuthenticationCompletion
-    weak var presentationContextProvider: (any ASWebAuthenticationPresentationContextProviding)?
-
-    init(url: URL, callbackURLScheme: String?, completionHandler: @escaping (URL?, (any Error)?) -> Void) {
-        completion = ForeignAuthenticationCompletion(invoke: completionHandler)
-        Self.latest = self
-    }
-
-    func start() -> Bool { true }
-    func cancel() {}
-}
-
+// Only the unrelated application shell is a stand-in. The actual framework class,
+// its imported API annotations, and CloudSettings.swift are compiled unchanged.
 @MainActor
 final class MainWindowHost: NSObject {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
@@ -51,6 +24,7 @@ struct CloudAuthenticationCallbackProbe {
 
     static func main() async {
         _ = NSApplication.shared
+        guard zmux_auth_callback_install() else { fail("could not capture the framework completion") }
         let owner = MainWindowHost()
         let controller = CloudWindowController(owner: owner)
         guard let content = controller.window?.contentView,
@@ -62,16 +36,14 @@ struct CloudAuthenticationCallbackProbe {
         // Invoke the real Objective-C action without showing a window or refreshing
         // an account: this must never read Keychain items or make HTTP requests.
         _ = controller.perform(NSSelectorFromString("signIn:"), with: nil)
-        guard !signIn.isEnabled, let session = ASWebAuthenticationSession.latest else {
+        guard !signIn.isEnabled, zmux_auth_callback_has_completion() else {
             fail("sign-in did not start an authentication session")
         }
-        let completion = session.completion
         await withCheckedContinuation { (returned: CheckedContinuation<Void, Never>) in
             DispatchQueue(label: "zmux.fixture.authentication-foreign-reply").async {
                 guard !Thread.isMainThread else { fail("framework stand-in ran on the main thread") }
                 FileHandle.standardOutput.write(Data("Invoking actual Cloud settings completion from a foreign queue\n".utf8))
-                completion.invoke(nil, NSError(domain: "ZmuxAuthenticationFixture", code: 7,
-                                               userInfo: [NSLocalizedDescriptionKey: "SDK dry-run refused (fixture)."]))
+                guard zmux_auth_callback_invoke_failure() else { fail("the framework completion disappeared") }
                 FileHandle.standardOutput.write(Data("Foreign authentication completion returned\n".utf8))
                 returned.resume()
             }
@@ -87,7 +59,7 @@ struct CloudAuthenticationCallbackProbe {
         }) else { fail("the SDK failure was not presented by the real controller") }
         MainActor.preconditionIsolated()
         controller.close()
-        ASWebAuthenticationSession.latest = nil
+        zmux_auth_callback_reset()
         print("Cloud auth callback passed: foreign queue accepted, UI recovered on MainActor, SDK failure displayed.")
     }
 }

@@ -10,14 +10,15 @@ import sys
 import tempfile
 
 
-def exercise(root, source, binary, baseline=False):
+def exercise(root, source, binary, transport, baseline=False):
     sys.path.insert(0, str(root / "scripts"))
     from browser_process import run_browser
 
     subprocess.run([
         "xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
         "-strict-concurrency=complete", "-warnings-as-errors", "-O",
-        str(source), str(root / "apps/macos/Sources/CloudClient.swift"),
+        "-import-objc-header", str(root / "tools/native-fixtures/cloud-auth-callback.h"),
+        str(transport), str(source), str(root / "apps/macos/Sources/CloudClient.swift"),
         str(root / "tools/native-fixtures/cloud-auth-callback.swift"),
         "-framework", "AppKit", "-framework", "AuthenticationServices",
         "-framework", "Security", "-framework", "CryptoKit", "-framework", "LocalAuthentication",
@@ -54,13 +55,20 @@ def main():
     root = Path(__file__).resolve().parents[2]
     with tempfile.TemporaryDirectory(prefix="zmux-cloud-auth-callback-") as directory:
         scratch = Path(directory)
+        transport = scratch / "authentication-transport.o"
+        sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
+        subprocess.run([
+            "xcrun", "clang", "-fobjc-arc", "-fblocks", "-Wall", "-Wextra", "-Werror",
+            "-isysroot", sdk, "-c", str(root / "tools/native-fixtures/cloud-auth-callback.m"),
+            "-o", str(transport),
+        ], check=True, timeout=30)
         if args.baseline_ref:
             baseline = scratch / "CloudSettings-before.swift"
             baseline.write_bytes(subprocess.check_output([
                 "git", "show", args.baseline_ref + ":apps/macos/Sources/CloudSettings.swift",
             ], cwd=root))
-            exercise(root, baseline, scratch / "before", baseline=True)
-        exercise(root, root / "apps/macos/Sources/CloudSettings.swift", scratch / "current")
+            exercise(root, baseline, scratch / "before", transport, baseline=True)
+        exercise(root, root / "apps/macos/Sources/CloudSettings.swift", scratch / "current", transport)
 
 
 if __name__ == "__main__":
