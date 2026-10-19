@@ -1,5 +1,6 @@
 #ifndef ZMUX_H
 #define ZMUX_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -50,6 +51,19 @@ ZmuxResult zmux_desktop_create_configured(const uint8_t *request, size_t length)
    up to99328 bytes, with parsed text <=16384 UTF-8 bytes, admitted once as one unit.
    Queue acceptance never authorizes automatic retry after partial/unknown delivery. */
 ZmuxResult zmux_desktop_dispatch(uint64_t desktop, const uint8_t *request, size_t length);
+/* Explicit host sharing for registered-device terminal access. Enable returns an owned JSON
+   buffer {grant:UUID}; repeated enable preserves the active grant, and disable returns
+   {grant:null} after revoking it. The UUID is also the relay presence epoch. */
+ZmuxResult zmux_desktop_terminal_sharing(uint64_t desktop, bool enabled);
+/* Strict grant-scoped terminal JSON, <=128 KiB:
+   {grant,request:{operation:list|frame|input|key|paste|resize|scroll,...}}.
+   List returns only existing terminal sessions. Targeted operations require the grant's exact
+   identity namespace, surface_id and session_id. No process creation, generic command forwarding,
+   browser or file operations are available. Replies serialize to at most 256 KiB; an oversized
+   read returns response_too_large without truncation. Mutations wait up to two seconds and
+   {accepted:true} means the terminal owner queued the operation, not child consumption. Unknown
+   outcomes are final and MUST NOT be replayed automatically. Both calls MUST run off the UI thread. */
+ZmuxResult zmux_desktop_shared_terminal(uint64_t desktop, const uint8_t *request, size_t length);
 /* Executes one action or windows command (<=16384 bytes) and replies with the executor's own
    result: {ok:true,revision} once it ran, {ok:false,error:{message},outcome_unknown} when the
    executor refused it. Dispatch above acknowledges only queue acceptance; use this when the

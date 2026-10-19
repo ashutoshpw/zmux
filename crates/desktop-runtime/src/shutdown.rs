@@ -128,6 +128,7 @@ impl Desktop {
             .map_err(|_| DesktopError::Failure("shutdown state poisoned".into()))?;
         let operation = operation.get_or_insert_with(|| Operation::new(budget, native_cleanup));
         self.shared.stop.store(true, Ordering::Release);
+        self.revoke_terminal_sharing()?;
         Ok(operation.report())
     }
     pub fn shutdown_native_complete(&self, ticket: u64) -> Result<(), DesktopError> {
