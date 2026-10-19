@@ -403,6 +403,20 @@ enum TerminalSelectionSmoke {
               links.contents.contains(plainURL), links.contents.contains("OSC8 LINK") else {
             throw failure("Local HTTP and OSC 8 fixture links were not visible in the production viewport")
         }
+        let plainStart = 6
+        let plainEnd = plainStart + (plainURL as NSString).length
+        guard plainEnd < links.size.cols else { throw failure("Plain fixture URL does not fit on its specified row") }
+        let plainSpanPresent = links.links.filter {
+            $0.row == 0 && $0.startColumn == plainStart && $0.endColumn == plainEnd && $0.url == plainURL
+        }.count == 1
+        let osc8SpanEnd = ("OSC8 LINK" as NSString).length
+        let osc8SpanPresent = links.links.filter {
+            $0.row == 1 && $0.startColumn == 0 && $0.endColumn == osc8SpanEnd && $0.url == osc8URL
+        }.count == 1
+        guard links.viewportGeneration > 0, plainSpanPresent, osc8SpanPresent,
+              view.onOpenTerminalLink != nil else {
+            throw failure("Native terminal-link prerequisites incomplete: generation=\(links.viewportGeneration > 0), plainSpan=\(plainSpanPresent), osc8Span=\(osc8SpanPresent), callback=\(view.onOpenTerminalLink != nil)")
+        }
         let linkURLs = Set([plainURL, osc8URL])
         let openedBeforeClick = coordinator.snapshot?.model.workspaces.flatMap({ $0.root.panes })
             .flatMap(\.surfaces).filter { $0.kind == "browser" && $0.url.map(linkURLs.contains) == true } ?? []
@@ -414,9 +428,6 @@ enum TerminalSelectionSmoke {
             try await save(result, to: report)
             throw failure("Printing fixture URLs opened a browser before Command-click")
         }
-        let plainStart = 6
-        let plainEnd = plainStart + (plainURL as NSString).length
-        guard plainEnd < links.size.cols else { throw failure("Plain fixture URL does not fit on its specified row") }
         let releaseSelectionOffset = 4
         let releaseSelectionStart = plainStart + releaseSelectionOffset
         let releaseSelection = (plainURL as NSString).substring(from: releaseSelectionOffset)
@@ -430,16 +441,13 @@ enum TerminalSelectionSmoke {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("ZMUX_SELECTION_SENTINEL", forType: .string)
         try pointerEvent(.leftMouseDown, cell: (0, releaseSelectionStart), modifiers: [.command],
-                         view: view, window: window, viewport: links,
-                         diagnosticLabel: "far-mouse-down", coordinator: coordinator, sessionID: frame.sessionId)
+                         view: view, window: window, viewport: links)
         try pointerEvent(.leftMouseUp, cell: (0, plainEnd), modifiers: [.command],
-                         view: view, window: window, viewport: links,
-                         diagnosticLabel: "far-mouse-up", coordinator: coordinator, sessionID: frame.sessionId)
+                         view: view, window: window, viewport: links)
         var releaseSelectionCopyError: String?
         do { try copy(window: window) }
         catch { releaseSelectionCopyError = String(describing: error) }
         let releaseSelectionObserved = NSPasteboard.general.string(forType: .string)
-        trace("copy sentinelUnchanged=\(releaseSelectionObserved?.utf8.elementsEqual("ZMUX_SELECTION_SENTINEL".utf8) == true)")
         let releaseSelectionMatches = releaseSelectionCopyError == nil
             && releaseSelectionObserved?.utf8.elementsEqual(releaseSelection.utf8) == true
         let releaseSelectionReport = releaseSelectionCopyError.map { "copy failed: \($0)" } ?? releaseSelectionObserved
@@ -694,9 +702,7 @@ enum TerminalSelectionSmoke {
     }
 
     private static func pointerEvent(_ type: NSEvent.EventType, cell: (Int, Int), modifiers: NSEvent.ModifierFlags,
-                                     view: TerminalView, window: NSWindow, viewport: Viewport, allowOutside: Bool = false,
-                                     diagnosticLabel: String? = nil, coordinator: ApplicationCoordinator? = nil,
-                                     sessionID: UInt64? = nil) throws {
+                                     view: TerminalView, window: NSWindow, viewport: Viewport, allowOutside: Bool = false) throws {
         let grid = try gridGeometry(view, viewport: viewport)
         let location: NSPoint
         if allowOutside {
@@ -725,35 +731,7 @@ enum TerminalSelectionSmoke {
             }
             event = middle
         }
-        if let diagnosticLabel, let coordinator, let sessionID {
-            traceHitTest(diagnosticLabel, location: location, view: view, window: window,
-                         viewport: coordinator.snapshot?.frames.first(where: { $0.sessionId == sessionID })?.snapshot?.viewport)
-        }
         window.sendEvent(event)
-    }
-
-    private static func trace(_ message: String) {
-        guard CommandLine.arguments.contains("--terminal-selection-smoke") else { return }
-        print("[terminal-selection-smoke] \(message)")
-    }
-
-    private static func traceHitTest(_ label: String, location: NSPoint, view: TerminalView,
-                                     window: NSWindow, viewport: Viewport?) {
-        guard CommandLine.arguments.contains("--terminal-selection-smoke") else { return }
-        let root = window.contentView
-        let hit = root?.hitTest(root?.convert(location, from: nil) ?? .zero)
-        let identity: (AnyObject?) -> String = { object in
-            guard let object else { return "nil" }
-            return "\(String(describing: type(of: object))):\(ObjectIdentifier(object))"
-        }
-        let responder = window.firstResponder
-        let viewportMetadata: String
-        if let viewport {
-            viewportMetadata = "rows=\(viewport.size.rows) cols=\(viewport.size.cols) scrollback=\(viewport.scrollbackOffset) pointerTracking=\(viewport.pointerTracking?.rawValue ?? "nil") alternateScreen=\(viewport.alternateScreen) generation=\(viewport.viewportGeneration)"
-        } else {
-            viewportMetadata = "unavailable"
-        }
-        print("[terminal-selection-smoke] hitTest event=\(label) view=\(identity(view)) hit=\(identity(hit)) window=\(identity(window)) windowNumber=\(window.windowNumber) firstResponder=\(identity(responder)) windowPoint=\(location.x),\(location.y) viewport=\(viewportMetadata)")
     }
 
     private static func gridGeometry(_ view: TerminalView, viewport: Viewport) throws -> NSRect {

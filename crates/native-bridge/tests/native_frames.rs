@@ -1,10 +1,13 @@
 //! Independent consumer of the native delta wire contract through the real ABI.
 use serde_json::{Value, json};
 use std::{
+    sync::Mutex,
     thread,
     time::{Duration, Instant},
 };
 use zmux_native_bridge::*;
+
+static NATIVE_FRAMES_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct Desktop(u64);
 impl Drop for Desktop {
@@ -63,6 +66,7 @@ fn packet(value: &Value, session: u64) -> &Value {
 
 #[test]
 fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_baselines() {
+    let _serial = NATIVE_FRAMES_TEST_LOCK.lock().unwrap();
     let created = zmux_desktop_create();
     assert_eq!(created.status, 0);
     let desktop = Desktop(created.value);
@@ -176,4 +180,118 @@ fn native_poll_patches_only_changed_rows_preserves_unicode_and_recovers_unknown_
         full["frames"][0]["snapshot"]["viewport"]["contents"],
         contents
     );
+}
+
+#[test]
+fn native_poll_preserves_viewport_link_metadata_across_resize_replacement_and_clear() {
+    let _serial = NATIVE_FRAMES_TEST_LOCK.lock().unwrap();
+    let created = zmux_desktop_create();
+    assert_eq!(created.status, 0);
+    let desktop = Desktop(created.value);
+    let first = wait(desktop.0, u64::MAX, |v| {
+        v["frame_packets"]
+            .as_array()
+            .is_some_and(|f| f.len() == 1 && f[0]["frame"]["snapshot"]["state"] == "running")
+    });
+    let session = first["frame_packets"][0]["frame"]["session_id"]
+        .as_u64()
+        .unwrap();
+    let plain_url = "https://plain.example/a";
+    let osc_url = "https://osc.example/b";
+    let fixture = concat!(
+        r"stty -echo; printf '\033[2J\033[Hhttps://plain.example/a\r\n\033]8;;https://osc.example/b\033\\OSC8_LINK\033]8;;\033\\\r\n'; ",
+        r"printf 'NATIVE_LINKS_%s\n' READY >/dev/tty; IFS= read -r hold; ",
+        r"printf '\033[2J\033[Hhttps://replacement.example/c\r\n'; ",
+        r"printf 'NATIVE_LINKS_%s\n' REPLACED >/dev/tty; IFS= read -r hold; ",
+        r"printf '\033[2J\033[H'; ",
+        r"printf 'NATIVE_LINKS_%s\n' CLEARED >/dev/tty; IFS= read -r hold",
+        "\n",
+    );
+    command(
+        desktop.0,
+        1,
+        json!({
+            "command":"input",
+            "session_id":session,
+            "text":fixture
+        }),
+    );
+
+    let linked = wait(desktop.0, u64::MAX, |v| {
+        packet(v, session)["frame"]["snapshot"]["viewport"]["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains("NATIVE_LINKS_READY"))
+    });
+    let revision = linked["snapshot"]["revision"].as_u64().unwrap();
+    let linked_viewport = &packet(&linked, session)["frame"]["snapshot"]["viewport"];
+    let initial_generation = linked_viewport["viewport_generation"]
+        .as_u64()
+        .expect("native frame includes the terminal viewport generation");
+    assert!(initial_generation > 0);
+    let expected_links = json!([
+        {"row":1,"start_column":0,"end_column":9,"url":osc_url},
+        {"row":0,"start_column":0,"end_column":plain_url.len(),"url":plain_url}
+    ]);
+    assert_eq!(linked_viewport["links"], expected_links);
+
+    let rows = linked_viewport["size"]["rows"].as_u64().unwrap();
+    let cols = linked_viewport["size"]["cols"].as_u64().unwrap();
+    command(
+        desktop.0,
+        2,
+        json!({"command":"resize","session_id":session,"rows":rows,"cols":cols}),
+    );
+    let resized = wait(desktop.0, revision, |v| {
+        packet(v, session)["frame"]["snapshot"]["viewport"]["viewport_generation"]
+            .as_u64()
+            .is_some_and(|generation| generation > initial_generation)
+    });
+    assert_eq!(resized["base_revision"], revision);
+    let resized_packet = packet(&resized, session);
+    assert_eq!(resized_packet["changed_rows"], json!([]));
+    let resized_viewport = &resized_packet["frame"]["snapshot"]["viewport"];
+    let resized_generation = resized_viewport["viewport_generation"].as_u64().unwrap();
+    assert!(resized_generation > initial_generation);
+    assert_eq!(resized_viewport["links"], expected_links);
+
+    command(
+        desktop.0,
+        3,
+        json!({"command":"input","session_id":session,"text":"replace\n"}),
+    );
+    let replaced = wait(
+        desktop.0,
+        resized["snapshot"]["revision"].as_u64().unwrap(),
+        |v| {
+            packet(v, session)["frame"]["snapshot"]["viewport"]["contents"]
+                .as_str()
+                .is_some_and(|contents| contents.contains("NATIVE_LINKS_REPLACED"))
+        },
+    );
+    let replaced_viewport = &packet(&replaced, session)["frame"]["snapshot"]["viewport"];
+    let replacement_url = "https://replacement.example/c";
+    assert_eq!(
+        replaced_viewport["links"],
+        json!([{"row":0,"start_column":0,"end_column":replacement_url.len(),"url":replacement_url}])
+    );
+    let replaced_generation = replaced_viewport["viewport_generation"].as_u64().unwrap();
+    assert!(replaced_generation > resized_generation);
+
+    command(
+        desktop.0,
+        4,
+        json!({"command":"input","session_id":session,"text":"clear\n"}),
+    );
+    let cleared = wait(
+        desktop.0,
+        replaced["snapshot"]["revision"].as_u64().unwrap(),
+        |v| {
+            packet(v, session)["frame"]["snapshot"]["viewport"]["contents"]
+                .as_str()
+                .is_some_and(|contents| contents.contains("NATIVE_LINKS_CLEARED"))
+        },
+    );
+    let cleared_viewport = &packet(&cleared, session)["frame"]["snapshot"]["viewport"];
+    assert_eq!(cleared_viewport["links"], json!([]));
+    assert!(cleared_viewport["viewport_generation"].as_u64().unwrap() > replaced_generation);
 }

@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::{collections::VecDeque, sync::Arc};
 use zmux_desktop_runtime::{Frame, Snapshot};
 use zmux_session_runtime::{Snapshot as TerminalSnapshot, State};
-use zmux_terminal_adapter::{PointerTracking, RowCopy, Run, Size, Viewport};
+use zmux_terminal_adapter::{LinkSpan, PointerTracking, RowCopy, Run, Size, Viewport};
 
 pub(crate) struct Baseline {
     pub revision: u64,
@@ -58,6 +58,8 @@ struct WireTerminal<'a> {
 /// before presentation; `contents` is a UTF-8 replacement span when rows is Some.
 #[derive(Serialize)]
 struct WireViewport<'a> {
+    viewport_generation: u64,
+    links: &'a [LinkSpan],
     size: Size,
     title: &'a str,
     working_directory: &'a Option<String>,
@@ -101,6 +103,8 @@ impl<'a> WireViewport<'a> {
         });
         (
             Self {
+                viewport_generation: current.viewport_generation,
+                links: &current.links,
                 size: current.size,
                 title: &current.title,
                 working_directory: &current.working_directory,
