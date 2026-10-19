@@ -1,11 +1,12 @@
 # Cloud deployment
 
-The owned production origin is **https://zmux.w3api.dev**. All production cloud
-deployments are postponed. The documented local setup runs in Docker; activating it
-against the persistent serving database still requires separate approval.
-The local setup neither creates nor verifies a public route. The owner may already have
-mapped the hostname; inspect the existing route before making any tunnel or DNS changes.
-The local setup alone does not claim that public deployment is complete.
+The owned production origin is **https://zmux.w3api.dev**. Hosted production cloud
+deployments remain postponed. On 2026-10-19, separate approval was granted to activate the
+persistent serving database through the documented local Docker setup; that operation completed
+and is recorded in the [activation receipt](../.agents/tasks/2026-10-19/01-device-terminal-access/references/activation-receipt.md).
+The setup does not create or verify a public route itself. Direct public endpoint checks later
+verified the existing route; no DNS or tunnel configuration was changed. This does not complete
+an authenticated public client journey or claim a hosted deployment.
 
 The native app uses the validated origin in `config/deployment.json`. A running local
 cloud service is useful for development and integration testing; it does not replace
@@ -30,8 +31,8 @@ scripts/local-cloud status
 ```
 
 `start` runs `bunx path-to-port` in `services/control-plane`; the current result is
-**3530**. The tunnel target is **http://127.0.0.1:3530**. Check whether the owner already
-maps the public hostname `zmux.w3api.dev` to that target before changing tunnel settings.
+**3530**. The tunnel target is **http://127.0.0.1:3530**. The existing public route was
+verified on 2026-10-19; no tunnel setting or DNS record was changed.
 A tunnel agent in its own network namespace must reach the host loopback explicitly;
 its container's `127.0.0.1` addresses that container. The app uses
 `https://zmux.w3api.dev` for auth origins and secure cookies. External HTTPS, tunnel
@@ -91,13 +92,15 @@ failure-path check `scripts/test-local-cloud-restore` also uses only disposable 
 
 `check` records `/health` and database-backed `/ready` results in private `health.json`.
 It records `public_tunnel_verified: false` because the script does not probe the public
-route; that value does not establish whether a route already exists. After migration 003
+route; that value does not reflect the independent direct route checks in the activation receipt.
+After migration 003
 and its schema checks pass, `/ready` reports identity, devices, organizations, stable
 device identity and terminal relay ready; VM and email remain unavailable. The relay
 carries encrypted requests through PostgreSQL to a currently running, online Mac that has
 explicitly enabled sharing. It does not provision a VM or a separate terminal daemon.
 Local readiness does not verify an existing public route or an authenticated public
-browser/native flow.
+browser/native flow. The direct public readiness checks passed on 2026-10-19; the authenticated
+terminal-client journey remains unverified.
 
 ## Host-selection handoff
 
@@ -113,14 +116,16 @@ If hosted deployment is resumed, extend the package workflow with a deployment j
 
 Remote host credentials, hosted database provisioning, public DNS/TLS and production mail
 configuration remain decisions for that discussion. Local Docker operations are separate
-from hosted deployment; activation against the persistent serving database still requires
-separate approval. No hosted Actions deployment workflow has been added.
+from hosted deployment. The 2026-10-19 serving-database activation was separately approved and
+completed; future serving-database or service mutations require separate approval. No hosted
+Actions deployment workflow has been added.
 
 The account/device service now provides an encrypted database relay for terminal requests
 to explicitly shared, online Macs. The Mac app owns the terminal sessions. This does not
-provision VMs or a standalone terminal daemon, and it does not verify any Cloudflare Tunnel
-route. Keep the implemented capability states explicit in `/v1/config`, `/ready`, and the
-native UI; the relay does not imply that a public route or remote VM is available.
+provision VMs or a standalone terminal daemon, and the relay does not configure a Cloudflare
+Tunnel route. Keep the implemented capability states explicit in `/v1/config`, `/ready`, and
+the native UI. Current endpoint readiness through the existing route is recorded separately
+in the activation receipt.
 
 Final hosted macOS workflow
 [`39238746402`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402) and Foundation
@@ -134,7 +139,9 @@ passed through the CryptoKit client, sharing host, NativeBridge and Rust PTY own
 bridge library contain both `arm64` and `x86_64` slices. Strict codesign verification passed;
 the artifact uses ad-hoc signatures and is not notarized. Physical two-Mac validation and an
 authenticated public-route journey remain unverified. These checks do not deploy the service;
-activation against the persistent serving database still requires separate approval.
+the 2026-10-19 persistent serving-database activation was separately approved and completed.
+See the [activation receipt](../.agents/tasks/2026-10-19/01-device-terminal-access/references/activation-receipt.md);
+future serving-database mutations still require separate approval.
 
 ## Remaining service operations
 
