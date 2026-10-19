@@ -122,6 +122,20 @@ provision VMs or a standalone terminal daemon, and it does not verify any Cloudf
 route. Keep the implemented capability states explicit in `/v1/config`, `/ready`, and the
 native UI; the relay does not imply that a public route or remote VM is available.
 
+Final hosted macOS workflow
+[`39238746402`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402) and Foundation
+checks [`39238746676`](https://github.com/ashutoshpw/zmux/actions/runs/39238746676) passed on
+source SHA `633347ff33dce806ad99dc3e8662e0be306060c2`. The packaged two-origin lifecycle smoke
+passed through the CryptoKit client, sharing host, NativeBridge and Rust PTY owner, with
+18x72 kernel resize and the account-switch and sharing-disable checks. Universal artifact
+[`12181162700`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402/artifacts/12181162700)
+(expires `2026-11-02T11:01:28Z`) was independently verified against that source SHA; its SHA-256 is
+`2bf2fe16965952bebe32106bee1b444e9e4b355b816cc132fd640e8ce444ce4e`. The app, CLI and native
+bridge library contain both `arm64` and `x86_64` slices. Strict codesign verification passed;
+the artifact uses ad-hoc signatures and is not notarized. Physical two-Mac validation and an
+authenticated public-route journey remain unverified. These checks do not deploy the service;
+activation against the persistent serving database still requires separate approval.
+
 ## Remaining service operations
 
 Before production rollout, add scheduled cleanup for expired authorization codes and

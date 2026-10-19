@@ -5,8 +5,9 @@
 
 ## Source and backend receipt
 
-- The backend implementation is pushed at `06996d418e1cc0eff405de3a17b40f237a29a7af`,
-  matching the remote exactly. Hosted Cloud workflow `39225147711` succeeded on that SHA.
+- Backend commit `06996d418e1cc0eff405de3a17b40f237a29a7af` was pushed and validated; backend
+  paths have remained unchanged since that SHA. Hosted Cloud workflow `39225147711` succeeded
+  on that SHA.
   Final `scripts/check-cloud` validation passed 35 tests and 423 assertions, and the control-
   plane image built. Parent log: `/tmp/zmux-device-terminal-cloud-final.log`.
 - Backend review reproduced the P2 relay-claim lock inversion (`SQLSTATE 40P01`). The
@@ -17,59 +18,47 @@
   fixed to return `413`, preserving the 16 KiB non-relay limit while relay bodies use their
   larger bound.
 
-## Runtime and native receipt
+## Runtime and hosted native receipts
 
 - Runtime commit `3ef82036082ce5e6a6629d5e2de31b8545e32600` records grant-scoped access to
   existing PTYs. `RUST_TEST_THREADS=2 scripts/check` passed, including clippy and C ABI checks.
-  Parent log: `/tmp/zmux-device-terminal-runtime-final.log`. Rust terminal execution rejects a
-  stale queued sharing grant before input reaches the PTY.
-- Native identity, Keychain, encryption, transport, UI and packaged smoke implementation are
-  present in source. The smoke is designed to traverse two fixture origins through the
-  client/CryptoKit fixture, sharing host and an existing Rust PTY for session listing, frame
-  delivery, split-marker input and resize (verify `stty size` reports `18 72`), plus denial and
-  recovery cases. It has not been executed here; native execution awaits hosted macOS.
-  Separately, Python AST/YAML checks and dual-origin HTTP fixture/report positive/negative checks
-  passed, and the separate Rust PTY suite passed as part of `scripts/check`. There is no combined
-  CryptoKit-to-host-to-Rust-PTY execution receipt.
-- Review-driven repairs include strict Rust raw-JSON handling, canonical lowercase UUIDs,
-  accurate error receipts, stopping share advertisement after restore loses the authoritative
-  Rust grant, 4096-byte input and 16384-byte paste bounds, automatic resize consent, retained
-  partial-cleanup retry on 503, and account-owned retirement only after Rust is off and the
-  new account is proven. Unresolved old presence is surfaced. Known rejected 4xx outcomes,
-  including 429, do not trigger wrong-epoch `sharing: false` cleanup.
-- Final independent native acceptance review returned no blocking source findings. This is a
-  source-review receipt only, not native execution evidence. This Linux environment has no
-  Swift/Xcode, so native compilation, packaged execution and the universal artifact remain
-  pending hosted macOS gates. Physical two-Mac behavior is unverified.
-- The first hosted native compile attempts, workflow runs `39228357371` and `39228357624`, failed.
-  Scoped repairs in `CloudClient.swift` removed unreachable post-request flags while preserving
-  unknown-outcome handling and no-replay behavior; `CloudTerminalLifecycleSmoke.swift` explicitly
-  types its `Task` result and discards unused fixture responses. Independent review found no
-  blocking source findings. The follow-up full macOS run `39229640506` passed production
-  both-architecture typechecking and Cloud credential/terminal checks, but the old auth-callback
-  probe lacked its dependency manifest and blocked the run. The current-source focused transport
-  run `39229640535` passed on `b4105c3`.
-- After three hosted Mac attempts, review traced the remaining failure to stale auth-callback test
-  wiring, not product-source behavior. The fixture now explicitly compiles the real CloudClient,
-  device-identity and terminal-transport sources with the selected CloudSettings and unchanged
-  Objective-C SDK shim. Callback-only terminal stand-ins fail fast if used; historical trap checks
-  remain intact, and the intended callback-failure path performs no Keychain or network work.
-  Independent fixture review found no blockers; portable AST and diff checks passed. A full native
-  auth-callback rerun is pending, so no callback or packaged-native success is claimed. The owned
-  disposable PostgreSQL container was removed; the serving database was untouched.
-- Hosted macOS run `39231022451` again passed production compile, credential and terminal checks,
-  then exposed an API mismatch in the old callback probe: baseline `CloudSettings.swift` had been
-  compiled against current `CloudClient.swift`, so its call ignored the newly returned device.
-  The fixture now selects `CloudSettings.swift` and `CloudClient.swift` from the same baseline
-  revision, includes identity/transport helpers only when present in that snapshot, and compiles
-  the current probe with current helpers. This is test wiring only; no product source changed.
-  Independent review found no blocking issue. Portable AST/source-selection/diff checks passed;
-  the full callback rerun remains pending.
+  Rust execution rejects a stale queued sharing grant before input reaches the PTY. Rust/C ABI
+  checks passed again in the final hosted macOS workflow; cloud validation remains the separate
+  `06996d4` receipt above.
+- Final macOS development workflow
+  [`39238746402`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402) and Foundation
+  checks [`39238746676`](https://github.com/ashutoshpw/zmux/actions/runs/39238746676) succeeded
+  on source SHA `633347ff33dce806ad99dc3e8662e0be306060c2`. The Mac workflow passed Swift checks
+  for both architectures, Cloud credentials and encrypted relay, historical callback traps and
+  the current callback path, Rust/C ABI checks, universal build and strict codesign verification,
+  packaged lifecycle smoke, sidebar and status-menu checks.
+- The packaged two-origin lifecycle report is `passed`; it exercised CloudClient, CryptoKit,
+  CloudTerminalHost, NativeBridge and the Rust owner against two loopback origins and an existing
+  shell. It records stable repeated registration, one listed session and frame, observed input,
+  viewport and kernel resize at 18x72, `sharing_disabled` rejection, cleanup races and
+  expired-session/account-switch gate checks. The broader native smoke report has `success: true`
+  and stages `assertions_complete` on the same source SHA.
+- Universal artifact [`12181162700`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402/artifacts/12181162700)
+  expires `2026-11-02T11:01:28Z`. The downloaded archive
+  `zmux-dev-universal-633347f.zip` has SHA-256
+  `2bf2fe16965952bebe32106bee1b444e9e4b355b816cc132fd640e8ce444ce4e`; independent verification
+  confirmed outer and embedded build info source SHA `633347ff33dce806ad99dc3e8662e0be306060c2`,
+  origin `https://zmux.w3api.dev`, and `arm64` plus `x86_64` headers for the app, CLI and native
+  bridge library. Strict codesign verification passed; signatures are ad-hoc and the archive
+  is not notarized. Receipt: `/tmp/zmux-device-final-633347f/artifact-verification.json`.
+- Earlier hosted attempts exposed compile and callback-probe wiring issues; those were repaired.
+  Focused transport run `39229640535` passed on `b4105c3`, and final independent native source
+  review returned no blocking findings. The report-key mismatch from run `39235177700` was fixed
+  in source SHA `633347f`; the corrected validator passed against the real report, recorded in
+  `/tmp/zmux-device-native-c0a1c08-diagnostics/validator-key-red-green.log`.
+- Physical two-Mac behavior and an authenticated public-route journey remain unverified. The owned
+  disposable PostgreSQL container was removed; the serving database, service, tunnel and running
+  app were not changed.
 
 ## Remaining gates
 
-- Complete hosted macOS compilation, packaged execution and universal artifact validation;
-  report physical two-Mac validation separately.
+- Complete physical two-Mac and authenticated public-route validation separately. The final
+  workflow and source-pinned universal artifact are verified; the artifact is not notarized.
 - The rollout plan is concrete and linked from `plan.md`. Activating the persistent serving
   database still requires separate approval; the plan does not grant it. No production
   database, service, tunnel or running app was changed for this task.

@@ -61,13 +61,17 @@ the post-migration checks below.
 5. Keep the upgraded client build and service change coordinated: current service
    `POST /v1/devices` requires `installation_id`, `device_secret`, and `public_key`. Older
    clients that send only name/platform receive `400 invalid_device`; only historical rows
-   retain the legacy bearer-only heartbeat. An implemented packaged smoke is designed to
-   traverse two fixture origins through the CryptoKit/client fixture, sharing host and Rust
-   PTY for session listing, frames, input and resize. Native execution awaits hosted macOS; no
-   combined CryptoKit-to-host-to-Rust-PTY run has occurred. Separate Python dual-origin HTTP
-   fixture/report checks and Rust PTY tests passed, but do not establish that combined
-   boundary. Hosted macOS compilation, packaged execution, the universal artifact and physical
-   two-Mac validation remain gates.
+   retain the legacy bearer-only heartbeat. The final hosted macOS workflow
+   [`39238746402`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402) succeeded on
+   source SHA `633347ff33dce806ad99dc3e8662e0be306060c2`; its corrected lifecycle report passed
+   the two-origin CloudClient/CryptoKit, sharing-host, NativeBridge and Rust PTY path for
+   registration, session listing, frames, input, resize, denial, cleanup races and account-switch
+   recovery. Universal artifact
+   [`12181162700`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402/artifacts/12181162700)
+   (expires `2026-11-02T11:01:28Z`) was independently verified against that source SHA and has SHA-256
+   `2bf2fe16965952bebe32106bee1b444e9e4b355b816cc132fd640e8ce444ce4e`; it carries ad-hoc
+   signatures and is not notarized. Physical two-Mac validation and authenticated public-route
+   checks remain separate gates.
 
 ## Rollback limits
 

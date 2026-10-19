@@ -28,27 +28,31 @@ the running app. Reuse Rust PTY operations and native terminal rendering.
 - [x] Inspect backend/native owners and agree one versioned protocol before edits.
 - [x] Reproduce registration duplication; implement stable identity and database constraint.
 - [x] Implement authenticated bounded relay, presence, native encryption/transport and sharing UI.
-- [ ] Execute the implemented packaged smoke designed to traverse two fixture origins through
-  the CryptoKit/client fixture, sharing host and Rust PTY for session listing, frames, input,
-  resize, denial and recovery behavior; native execution awaits hosted macOS.
+- [x] Execute the packaged two-origin smoke through CloudClient/CryptoKit, CloudTerminalHost,
+  NativeBridge and the Rust PTY owner; final workflow `39238746402` reports success on source
+  `633347ff33dce806ad99dc3e8662e0be306060c2`, with lifecycle state `passed` and kernel size
+  `18 72`.
 - [x] Run service database integration, portable runtime/ABI checks, hosted cloud checks and image build.
 - [x] Complete final independent native source review with no blocking findings.
-- [ ] Complete hosted macOS compilation, packaged execution and universal artifact; report
-  physical two-Mac validation separately.
+- [x] Complete the final hosted macOS workflow and independently verify the universal artifact
+  for source `633347ff33dce806ad99dc3e8662e0be306060c2`; report physical two-Mac validation
+  separately.
+- [ ] Complete physical two-Mac and authenticated public-route validation.
 - [ ] Obtain separate serving-database activation approval before executing the rollout plan.
 
 ## Acceptance criteria
 - [x] Sequential/concurrent registration returns one stable device for one installation; distinct
   installations sharing a name remain separate and revoked registrations fail closed.
 - [x] Service checks cover account/device proof, replay, expiry, sharing epoch and queue bounds.
-- [ ] The packaged two-origin CryptoKit/client-to-host-to-Rust-PTY smoke executes successfully;
-  implementation exists, but native execution awaits hosted macOS. Separate Python dual-origin
-  HTTP fixture/report checks and Rust PTY tests passed; neither is combined native evidence.
+- [x] The packaged two-origin CryptoKit/client-to-host-to-Rust-PTY smoke report passes in hosted
+  run `39238746402`, with the corrected checker and final workflow succeeding; this does not
+  establish physical two-Mac or authenticated public-route acceptance.
 - [x] Restore handling stops advertising sharing after authoritative Rust grant loss; sharing-
   disable races and known rejected outcomes fail closed without silent replay or wrong-epoch cleanup.
 - [x] Final native acceptance source review returned no blocking findings.
-- [ ] Hosted macOS compile/packaged execution, universal artifact and physical two-Mac validation
-  are complete.
+- [x] The final hosted macOS workflow succeeds and its universal artifact is verified against
+  source SHA `633347ff33dce806ad99dc3e8662e0be306060c2`.
+- [ ] Physical two-Mac and authenticated public-route validation are complete.
 - [x] Unrelated profile-lifecycle work and production service/database/tunnel state were preserved.
 
 ## References
