@@ -470,25 +470,20 @@ actor CloudClient {
                                                         context: stored.cryptoContext, direction: .response,
                                                         issuedAt: stored.issuedAt, expiresAt: stored.expiresAt)
         let path = "v1/terminal-relay/requests/\(claim.id.uuidString.lowercased())/response"
-        var mayHaveResponded = false
+        let body = try encode(CloudPayloadBody(payload: encrypted))
+        let headers = try deviceHeaders(deviceID: stored.targetDeviceID, identity: identity)
         do {
-            mayHaveResponded = true
-            _ = try await rawRequestData(path, method: "POST", body: try encode(CloudPayloadBody(payload: encrypted)),
-                                         headers: try deviceHeaders(deviceID: stored.targetDeviceID, identity: identity),
+            _ = try await rawRequestData(path, method: "POST", body: body,
+                                         headers: headers,
                                          deviceAuthenticated: true, missingMeansDeviceReauth: true,
                                          deadline: stored.expiresAt, scope: stored.scope)
             try check(stored.scope.generation)
         } catch let failure as CloudFailure {
             throw failureAfterMutation(failure)
-        }
-        catch is CancellationError {
+        } catch is CancellationError {
             guard generation == stored.scope.generation else { throw CancellationError() }
-            if mayHaveResponded {
-                throw CloudFailure(message: "Cloud could not confirm delivery of the terminal response.", outcomeUnknown: true)
-            }
-            throw CancellationError()
-        }
-        catch {
+            throw CloudFailure(message: "Cloud could not confirm delivery of the terminal response.", outcomeUnknown: true)
+        } catch {
             guard generation == stored.scope.generation else { throw CancellationError() }
             throw CloudFailure(message: "Cloud could not confirm delivery of the terminal response.", outcomeUnknown: true)
         }
@@ -527,9 +522,7 @@ actor CloudClient {
         guard body.count <= 384 * 1024 else { throw CloudFailure(message: "Terminal request exceeded the relay body limit.") }
         let proof = try deviceHeaders(deviceID: senderID, identity: identity)
         var effectiveDeadline = deadline
-        var mayHaveEnqueued = false
         do {
-            mayHaveEnqueued = true
             let bytes = try await rawRequestData("v1/terminal-relay/requests", method: "POST", body: body,
                                                  headers: proof, deviceAuthenticated: true,
                                                  missingMeansDeviceReauth: true, deadline: deadline, scope: scope)
@@ -554,14 +547,10 @@ actor CloudClient {
             // request ID; never send the mutation again.
         } catch is CancellationError {
             guard generation == scope.generation else { throw CancellationError() }
-            if mayHaveEnqueued {
-                throw CloudFailure(message: "Cloud could not confirm whether the terminal request was accepted.", outcomeUnknown: true)
-            }
-            throw CancellationError()
-        }
-        catch {
+            throw CloudFailure(message: "Cloud could not confirm whether the terminal request was accepted.", outcomeUnknown: true)
+        } catch {
             guard generation == scope.generation else { throw CancellationError() }
-            if Task.isCancelled, mayHaveEnqueued {
+            if Task.isCancelled {
                 throw CloudFailure(message: "Cloud could not confirm whether the terminal request was accepted.", outcomeUnknown: true)
             }
             // Query the original ID to distinguish a lost acknowledgement from
