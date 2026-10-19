@@ -51,14 +51,35 @@
   review returned no blocking findings. The report-key mismatch from run `39235177700` was fixed
   in source SHA `633347f`; the corrected validator passed against the real report, recorded in
   `/tmp/zmux-device-native-c0a1c08-diagnostics/validator-key-red-green.log`.
-- Physical two-Mac behavior and an authenticated public-route journey remain unverified. The owned
-  disposable PostgreSQL container was removed; the serving database, service, tunnel and running
-  app were not changed.
+
+## Approved serving activation
+
+- After explicit user approval, `scripts/local-cloud start` and `scripts/local-cloud check`
+  completed successfully on 2026-10-19. The control-plane service and persistent serving database
+  were activated; this is recorded separately from the hosted macOS artifact workflow.
+- Pre-migration archive: `~/.local/state/zmux/control-plane/backups/pre-migration-20261019T113401997337Z.dump`,
+  25,929 bytes, SHA-256
+  `245b0474c74be032c7ce01800c7b24c865b813b9dfd2ca80945ee34a9945b63c`. Parent verified the
+  file hash, size, mode `0600`, and PostgreSQL custom-dump header. Restore testing was not done.
+- A read-only serving-database ledger query showed `001_native_identity.sql`,
+  `002_native_token_expiry.sql`, and `003_device_terminal_relay.sql`. The running app image has
+  SHA-256 `b10a718017f5eaf5fe2d1cc659c683e4bd1395af5b60a60c652ea7f6f01f9150` and was healthy;
+  the app container started at `2026-10-19T11:34:09.581537922Z`. The owned PostgreSQL container
+  was healthy and started at `2026-10-19T11:34:04.646782212Z`.
+- At approximately 11:34–11:35 UTC, direct local checks against `http://127.0.0.1:3530` and
+  public checks against `https://zmux.w3api.dev` returned HTTP 200 for `/health`, `/ready` and
+  `/v1/config`. Both origins reported healthy/ready status, `stable_device_identity` and
+  `terminal_relay` ready/true, the configured public origin, and `vm`/`email` false. The existing
+  public route was reachable with a normal Mozilla user agent. No DNS or tunnel changes were made.
+- The script's `public_tunnel_verified: false` means it did not probe the route; the direct public
+  checks above independently verified endpoint readiness. Physical two-Mac behavior and an
+  authenticated terminal-client journey remain unverified. The user's running cmux app and hosted
+  infrastructure were not changed.
 
 ## Remaining gates
 
-- Complete physical two-Mac and authenticated public-route validation separately. The final
-  workflow and source-pinned universal artifact are verified; the artifact is not notarized.
-- The rollout plan is concrete and linked from `plan.md`. Activating the persistent serving
-  database still requires separate approval; the plan does not grant it. No production
-  database, service, tunnel or running app was changed for this task.
+- Complete physical two-Mac and authenticated terminal-client validation. Public health and
+  capability endpoints are verified, but they do not prove authenticated client attachment or
+  remote terminal interaction. The source-pinned artifact is verified and is not notarized.
+- Future serving-database or service mutations require separate approval. The 2026-10-19
+  activation was explicitly approved and completed; see [activation receipt](references/activation-receipt.md).

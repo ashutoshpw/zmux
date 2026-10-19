@@ -36,5 +36,9 @@
 - Hosted runner execution establishes packaged-path coverage, not physical two-Mac acceptance.
   Two physical Macs and an authenticated public-route journey remain separate unverified gates;
   Linux/runtime/HTTP evidence alone is not a MacBook dogfood receipt.
-- Production migration/deployment is a separate final gate after concrete validated artifacts;
-  no production DB, serving service, tunnel, or user's running cmux is changed during development.
+- The persistent serving-database activation was separately approved and completed on
+  2026-10-19 after the validated artifact was available. Local and existing public-route health
+  and capability endpoints returned ready; see [activation receipt](activation-receipt.md).
+  This does not establish an authenticated terminal-client journey or physical two-Mac behavior.
+  Future serving-database or service mutations require separate approval. No DNS or tunnel
+  settings were changed, and the user's running cmux app was left untouched.

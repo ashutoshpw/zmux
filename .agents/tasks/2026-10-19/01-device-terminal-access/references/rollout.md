@@ -1,9 +1,11 @@
 # Local rollout and rollback plan
 
-This is an operator plan only. No database, local service, public origin, or tunnel was
-changed while writing it. `scripts/local-cloud` is the documented local path, but activation
-against the persistent serving database requires separate approval. This plan does not
-authorize that operation or constitute a production deployment workflow.
+This operator plan now includes the receipt for the explicitly approved 2026-10-19 activation.
+`scripts/local-cloud start` and `scripts/local-cloud check` completed successfully; the serving
+database was migrated and the local control-plane service restarted. See
+[activation receipt](activation-receipt.md) for the archive, migration ledger, running image and
+endpoint evidence. This record does not authorize future database or service mutations and does
+not constitute a hosted production deployment workflow.
 
 The parent's read-only pre-rollout snapshot on 2026-10-19 found
 `http://127.0.0.1:3530/v1/config` reporting the legacy keys `identity: true`,
@@ -19,16 +21,18 @@ the post-migration checks below.
    installation identity fields, sharing fields with a disabled default, an account-scoped
    unique index, and the encrypted relay table. Historical rows keep null installation
    identity and remain separate; the migration does not merge them by name.
-2. After separate approval to activate the persistent serving database, run
-   `scripts/local-cloud start` from the repository root.
+2. **Completed 2026-10-19 after separate user approval:** run `scripts/local-cloud start` from
+   the repository root.
    The script builds the service image, starts the owned PostgreSQL container, saves a private
    custom-format `pg_dump` under `~/.local/state/zmux/control-plane/backups/` by default
    (or under `ZMUX_LOCAL_STATE`), applies the explicit migrations (including 003), then
    recreates only the app container. It stops before promotion if backup or migration fails.
-   The pre-migration archive is local and has no automatic retention or off-host copy.
-3. Run `scripts/local-cloud check` and inspect its private `health.json` receipt. It checks
-   `/health` and database-backed `/ready` on the local service. Then inspect all three local
-   endpoints directly:
+   The pre-migration archive is local and has no automatic retention or off-host copy. Its
+   verified name, size, hash and file mode are in the activation receipt; it was not restore-tested.
+3. **Completed after activation:** `scripts/local-cloud check` and direct local endpoint checks
+   returned HTTP 200 for `/health`, `/ready` and `/v1/config`. It checks
+   `/health` and database-backed `/ready` on the local service and records them in private
+   `health.json`; the direct checks covered all three endpoints:
 
    ```sh
    curl --fail --silent --show-error http://127.0.0.1:3530/health
@@ -36,28 +40,26 @@ the post-migration checks below.
    curl --fail --silent --show-error http://127.0.0.1:3530/v1/config
    ```
 
-   Require `/health` to return `status: "ok"`; `/ready` must return `status: "ready"`,
-   `stable_device_identity: "ready"` and `terminal_relay: "ready"`; `/v1/config` must report
+   The observed `/health` returned `status: "ok"`; `/ready` returned `status: "ready"`,
+   `stable_device_identity: "ready"` and `terminal_relay: "ready"`; `/v1/config` reported
    `cloud_origin: "https://zmux.w3api.dev"`, `stable_device_identity: true` and
-   `terminal_relay: true`. Confirm that `vm` and `email` remain unavailable/false. A healthy
+   `terminal_relay: true`; `vm` and `email` remained unavailable/false. A healthy
    process alone does not prove migration readiness.
-4. `scripts/local-cloud start` does not create or validate a public route. First verify
-   whether the owner has already mapped the origin; do not create or change a tunnel as part
-   of this rollout plan. After confirming the existing route and an authorized external
-   path, check the same endpoints through it:
+4. **Completed 2026-10-19:** the existing public route was reachable; no DNS or tunnel changes
+   were made. Direct checks through `https://zmux.w3api.dev` returned HTTP 200 for the same
+   endpoints; the public probe used a normal Mozilla user agent:
 
    ```sh
-   curl --fail --silent --show-error https://zmux.w3api.dev/health
-   curl --fail --silent --show-error https://zmux.w3api.dev/ready
-   curl --fail --silent --show-error https://zmux.w3api.dev/v1/config
+   curl --user-agent 'Mozilla/5.0' --fail --silent --show-error https://zmux.w3api.dev/health
+   curl --user-agent 'Mozilla/5.0' --fail --silent --show-error https://zmux.w3api.dev/ready
+   curl --user-agent 'Mozilla/5.0' --fail --silent --show-error https://zmux.w3api.dev/v1/config
    ```
 
-   If these requests receive Cloudflare error 1010, that is a blocked integrity check, not
-   a service health result; repeat the check through an authorized path.
-   Require the same readiness and capability values, with the configured public origin in
-   `cloud_origin`. Recheck from a permitted path that can complete any Cloudflare integrity
-   check. The local receipt's `public_tunnel_verified: false` records that the script did not
-   verify the public route.
+   The public endpoints reported the same readiness and capability values, with the configured
+   origin in `cloud_origin`; `vm` and `email` remained unavailable/false. A prior pre-activation
+   urllib probe received Cloudflare error 1010 and did not verify service health. The later
+   direct Mozilla-user-agent checks established public endpoint readiness. The local receipt's
+   `public_tunnel_verified: false` still records that the script itself did not probe the route.
 5. Keep the upgraded client build and service change coordinated: current service
    `POST /v1/devices` requires `installation_id`, `device_secret`, and `public_key`. Older
    clients that send only name/platform receive `400 invalid_device`; only historical rows
@@ -70,8 +72,9 @@ the post-migration checks below.
    [`12181162700`](https://github.com/ashutoshpw/zmux/actions/runs/39238746402/artifacts/12181162700)
    (expires `2026-11-02T11:01:28Z`) was independently verified against that source SHA and has SHA-256
    `2bf2fe16965952bebe32106bee1b444e9e4b355b816cc132fd640e8ce444ce4e`; it carries ad-hoc
-   signatures and is not notarized. Physical two-Mac validation and authenticated public-route
-   checks remain separate gates.
+   signatures and is not notarized. Physical two-Mac and authenticated terminal-client validation
+   remain open; public endpoint readiness does not prove a client can attach or exchange input.
+   See [activation receipt](activation-receipt.md) for the serving-state and endpoint evidence.
 
 ## Rollback limits
 

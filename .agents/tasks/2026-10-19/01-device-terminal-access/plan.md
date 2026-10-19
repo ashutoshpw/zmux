@@ -37,8 +37,10 @@ the running app. Reuse Rust PTY operations and native terminal rendering.
 - [x] Complete the final hosted macOS workflow and independently verify the universal artifact
   for source `633347ff33dce806ad99dc3e8662e0be306060c2`; report physical two-Mac validation
   separately.
-- [ ] Complete physical two-Mac and authenticated public-route validation.
-- [ ] Obtain separate serving-database activation approval before executing the rollout plan.
+- [ ] Complete physical two-Mac and authenticated terminal-client validation. The existing
+  public route's health and capability endpoints have been verified separately.
+- [x] Obtain separate serving-database activation approval and execute the rollout; see
+  [activation receipt](references/activation-receipt.md).
 
 ## Acceptance criteria
 - [x] Sequential/concurrent registration returns one stable device for one installation; distinct
@@ -52,11 +54,14 @@ the running app. Reuse Rust PTY operations and native terminal rendering.
 - [x] Final native acceptance source review returned no blocking findings.
 - [x] The final hosted macOS workflow succeeds and its universal artifact is verified against
   source SHA `633347ff33dce806ad99dc3e8662e0be306060c2`.
-- [ ] Physical two-Mac and authenticated public-route validation are complete.
-- [x] Unrelated profile-lifecycle work and production service/database/tunnel state were preserved.
+- [x] After explicit approval, the serving database and local service were activated; local and
+  existing public-route readiness/capability endpoints passed. See the activation receipt.
+- [ ] Physical two-Mac and authenticated terminal-client validation are complete.
+- [x] Unrelated profile-lifecycle work and public DNS/tunnel configuration were preserved.
 
 ## References
 - [references/protocol.md](references/protocol.md) — shared device, relay and terminal contract.
 - [references/security-and-validation.md](references/security-and-validation.md) — authorization and acceptance boundaries.
 - [references/rollout.md](references/rollout.md) — local migration, capability checks, public-route gate and rollback limits.
+- [references/activation-receipt.md](references/activation-receipt.md) — approved activation, backup, migration, image and endpoint evidence.
 - [status.md](status.md) — discoveries, validation and remaining delivery gates.
