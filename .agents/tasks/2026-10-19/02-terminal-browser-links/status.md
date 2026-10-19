@@ -4,27 +4,42 @@
 - **Updated:** 2026-10-19
 
 ## Current delivery gate
-- Contract, implementation, and focused regression steps are complete. Source-independent review
-  cleared after fixes for balanced URL trimming, far-away mouse-up handling, and the unregistered /
-  wrong-nonce burst P2. The later representation-only cleanup delta also cleared re-review.
+- Source commit `53bac2cdaee02bee2b59851fd8bf110d855d11b5` is pushed to `origin/main`; `git
+  ls-remote` confirmed remote parity. Unrelated older status and profile files were preserved.
+- Contract, implementation, focused regressions, and source-independent review are complete.
+  Review cleared after fixes for balanced URL trimming, far-away mouse-up handling, and the
+  unregistered/wrong-nonce burst P2; the later `Box<SessionError>` cleanup handoff also cleared
+  targeted review.
+- Hosted Swift checks on both architectures passed, including native persistence, cloud
+  credentials, device, relay, callback, browser-download, and file-panel checks. This does not
+  establish physical-Mac behavior or a delivered browser effect.
 - Focused green results: terminal adapter 18 tests; session runtime 25 tests; managed SSH 7 tests;
-  desktop URL policy 1 test and browser integration 2 tests. The desktop integration asserts an
-  actual browser surface and URL in the intended pane, including same-size viewport generation.
+  core URL policy 1 test and browser integration 2 tests. The desktop integration asserts an actual
+  browser surface and URL in the intended pane, including same-size viewport generation.
 - Full workspace test phase: 619 passed across 84 passing suites, with 2 existing tests ignored.
   Workspace Clippy, format, license inventory, diff checks, C ABI, and native profile-lease ABI
-  passed after replacing literal-only `format!` calls and boxing the retained cleanup
-  `SessionError` payload (unboxed at completion).
-- Portable native-input checks (341), Ruby/YAML checks, whitespace checks, and the
+  passed. Portable native-input checks (341), Ruby/YAML checks, whitespace checks, and the
   `TerminalSelectionSmoke` audit table with three browser-kind classifications passed; the CU14
   receipt is green.
 - Final `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
   `/tmp/zmux-terminal-browser-check-clean-20261019.log`. Dependency review covered 112 resolved
   dependencies, 76 notice texts, and 3 unbundled license packages; the latter are unchanged
   Windows/UEFI-specific baseline items, not new dependencies.
-- All source review is clear, including the targeted `Box<SessionError>` handoff review. Native/Swift
-  hosted compilation and mounted-view smoke, packaged macOS validation, universal artifact
-  verification, and commit/push remain pending. Physical Mac behavior and provider login are not
-  verified. Unsupported integrations remain exclusions, not acceptance results.
+- Full macOS run [39268201123](https://github.com/ashutoshpw/zmux/actions/runs/39268201123)
+  failed in the desktop Command-click regression: the valid-click assertion used a viewport
+  generation captured before asynchronous shell output could settle after resize. The fixture now
+  prints its ready marker and executes a silent `cat`, avoiding interactive prompt redraws.
+  Production revalidation remains strict. The repaired Command-click test passed 10 consecutive
+  runs; independent review found no issues. `RUST_TEST_THREADS=2 scripts/check` passed with exit 0
+  at `/tmp/zmux-terminal-browser-ci-repair-check.log`, including Rust, lint, license and ABI gates.
+- Focused terminal-selection run [39268249169](https://github.com/ashutoshpw/zmux/actions/runs/39268249169)
+  built and signed the host app, then failed compiling its decoder probe because its input list
+  omitted `FileHostClient.swift` and `FileLoadGate.swift`. Both real source files are now included;
+  portable input validation passes. Independent review found no issues. Mounted interaction did
+  not run on this attempt; hosted replacement runs remain necessary.
+- Universal build, native interaction, and artifact verification remain pending. Physical-Mac
+  behavior and provider login are unverified. After CI and artifact verification, a final delivery
+  receipt commit remains; unsupported integrations remain exclusions, not acceptance results.
 
 ## Notes
 - The accepted cross-layer contract is recorded in

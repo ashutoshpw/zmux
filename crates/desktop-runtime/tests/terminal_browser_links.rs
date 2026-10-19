@@ -286,7 +286,7 @@ fn command_click_revalidates_live_owner_and_same_size_resize_generation() {
         1,
         Command::Input {
             session_id: origin_session,
-            text: "stty -echo; printf '%s\\n' 'https://example.test/click-target'; printf 'LINK_%s\\n' READY >/dev/tty\n"
+            text: "stty -echo; printf '%s\\n' 'https://example.test/click-target'; printf 'LINK_%s\\n' READY >/dev/tty; exec /bin/cat >/dev/null\n"
                 .to_owned(),
         },
     );
@@ -294,11 +294,15 @@ fn command_click_revalidates_live_owner_and_same_size_resize_generation() {
         &desktop,
         Instant::now() + Duration::from_secs(5),
         |snapshot| {
-            terminal_viewport(snapshot, origin_session).is_some_and(|(_, _, _, links)| {
-                links
-                    .iter()
-                    .any(|link| link.url == "https://example.test/click-target")
-            })
+            let marker_printed = terminal_contents(snapshot, origin_session)
+                .is_some_and(|contents| contents.contains("LINK_READY"));
+            let link_visible =
+                terminal_viewport(snapshot, origin_session).is_some_and(|(_, _, _, links)| {
+                    links
+                        .iter()
+                        .any(|link| link.url == "https://example.test/click-target")
+                });
+            marker_printed && link_visible
         },
     );
     let (old_generation, rows, cols, links) =
@@ -365,8 +369,15 @@ fn command_click_revalidates_live_owner_and_same_size_resize_generation() {
         &desktop,
         Instant::now() + Duration::from_secs(5),
         |snapshot| {
-            terminal_viewport(snapshot, origin_session)
-                .is_some_and(|(generation, _, _, _)| generation > old_generation)
+            terminal_viewport(snapshot, origin_session).is_some_and(|(generation, _, _, links)| {
+                generation > old_generation
+                    && links.iter().any(|current| {
+                        current.row == link.row
+                            && link.start_column >= current.start_column
+                            && link.start_column < current.end_column
+                            && current.url == link.url
+                    })
+            })
         },
     );
     let (new_generation, _, _, _) = terminal_viewport(&resized, origin_session).unwrap();
@@ -398,11 +409,13 @@ fn command_click_revalidates_live_owner_and_same_size_resize_generation() {
             new_generation,
         ),
     );
-    assert!(browser_in_pane(
-        &opened,
-        origin_pane,
-        "https://example.test/click-target"
-    ));
+    assert!(
+        browser_in_pane(&opened, origin_pane, "https://example.test/click-target"),
+        "link click failed: last_error={:?}, submitted_generation={}, returned_generation={:?}",
+        opened.last_error,
+        new_generation,
+        terminal_viewport(&opened, origin_session).map(|(generation, _, _, _)| generation)
+    );
 
     let split = send(
         &desktop,
