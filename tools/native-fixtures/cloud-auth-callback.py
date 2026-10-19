@@ -10,14 +10,25 @@ import sys
 import tempfile
 
 
-def exercise(root, source, binary, transport, sdk, baseline=False):
+def source_at_revision(root, revision, relative_path, scratch):
+    spec = f"{revision}:{relative_path.as_posix()}"
+    exists = subprocess.run(["git", "cat-file", "-e", spec], cwd=root,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if exists.returncode != 0:
+        return None
+    source = scratch / f"baseline-{relative_path.name}"
+    source.write_bytes(subprocess.check_output(["git", "show", spec], cwd=root))
+    return source
+
+
+def exercise(root, source, binary, transport, sdk, baseline=False,
+             client_source=None, support_sources=()):
     sys.path.insert(0, str(root / "scripts"))
     from browser_process import run_browser
 
     swift_sources = [
-        root / "apps/macos/Sources/CloudClient.swift",
-        root / "apps/macos/Sources/CloudDeviceIdentity.swift",
-        root / "apps/macos/Sources/CloudTerminalTransport.swift",
+        client_source or root / "apps/macos/Sources/CloudClient.swift",
+        *support_sources,
         source,
         root / "tools/native-fixtures/cloud-auth-callback.swift",
     ]
@@ -71,12 +82,27 @@ def main():
             "-o", str(transport),
         ], check=True, timeout=30)
         if args.baseline_ref:
-            baseline = scratch / "CloudSettings-before.swift"
-            baseline.write_bytes(subprocess.check_output([
-                "git", "show", args.baseline_ref + ":apps/macos/Sources/CloudSettings.swift",
-            ], cwd=root))
-            exercise(root, baseline, scratch / "before", transport, sdk, baseline=True)
-        exercise(root, root / "apps/macos/Sources/CloudSettings.swift", scratch / "current", transport, sdk)
+            baseline_settings = source_at_revision(
+                root, args.baseline_ref, Path("apps/macos/Sources/CloudSettings.swift"), scratch)
+            baseline_client = source_at_revision(
+                root, args.baseline_ref, Path("apps/macos/Sources/CloudClient.swift"), scratch)
+            if baseline_settings is None or baseline_client is None:
+                raise RuntimeError("The callback baseline must contain both CloudSettings.swift and CloudClient.swift")
+            baseline_support = [
+                source for source in (
+                    source_at_revision(root, args.baseline_ref,
+                                       Path("apps/macos/Sources/CloudDeviceIdentity.swift"), scratch),
+                    source_at_revision(root, args.baseline_ref,
+                                       Path("apps/macos/Sources/CloudTerminalTransport.swift"), scratch),
+                ) if source is not None
+            ]
+            exercise(root, baseline_settings, scratch / "before", transport, sdk, baseline=True,
+                     client_source=baseline_client, support_sources=baseline_support)
+        current_support = [root / "apps/macos/Sources/CloudDeviceIdentity.swift",
+                           root / "apps/macos/Sources/CloudTerminalTransport.swift"]
+        exercise(root, root / "apps/macos/Sources/CloudSettings.swift", scratch / "current", transport, sdk,
+                 client_source=root / "apps/macos/Sources/CloudClient.swift",
+                 support_sources=current_support)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,14 @@
   Independent fixture review found no blockers; portable AST and diff checks passed. A full native
   auth-callback rerun is pending, so no callback or packaged-native success is claimed. The owned
   disposable PostgreSQL container was removed; the serving database was untouched.
+- Hosted macOS run `39231022451` again passed production compile, credential and terminal checks,
+  then exposed an API mismatch in the old callback probe: baseline `CloudSettings.swift` had been
+  compiled against current `CloudClient.swift`, so its call ignored the newly returned device.
+  The fixture now selects `CloudSettings.swift` and `CloudClient.swift` from the same baseline
+  revision, includes identity/transport helpers only when present in that snapshot, and compiles
+  the current probe with current helpers. This is test wiring only; no product source changed.
+  Independent review found no blocking issue. Portable AST/source-selection/diff checks passed;
+  the full callback rerun remains pending.
 
 ## Remaining gates
 
