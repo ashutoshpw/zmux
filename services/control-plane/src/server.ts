@@ -2,6 +2,7 @@ import { createApp } from "./app";
 import { createAuth } from "./auth";
 import { loadConfig } from "./config";
 import { createPool } from "./db";
+import { MAX_RELAY_BODY_BYTES } from "./device-terminal";
 
 const config = loadConfig();
 const pool = createPool(config);
@@ -11,7 +12,7 @@ const app = createApp(pool, auth, config);
 const server = Bun.serve({
   hostname: config.host,
   port: config.port,
-  maxRequestBodySize: 16 * 1024,
+  maxRequestBodySize: MAX_RELAY_BODY_BYTES,
   fetch(request, server) {
     return app(request, { ip: server.requestIP(request)?.address });
   },
