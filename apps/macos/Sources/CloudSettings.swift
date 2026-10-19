@@ -143,12 +143,15 @@ final class CloudWindowController: NSWindowController, NSWindowDelegate, ASWebAu
             authentication?.cancel()
             let authorization = try CloudAuthorization(endpoint: endpoint)
             let current = begin("Complete sign-in in your browser…")
-            let session = ASWebAuthenticationSession(url: authorization.url, callbackURLScheme: "zmux-dev") { [weak self] callback, error in
+            // AuthenticationServices can complete on Safari's XPC queue. Keep this outer
+            // callback nonisolated; an inherited MainActor check would trap before the hop.
+            let session = ASWebAuthenticationSession(url: authorization.url, callbackURLScheme: "zmux-dev") { @Sendable [weak self] callback, error in
                 Task { @MainActor [weak self] in
                     guard let self, self.generation == current else { return }
                     self.authentication = nil
                     guard let callback, error == nil else {
-                        self.message.stringValue = "Sign-in was cancelled or could not open. Try again when cloud is available."
+                        self.message.stringValue = error.map { "Unable to complete browser sign-in: " + $0.localizedDescription }
+                            ?? "Sign-in ended without an authorization callback. Please try again."
                         self.setBusy(false); return
                     }
                     do {
