@@ -55,7 +55,7 @@ jobs:
         run: scripts/check-macos-sources
       - name: Verify native persistence directory paths
         run: scripts/check-native-storage-paths
-      - name: Verify native cloud credential cancellation and ownership
+      - name: Verify native cloud credentials, device registration and encrypted terminal relay
         run: scripts/check-native-cloud-client --baseline-ref c25c4c631bb4917ee496f9caed39b42e843bb78d
       - name: Verify native authentication callbacks from foreign queues
         run: scripts/check-native-cloud-auth-callback --baseline-ref 380c6f7f218ae83b1c64e33954caa99554f94ca8
@@ -93,6 +93,10 @@ jobs:
             dist/build-info.json
             dist/native-smoke.json
             dist/native-smoke.json.stages.json
+            dist/native-cloud-terminal-lifecycle.json
+            dist/native-cloud-terminal-lifecycle.stdout.log
+            dist/native-cloud-terminal-lifecycle.stderr.log
+            dist/native-cloud-terminal-fixture.json
             dist/native-download-preflight.log
             dist/native-windows.json
             dist/native-resources.json
@@ -117,6 +121,10 @@ jobs:
             dist/native-window-*.json
             dist/native-smoke.json
             dist/native-smoke.json.stages.json
+            dist/native-cloud-terminal-lifecycle.json
+            dist/native-cloud-terminal-lifecycle.stdout.log
+            dist/native-cloud-terminal-lifecycle.stderr.log
+            dist/native-cloud-terminal-fixture.json
             dist/native-download-preflight.log
             dist/native-windows.json
             dist/native-resources.json

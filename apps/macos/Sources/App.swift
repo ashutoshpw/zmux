@@ -73,6 +73,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var authorizedClose = false
     private let workspaceMenuContexts = NSMapTable<NSMenu, WorkspaceContextTarget>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     private var bridge: NativeBridge { coordinator.bridge }
+    var cloudEndpoint: CloudEndpoint { coordinator.cloudEndpoint }
+    var cloudClient: CloudClient { coordinator.cloudClient }
+    var cloudTerminalHost: CloudTerminalHost { coordinator.cloudTerminalHost }
+    @discardableResult func openCloudTerminal(_ session: CloudTerminalSessionDescriptor) -> Bool {
+        coordinator.openCloudTerminal(session)
+    }
     private var browserDownloads: BrowserDownloads { coordinator.browserDownloads }
     private var notificationDelivery: NotificationDelivery { coordinator.notificationDelivery }
     private var imagePastes: ClipboardImagePastes { coordinator.imagePastes }
@@ -2130,7 +2136,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         window.contentView?.layoutSubtreeIfNeeded()
         try await waitUntil { [weak self] snapshot in
             guard let terminal = self?.focusedTerminal,
-                  let frame = snapshot.frames.first(where: { $0.sessionId == terminal.pane.sessionId }),
+                  let frame = snapshot.frames.first(where: { $0.sessionId == terminal.pane?.sessionId }),
                   let size = frame.snapshot?.viewport.size else { return false }
             return size.rows > 1 && size.cols > 1 && terminal.requestedSize == (size.rows, size.cols)
         }
@@ -3317,10 +3323,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try await NotificationPermissionSmoke.validate()
                 }
                 let storage: NativeDesktopStorage
-                if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
-                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
-                } else if CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
+                if CommandLine.arguments.contains("--cloud-terminal-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") {
                     storage = .transient
+                } else if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--completed-history-smoke"), CommandLine.arguments.count > index + 2 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--profile-operations-smoke"), CommandLine.arguments.count > index + 4 {
@@ -3334,6 +3340,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--cloud-terminal-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                    do {
+                        let hostEndpoint = try CloudEndpoint(CommandLine.arguments[index + 2])
+                        let viewerEndpoint = try CloudEndpoint(CommandLine.arguments[index + 3])
+                        try await CloudTerminalLifecycleSmoke.run(report: report, hostEndpoint: hostEndpoint,
+                                                                  viewerEndpoint: viewerEndpoint, bridge: coordinator.bridge)
+                        try await coordinator.shutdown()
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native Cloud terminal lifecycle failed: \(error.localizedDescription)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Cloud terminal lifecycle cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--sidebar-grouping-smoke"), CommandLine.arguments.count > index + 2 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
@@ -3449,7 +3472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--sidebar-grouping-smoke") || CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
+                if CommandLine.arguments.contains("--cloud-terminal-lifecycle-smoke") || CommandLine.arguments.contains("--sidebar-grouping-smoke") || CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }
