@@ -12,7 +12,7 @@ static bool installed;
 - (instancetype)zmux_fixture_initWithURL:(NSURL *)url
                      callbackURLScheme:(NSString *)scheme
                      completionHandler:(ASWebAuthenticationSessionCompletionHandler)completion
-    NS_METHOD_FAMILY(init);
+    __attribute__((objc_method_family(init)));
 - (BOOL)zmux_fixture_start;
 @end
 
