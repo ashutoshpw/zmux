@@ -26,14 +26,14 @@ No production-only test seam, browser session, credentials or HTTP requests need
 ## Steps
 - [x] Correlate build 217, full crashed stack and current production callback.
 - [x] Fix callback isolation and add a native owner regression with baseline proof.
-- [ ] Validate portable checks, hosted baseline/current regression and native app.
-- [ ] Commit/push scoped files and deliver a verified replacement build.
+- [x] Validate portable checks, hosted baseline/current regression and native app.
+- [x] Commit/push scoped files and deliver a verified replacement build.
 
 ## Acceptance criteria
-- [ ] Pre-fix callback reproduces the executor trap on a background queue.
-- [ ] Fixed callback restores UI safely and reports the SDK failure on MainActor.
-- [ ] Required portable and hosted native checks pass; source/build receipt verified.
-- [ ] Real Safari launch and authenticated login remain clearly distinguished from
+- [x] Pre-fix callback reproduces the executor trap on a background queue.
+- [x] Fixed callback restores UI safely and reports the SDK failure on MainActor.
+- [x] Required portable and hosted native checks pass; source/build receipt verified.
+- [x] Real Safari launch and authenticated login remain clearly distinguished from
       deterministic callback regression coverage and require the affected Mac retry.
 
 ## References
