@@ -1,13 +1,90 @@
 import AppKit
 import AuthenticationServices
 
+// CloudSettings currently depends on the app-lifetime terminal owner, but this
+// callback-only probe must not link the Rust terminal bridge. Keep these minimal
+// API stand-ins local to the fixture and fail if the probe starts using them.
+struct CloudTerminalSessionScope {
+    let sessionId: UInt64
+}
+
+struct CloudTerminalSessionDescriptor {
+    let scope: CloudTerminalSessionScope
+    let title: String
+}
+
+enum CloudTerminalSharingState: Equatable {
+    case off
+    case starting
+    case sharing
+    case stopping
+    case failed(String)
+
+    var isSharing: Bool {
+        if case .sharing = self { return true }
+        return false
+    }
+
+    var message: String {
+        switch self {
+        case .off: return "Terminal sharing is off."
+        case .starting: return "Starting terminal sharing…"
+        case .sharing: return "Terminal sharing is on."
+        case .stopping: return "Stopping terminal sharing…"
+        case .failed(let message): return message
+        }
+    }
+}
+
+@MainActor
+final class CloudTerminalHost {
+    var sharingState: CloudTerminalSharingState { .off }
+
+    func observeSharing(_ observer: @escaping @MainActor (CloudTerminalSharingState) -> Void) -> UUID {
+        fatalError("callback-only fixture unexpectedly observed terminal sharing")
+    }
+
+    func removeSharingObserver(_ id: UUID) {
+        fatalError("callback-only fixture unexpectedly removed a terminal sharing observer")
+    }
+
+    func stopForCredentialChange() async -> String? {
+        fatalError("callback-only fixture unexpectedly stopped terminal sharing")
+    }
+
+    func setSharingEnabled(_ enabled: Bool) async throws {
+        fatalError("callback-only fixture unexpectedly changed terminal sharing")
+    }
+
+    func listSessions(on device: CloudDevice) async throws -> [CloudTerminalSessionDescriptor] {
+        fatalError("callback-only fixture unexpectedly listed terminal sessions")
+    }
+}
+
 // Only the unrelated application shell is a stand-in. The actual framework class,
 // its imported API annotations, and CloudSettings.swift are compiled unchanged.
 @MainActor
 final class MainWindowHost: NSObject {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
                           styleMask: [.titled], backing: .buffered, defer: false)
+    let cloudEndpoint: CloudEndpoint
+    let cloudClient: CloudClient
+    let cloudTerminalHost = CloudTerminalHost()
+
+    override init() {
+        let endpoint: CloudEndpoint
+        do { endpoint = try CloudEndpoint("https://cloud-auth-callback.invalid") }
+        catch { fatalError("invalid callback fixture endpoint: \(error)") }
+        cloudEndpoint = endpoint
+        cloudClient = CloudClient(endpoint: endpoint)
+        super.init()
+    }
+
     func updateCloudStatus(_ title: String, connected: Bool) {}
+
+    func openCloudTerminal(_ session: CloudTerminalSessionDescriptor) -> Bool {
+        fatalError("callback-only fixture unexpectedly opened a terminal session")
+    }
 }
 
 @main

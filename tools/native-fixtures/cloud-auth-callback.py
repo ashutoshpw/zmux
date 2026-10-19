@@ -14,13 +14,19 @@ def exercise(root, source, binary, transport, sdk, baseline=False):
     sys.path.insert(0, str(root / "scripts"))
     from browser_process import run_browser
 
+    swift_sources = [
+        root / "apps/macos/Sources/CloudClient.swift",
+        root / "apps/macos/Sources/CloudDeviceIdentity.swift",
+        root / "apps/macos/Sources/CloudTerminalTransport.swift",
+        source,
+        root / "tools/native-fixtures/cloud-auth-callback.swift",
+    ]
     subprocess.run([
         "xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
         "-strict-concurrency=complete", "-warnings-as-errors", "-O", "-g",
         "-target", platform.machine() + "-apple-macosx14.0", "-sdk", sdk,
         "-import-objc-header", str(root / "tools/native-fixtures/cloud-auth-callback.h"),
-        str(transport), str(source), str(root / "apps/macos/Sources/CloudClient.swift"),
-        str(root / "tools/native-fixtures/cloud-auth-callback.swift"),
+        str(transport), *map(str, swift_sources),
         "-framework", "AppKit", "-framework", "AuthenticationServices",
         "-framework", "Security", "-framework", "CryptoKit", "-framework", "LocalAuthentication",
         "-o", str(binary),
