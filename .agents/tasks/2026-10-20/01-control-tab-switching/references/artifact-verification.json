@@ -1,0 +1,62 @@
+{
+  "source_sha": "ddc5373161bd3d0b2f31a63ee3eec528fbc65c3c",
+  "run_id": 39419255495,
+  "artifact_id": 12265031238,
+  "artifact_url": "https://github.com/ashutoshpw/zmux/actions/runs/39419255495/artifacts/12265031238",
+  "archive": "zmux-dev-universal-ddc5373.zip",
+  "sha256": "007b62ddccbe0c1c7ef54030b2cd5c4419616cde634d7b0c51850021db5fa6d6",
+  "outer_artifact_sha256": "4eccca166b2e8d827d83d7539c2704e5c3176a5d5896db7fa30f85a4cd802a24",
+  "architectures": {
+    "zmux.app/Contents/MacOS/zmux-app": [
+      "x86_64",
+      "arm64"
+    ],
+    "zmux.app/Contents/Resources/bin/zmux": [
+      "x86_64",
+      "arm64"
+    ],
+    "zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "build_info": {
+    "source_sha": "ddc5373161bd3d0b2f31a63ee3eec528fbc65c3c",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "minimum_macos": "14.0",
+    "bundle_id": "app.w3dev.zmux.dev",
+    "signing": "ad-hoc",
+    "notarized": false,
+    "cloud_origin": "https://zmux.w3api.dev",
+    "optional_ghostty_linked": false,
+    "default_terminal_engine": "vt100",
+    "optional_zellij_packaged": false
+  },
+  "native_shortcut_receipts": {
+    "ctrl_tab_navigation": true,
+    "ctrl_tab_single_tab_no_input": true,
+    "ctrl_tab_multipane_scoping": true,
+    "terminal_tab_shortcut": true,
+    "close_tab_shortcut": true,
+    "reopen_tab_shortcut": true,
+    "tab_navigation_shared_actions": true
+  },
+  "native_selection_cases": 41,
+  "terminal_link_requests": [
+    "/p-53e5bf12dcc645be",
+    "/o-53e5bf12dcc645be"
+  ],
+  "retained_source_files_verified": 340,
+  "packaged_native_smoke": "passed",
+  "cloud_terminal_lifecycle": "passed",
+  "sidebar_and_status_menu": "passed",
+  "hosted_strict_codesign_verification": "passed",
+  "excluded_checks": {
+    "native_save_dialog_accessibility": "skipped_user_deferred",
+    "browser_downloads_native": false
+  },
+  "physical_user_mac_verified": false
+}
