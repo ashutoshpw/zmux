@@ -1,42 +1,29 @@
 # Status
 
-- **State:** in-progress
+- **State:** done
 - **Updated:** 2026-10-20
 
 ## Notes
-- The test-only completion marker now writes the original wrapper exit status to a temporary file
-  and atomically renames it. Independent review found no issues; the exact focused test passed
-  all five scenarios (1 test), and `RUST_TEST_THREADS=2 scripts/check` exited 0 at
-  `/tmp/zmux-ctrl-tab-status-publication-check.log`. The exact `0` assertion remains unchanged.
-- Hosted run `39417663909` passed native Swift source checks and helper checks, then failed the
-  unchanged CLI agent-message fixture before app packaging: wrapper exit status was empty rather
-  than `0`. The producer creates `wrapper-status` before its printf writes, while the consumer
-  waits only for file existence. A scoped test-only repair will publish the completed status via
-  temporary-file rename; the strict exit-code assertion remains unchanged. No native shortcut
-  execution has occurred on this run.
-- Source `301fe9d3b012ffc3b0e672719525d43e72c71352` is pushed to `origin/main` with remote
-  parity confirmed. Hosted macOS run
-  [39417663909](https://github.com/ashutoshpw/zmux/actions/runs/39417663909) is queued on this SHA.
-  Native validation and a source-bound universal artifact remain pending.
-- Implementation and independent review are complete. Main-window callbacks reuse next/previous
-  navigation; exact Control/Control+Shift matching preserves the existing bracket aliases.
-  Unconfigured windows, marked text, sheets, and browser-owned automation events retain fallback
-  or containment behavior.
-- The packaged smoke now dispatches real NSApp events for forward/backward order and wraparound,
-  bracket aliases, and focused-pane scoping. A bounded raw PTY reader verifies that x is the first
-  received byte after both one-tab shortcuts, ordinary Tab is next, and y completes the probe;
-  indexed receipts prevent delayed screen updates from satisfying a stale assertion. The reader
-  restores termios before emitting its completion marker, including cancellation cleanup.
-- `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at `/tmp/zmux-ctrl-tab-check.log`.
-  Python syntax compilation and `git diff --check` pass. This Linux host has no Swift/AppKit
-  compiler, so native compilation and mounted execution await the hosted macOS build.
-- Review repaired fixture key-code mapping, unrelated close-history assumptions, and raw-reader
-  ordering/cleanup before delivery. No production routing findings remain.
-- User clarified the target is Zmux. Design accepted: main-window key-equivalent routing after
-  owned browser-event containment, using the existing focused-pane next/previous actions.
-- Existing menu validation disables those actions with one tab, so hidden menu aliases alone
-  would allow Ctrl+Tab to reach terminal input. The main-window route will consume both shortcuts
-  even when navigation is a no-op.
-- Native regression extends the existing packaged smoke at NSApp dispatch and real PTY boundaries;
-  it covers ordering, wraparound, pane scoping, bracket aliases, and a single-tab input probe.
-- Base source is `64c3482`; unrelated dirty task/profile files are preserved.
+- Replacement macOS workflow [39419255495](https://github.com/ashutoshpw/zmux/actions/runs/39419255495)
+  passed on pushed source `ddc5373161bd3d0b2f31a63ee3eec528fbc65c3c`; remote parity was confirmed.
+  Artifact [12265031238](https://github.com/ashutoshpw/zmux/actions/runs/39419255495/artifacts/12265031238)
+  and its machine-readable verification are recorded in
+  [artifact-verification.json](references/artifact-verification.json). The archive SHA-256 is
+  `007b62ddccbe0c1c7ef54030b2cd5c4419616cde634d7b0c51850021db5fa6d6`; the outer artifact
+  SHA-256 is `4eccca166b2e8d827d83d7539c2704e5c3176a5d5896db7fa30f85a4cd802a24`.
+- Packaged smoke receipts passed for `ctrl_tab_navigation`, `ctrl_tab_single_tab_no_input`,
+  `ctrl_tab_multipane_scoping`, `terminal_tab_shortcut`, `close_tab_shortcut`,
+  `reopen_tab_shortcut`, and shared navigation actions. All three packaged app binaries are
+  universal (`arm64` and `x86_64`); 340 retained source files and strict code-signature
+  verification passed. The app targets macOS 14+, is ad-hoc signed, and is not notarized.
+- Native save-dialog/accessibility coverage was user-deferred; the dependent browser-native download
+  path remains excluded. No physical user-Mac verification was performed.
+- The original hosted run [39417663909](https://github.com/ashutoshpw/zmux/actions/runs/39417663909)
+  failed before app packaging in the unrelated CLI `agent_messages` fixture: the producer created
+  `wrapper-status` before writing its exit code, while the consumer waited only for file existence.
+  The test-only repair publishes the captured status through a temporary file and atomic rename;
+  the strict `0` assertion remains. The replacement run above passed.
+- Implementation review cleared the shared focused-pane navigation path and native regression. The
+  focused test passed all five scenarios, and `RUST_TEST_THREADS=2 scripts/check` exited 0 at
+  `/tmp/zmux-ctrl-tab-status-publication-check.log`. The packaged smoke exercises real NSApp
+  dispatch, ordering, wraparound, pane scoping, bracket aliases, and a raw PTY input probe.
