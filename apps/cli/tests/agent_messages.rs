@@ -604,7 +604,7 @@ int main(int argc,char **argv){
             String::new()
         };
         let script = format!(
-            "{temporary_environment}export FIXTURE_CLI={}\nexport FIXTURE_CAPTURE={}\nexport FIXTURE_BARRIER={}\nexport FIXTURE_HOLD={}\nexport ZMUX_SOCKET_PASSWORD=fixture-only\nexport ZMUX_SURFACE_ID=fixture-wrong-ambient\n{} --socket {} hooks claude run --directory {} --surface {}{}\nprintf '%s' $? > wrapper-status\n",
+            "{temporary_environment}export FIXTURE_CLI={}\nexport FIXTURE_CAPTURE={}\nexport FIXTURE_BARRIER={}\nexport FIXTURE_HOLD={}\nexport ZMUX_SOCKET_PASSWORD=fixture-only\nexport ZMUX_SURFACE_ID=fixture-wrong-ambient\n{} --socket {} hooks claude run --directory {} --surface {}{}\nprintf '%s' \"$?\" > wrapper-status.pending && mv wrapper-status.pending wrapper-status\n",
             quote(Path::new(cli)),
             quote(&root.0.join("hook-output")),
             quote(&root.0.join("phase")),
