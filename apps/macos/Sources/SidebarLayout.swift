@@ -40,6 +40,7 @@ final class SidebarLayout {
 @MainActor
 final class SidebarFocusWindow: NSWindow {
     var onWorkspaceNumber: ((Int) -> Void)?
+    var onTabNavigation: ((Bool) -> Void)?
     private var terminalMotionOwners: Set<ObjectIdentifier> = []
     private var previousMouseMovedEvents: Bool?
 
@@ -60,6 +61,19 @@ final class SidebarFocusWindow: NSWindow {
         if (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.contain(event) == true { return true }
         (NSApp as? BrowserInputApplication)?.browserKeyboardEvents.observeUnowned(event)
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let inputHasMarkedText = (firstResponder as? NSTextInputClient)?.hasMarkedText() == true
+        if !inputHasMarkedText, event.type == .keyDown, event.keyCode == 48,
+           event.windowNumber == windowNumber, isMainWindow, isKeyWindow,
+           NSApp.keyWindow === self, attachedSheet == nil {
+            if modifiers == [.control], let onTabNavigation {
+                onTabNavigation(false)
+                return true
+            }
+            if modifiers == [.control, .shift], let onTabNavigation {
+                onTabNavigation(true)
+                return true
+            }
+        }
         if event.type == .keyDown, modifiers == [.command],
            let key = event.charactersIgnoringModifiers, key.count == 1,
            let digit = Int(key), (1...9).contains(digit), let onWorkspaceNumber {

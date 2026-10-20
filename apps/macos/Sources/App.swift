@@ -153,6 +153,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         super.init()
         window.delegate = self
         window.onWorkspaceNumber = { [weak self] digit in self?.selectWorkspaceNumber(digit) }
+        window.onTabNavigation = { [weak self] previous in
+            if previous { self?.previousTab() } else { self?.nextTab() }
+        }
         window.title = "Terminal"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -1940,9 +1943,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             throw BridgeFailure(message: "New terminal shortcut did not create an independent tab")
         }
         guard let secondTab = focusedPane?.selectedSurface else { throw BridgeFailure(message: "Missing navigation tab") }
-        try performShortcut("[", modifiers: [.command, .shift])
+        try performShortcut("[", modifiers: [.command, .shift], throughApplication: true)
         try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface }
-        try performShortcut("]", modifiers: [.command, .shift])
+        try performShortcut("]", modifiers: [.command, .shift], throughApplication: true)
         try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == secondTab }
         lastTab()
         try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface }
@@ -1952,10 +1955,40 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == originalPane.selectedSurface }
         nextTab()
         try await waitUntil { $0.workspace?.root.panes.first?.selectedSurface == secondTab }
+        newTerminal()
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.surfaces.count == 3 }
+        guard let navigationTabs = snapshot?.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.surfaces.map(\.id),
+              navigationTabs.count == 3, navigationTabs.contains(originalPane.selectedSurface), navigationTabs.contains(secondTab),
+              let disposableTab = navigationTabs.first(where: { $0 != originalPane.selectedSurface && $0 != secondTab }) else {
+            throw BridgeFailure(message: "Control-Tab navigation fixture did not produce three ordered tabs")
+        }
+        selectTab(navigationTabs[0])
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == navigationTabs[0] }
+        let navigationCases: [(NSEvent.ModifierFlags, UInt64)] = [
+            (NSEvent.ModifierFlags.control.union(.capsLock), navigationTabs[1]),
+            (.control, navigationTabs[2]),
+            (.control, navigationTabs[0]),
+            (NSEvent.ModifierFlags.control.union(.shift).union(.function), navigationTabs[2]),
+            (.control.union(.shift), navigationTabs[1]),
+            (.control.union(.shift), navigationTabs[0])
+        ]
+        for (modifiers, target) in navigationCases {
+            try performShortcut("tab", modifiers: modifiers, throughApplication: true)
+            try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == target }
+        }
+        try performShortcut("[", modifiers: [.command, .shift], throughApplication: true)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == navigationTabs[2] }
+        try performShortcut("]", modifiers: [.command, .shift], throughApplication: true)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == navigationTabs[0] }
+        selectTab(secondTab)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == secondTab }
+        closeTerminalTab(disposableTab)
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.surfaces.count == 2 }
+        let closedItemsBeforeOriginalTabClose = snapshot?.model.closedItems.count ?? 0
         try performShortcut("w", modifiers: [.command])
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
         try performShortcut("t", modifiers: [.command, .shift])
-        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.model.closedItems.isEmpty && $0.frames.first?.snapshot?.state == "running" }
+        try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 2 && $0.model.closedItems.count == closedItemsBeforeOriginalTabClose && $0.frames.first?.snapshot?.state == "running" }
         guard snapshot?.workspace?.focusedPane == originalPane.id else { throw BridgeFailure(message: "Reopen did not restore tab placement") }
         try performShortcut("w", modifiers: [.command])
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
@@ -2096,12 +2129,34 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         }
         closeTerminalTab(attentionTab)
         try await waitUntil { $0.workspace?.root.panes.first?.surfaces.count == 1 && $0.frames.first?.processId == originalPID }
+        try await smokeControlTabSingleTabNoInput(session: originalSession, surface: originalPane.selectedSurface)
         showingNotifications = false
         setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
         splitRight()
         try await waitUntil { $0.workspace?.root.panes.count == 2 && $0.frames.count == 2 && $0.frames.allSatisfy { $0.snapshot?.state == "running" } }
         guard let rightPane = focusedPane else { throw BridgeFailure(message: "No right pane for navigation") }
+        guard let leftSelection = snapshot?.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface else {
+            throw BridgeFailure(message: "Control-Tab pane fixture lost the original pane")
+        }
+        newTerminal()
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == rightPane.id })?.surfaces.count == 2 }
+        guard let rightTabs = snapshot?.workspace?.root.panes.first(where: { $0.id == rightPane.id })?.surfaces.map(\.id),
+              rightTabs.count == 2 else { throw BridgeFailure(message: "Control-Tab pane fixture did not produce a second right-pane tab") }
+        selectTab(rightTabs[0])
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == rightPane.id })?.selectedSurface == rightTabs[0] }
+        try performShortcut("tab", modifiers: [.control], throughApplication: true)
+        try await waitUntil { value in
+            value.workspace?.root.panes.first(where: { $0.id == rightPane.id })?.selectedSurface == rightTabs[1]
+                && value.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == leftSelection
+        }
+        try performShortcut("tab", modifiers: [.control, .shift], throughApplication: true)
+        try await waitUntil { value in
+            value.workspace?.root.panes.first(where: { $0.id == rightPane.id })?.selectedSurface == rightTabs[0]
+                && value.workspace?.root.panes.first(where: { $0.id == originalPane.id })?.selectedSurface == leftSelection
+        }
+        closeTerminalTab(rightTabs[1])
+        try await waitUntil { $0.workspace?.root.panes.first(where: { $0.id == rightPane.id })?.surfaces.count == 1 }
         try performShortcut(String(UnicodeScalar(NSLeftArrowFunctionKey)!), modifiers: [.command, .option])
         try await waitUntil { $0.workspace?.focusedPane == originalPane.id }
         guard window.firstResponder === focusedTerminal else { throw BridgeFailure(message: "Directional focus did not reach the native terminal") }
@@ -2333,6 +2388,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "reopen_tab_shortcut": true,
             "sibling_process_preserved": true,
             "tab_navigation_shared_actions": true,
+            "ctrl_tab_navigation": true,
+            "ctrl_tab_single_tab_no_input": true,
+            "ctrl_tab_multipane_scoping": true,
             "workspace_navigation_shortcuts": true,
             "directional_pane_focus_shortcuts": true,
             "browser_directional_focus": true,
@@ -3269,27 +3327,125 @@ emit("done")
         try await waitUntil { $0.frames.first?.snapshot?.viewport.scrollbackOffset == 0 && $0.frames.first?.snapshot?.viewport.contents.components(separatedBy: "\n").contains("SCROLL_LIVE") == true }
     }
 
-    private func performShortcut(_ key: String, modifiers: NSEvent.ModifierFlags) throws {
+    private func smokeControlTabSingleTabNoInput(session: UInt64, surface: UInt64) async throws {
+        guard let pane = focusedPane, pane.selectedSurface == surface, pane.surfaces.count == 1,
+              snapshot?.workspace?.focusedPane == pane.id,
+              window.isMainWindow, window.isKeyWindow, NSApp.keyWindow === window,
+              window.attachedSheet == nil, window.firstResponder === focusedTerminal else {
+            throw BridgeFailure(message: "One-tab Control-Tab probe lacks the focused terminal responder")
+        }
+
+        let token = String(UUID().uuidString.prefix(8))
+        let readinessPrefix = "ZCT_\(token)_"
+        let readinessSuffix = "READY"
+        let readinessMarker = readinessPrefix + readinessSuffix
+        let completionSuffix = "DONE"
+        let completionMarker = readinessPrefix + completionSuffix
+        let bytePrefix = "ZCT_\(token)_BYTE:"
+        let firstBytePrefix = bytePrefix + "0:"
+        let secondBytePrefix = bytePrefix + "1:"
+        let thirdBytePrefix = bytePrefix + "2:"
+        let secondTabByte = secondBytePrefix + "09"
+        let knownByte = firstBytePrefix + "78"
+        let finalKnownByte = thirdBytePrefix + "79"
+        let readerCommand = "python3 -u -c 'import os,select,termios,tty\noriginal=termios.tcgetattr(0)\ntry:\n    tty.setraw(0)\n    print(\"\(readinessPrefix)\"+\"\(readinessSuffix)\",flush=True)\n    for index in range(3):\n        readable,_,_=select.select([0],[],[],8)\n        data=os.read(0,1).hex() if readable else \"TIMEOUT\"\n        print(\"\(bytePrefix)\"+str(index)+\":\"+data,flush=True)\n        if data==\"03\":\n            break\nfinally:\n    termios.tcsetattr(0,termios.TCSADRAIN,original)\nprint(\"\(readinessPrefix)\"+\"\(completionSuffix)\",flush=True)'\r"
+        var readerMayBeRunning = false
+
+        do {
+            enqueue(.input(session, readerCommand))
+            readerMayBeRunning = true
+            try await waitUntil { value in
+                value.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(readinessMarker) == true
+            }
+            guard snapshot?.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(readinessMarker) == true else {
+                throw BridgeFailure(message: "Raw one-byte PTY reader did not publish readiness")
+            }
+
+            let modifiersToTest: [NSEvent.ModifierFlags] = [.control, .control.union(.shift)]
+            for modifiers in modifiersToTest {
+                try performShortcut("tab", modifiers: modifiers, throughApplication: true)
+                try await Task.sleep(for: .milliseconds(250))
+                let contents = snapshot?.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents ?? ""
+                if contents.contains(firstBytePrefix) || contents.contains(secondBytePrefix) || contents.contains(thirdBytePrefix) {
+                    throw BridgeFailure(message: "Control-Tab forwarded byte 09 to a single-tab PTY")
+                }
+                guard contents.contains(readinessMarker), focusedPane?.selectedSurface == surface else {
+                    throw BridgeFailure(message: "Single-tab Control-Tab changed selection or lost the PTY readiness marker")
+                }
+            }
+
+            enqueue(.input(session, "x"))
+            try await waitUntil { value in
+                value.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(knownByte) == true
+            }
+            guard snapshot?.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(secondBytePrefix) == false else {
+                throw BridgeFailure(message: "The single-tab PTY received input before ordinary Tab was tested")
+            }
+            guard focusedPane?.selectedSurface == surface else {
+                throw BridgeFailure(message: "Single-tab Control-Tab changed the selected surface")
+            }
+            try performShortcut("tab", modifiers: [], throughApplication: true)
+            try await waitUntil { value in
+                value.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(secondTabByte) == true
+            }
+            enqueue(.input(session, "y"))
+            try await waitUntil { value in
+                value.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(finalKnownByte) == true
+            }
+            try await waitUntil { value in
+                value.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(completionMarker) == true
+            }
+            readerMayBeRunning = false
+        } catch {
+            if readerMayBeRunning {
+                enqueue(.input(session, "\u{03}"))
+                let deadline = ContinuousClock.now + .seconds(3)
+                while ContinuousClock.now < deadline {
+                    if snapshot?.frames.first(where: { $0.sessionId == session })?.snapshot?.viewport.contents.contains(completionMarker) == true {
+                        readerMayBeRunning = false
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(32))
+                }
+            }
+            throw error
+        }
+    }
+
+    private func performShortcut(
+        _ key: String,
+        modifiers: NSEvent.ModifierFlags,
+        throughApplication: Bool = false
+    ) throws {
         // AppKit removes command/option/control from charactersIgnoringModifiers, but
         // retains Shift. Supplying lowercase here would synthesize an unshifted shortcut.
-        let characters = modifiers.contains(.shift) ? (["[": "{", "]": "}"][key] ?? key.uppercased()) : key
+        let characters = key == "tab" ? "\t" : (modifiers.contains(.shift) ? (["[": "{", "]": "}"][key] ?? key.uppercased()) : key)
         let keyCodes: [String: UInt16] = [
-            "t": 17, "w": 13, "b": 11, "u": 32, "[": 33, "]": 30,
+            "t": 17, "w": 13, "b": 11, "u": 32, "[": 33, "]": 30, "tab": 48,
             String(UnicodeScalar(NSLeftArrowFunctionKey)!): 123,
             String(UnicodeScalar(NSRightArrowFunctionKey)!): 124,
             String(UnicodeScalar(NSDownArrowFunctionKey)!): 125,
             String(UnicodeScalar(NSUpArrowFunctionKey)!): 126
         ]
         let keyCode = keyCodes[key] ?? 0
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode) else {
+            throw BridgeFailure(message: "Could not create native shortcut event for \(key)")
+        }
+        if throughApplication {
+            guard window.isMainWindow, window.isKeyWindow, NSApp.keyWindow === window, window.attachedSheet == nil else {
+                throw BridgeFailure(message: "Native shortcut event has no active main window")
+            }
+            NSApp.sendEvent(event)
+            return
+        }
         // A synthetic menu invocation does not run AppKit's normal event-dispatch menu
         // update. Refresh dynamic availability, including newly added close history.
         NSApp.mainMenu?.items.forEach { $0.submenu?.update() }
         NSApp.mainMenu?.update()
-        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, characters: characters,
-            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode),
-            NSApp.mainMenu?.performKeyEquivalent(with: event) == true else {
+        guard NSApp.mainMenu?.performKeyEquivalent(with: event) == true else {
             throw BridgeFailure(message: "Native menu did not handle shortcut \(key)")
         }
     }

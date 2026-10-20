@@ -47,7 +47,10 @@ Release signing, notarization and automatic updates are later distribution gates
 
 Use **⌘N** for a workspace, **⌘T** for a terminal tab, **⌘D** to split right, **⇧⌘D** to
 split down, **⌘W** to close the selected tab, and **⇧⌘T** to reopen the last closed item.
-Use **⇧⌘[** / **⇧⌘]** to traverse tabs, or History → Recently Closed to choose an item. Use the globe icon or Workspace → New Browser Tab to browse, and ⌘L to focus the browser
+Use **Ctrl+Tab** / **Ctrl+Shift+Tab** for the next/previous tab in the focused pane, wrapping
+at either end. **⇧⌘[** / **⇧⌘]** also traverse tabs. With a single tab, the Control shortcuts
+do nothing and do not send input to the terminal. Use History → Recently Closed to choose an
+item to reopen. Use the globe icon or Workspace → New Browser Tab to browse, and ⌘L to focus the browser
 address bar. Use the Browser menu for page find/zoom/navigation. Use the Edit menu for copy/paste.
 
 Use Shift-PageUp/PageDown for history pages and Command-Home/End for oldest/live output.
