@@ -499,6 +499,7 @@ impl Worker {
                 connection: None,
                 cached: None,
                 starting: true,
+                reconnectable: false,
                 failure: None,
                 resize: None,
                 last_notice: 0,

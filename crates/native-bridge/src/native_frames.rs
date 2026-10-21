@@ -43,6 +43,7 @@ struct WireFrame<'a> {
     session_id: zmux_workspace_core::SessionId,
     process_id: Option<u32>,
     starting: bool,
+    reconnectable: bool,
     failure: &'a Option<String>,
     snapshot: Option<WireTerminal<'a>>,
 }
@@ -177,6 +178,7 @@ fn packet<'a>(frame: &'a Frame, previous: Option<&Frame>) -> Packet<'a> {
             session_id: frame.session_id,
             process_id: frame.process_id,
             starting: frame.starting,
+            reconnectable: frame.reconnectable,
             failure: &frame.failure,
             snapshot,
         },

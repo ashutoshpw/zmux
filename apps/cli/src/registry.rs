@@ -326,7 +326,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         false,
         true,
         "ssh DESTINATION [--name NAME] [--port PORT] [--identity PATH] [--ssh-config PATH] [-A|-a] [--jump HOST] [--ssh-option KEY=VALUE] [--command TEXT] [--focus true|false|--no-focus] [-- REMOTE_ARG ...]",
-        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. Regular file/image uploads reuse this terminal's private authenticated connection. The native app supports clipboard image paste/drop; this CLI accepts image file paths through paste-files. Cross-tab connection sharing and reconnect remain unavailable. Extra SSH options use a bounded allowlist; mosh is unavailable."
+        "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. After the SSH process exits or launch fails, the native app's same-tab reconnect icon can start a fresh login without resuming the shell or replaying the startup command or terminal input. Regular file/image uploads reuse this terminal's private authenticated connection. The native app supports clipboard image paste/drop; this CLI accepts image file paths through paste-files. Cross-tab sharing, automatic or durable reconnect, and CLI reconnect are unavailable. Extra SSH options use a bounded allowlist; mosh is unavailable."
     ),
     command!(
         "new-workspace",

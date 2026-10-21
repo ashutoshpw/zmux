@@ -107,6 +107,7 @@ jobs:
             dist/native-resources.json
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png
+            dist/zmux-ssh-reconnect.png
             dist/zmux-browser-smoke.png
             dist/zmux-local-tmux-smoke.png
             dist/native-sidebar*.json
@@ -146,6 +147,7 @@ jobs:
             dist/native-failure-process.json
             dist/Zmux-native-smoke.png
             dist/Zmux-native-window.png
+            dist/zmux-ssh-reconnect.png
             dist/zmux-browser-smoke.png
             dist/zmux-local-tmux-smoke.png
             dist/native-sidebar*.json

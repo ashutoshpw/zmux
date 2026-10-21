@@ -46,7 +46,7 @@ use zmux_workspace_core::targets::TargetError;
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     sync::{
         Arc, Mutex, RwLock,
@@ -63,7 +63,7 @@ use zmux_session_runtime::{
 };
 use zmux_terminal_adapter::Size;
 use zmux_workspace_core::{
-    Action, Effect, PaneId, SessionId, Snapshot as Model, SurfaceId, WorkspaceStore,
+    Action, Effect, PaneId, SessionId, Snapshot as Model, Surface, SurfaceId, WorkspaceStore,
 };
 
 pub const MAX_TERMINALS: usize = 32;
@@ -466,6 +466,7 @@ pub struct Frame {
     pub session_id: SessionId,
     pub process_id: Option<u32>,
     pub starting: bool,
+    pub reconnectable: bool,
     pub snapshot: Option<Arc<TerminalSnapshot>>,
     pub failure: Option<String>,
 }
@@ -1413,9 +1414,57 @@ struct Slot {
     connection: Option<Arc<ManagedConnection>>,
     cached: Option<Arc<TerminalSnapshot>>,
     starting: bool,
+    reconnectable: bool,
     failure: Option<String>,
     resize: Option<Size>,
     last_notice: u64,
+}
+
+/// Reconnect admission and the native affordance use the same owner-side state.
+/// The session keeps an exited viewport alive for scrollback, so process state—not
+/// worker-thread termination—is the proof that an SSH login may be replaced.
+fn ssh_reconnectable(surface: &Surface, slot: &Slot) -> bool {
+    if surface.kind != zmux_workspace_core::SurfaceKind::Terminal
+        || surface.remote.is_none()
+        || slot.starting
+    {
+        return false;
+    }
+    match slot.session.as_ref() {
+        Some(session) => {
+            let state = session
+                .snapshot()
+                .ok()
+                .map(|snapshot| snapshot.state)
+                .or_else(|| slot.cached.as_ref().map(|snapshot| snapshot.state));
+            matches!(state, Some(zmux_session_runtime::State::Exited))
+                || (session.is_finished()
+                    && matches!(
+                        state,
+                        Some(
+                            zmux_session_runtime::State::Failed
+                                | zmux_session_runtime::State::Closed
+                        )
+                    ))
+        }
+        None => slot.failure.is_some(),
+    }
+}
+/// Exited is published after the child is stopped and reaped. Closed/Failed can
+/// precede cleanup, so those owners remain charged until their worker ends.
+fn session_may_own_process(session: &Session, cached: Option<&TerminalSnapshot>) -> bool {
+    let state = session
+        .snapshot()
+        .ok()
+        .map(|snapshot| snapshot.state)
+        .or_else(|| cached.map(|snapshot| snapshot.state));
+    match state {
+        Some(zmux_session_runtime::State::Exited) => false,
+        Some(zmux_session_runtime::State::Closed | zmux_session_runtime::State::Failed) => {
+            !session.is_finished()
+        }
+        Some(zmux_session_runtime::State::Running) | None => true,
+    }
 }
 impl Drop for Slot {
     fn drop(&mut self) {
@@ -1689,6 +1738,7 @@ impl Worker {
             if !self.profiles.snapshot.loading {
                 dirty |= self.poll_sessions();
             }
+            dirty |= self.refresh_ssh_reconnectability();
             dirty |= self.poll_completed_zellij_sessions();
             dirty |= self.attention.reconcile(&self.model.snapshot());
             dirty |= self.poll_transfers();
@@ -2908,6 +2958,14 @@ impl Worker {
         Ok(())
     }
     fn action(&mut self, action: Action) -> Result<(), DesktopError> {
+        if let Action::ReconnectSsh {
+            identity_namespace,
+            surface_id,
+            expected_session_id,
+        } = &action
+        {
+            self.validate_ssh_reconnect(*identity_namespace, *surface_id, *expected_session_id)?;
+        }
         let move_context = if let Action::MoveWorkspaceToWindow {
             workspace_id,
             destination_window_id,
@@ -2958,27 +3016,7 @@ impl Worker {
             .apply(action)
             .map_err(|e| DesktopError::Failure(e.to_string()))?;
         self.validate_launch_effects(&transition.effects)?;
-        let starts = transition
-            .effects
-            .iter()
-            .filter(|e| {
-                matches!(
-                    e,
-                    Effect::StartSession { .. } | Effect::AttachLocalZellijSession { .. }
-                )
-            })
-            .count();
-        let owned = self.pending_launches
-            + self.local_tmux.reserved.len()
-            + self.retired.len()
-            + self.slots.values().filter(|s| s.session.is_some()).count();
-        if starts > 0
-            && (self.slots.len() + starts > MAX_TERMINALS || owned + starts > MAX_TERMINALS)
-        {
-            return Err(DesktopError::Failure(format!(
-                "development build supports at most {MAX_TERMINALS} terminals; close a tab and wait for cleanup first"
-            )));
-        }
+        self.ensure_start_capacity(&transition.effects)?;
         ensure_surface_caps(&candidate.snapshot())?;
         self.profiles
             .validate_transition(&self.model.snapshot(), &candidate.snapshot())?;
@@ -3023,6 +3061,147 @@ impl Worker {
                 windows::WindowKind::Focus,
                 true,
             )?;
+        }
+        Ok(())
+    }
+    fn ensure_start_capacity(&self, effects: &[Effect]) -> Result<(), DesktopError> {
+        let starts = effects
+            .iter()
+            .filter(|effect| {
+                matches!(
+                    effect,
+                    Effect::StartSession { .. } | Effect::AttachLocalZellijSession { .. }
+                )
+            })
+            .count();
+        if starts == 0 {
+            return Ok(());
+        }
+        let stopped_sessions: HashSet<_> = effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::StopSession { session_id } => Some(*session_id),
+                _ => None,
+            })
+            .collect();
+        let stopped_slots = stopped_sessions
+            .iter()
+            .filter(|session_id| self.slots.contains_key(*session_id))
+            .count();
+        // The child is already stopped for an Exited/Closed snapshot, even while
+        // its session worker retains scrollback. The wrapper remains retired and
+        // is still joined by poll_retired_sessions(). Unknown/failed owners count.
+        let owned = self.pending_launches
+            + self.local_tmux.reserved.len()
+            + self
+                .retired
+                .iter()
+                .filter(|session| session_may_own_process(session, None))
+                .count()
+            + self
+                .slots
+                .values()
+                .filter(|slot| {
+                    slot.session.as_ref().is_some_and(|session| {
+                        session_may_own_process(session, slot.cached.as_deref())
+                    })
+                })
+                .count();
+        if self.slots.len() - stopped_slots + starts > MAX_TERMINALS
+            || owned + starts > MAX_TERMINALS
+        {
+            return Err(DesktopError::Failure(format!(
+                "development build supports at most {MAX_TERMINALS} terminals; close a tab and wait for cleanup first"
+            )));
+        }
+        Ok(())
+    }
+    fn refresh_ssh_reconnectability(&mut self) -> bool {
+        let model = self.model.snapshot();
+        let mut changed = false;
+        for surface in model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+        {
+            let Some(session_id) = surface.session_id else {
+                continue;
+            };
+            let Some(slot) = self.slots.get_mut(&session_id) else {
+                continue;
+            };
+            let reconnectable = ssh_reconnectable(surface, slot);
+            if reconnectable != slot.reconnectable {
+                slot.reconnectable = reconnectable;
+                changed = true;
+            }
+        }
+        changed
+    }
+    fn validate_ssh_reconnect(
+        &self,
+        identity_namespace: uuid::Uuid,
+        surface_id: SurfaceId,
+        expected_session_id: SessionId,
+    ) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        if model.identity_namespace != identity_namespace {
+            return Err(DesktopError::Failure(
+                "desktop identity changed before SSH reconnect".into(),
+            ));
+        }
+        let surface = model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .find(|surface| surface.id == surface_id)
+            .ok_or_else(|| DesktopError::Failure("SSH tab no longer exists".into()))?;
+        if surface.kind != zmux_workspace_core::SurfaceKind::Terminal
+            || surface.remote.is_none()
+            || surface.session_id != Some(expected_session_id)
+        {
+            return Err(DesktopError::Failure(
+                "SSH tab or session changed before reconnect".into(),
+            ));
+        }
+        let slot = self
+            .slots
+            .get(&expected_session_id)
+            .ok_or(DesktopError::TerminalUnavailable)?;
+        if !ssh_reconnectable(surface, slot) {
+            if slot.starting {
+                return Err(DesktopError::Failure(
+                    "SSH session is still starting; reconnect is unavailable".into(),
+                ));
+            }
+            if let Some(session) = slot.session.as_ref() {
+                let snapshot = session.snapshot().map_err(|error| {
+                    DesktopError::Failure(format!("SSH session state is unavailable: {error}"))
+                })?;
+                if snapshot.state == zmux_session_runtime::State::Running {
+                    return Err(DesktopError::Failure(
+                        "SSH session is still running; reconnect is unavailable".into(),
+                    ));
+                }
+                if !session.is_finished() {
+                    return Err(DesktopError::Failure(
+                        "SSH session is still cleaning up; retry reconnect shortly".into(),
+                    ));
+                }
+                return Err(DesktopError::Failure(
+                    "SSH session has no completed exit state to reconnect".into(),
+                ));
+            }
+            if slot.failure.is_none() {
+                return Err(DesktopError::Failure(
+                    "SSH session has no completed launch failure to retry".into(),
+                ));
+            }
+            return Err(DesktopError::Failure(
+                "SSH session is not ready to reconnect".into(),
+            ));
         }
         Ok(())
     }
@@ -3077,6 +3256,7 @@ impl Worker {
                             connection: None,
                             cached: None,
                             starting: true,
+                            reconnectable: false,
                             failure: None,
                             resize: None,
                             last_notice: 0,
@@ -3345,6 +3525,7 @@ impl Worker {
                         session_id: surface.session_id.expect("terminal slot"),
                         process_id: slot.session.as_ref().map(Session::process_id),
                         starting: slot.starting,
+                        reconnectable: slot.reconnectable,
                         snapshot: slot.cached.clone(),
                         failure: slot.failure.clone(),
                     })

@@ -109,8 +109,30 @@ struct TerminalSnapshot: Decodable, Sendable {
     let exitCode: Int?; let failure: String?
 }
 struct Frame: Decodable, Sendable {
-    let sessionId: UInt64; let processId: UInt32?; let starting: Bool
+    let sessionId: UInt64; let processId: UInt32?; let starting: Bool; let reconnectable: Bool
     let snapshot: TerminalSnapshot?; let failure: String?
+
+    private enum CodingKeys: String, CodingKey { case sessionId, processId, starting, reconnectable, snapshot, failure }
+
+    init(sessionId: UInt64, processId: UInt32?, starting: Bool, reconnectable: Bool,
+         snapshot: TerminalSnapshot?, failure: String?) {
+        self.sessionId = sessionId
+        self.processId = processId
+        self.starting = starting
+        self.reconnectable = reconnectable
+        self.snapshot = snapshot
+        self.failure = failure
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(UInt64.self, forKey: .sessionId)
+        processId = try c.decodeIfPresent(UInt32.self, forKey: .processId)
+        starting = try c.decode(Bool.self, forKey: .starting)
+        reconnectable = try c.decodeIfPresent(Bool.self, forKey: .reconnectable) ?? false
+        snapshot = try c.decodeIfPresent(TerminalSnapshot.self, forKey: .snapshot)
+        failure = try c.decodeIfPresent(String.self, forKey: .failure)
+    }
 }
 struct RemoteEndpoint: Decodable, Sendable { let destination: String }
 struct UploadProgress: Decodable, Sendable {

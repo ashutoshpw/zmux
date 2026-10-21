@@ -52,6 +52,11 @@ input is not replayed. It opens a fresh connection and follows current ssh_confi
 defaults. Remote cwd restoration is not implemented; fresh remote terminals show unknown
 cwd until observed. Remote paths are never used as local launch directories.
 
+After an SSH process exits or its launch fails, the native app's reconnect icon on that
+same tab starts a fresh login using the retained endpoint. It does not resume the prior
+shell or replay the explicit startup command or terminal input. This is a manual recovery
+control; automatic or durable reconnect and CLI reconnect are unavailable.
+
 File drops and Finder file paste use the same shared operation as:
 
 ```sh
@@ -83,8 +88,8 @@ cat and wc.
 
 Image files work as files. Raw clipboard images, directory transfers, custom upload
 rules, durable remote sessions, automatic reconnect, mosh and remote CLI relays remain
-open. Additional SSH options use a bounded allowlist; full option compatibility remains
-open. No cloud deployment is required for this SSH path.
+unavailable. Additional SSH options use a bounded allowlist; full option compatibility
+remains open. No cloud deployment is required for this SSH path.
 
 The isolated loopback test covers actual key authentication, input/output, remote PTY,
 no-focus creation, fresh reopen without command replay, authenticated upload after the

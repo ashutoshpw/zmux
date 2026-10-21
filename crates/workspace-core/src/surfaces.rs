@@ -380,6 +380,57 @@ impl WorkspaceStore {
                     self.focus(wi, pane_id);
                 }
             }
+            Action::ReconnectSsh {
+                identity_namespace,
+                surface_id,
+                expected_session_id,
+            } => {
+                if self.state.identity_namespace != identity_namespace {
+                    return Err(ActionError::InvalidOperation(
+                        "desktop identity changed before SSH reconnect".into(),
+                    ));
+                }
+                let (wi, pane_id, index) = self.location(surface_id)?;
+                let current = &self.state.workspaces[wi]
+                    .root
+                    .panes()
+                    .into_iter()
+                    .find(|pane| pane.id == pane_id)
+                    .expect("surface location has a pane")
+                    .surfaces[index];
+                if current.kind != SurfaceKind::Terminal
+                    || current.session_id != Some(expected_session_id)
+                    || current.remote.is_none()
+                {
+                    return Err(ActionError::InvalidOperation(
+                        "SSH surface or session changed before reconnect".into(),
+                    ));
+                }
+                let remote = current
+                    .remote
+                    .as_ref()
+                    .expect("validated managed SSH surface")
+                    .for_restore();
+                let new_session_id = SessionId(self.reserve(1)?);
+                let surface = &mut self.state.workspaces[wi]
+                    .root
+                    .pane_mut(pane_id)
+                    .expect("surface location has a pane")
+                    .surfaces[index];
+                surface.session_id = Some(new_session_id);
+                surface.cwd = None;
+                surface.remote = Some(remote.clone());
+                effects.push(Effect::StopSession {
+                    session_id: expected_session_id,
+                });
+                effects.push(Effect::StartSession {
+                    pane_id,
+                    session_id: new_session_id,
+                    cwd: None,
+                    remote: Some(remote),
+                    local_tmux: None,
+                });
+            }
             Action::CreateSurface { pane_id } => {
                 let wi = self.workspace_index(pane_id)?;
                 let pane = self.pane(pane_id)?;
