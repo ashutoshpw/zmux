@@ -198,7 +198,7 @@ actor NativeBridge {
                     exitCode: delta.exitCode, failure: delta.failure)
             }
             next[frame.sessionId] = Frame(sessionId: frame.sessionId, processId: frame.processId,
-                starting: frame.starting, snapshot: terminal, failure: frame.failure)
+                starting: frame.starting, reconnectable: frame.reconnectable, snapshot: terminal, failure: frame.failure)
         }
         snapshot.frames = envelope.framePackets.compactMap { next[$0.frame.sessionId] }
         frameCache = next; frameNamespace = snapshot.model.identityNamespace
@@ -414,8 +414,14 @@ actor NativeBridge {
         }
         try await work.value
     }
-    func pasteFiles(surface: UInt64, paths: [String]) async throws {
-        try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface, "paths": paths]])
+    func pasteFiles(surface: UInt64, expectedSession: UInt64, paths: [String]) async throws {
+        try await send(["command": "transfer", "action": ["operation": "paste_files", "surface_id": surface,
+            "expected_session_id": expectedSession, "paths": paths]])
+    }
+    func reconnectSSH(identityNamespace: UUID, surface: UInt64, expectedSession: UInt64) async throws {
+        try await send(["command": "action", "action": ["action": "reconnect_ssh",
+            "identity_namespace": identityNamespace.uuidString.lowercased(), "surface_id": surface,
+            "expected_session_id": expectedSession]], acknowledged: true)
     }
     /// Native-only download acknowledgements. Tokens are chosen before admission,
     /// so an uncertain response can be correlated with authoritative snapshots.

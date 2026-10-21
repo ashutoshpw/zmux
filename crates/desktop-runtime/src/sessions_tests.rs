@@ -8,6 +8,7 @@ use crate::{
 };
 use std::{
     fs,
+    net::TcpListener,
     os::unix::fs::PermissionsExt,
     sync::{
         Arc, Mutex,
@@ -279,6 +280,56 @@ fn close_writer(worker: &mut Worker) {
         .io
         .join_until(Instant::now() + Duration::from_secs(5))
         .unwrap();
+}
+fn install_ssh_surface(worker: &mut Worker) -> (Uuid, SurfaceId, SessionId) {
+    let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let closed_port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let namespace = Uuid::new_v4();
+    let mut model = WorkspaceStore::with_identity_namespace(namespace);
+    model
+        .apply(Action::CreateSshWorkspace {
+            name: "Reconnect fixture".into(),
+            connection: zmux_remote_runtime::SshConnectionConfig {
+                destination: "127.0.0.1".into(),
+                port: Some(closed_port),
+                identity: None,
+                config_file: None,
+                forward_agent: None,
+                ssh_options: vec!["BatchMode=yes".into(), "ConnectTimeout=1".into()],
+                jump_hosts: Vec::new(),
+                command: Some(vec!["printf".into(), "STARTUP_MARKER".into()]),
+            },
+            focus: true,
+        })
+        .unwrap();
+    worker.model = model;
+    let model = worker.model.snapshot();
+    let surface = model.workspaces[0].root.panes()[0].selected().clone();
+    let session_id = surface.session_id.unwrap();
+    worker.slots.insert(
+        session_id,
+        Slot {
+            cancellation: Arc::new(AtomicBool::new(false)),
+            launch_id: 1,
+            session: None,
+            connection: None,
+            cached: None,
+            starting: true,
+            reconnectable: false,
+            failure: None,
+            resize: None,
+            last_notice: 0,
+        },
+    );
+    (namespace, surface.id, session_id)
+}
+fn wait_for_session_exit(session: &Session) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while session.snapshot().unwrap().state != zmux_session_runtime::State::Exited {
+        assert!(Instant::now() < deadline, "fixture terminal did not exit");
+        thread::sleep(Duration::from_millis(2));
+    }
 }
 fn flush_shutdown(worker: &mut Worker) {
     worker.shared.stop.store(true, Ordering::Release);
@@ -633,6 +684,80 @@ fn attach_and_start_setup_refusal_publish_no_surface_and_burn_without_leaking_ti
     assert_eq!(
         serde_json::to_value(worker.model.snapshot().workspaces).unwrap(),
         topology
+    );
+    close_writer(&mut worker);
+}
+
+#[test]
+fn ssh_reconnect_at_terminal_cap_replaces_exited_process_and_reaps_retired_worker() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let (namespace, surface_id, session_id) = install_ssh_surface(&mut worker);
+    let target = Session::spawn(Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "exit 7".into()],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    wait_for_session_exit(&target);
+    assert!(
+        !target.is_finished(),
+        "exited sessions retain their history worker until explicitly closed"
+    );
+    let target_snapshot = target.snapshot().unwrap();
+    worker.slots.get_mut(&session_id).unwrap().starting = false;
+    worker.slots.get_mut(&session_id).unwrap().cached = Some(target_snapshot);
+    worker.slots.get_mut(&session_id).unwrap().session = Some(target);
+
+    for index in 0..(MAX_TERMINALS - 1) {
+        worker.slots.insert(
+            SessionId(9_000_000 + index as u64),
+            Slot {
+                cancellation: Arc::new(AtomicBool::new(false)),
+                launch_id: index as u64 + 2,
+                session: None,
+                connection: None,
+                cached: None,
+                starting: true,
+                reconnectable: false,
+                failure: None,
+                resize: None,
+                last_notice: 0,
+            },
+        );
+    }
+    worker.pending_launches = MAX_TERMINALS - 1;
+    worker
+        .action(Action::ReconnectSsh {
+            identity_namespace: namespace,
+            surface_id,
+            expected_session_id: session_id,
+        })
+        .unwrap();
+
+    let model = worker.model.snapshot();
+    let replacement = model.workspaces[0].root.panes()[0].selected();
+    let replacement_id = replacement.session_id.unwrap();
+    assert_eq!(replacement.id, surface_id);
+    assert_ne!(replacement_id, session_id);
+    assert_eq!(worker.slots.len(), MAX_TERMINALS);
+    assert_eq!(worker.pending_launches, MAX_TERMINALS);
+    assert_eq!(
+        worker.retired.len(),
+        1,
+        "the old worker is retired asynchronously"
+    );
+    assert!(worker.slots[&replacement_id].starting);
+
+    worker.retired[0]
+        .session
+        .shutdown(Duration::from_secs(2))
+        .unwrap();
+    assert!(worker.poll_retired_sessions());
+    assert!(
+        worker.retired.is_empty(),
+        "retired workers are joined by polling"
     );
     close_writer(&mut worker);
 }
@@ -1203,5 +1328,180 @@ fn completed_fact_blocks_all_new_input_before_saved_while_the_real_pty_is_live()
         .unwrap()
         .shutdown(Duration::from_secs(5))
         .unwrap();
+    close_writer(&mut worker);
+}
+
+#[test]
+fn ssh_reconnect_appears_after_process_exit_and_replaces_through_worker_action() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let (namespace, surface_id, session_id) = install_ssh_surface(&mut worker);
+    let session = Session::spawn(Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "sleep 0.1; exit 7".into()],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    let running = session.snapshot().unwrap();
+    assert_eq!(running.state, zmux_session_runtime::State::Running);
+    {
+        let slot = worker.slots.get_mut(&session_id).unwrap();
+        slot.starting = false;
+        slot.session = Some(session);
+        slot.cached = Some(running);
+    }
+    assert!(!worker.refresh_ssh_reconnectability());
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: namespace,
+                surface_id,
+                expected_session_id: session_id,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("still running")
+    );
+
+    let session = worker.slots[&session_id].session.as_ref().unwrap();
+    wait_for_session_exit(session);
+    assert!(
+        !session.is_finished(),
+        "process exit can be proved before the history worker is joined"
+    );
+    let exited = session.snapshot().unwrap();
+    assert_eq!(exited.state, zmux_session_runtime::State::Exited);
+    worker.slots.get_mut(&session_id).unwrap().cached = Some(exited);
+    assert!(worker.refresh_ssh_reconnectability());
+    let published = worker.publish(false);
+    assert!(
+        published
+            .frames
+            .iter()
+            .any(|frame| frame.session_id == session_id && frame.reconnectable)
+    );
+
+    worker
+        .action(Action::ReconnectSsh {
+            identity_namespace: namespace,
+            surface_id,
+            expected_session_id: session_id,
+        })
+        .unwrap();
+    let after = worker.model.snapshot();
+    let replacement = after.workspaces[0].root.panes()[0].selected();
+    assert_eq!(replacement.id, surface_id);
+    assert_ne!(replacement.session_id, Some(session_id));
+    assert_eq!(
+        replacement.remote.as_ref().unwrap().destination,
+        "127.0.0.1"
+    );
+    assert_eq!(replacement.remote.as_ref().unwrap().command, None);
+    assert_eq!(
+        worker.retired.len(),
+        1,
+        "old-session cleanup remains asynchronous"
+    );
+    let replacement_id = replacement.session_id.unwrap();
+    assert!(worker.slots[&replacement_id].starting);
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: namespace,
+                surface_id,
+                expected_session_id: session_id,
+            })
+            .is_err()
+    );
+    close_writer(&mut worker);
+}
+
+#[test]
+fn ssh_reconnect_rejects_local_and_pending_but_accepts_settled_launch_failure() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let local = worker.model.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: worker.model.snapshot().identity_namespace,
+                surface_id: local.id,
+                expected_session_id: local.session_id.unwrap(),
+            })
+            .is_err()
+    );
+
+    let (namespace, surface_id, session_id) = install_ssh_surface(&mut worker);
+    assert!(!worker.refresh_ssh_reconnectability());
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: namespace,
+                surface_id,
+                expected_session_id: session_id,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("still starting")
+    );
+    worker.slots.get_mut(&session_id).unwrap().starting = false;
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: namespace,
+                surface_id,
+                expected_session_id: session_id,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("no completed launch failure")
+    );
+    worker.slots.get_mut(&session_id).unwrap().failure =
+        Some("fixture authentication failure".into());
+    assert!(worker.refresh_ssh_reconnectability());
+    let published = worker.publish(false);
+    assert!(
+        published
+            .frames
+            .iter()
+            .any(|frame| frame.session_id == session_id && frame.reconnectable)
+    );
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: Uuid::new_v4(),
+                surface_id,
+                expected_session_id: session_id,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("identity changed")
+    );
+    worker
+        .action(Action::ReconnectSsh {
+            identity_namespace: namespace,
+            surface_id,
+            expected_session_id: session_id,
+        })
+        .unwrap();
+    let replacement_id = worker.model.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .session_id
+        .unwrap();
+    assert_ne!(replacement_id, session_id);
+    assert!(worker.slots[&replacement_id].starting);
+    assert!(
+        worker
+            .action(Action::ReconnectSsh {
+                identity_namespace: namespace,
+                surface_id,
+                expected_session_id: session_id,
+            })
+            .is_err(),
+        "duplicate requests for the old generation are stale"
+    );
     close_writer(&mut worker);
 }

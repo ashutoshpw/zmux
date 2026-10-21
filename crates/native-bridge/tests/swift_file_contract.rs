@@ -947,9 +947,20 @@ fn pin_a_close_the_core_refuses_gives_the_discard_back() {
         );
     }
     assert!(
-        perform.contains("case .window, .action, .surface: break")
+        perform.contains("case .window, .action, .surface, .reconnectSSH: break")
             && perform.contains("default: throw BridgeFailure("),
         "only commands the bridge acknowledges may be tracked: {perform}"
+    );
+    let native_bridge = swift("NativeBridge.swift");
+    let reconnect_bridge = between(
+        &native_bridge,
+        "func reconnectSSH(identityNamespace:",
+        "/// Native-only download acknowledgements",
+    );
+    assert!(
+        reconnect_bridge.contains("expected_session_id")
+            && reconnect_bridge.contains("]], acknowledged: true)"),
+        "a tracked SSH reconnect must wait for the bridge's acknowledged action result: {reconnect_bridge}"
     );
     let command_loop = between(
         &coordinator,

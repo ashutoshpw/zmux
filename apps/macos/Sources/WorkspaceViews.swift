@@ -618,9 +618,17 @@ final class TerminalTabBar: BackgroundView {
             selected.scrollToVisible(selected.bounds)
         }
     }
-    func updateAttention(_ notifications: [AttentionNotification], surfaces: [Surface]) {
+    func updateAttention(_ notifications: [AttentionNotification], surfaces: [Surface], frames: [Frame]) {
         for tab in tabs {
-            if let surface = surfaces.first(where: { $0.id == tab.surface.id }) { tab.surface = surface }
+            if let surface = surfaces.first(where: { $0.id == tab.surface.id }) {
+                tab.surface = surface
+                let reconnectable = surface.sessionId.flatMap { session in
+                    frames.first(where: { $0.sessionId == session })?.reconnectable
+                } ?? false
+                tab.updateReconnectable(reconnectable)
+            } else {
+                tab.updateReconnectable(false)
+            }
             tab.updateAttention(notifications.filter { !$0.read && $0.surfaceId == tab.surface.id }.count)
         }
     }
@@ -651,6 +659,11 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     weak var owner: MainWindowHost?
     private var mouseOrigin: NSPoint?
     private let titleLabel = NSTextField(labelWithString: "")
+    private lazy var reconnectButton = IconButton(symbol: "arrow.clockwise", label: "Reconnect with a fresh SSH login",
+                                                 target: self, action: #selector(reconnectSSH))
+    private var reconnectWidthConstraint: NSLayoutConstraint!
+    private var reconnectable = false
+    private var reconnectPending = false
 
     private static func symbolName(for surface: Surface) -> String {
         switch surface.kind {
@@ -681,12 +694,18 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         title.textColor = selected ? .labelColor : ZmuxPalette.subdued
         title.lineBreakMode = .byTruncatingTail
         let close = IconButton(symbol: "xmark", label: "Close \(surface.title)", target: self, action: #selector(closeTab))
-        for view in [icon, title, close] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
+        reconnectButton.isHidden = true
+        reconnectButton.isEnabled = false
+        reconnectWidthConstraint = reconnectButton.widthAnchor.constraint(equalToConstant: 0)
+        for view in [icon, title, reconnectButton, close] { view.translatesAutoresizingMaskIntoConstraints = false; addSubview(view) }
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10), icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 13), icon.heightAnchor.constraint(equalToConstant: 13),
             title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 7), title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            title.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -3),
+            title.trailingAnchor.constraint(equalTo: reconnectButton.leadingAnchor, constant: -3),
+            reconnectButton.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -2), reconnectButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            reconnectButton.heightAnchor.constraint(equalToConstant: 22),
+            reconnectWidthConstraint,
             close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4), close.centerYAnchor.constraint(equalTo: centerYAnchor),
             close.widthAnchor.constraint(equalToConstant: 22), close.heightAnchor.constraint(equalToConstant: 22)
         ])
@@ -742,6 +761,29 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
         titleLabel.stringValue = label
         titleLabel.textColor = unread > 0 ? .systemOrange : .labelColor
         setAccessibilityLabel(accessibility)
+    }
+    func updateReconnectable(_ reconnectable: Bool) {
+        self.reconnectable = reconnectable
+        reconnectButton.isHidden = !reconnectable
+        reconnectWidthConstraint.constant = reconnectable ? 22 : 0
+        if !reconnectable {
+            reconnectPending = false
+            reconnectButton.isEnabled = false
+        } else if !reconnectPending {
+            reconnectButton.isEnabled = true
+        }
+    }
+    @objc private func reconnectSSH() {
+        guard reconnectable, !reconnectPending, let session = surface.sessionId, let owner else { return }
+        reconnectPending = true
+        reconnectButton.isEnabled = false
+        let outcome = owner.reconnectSSH(identityNamespace: namespace, surface: surface.id, expectedSession: session)
+        Task { @MainActor [weak self] in
+            let accepted = await outcome.wait()
+            guard !accepted, let self else { return }
+            self.reconnectPending = false
+            self.reconnectButton.isEnabled = self.reconnectable
+        }
     }
     @objc private func moveTabLeft() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: -1) }
     @objc private func moveTabRight() { owner?.moveTab(surface.id, in: paneID, namespace: namespace, offset: 1) }

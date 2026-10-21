@@ -24,7 +24,7 @@ enum TerminalDamageSmoke {
         }
         view.update(frame)
         flush()
-        let metadataOnly = Frame(sessionId: frame.sessionId, processId: frame.processId, starting: false,
+        let metadataOnly = Frame(sessionId: frame.sessionId, processId: frame.processId, starting: false, reconnectable: frame.reconnectable,
             snapshot: TerminalSnapshot(state: original.state, viewport: original.viewport,
                 bytesRead: original.bytesRead + 1, exitCode: original.exitCode, failure: original.failure), failure: frame.failure)
         view.update(metadataOnly)
@@ -33,7 +33,7 @@ enum TerminalDamageSmoke {
         }
         var cursor = original.viewport
         cursor.cursorCol = (cursor.cursorCol + 1) % cursor.size.cols
-        let moved = Frame(sessionId: frame.sessionId, processId: frame.processId, starting: false,
+        let moved = Frame(sessionId: frame.sessionId, processId: frame.processId, starting: false, reconnectable: frame.reconnectable,
             snapshot: TerminalSnapshot(state: original.state, viewport: cursor,
                 bytesRead: original.bytesRead + 2, exitCode: original.exitCode, failure: original.failure), failure: frame.failure)
         view.update(moved)

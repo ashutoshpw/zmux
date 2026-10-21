@@ -20,7 +20,8 @@ enum UICommand: Sendable {
     case browser(String, UInt64?, UInt64?, String, String?, UUID?)
     case browserAutomation(UInt64, BrowserAction)
     case downloadCancel(BrowserDownloadRecord)
-    case pasteFiles(UInt64, [String])
+    case pasteFiles(UInt64, UInt64, [String])
+    case reconnectSSH(UUID, UInt64, UInt64)
     case cancelUpload(UInt64)
     case input(UInt64, String)
     case key(UInt64, TerminalKeyEvent)
@@ -457,8 +458,13 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             try await bridge.attention(operation, id: id, through: through, active: active)
         case .notificationMutation(let selection):
             _ = try await bridge.notificationAction(.mutate(selection))
-        case .pasteFiles(let surface, let paths):
-            try await bridge.pasteFiles(surface: surface, paths: paths)
+        case .pasteFiles(let surface, let session, let paths):
+            try await bridge.pasteFiles(surface: surface, expectedSession: session, paths: paths)
+        case .reconnectSSH(let namespace, let surface, let session):
+            guard snapshot?.model.identityNamespace == namespace else {
+                throw BridgeFailure(message: "SSH tab belongs to a previous desktop")
+            }
+            try await bridge.reconnectSSH(identityNamespace: namespace, surface: surface, expectedSession: session)
         case .cancelUpload(let id):
             try await bridge.cancelUpload(id: id)
         case .input(let session, let text):
@@ -482,7 +488,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
                 // Only the commands the bridge can acknowledge are trackable; anything else would
                 // report queue acceptance as success, which is exactly what tracking exists to avoid.
                 switch inner {
-                case .window, .action, .surface: break
+                case .window, .action, .surface, .reconnectSSH: break
                 default: throw BridgeFailure(message: "Only window, action and surface commands can be tracked")
                 }
                 try await perform(inner, acknowledged: true)

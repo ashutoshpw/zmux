@@ -265,6 +265,11 @@ pub enum Action {
         #[serde(default = "default_focus")]
         focus: bool,
     },
+    ReconnectSsh {
+        identity_namespace: uuid::Uuid,
+        surface_id: SurfaceId,
+        expected_session_id: SessionId,
+    },
     CreateBrowser {
         #[serde(default)]
         profile_id: Option<uuid::Uuid>,

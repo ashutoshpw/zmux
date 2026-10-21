@@ -870,7 +870,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     private func updateTabAttention(_ view: NSView, snapshot: DesktopSnapshot) {
-        if let bar = view as? TerminalTabBar { bar.updateAttention(snapshot.notifications, surfaces: snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }) }
+        if let bar = view as? TerminalTabBar {
+            bar.updateAttention(snapshot.notifications,
+                surfaces: snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces },
+                frames: snapshot.frames)
+        }
         for child in view.subviews { updateTabAttention(child, snapshot: snapshot) }
     }
 
@@ -1096,7 +1100,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let view: NSView
             if let session = pane.sessionId {
                 let terminal = coordinator.terminal(session: session, pane: pane)
-                terminal.onFiles = { [weak self] paths in self?.enqueue(.pasteFiles(pane.selectedSurface, paths)) }
+                terminal.onFiles = { [weak self] paths in self?.enqueue(.pasteFiles(pane.selectedSurface, session, paths)) }
                 terminal.onImage = { [weak self] data in
                     guard let self else { return false }
                     self.presentationError = nil
@@ -1501,6 +1505,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         else { newBrowser() }
     }
     func selectTab(_ id: UInt64) { enqueue(.surface("select_surface", id, nil, nil, nil)) }
+    func reconnectSSH(identityNamespace: UUID, surface: UInt64, expectedSession: UInt64) -> CommandOutcome {
+        coordinator.enqueueTracked(.reconnectSSH(identityNamespace, surface, expectedSession))
+    }
     func closeTerminalTab(_ id: UInt64) {
         closeAfterFileCheck([id], key: "surface:\(id)") { [weak self] in self?.sendClose(.surface("close_surface", id, nil, nil, nil)) ?? .failed() }
     }
@@ -2318,6 +2325,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             return capture.terminationStatus
         }.value
         try await stages.complete("native_render")
+        try await stages.begin("ssh_reconnect")
+        try await SSHReconnectSmoke.validate(
+            configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"),
+            host: self, snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
+        try await stages.complete("ssh_reconnect")
         try await stages.begin("remote_clipboard")
         try await RemoteClipboardImageSmoke.validate(configuration: report.deletingLastPathComponent().appendingPathComponent("native-ssh-fixture.json"), snapshot: { self.snapshot }, terminal: { self.terminals[$0] })
         try await stages.complete("remote_clipboard")
@@ -2354,6 +2366,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "workspace_todo_metadata": true,
             "remote_file_url_symlink": true,
             "remote_file_url_directory_refusal": true,
+            "ssh_reconnect_native_icon": true,
             "browser_cli_automation": true,
             "browser_locators_waits": true,
             "browser_profiles_isolation_reopen": true,
