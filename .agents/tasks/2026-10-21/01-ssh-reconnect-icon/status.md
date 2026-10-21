@@ -1,17 +1,35 @@
 # Status
 
-- **State:** in-progress
+- **State:** done
 - **Updated:** 2026-10-21
 
 ## Notes
-- Implementation and independent production review are complete; no confirmed correctness or security findings remain. The native tab icon uses the runtime eligibility flag, captured namespace/surface/session identity, and acknowledged dispatch. Packaged smoke clicks the actual icon, checks the replacement terminal view and fresh-shell input, and retains a stopped-icon screenshot.
-- Native fixture behavior was exercised with private loopback SSH on Linux. Swift/AppKit compilation and packaged native execution require the hosted macOS workflow and remain pending. The existing save-dialog/accessibility exclusions are unchanged.
-- Design accepted: same surface ID, expected old session ID, fresh replacement session ID; reconnect accepts finished non-running SSH processes and settled SSH launch failures.
-- Native file drops must carry their originating session ID. Existing upload completion logic already cancels stale `(surface_id, session_id)` origins.
-- Preserve existing dirty cloud-origin task status and untracked profile-lifecycle files.
-- Rust runtime and workspace action are implemented. Reconnect is admitted from `Worker::action` only for an exited SSH process or a settled launch failure, pins the expected surface/session, and clears the startup command on replacement. An exited process releases process capacity before its history worker is joined; the retired wrapper remains queued for asynchronous cleanup.
-- Updated `docs/ssh.md` and the SSH CLI help description to distinguish the manual same-tab fresh-login icon from shell resume, automatic/durable reconnect, and CLI reconnect.
-- Focused verification passed: `cargo test -p zmux-desktop-runtime --lib ssh_reconnect -- --nocapture` — 3 passed, 0 failed.
-- The first full `RUST_TEST_THREADS=2 scripts/check` run exited 101 because `crates/native-bridge/tests/swift_file_contract.rs::pin_a_close_the_core_refuses_gives_the_discard_back` still omitted `.reconnectSSH` from its tracked-command allowlist. Updated the contract and added a check that `NativeBridge.reconnectSSH` sends an acknowledged action. Focused rerun passed: 1 passed, 0 failed.
-- Final full verification passed: `RUST_TEST_THREADS=2 scripts/check` exited 0. It ran all workspace tests, doc tests, Rust checks, package inventory, C ABI checks, and native-profile-lease C ABI checks. The reconnect runtime tests all passed in that run.
-- Packaged native smoke and hosted macOS acceptance remain pending; task delivery stays in progress.
+- Source `2fb5db683be30c7353542d0d4f059863b73e83f2` is pushed to `origin/main`.
+  Hosted macOS run [39672577235](https://github.com/ashutoshpw/zmux/actions/runs/39672577235)
+  passed, including both Swift source slices, Rust/ABI validation, universal packaging,
+  terminal selection/browser links, packaged app smoke, sidebar, and status menu.
+- [Artifact 12381162329](https://github.com/ashutoshpw/zmux/actions/runs/39672577235/artifacts/12381162329)
+  contains `zmux-dev-universal-2fb5db6.zip`. The outer/embedded source receipts, ZIP checksum,
+  three universal binaries, and 341 retained source hashes were independently verified.
+  See [artifact-verification.json](references/artifact-verification.json).
+- `ssh_reconnect_native_icon` is true: packaged smoke observes the stopped SSH tab icon,
+  clicks the real AppKit button, preserves tab identity/order/title/route, observes a new
+  session and terminal view, and types into the fresh shell without replaying the startup command.
+  The stopped-icon screenshot was visually inspected. Existing Ctrl+Tab/create/close/reopen
+  receipts passed; all 41 terminal-selection cases matched and both browser-link HTTP requests arrived.
+- Rust owner tests exercise `Worker::action` for live/pending/local/stale rejection, exited
+  process replacement, settled launch-failure retry, and the 32-terminal limit. Exit releases
+  process capacity while its scrollback worker remains asynchronously retired. File drops
+  pin their originating surface/session so old callbacks cannot target a replacement shell.
+- Independent production review found no confirmed correctness or security defects.
+  The generic completion path is covered separately from the settled launch-failure action test.
+- `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
+  `/tmp/zmux-ssh-reconnect-check.log`. Focused reconnect tests passed (3), and the tracked-close
+  Swift contract test passed (1). The first full run exposed that contract's stale command
+  allowlist; its repair includes an acknowledged reconnect bridge guard and passed the full rerun.
+- macOS 14+, Apple Silicon and Intel; ad-hoc signed, not notarized. Hosted strict codesign passed.
+  Save-dialog/accessibility and dependent native-browser-download checks remain user-deferred.
+  This does not establish physical user-Mac, two-host, or production-provider verification.
+- Implementation is limited to a manual reconnect icon for managed SSH tabs. It starts a fresh
+  login using the saved endpoint; automatic reconnect, durable sessions, menus and CLI reconnect
+  were not added. Unrelated dirty cloud-origin and profile-lifecycle work was preserved.
