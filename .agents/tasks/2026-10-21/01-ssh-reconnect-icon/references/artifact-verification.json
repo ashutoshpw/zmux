@@ -1,0 +1,68 @@
+{
+  "source_sha": "2fb5db683be30c7353542d0d4f059863b73e83f2",
+  "run_id": 39672577235,
+  "job_id": 119474004777,
+  "artifact_id": 12381162329,
+  "artifact_url": "https://github.com/ashutoshpw/zmux/actions/runs/39672577235/artifacts/12381162329",
+  "archive": "zmux-dev-universal-2fb5db6.zip",
+  "sha256": "4a9919a4b0e82b28bae530b560bd010c211d82e6238db365f578f68437aaf91b",
+  "outer_artifact_sha256": "0636f93ef2167b7557324057e0003cc6b46dfa52ea1b179221978f48853a9df9",
+  "architectures": {
+    "zmux.app/Contents/MacOS/zmux-app": [
+      "x86_64",
+      "arm64"
+    ],
+    "zmux.app/Contents/Resources/bin/zmux": [
+      "x86_64",
+      "arm64"
+    ],
+    "zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib": [
+      "x86_64",
+      "arm64"
+    ]
+  },
+  "build_info": {
+    "source_sha": "2fb5db683be30c7353542d0d4f059863b73e83f2",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "minimum_macos": "14.0",
+    "bundle_id": "app.w3dev.zmux.dev",
+    "signing": "ad-hoc",
+    "notarized": false,
+    "cloud_origin": "https://zmux.w3api.dev",
+    "optional_ghostty_linked": false,
+    "default_terminal_engine": "vt100",
+    "optional_zellij_packaged": false
+  },
+  "native_shortcut_and_reconnect_receipts": {
+    "ssh_reconnect_native_icon": true,
+    "ctrl_tab_navigation": true,
+    "ctrl_tab_single_tab_no_input": true,
+    "ctrl_tab_multipane_scoping": true,
+    "terminal_tab_shortcut": true,
+    "close_tab_shortcut": true,
+    "reopen_tab_shortcut": true,
+    "tab_navigation_shared_actions": true
+  },
+  "native_selection_cases": 41,
+  "terminal_link_requests": [
+    "/p-05f32ee156104e1e",
+    "/o-05f32ee156104e1e"
+  ],
+  "retained_source_files_verified": 341,
+  "packaged_native_smoke": "passed",
+  "cloud_terminal_lifecycle": "passed",
+  "sidebar_and_status_menu": "passed",
+  "screenshot": "zmux-ssh-reconnect.png",
+  "screenshot_sha256": "44514ecdf527244776ab523959c7be2533ff9463ee78c93358f7d7c4d08cf4c5",
+  "screenshot_visually_verified": true,
+  "excluded_checks": {
+    "native_save_dialog_accessibility": "skipped_user_deferred",
+    "browser_downloads_native": false
+  },
+  "physical_user_mac_verified": false,
+  "hosted_strict_codesign_verification": "passed",
+  "screenshot_observation": "Reconnect arrow is visible beside the selected exited SSH tab; live sibling has no reconnect arrow."
+}
