@@ -263,7 +263,7 @@ enum WorkspaceOrderSmoke {
                 throw BridgeFailure(message: "Workspace row click did not permit restoring the original content responder")
             }
 
-            guard sidebar.isFlipped, let clipView, let scrollView, let savedClipOrigin else {
+            guard sidebar.isFlipped, let clipView, let scrollView else {
                 throw BridgeFailure(message: "Workspace drag fixture has no flipped, scrolled sidebar")
             }
             compactWindowApplied = true
