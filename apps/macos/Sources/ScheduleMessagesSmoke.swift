@@ -632,7 +632,7 @@ enum ScheduleMessagesSmoke {
         let tableVisibleRect = controls.table.visibleRect
         guard stateColumnRect.minX >= tableVisibleRect.minX - 1,
               stateColumnRect.maxX <= tableVisibleRect.maxX + 1 else {
-            throw BridgeFailure(message: "Scheduled messages State column is outside the visible queue viewport")
+            throw BridgeFailure(message: "Scheduled messages State column is outside the visible queue viewport (column: \(stateColumnRect), visible: \(tableVisibleRect), table: \(controls.table.frame), queue: \(controls.queueScroll.frame))")
         }
 
         guard controls.message.string == expectedMessage,

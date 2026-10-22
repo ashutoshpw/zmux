@@ -66,6 +66,18 @@ private struct ScheduleEditorSnapshot {
     let submitEdited: Bool
 }
 
+/// Keep columns inside the actual clip width, including split and scroller changes.
+private final class ScheduleQueueScrollView: NSScrollView {
+    override func tile() {
+        super.tile()
+        guard let table = documentView as? NSTableView else { return }
+        let width = contentView.bounds.width
+        if width > 0, abs(table.frame.width - width) > 0.5 {
+            table.setFrameSize(NSSize(width: width, height: table.frame.height))
+        }
+    }
+}
+
 private final class ScheduleDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
@@ -217,6 +229,8 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         table.addTableColumn(makeColumn("Remote target", identifier: "target", width: 100))
         table.addTableColumn(makeColumn("Scheduled", identifier: "deadline", width: 110))
         table.addTableColumn(makeColumn("State", identifier: "state", width: 90))
+        table.autoresizingMask = [.width]
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.headerView = NSTableHeaderView()
         table.rowHeight = 42
         table.usesAlternatingRowBackgroundColors = true
@@ -306,7 +320,7 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         column.title = title
         column.width = width
         column.minWidth = 72
-        column.resizingMask = .userResizingMask
+        column.resizingMask = [.userResizingMask, .autoresizingMask]
         return column
     }
 
@@ -317,7 +331,7 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         let controls = horizontalStack([refreshButton, setupCheckButton, setupInstallButton], spacing: 8)
         let top = verticalStack([heading, controls, statusLabel], spacing: 8)
 
-        let tableScroll = NSScrollView()
+        let tableScroll = ScheduleQueueScrollView()
         tableScroll.hasVerticalScroller = true
         tableScroll.hasHorizontalScroller = true
         tableScroll.autohidesScrollers = true

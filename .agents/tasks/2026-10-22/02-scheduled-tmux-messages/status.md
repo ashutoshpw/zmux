@@ -42,6 +42,25 @@ Mac artifact, hosted acceptance and delivery verification remain pending.
   24,344,586 bytes), but scheduler UI acceptance has not run and it is not yet
   delivered as this feature's accepted build.
 
+- Fixture repair `fa1b43b0a71546b2bd2bf3d46ac42648d680a594` is on origin/main
+  with exact remote parity. Personal post-commit review found no further defect.
+  Fresh run [39870897287](https://github.com/ashutoshpw/zmux/actions/runs/39870897287)
+  is in progress, with both Linux helper builds passed. New accepted artifact is pending.
+
+- Run 39870897287 passed the corrected native save/reopen persistence journey.
+  Its scheduler report confirms the embedded tab, correctly scoped context menu,
+  no extra window/dedup, managed SSH refresh, lost-ack reconciliation, create,
+  message-only edit, time-only edit and combined edit. It then correctly failed
+  the existing geometry gate: the State column extended outside the queue viewport.
+  The screenshot visibly confirms a real embedded tab and clipping of State/version.
+  Make the table follow its viewport width and allow all columns to resize uniformly;
+  retain the strict column-visibility assertion. The repair pins document width
+  in scroll-view tiling and enables uniform column autoresizing, with dimensions
+  added to failure diagnostics. Full portable `scripts/check` passed again
+  (`/tmp/zmux-relative-tabs-layout-check.log`). AppKit acceptance must rerun.
+  Evidence: `/tmp/zmux-relative-tabs-diagnostics-39870897287/`, failure log
+  `/tmp/zmux-relative-tabs-native-second-failure.log`.
+
 ## Current result
 
 - Verified fixed candidate
