@@ -52,7 +52,7 @@ private struct ScheduleMutationIdentity {
 }
 
 private struct ScheduleEditorSnapshot {
-    let selectedJobID: UUID?
+    let selectedJob: ScheduleMessageJob?
     let message: String
     let deadlineText: String
     let occurrence: Int
@@ -450,37 +450,45 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
                         }
                     }
                 }
-                self.suppressEditorEvents = true
-                self.table.reloadData()
-                self.suppressEditorEvents = false
+                var jobToLoad: ScheduleMessageJob?
+                var latestEditorJob: ScheduleMessageJob?
+                var shouldBeginNewMessage = false
                 if let requestedJobID,
                    let job = self.currentJobs.first(where: { $0.id == requestedJobID }) {
                     self.isHistory = false
-                    self.viewMode.selectedSegment = 0
-                    self.loadEditor(job)
-                    self.selectRow(for: job.id)
+                    jobToLoad = job
                 } else if let requestedJobID,
                           let job = self.historyJobs.first(where: { $0.id == requestedJobID }) {
                     self.isHistory = true
-                    self.viewMode.selectedSegment = 1
-                    self.loadEditor(job)
-                    self.selectRow(for: job.id)
+                    jobToLoad = job
                 } else if let editorSnapshot {
-                    let latest = editorSnapshot.selectedJobID.flatMap { id in
-                        self.currentJobs.first(where: { $0.id == id })
-                            ?? self.historyJobs.first(where: { $0.id == id })
+                    latestEditorJob = editorSnapshot.selectedJob.flatMap { snapshotJob in
+                        self.currentJobs.first(where: { $0.id == snapshotJob.id })
+                            ?? self.historyJobs.first(where: { $0.id == snapshotJob.id })
                     }
-                    self.restoreEditor(editorSnapshot, latestJob: latest)
-                    if let id = editorSnapshot.selectedJobID { self.selectRow(for: id) }
-                    else { self.table.deselectAll(nil) }
+                    if let latestEditorJob {
+                        self.isHistory = self.historyJobs.contains(where: { $0.id == latestEditorJob.id })
+                    }
                 } else if let previousJobID,
                           let job = self.currentJobs.first(where: { $0.id == previousJobID })
                             ?? self.historyJobs.first(where: { $0.id == previousJobID }) {
-                    self.loadEditor(job)
                     self.isHistory = self.historyJobs.contains(where: { $0.id == job.id })
-                    self.viewMode.selectedSegment = self.isHistory ? 1 : 0
-                    self.selectRow(for: job.id)
+                    jobToLoad = job
                 } else if previousJobID != nil {
+                    shouldBeginNewMessage = true
+                }
+                self.viewMode.selectedSegment = self.isHistory ? 1 : 0
+                self.suppressEditorEvents = true
+                self.table.reloadData()
+                self.suppressEditorEvents = false
+                if let jobToLoad {
+                    self.loadEditor(jobToLoad)
+                    self.selectRow(for: jobToLoad.id)
+                } else if let editorSnapshot {
+                    self.restoreEditor(editorSnapshot)
+                    if let id = editorSnapshot.selectedJob?.id { self.selectRow(for: id) }
+                    else { self.table.deselectAll(nil) }
+                } else if shouldBeginNewMessage {
                     self.table.deselectAll(nil)
                     self.beginNewMessage()
                 } else {
@@ -515,7 +523,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
     private func captureEditorSnapshot() -> ScheduleEditorSnapshot {
         ScheduleEditorSnapshot(
-            selectedJobID: selectedJob?.id,
+            selectedJob: selectedJob,
             message: messageText.string,
             deadlineText: deadlineField.stringValue,
             occurrence: occurrencePicker.indexOfSelectedItem,
@@ -528,8 +536,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         )
     }
 
-    private func restoreEditor(_ snapshot: ScheduleEditorSnapshot, latestJob: ScheduleMessageJob?) {
-        if let latestJob { selectedJob = latestJob }
+    private func restoreEditor(_ snapshot: ScheduleEditorSnapshot) {
+        selectedJob = snapshot.selectedJob
         suppressEditorEvents = true
         if let job = selectedJob {
             targetPicker.removeAllItems()

@@ -539,6 +539,7 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
         "cancel_removes_pending_job_and_history_view_retains_receipt",
         "populated_history_editor_screenshot_retained",
         "captured_create_edit_cancel_ids_resolve_through_managed_status",
+        "dirty_refresh_retains_original_version_and_rejects_concurrent_overwrite",
     }
     receipts = schedule_evidence.get("mutation_receipts", [])
     if schedule_evidence.get("source_sha") != info.get("ZmuxSourceSHA") \
@@ -547,6 +548,22 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
             or any(item.get("receipt_state") != "applied" for item in receipts) \
             or schedule_evidence.get("unknown_outcome_ui_exercised") is not True:
         raise SystemExit("Packaged scheduled-message evidence has an invalid scope, receipt set, or state")
+    cas_refresh = schedule_evidence.get("cas_refresh_rejection")
+    if not isinstance(cas_refresh, dict) \
+            or type(cas_refresh.get("original_version")) is not int \
+            or cas_refresh.get("original_version") != 1 \
+            or type(cas_refresh.get("remote_version")) is not int \
+            or cas_refresh.get("remote_version") != 2 \
+            or type(cas_refresh.get("cleanup_version")) is not int \
+            or cas_refresh.get("cleanup_version") != 3:
+        raise SystemExit("Packaged scheduled-message evidence has invalid dirty-refresh CAS versions")
+    retained_message = cas_refresh.get("retained_message")
+    remote_message_after_rejection = cas_refresh.get("remote_message_after_rejection")
+    if not isinstance(retained_message, str) or not retained_message.strip() \
+            or not isinstance(remote_message_after_rejection, str) \
+            or not remote_message_after_rejection.strip() \
+            or retained_message == remote_message_after_rejection:
+        raise SystemExit("Dirty-refresh CAS rejection did not retain distinct nonempty local and remote messages")
     if schedule_evidence.get("screenshot") != schedule_screenshot.name or not schedule_screenshot.is_file() \
             or schedule_screenshot.stat().st_size <= 4096:
         raise SystemExit("The populated scheduled-message history screenshot was not retained")

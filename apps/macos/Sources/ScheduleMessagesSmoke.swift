@@ -32,14 +32,21 @@ enum ScheduleMessagesSmoke {
         let permissions: UInt16
     }
 
+    private struct SchedulerActionReply {
+        let kind: String
+        let value: [String: Any]
+    }
+
     @MainActor
     private struct Controls {
         let window: NSWindow
+        let refresh: NSButton
         let target: NSPopUpButton
         let message: NSTextView
         let deadline: NSTextField
         let viewMode: NSSegmentedControl
         let table: NSTableView
+        let new: NSButton
         let save: NSButton
         let cancel: NSButton
         let requestStatus: NSButton
@@ -57,11 +64,13 @@ enum ScheduleMessagesSmoke {
                 return value
             }
             self.window = window
+            refresh = try required(NSButton.self, label: "Refresh scheduled messages")
             target = try required(NSPopUpButton.self, label: "Remote tmux pane")
             message = try required(NSTextView.self, label: "Scheduled message text")
             deadline = try required(NSTextField.self, label: "Scheduled local date and time")
             viewMode = try required(NSSegmentedControl.self, label: "Scheduled message list view")
             table = try required(NSTableView.self, label: "Scheduled message list")
+            new = try required(NSButton.self, label: "Create a new scheduled message")
             save = try required(NSButton.self, label: "Save or schedule message")
             cancel = try required(NSButton.self, label: "Cancel selected pending scheduled message")
             requestStatus = try required(NSButton.self, label: "Check the remote receipt for the unresolved request")
@@ -270,6 +279,95 @@ enum ScheduleMessagesSmoke {
             }
             evidence["mutation_receipts"] = receiptEvidence
             append("captured_create_edit_cancel_ids_resolve_through_managed_status", to: &evidence)
+
+            let casOriginalMessage = "Native schedule CAS original \(token)"
+            let casDraftMessage = "Native schedule CAS draft \(token)"
+            let casExternalMessage = "Native schedule CAS external edit \(token)"
+            let casDeadline = localMinuteText(offsetMinutes: 45)
+            controls.viewMode.selectedSegment = 0
+            try sendAction(controls.viewMode, named: "Pending scheduled messages")
+            try await waitUntil("pending view before the concurrent-edit regression") {
+                controls.viewMode.selectedSegment == 0 && controls.table.numberOfRows == 0
+            }
+            try click(controls.new, named: "New")
+            try replaceMessage(casOriginalMessage, in: controls)
+            try setDeadline(casDeadline, in: controls)
+            try await waitUntil("concurrent-edit fixture create readiness") { controls.save.isEnabled }
+            try click(controls.save, named: "Schedule Message")
+            try await waitForRow(message: casOriginalMessage, deadline: casDeadline, version: 1, in: controls)
+
+            let jobsReply = try await schedulerAction(
+                ["action": "list", "limit": 100], bridge: coordinator.bridge, route: route)
+            guard jobsReply.kind == "jobs",
+                  let jobs = jobsReply.value["jobs"] as? [[String: Any]],
+                  let casJob = jobs.first(where: { $0["message"] as? String == casOriginalMessage }),
+                  let casJobIDText = casJob["id"] as? String,
+                  let casJobID = UUID(uuidString: casJobIDText),
+                  (casJob["version"] as? NSNumber)?.uint64Value == 1 else {
+                throw BridgeFailure(message: "Concurrent-edit fixture was not present in the remote scheduler at version 1")
+            }
+
+            try replaceMessage(casDraftMessage, in: controls)
+            try await waitUntil("dirty concurrent-edit draft readiness") { controls.save.isEnabled }
+            let externalEdit = try await schedulerAction([
+                "action": "edit",
+                "job_id": casJobID.uuidString.lowercased(),
+                "expected_version": 1,
+                "patch": ["message": casExternalMessage]
+            ], requestID: UUID(), bridge: coordinator.bridge, route: route)
+            guard externalEdit.kind == "mutation",
+                  let externalJob = externalEdit.value["job"] as? [String: Any],
+                  externalJob["message"] as? String == casExternalMessage,
+                  (externalJob["version"] as? NSNumber)?.uint64Value == 2 else {
+                throw BridgeFailure(message: "Out-of-band scheduler edit did not advance the fixture to version 2")
+            }
+
+            try click(controls.refresh, named: "Refresh")
+            try await waitUntil("refresh preserves the draft while showing the remote version 2 row") {
+                guard let row = Self.rowIndex(message: casExternalMessage, in: controls.table) else { return false }
+                return Self.visibleText(in: scheduleWindow).contains("Remote scheduler refreshed")
+                    && controls.table.selectedRow == row
+                    && Self.cellText(column: 3, row: row, in: controls.table) == "pending · v2"
+                    && controls.message.string == casDraftMessage
+                    && controls.save.isEnabled
+            }
+
+            try click(controls.save, named: "Save Changes")
+            try await waitUntil("stale-version rejection for the retained editor baseline") {
+                Self.visibleText(in: scheduleWindow).contains("version changed")
+                    && controls.message.string == casDraftMessage
+            }
+            let authoritativeReply = try await schedulerAction([
+                "action": "show",
+                "job_id": casJobID.uuidString.lowercased()
+            ], bridge: coordinator.bridge, route: route)
+            guard authoritativeReply.kind == "job",
+                  let authoritativeJob = authoritativeReply.value["job"] as? [String: Any],
+                  authoritativeJob["id"] as? String == casJobID.uuidString.lowercased(),
+                  authoritativeJob["message"] as? String == casExternalMessage,
+                  authoritativeJob["state"] as? String == "pending",
+                  (authoritativeJob["version"] as? NSNumber)?.uint64Value == 2 else {
+                throw BridgeFailure(message: "Stale AppKit save changed the authoritative version 2 scheduler job")
+            }
+            let cleanupReply = try await schedulerAction([
+                "action": "cancel",
+                "job_id": casJobID.uuidString.lowercased(),
+                "expected_version": 2
+            ], requestID: UUID(), bridge: coordinator.bridge, route: route)
+            guard cleanupReply.kind == "mutation",
+                  let cleanupJob = cleanupReply.value["job"] as? [String: Any],
+                  cleanupJob["state"] as? String == "cancelled",
+                  (cleanupJob["version"] as? NSNumber)?.uint64Value == 3 else {
+                throw BridgeFailure(message: "Concurrent-edit fixture could not be cancelled at its known version 2")
+            }
+            evidence["cas_refresh_rejection"] = [
+                "original_version": 1,
+                "remote_version": 2,
+                "retained_message": casDraftMessage,
+                "remote_message_after_rejection": casExternalMessage,
+                "cleanup_version": 3
+            ]
+            append("dirty_refresh_retains_original_version_and_rejects_concurrent_overwrite", to: &evidence)
             evidence["state"] = "passed"
             try await writeEvidence(evidence, to: report)
 
@@ -278,6 +376,22 @@ enum ScheduleMessagesSmoke {
                                              coordinator: coordinator)
         } catch {
             let primary = error
+            if let scheduleWindow {
+                let failureScreenshot = report.deletingLastPathComponent()
+                    .appendingPathComponent("zmux-scheduled-messages.png")
+                if scheduleWindow.isVisible {
+                    do {
+                        try capture(scheduleWindow, to: failureScreenshot)
+                        evidence["failure_screenshot"] = failureScreenshot.lastPathComponent
+                    } catch {
+                        evidence["failure_screenshot_error"] = String(String(describing: error).prefix(512))
+                    }
+                } else {
+                    evidence["failure_screenshot_error"] = "Scheduled Messages window was not visible at failure"
+                }
+            } else {
+                evidence["failure_screenshot_error"] = "Scheduled Messages window was unavailable at failure"
+            }
             scheduleWindow?.close()
             do {
                 try await cleanUpRemoteWorkspace(remoteWorkspaceID, restoring: originalWorkspace, host: host,
@@ -479,6 +593,41 @@ enum ScheduleMessagesSmoke {
               mutations.map(\.requestID).count == Set(mutations.map(\.requestID)).count else {
             throw BridgeFailure(message: "Scheduler edit/cancel requests did not retain one job identity and unique request IDs")
         }
+    }
+
+    private static func schedulerAction(_ action: [String: Any], requestID: UUID? = nil,
+                                        bridge: NativeBridge, route: Route) async throws -> SchedulerActionReply {
+        let requestIDValue: Any = requestID.map { $0.uuidString.lowercased() as Any } ?? NSNull()
+        let request = try JSONSerialization.data(withJSONObject: [
+            "protocol_version": 1,
+            "request_id": requestIDValue,
+            "action": action
+        ], options: [.sortedKeys])
+        let response = try await bridge.scheduleRequest(identityNamespace: route.identityNamespace,
+            surface: route.surface, expectedSession: route.session, request: request)
+        guard let wrapper = try JSONSerialization.jsonObject(with: response) as? [String: Any],
+              let ok = wrapper["ok"] as? Bool,
+              let outcomeUnknown = wrapper["outcome_unknown"] as? Bool else {
+            throw BridgeFailure(message: "Managed SSH scheduler returned an invalid bridge wrapper")
+        }
+        guard ok else {
+            let error = wrapper["error"] as? [String: Any] ?? [:]
+            throw BridgeFailure(message: error["message"] as? String ?? "Managed SSH scheduler request failed")
+        }
+        guard !outcomeUnknown,
+              let reply = wrapper["reply"] as? [String: Any],
+              let result = reply["result"] as? [String: Any],
+              let status = result["status"] as? String,
+              let data = result["data"] as? [String: Any] else {
+            throw BridgeFailure(message: "Managed SSH scheduler returned an incomplete or uncertain reply")
+        }
+        guard status == "success" else {
+            throw BridgeFailure(message: data["message"] as? String ?? "Managed SSH scheduler rejected the request")
+        }
+        guard let kind = data["kind"] as? String else {
+            throw BridgeFailure(message: "Managed SSH scheduler reply omitted its result kind")
+        }
+        return SchedulerActionReply(kind: kind, value: data["value"] as? [String: Any] ?? data)
     }
 
     private static func checkReceipt(_ requestID: UUID, bridge: NativeBridge, route: Route) async throws -> String {
