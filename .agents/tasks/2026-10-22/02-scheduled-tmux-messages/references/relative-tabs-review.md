@@ -34,3 +34,15 @@ require exactly 11; no application code or other assertion changes. All executab
 session-version expectations were searched across scripts/tools/apps/crates.
 The full local gate passed again at `/tmp/zmux-relative-tabs-fixture-check.log`.
 A new hosted run is required; scheduler UI acceptance was not reached in the first.
+
+## Embedded queue layout repair
+
+Run 39870897287 passed save/reopen and the first eight scheduler checks, then
+reported the State column outside its visible queue viewport. The retained native
+screenshot confirms the embedded tab and real clipping. The layout repair pins
+the table frame to its clip width in `NSScrollView.tile`, permits all columns to
+autoresize and uses uniform column resizing. The existing strict visibility test
+is retained, with actual dimensions added to its failure diagnostic.
+Full portable verification passed again at `/tmp/zmux-relative-tabs-layout-check.log`.
+Native acceptance remains required; relative create/edit/countdown checks run after
+the layout check and have not yet been reached.
