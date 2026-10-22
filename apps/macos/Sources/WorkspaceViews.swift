@@ -92,9 +92,32 @@ final class IconButton: NSButton {
 }
 
 @MainActor
-final class WorkspaceRowView: NSControl {
+struct WorkspaceSidebarOrderGroup {
+    let id: UInt64
+    let workspaceIDs: [UInt64]
+}
+
+@MainActor
+struct WorkspaceSidebarOrderState {
+    let namespace: UUID
+    let window: UUID
+    let revision: UInt64
+    let workspaceIDs: [UInt64]
+    let workspaceUUIDs: [UUID]
+    let groups: [WorkspaceSidebarOrderGroup]
+}
+
+@MainActor
+final class WorkspaceRowView: NSControl, NSDraggingSource {
+    private static let dragType = NSPasteboard.PasteboardType("app.zmux.workspace-order")
     let workspaceID: UInt64
     var onMetadata: (@MainActor (NSView) -> Void)?
+    weak var workspaceDragOwner: AnyObject?
+    var workspaceOrderTarget: (@MainActor (UInt64) -> WorkspaceOrderTarget?)?
+    private var mouseOrigin: NSPoint?
+    private weak var mouseDownWindow: NSWindow?
+    private var didBeginDrag = false
+    private(set) var activeDragTarget: WorkspaceOrderTarget?
     private let terminalIcon = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -206,6 +229,11 @@ final class WorkspaceRowView: NSControl {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        return hit is NSButton ? hit : self
+    }
+
     func update(title: String, subtitle: String, isSelected: Bool, isRunning: Bool, unread: Int = 0, metadata: WorkspaceMetadata? = nil) {
         let normalizedMetadata = metadata.flatMap { $0.isEmpty ? nil : $0 }
         let next = Presentation(title: title, subtitle: subtitle, selected: isSelected,
@@ -274,9 +302,78 @@ final class WorkspaceRowView: NSControl {
     @objc private func showMetadata() { onMetadata?(self) }
 
     override func mouseDown(with event: NSEvent) {
+        guard event.type == .leftMouseDown else { super.mouseDown(with: event); return }
+        mouseOrigin = event.locationInWindow
+        mouseDownWindow = window
+        didBeginDrag = false
+        activeDragTarget = workspaceOrderTarget?(workspaceID)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !didBeginDrag, let origin = mouseOrigin,
+              hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 5,
+              let target = activeDragTarget,
+              let sidebar = superview as? WorkspaceSidebarList,
+              let owner = workspaceDragOwner,
+              sidebar.dragOwner === owner,
+              let currentWindow = window,
+              mouseDownWindow === currentWindow,
+              sidebar.window === currentWindow,
+              sidebar.arrangedSubviews.contains(where: { $0 === self }),
+              workspaceOrderTarget?(workspaceID) == target,
+              let state = sidebar.orderState?(),
+              state.namespace == target.namespace, state.window == target.window,
+              state.revision == target.revision,
+              state.workspaceIDs.indices.contains(target.index),
+              state.workspaceUUIDs.indices.contains(target.index),
+              state.workspaceIDs[target.index] == workspaceID,
+              state.workspaceUUIDs[target.index] == target.workspace,
+              let data = try? JSONEncoder().encode(target), data.count <= 512 else { return }
+
+        let item = NSPasteboardItem()
+        guard item.setData(data, forType: Self.dragType) else { return }
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        guard let image = dragPreviewImage() else { return }
+        dragging.setDraggingFrame(bounds, contents: image)
+        activeDragTarget = target
+        didBeginDrag = true
+        mouseOrigin = nil
+        beginDraggingSession(with: [dragging], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let isClick = event.type == .leftMouseUp && mouseOrigin != nil && !didBeginDrag
+        mouseOrigin = nil
+        mouseDownWindow = nil
+        defer {
+            didBeginDrag = false
+            activeDragTarget = nil
+        }
+        guard isClick else { return }
         window?.makeFirstResponder(self)
-        guard event.type == .leftMouseDown, let action else { return }
-        sendAction(action, to: target)
+        if let action { sendAction(action, to: target) }
+    }
+
+    private func dragPreviewImage() -> NSImage? {
+        layoutSubtreeIfNeeded()
+        guard let bitmap = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            cacheDisplay(in: bounds, to: bitmap)
+        }
+        let image = NSImage(size: bounds.size)
+        image.addRepresentation(bitmap)
+        return image
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? .move : []
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        mouseOrigin = nil
+        mouseDownWindow = nil
+        didBeginDrag = false
+        activeDragTarget = nil
     }
 
     override func keyDown(with event: NSEvent) {
@@ -413,8 +510,180 @@ final class WorkspaceMetadataViewController: NSViewController {
 }
 
 @MainActor
-final class FlippedStackView: NSStackView {
+class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
+}
+
+/// Workspace-only drop destination. It maps visible row/header geometry to a
+/// canonical slot, then lets the existing revision-bound owner validate commit.
+@MainActor
+final class WorkspaceSidebarList: FlippedStackView {
+    private static let dragType = NSPasteboard.PasteboardType("app.zmux.workspace-order")
+    weak var dragOwner: AnyObject?
+    var orderState: (@MainActor () -> WorkspaceSidebarOrderState?)?
+    var targetForWorkspace: (@MainActor (UInt64) -> WorkspaceOrderTarget?)?
+    var onWorkspaceDrop: (@MainActor (WorkspaceOrderTarget, Int) -> Bool)?
+
+    private struct Insertion {
+        let target: WorkspaceOrderTarget
+        let index: Int
+        let y: CGFloat
+    }
+    private let indicator = NSView(frame: .zero)
+    private var insertion: Insertion?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([Self.dragType])
+        indicator.wantsLayer = true
+        indicator.layer?.backgroundColor = ZmuxPalette.selectionBorder.cgColor
+        indicator.layer?.cornerRadius = 1
+        indicator.isHidden = true
+        addSubview(indicator)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        updateIndicatorFrame()
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        updateInsertion(sender) ? .move : []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        updateInsertion(sender) ? .move : []
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        clearInsertion()
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        updateInsertion(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard updateInsertion(sender), let insertion else {
+            clearInsertion()
+            return false
+        }
+        clearInsertion()
+        return onWorkspaceDrop?(insertion.target, insertion.index) ?? false
+    }
+
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+        clearInsertion()
+    }
+
+    private func updateInsertion(_ sender: any NSDraggingInfo) -> Bool {
+        guard let source = sender.draggingSource as? WorkspaceRowView,
+              let owner = dragOwner, source.workspaceDragOwner === owner,
+              source.window === window, source.superview === self,
+              arrangedSubviews.contains(where: { $0 === source }),
+              let target = source.activeDragTarget,
+              let pasteboard = sender.draggingPasteboard.data(forType: Self.dragType),
+              pasteboard.count <= 512,
+              let decoded = try? JSONDecoder().decode(WorkspaceOrderTarget.self, from: pasteboard), decoded == target,
+              let state = orderState?(),
+              state.namespace == target.namespace, state.window == target.window,
+              state.revision == target.revision,
+              state.workspaceIDs.indices.contains(target.index),
+              state.workspaceUUIDs.indices.contains(target.index),
+              state.workspaceIDs[target.index] == source.workspaceID,
+              state.workspaceUUIDs[target.index] == target.workspace,
+              targetForWorkspace?(source.workspaceID) == target,
+              let next = insertion(at: convert(sender.draggingLocation, from: nil), source: source, target: target, state: state) else {
+            clearInsertion()
+            return false
+        }
+        insertion = next
+        updateIndicatorFrame()
+        return true
+    }
+
+    private func insertion(
+        at point: NSPoint,
+        source: WorkspaceRowView,
+        target: WorkspaceOrderTarget,
+        state: WorkspaceSidebarOrderState
+    ) -> Insertion? {
+        guard !state.workspaceIDs.isEmpty else { return nil }
+        let views = arrangedSubviews.filter { $0 is WorkspaceRowView || $0 is WorkspaceGroupRowView }
+        let rawGap: Int
+        let markerY: CGFloat
+        if views.isEmpty {
+            rawGap = 0
+            markerY = bounds.minY
+        } else if let destination = views.first(where: { point.y < $0.frame.midY }) {
+            if let row = destination as? WorkspaceRowView {
+                guard let index = state.workspaceIDs.firstIndex(of: row.workspaceID) else { return nil }
+                rawGap = index
+                markerY = markerBeforeWorkspace(row.workspaceID, fallback: row.frame.minY, state: state)
+            } else if let header = destination as? WorkspaceGroupRowView,
+                      let group = state.groups.first(where: { $0.id == header.groupID }),
+                      let index = group.workspaceIDs.compactMap({ state.workspaceIDs.firstIndex(of: $0) }).min() {
+                rawGap = index
+                markerY = header.frame.minY
+            } else { return nil }
+        } else if let destination = views.last {
+            markerY = destination.frame.maxY
+            if let row = destination as? WorkspaceRowView {
+                guard let index = state.workspaceIDs.firstIndex(of: row.workspaceID) else { return nil }
+                rawGap = index + 1
+            } else if let header = destination as? WorkspaceGroupRowView,
+                      let group = state.groups.first(where: { $0.id == header.groupID }),
+                      let index = group.workspaceIDs.compactMap({ state.workspaceIDs.firstIndex(of: $0) }).max() {
+                rawGap = index + 1
+            } else { return nil }
+        } else { return nil }
+
+        let sourceIndex = target.index
+        let finalIndex = rawGap - (sourceIndex < rawGap ? 1 : 0)
+        var reordered = state.workspaceIDs
+        let workspaceID = reordered.remove(at: sourceIndex)
+        reordered.insert(workspaceID, at: finalIndex)
+        guard reordered != state.workspaceIDs, preservesGroups(state.groups, in: reordered) else { return nil }
+        return Insertion(target: target, index: finalIndex, y: markerY)
+    }
+
+    private func markerBeforeWorkspace(
+        _ workspaceID: UInt64,
+        fallback: CGFloat,
+        state: WorkspaceSidebarOrderState
+    ) -> CGFloat {
+        guard let group = state.groups.first(where: { $0.workspaceIDs.first == workspaceID }),
+              let header = arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView })
+                .first(where: { $0.groupID == group.id }) else { return fallback }
+        return header.frame.minY
+    }
+
+    private func preservesGroups(_ groups: [WorkspaceSidebarOrderGroup], in workspaceIDs: [UInt64]) -> Bool {
+        for group in groups {
+            guard let anchor = group.workspaceIDs.first else { return false }
+            let positions = group.workspaceIDs.compactMap { workspaceIDs.firstIndex(of: $0) }.sorted()
+            guard positions.count == group.workspaceIDs.count, let first = positions.first,
+                  workspaceIDs[first] == anchor,
+                  positions.last == first + group.workspaceIDs.count - 1 else { return false }
+            let members = Set(group.workspaceIDs)
+            guard workspaceIDs[first..<(first + group.workspaceIDs.count)].allSatisfy(members.contains) else { return false }
+        }
+        return true
+    }
+
+    private func updateIndicatorFrame() {
+        guard let insertion else { indicator.isHidden = true; return }
+        addSubview(indicator, positioned: .above, relativeTo: nil)
+        indicator.frame = NSRect(x: 8, y: insertion.y - 1, width: max(0, bounds.width - 16), height: 2)
+        indicator.isHidden = false
+    }
+
+    private func clearInsertion() {
+        insertion = nil
+        indicator.isHidden = true
+    }
 }
 
 @MainActor

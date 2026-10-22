@@ -120,7 +120,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var notificationKey = ""
     private lazy var notificationButton = IconButton(symbol: "bell", label: "Notifications", target: self, action: #selector(toggleNotifications))
     private let canvas = BackgroundView(color: ZmuxPalette.terminal)
-    private let workspaceList = FlippedStackView()
+    private let workspaceList = WorkspaceSidebarList(frame: .zero)
     private let mainHeader = MainHeaderView()
     private lazy var cancelUploadButton = IconButton(symbol: "xmark.circle", label: "Cancel active upload", target: self, action: #selector(cancelActiveUpload))
     private var statusMessage = "Starting shell…"
@@ -131,6 +131,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var modelRevision: UInt64 = .max
     private var workspaceRows: [WorkspaceRowView: UInt64] = [:]
     private var workspaceRowsNamespace: UUID?
+    private var workspaceRowsWindowID: UInt64?
     private var metadataPopover: NSPopover?
     private var metadataInspector: WorkspaceMetadataViewController?
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
@@ -151,6 +152,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             defer: false
         )
         super.init()
+        workspaceList.dragOwner = self
+        workspaceList.orderState = { [weak self] in self?.workspaceSidebarOrderState() }
+        workspaceList.targetForWorkspace = { [weak self] id in self?.workspaceDragTarget(for: id) }
+        workspaceList.onWorkspaceDrop = { [weak self] target, index in
+            guard let self else { return false }
+            return self.coordinator.enqueue(.workspaceOrder(target.workspace, target.window, index, target.revision))
+        }
         window.delegate = self
         window.onWorkspaceNumber = { [weak self] digit in self?.selectWorkspaceNumber(digit) }
         window.onTabNavigation = { [weak self] previous in
@@ -879,21 +887,27 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     private func rebuildWorkspaceRowsIfNeeded(_ snapshot: DesktopSnapshot) {
-        guard modelRevision != snapshot.model.revision || workspaceRowsNamespace != snapshot.model.identityNamespace else { return }
+        guard let identity, identity.namespace == snapshot.model.identityNamespace,
+              let owner = snapshot.model.windows.first(where: { $0.id == identity.windowId }) else { return }
+        guard modelRevision != snapshot.model.revision || workspaceRowsNamespace != snapshot.model.identityNamespace
+                || workspaceRowsWindowID != identity.windowId else { return }
         modelRevision = snapshot.model.revision
         workspaceRowsNamespace = snapshot.model.identityNamespace
+        workspaceRowsWindowID = identity.windowId
         workspaceList.arrangedSubviews.forEach {
             workspaceList.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
         workspaceRows.removeAll()
         var emittedGroups = Set<UInt64>()
-        for workspace in snapshot.model.workspaces {
-            let group = snapshot.model.workspaceGroups.first { $0.workspaceIds.contains(workspace.id) }
+        let workspacesByID = Dictionary(uniqueKeysWithValues: snapshot.model.workspaces.map { ($0.id, $0) })
+        for workspaceID in owner.workspaceIds {
+            guard let workspace = workspacesByID[workspaceID] else { continue }
+            let group = snapshot.model.workspaceGroups.first { $0.windowId == owner.id && $0.workspaceIds.contains(workspace.id) }
             if let group {
                 if emittedGroups.insert(group.id).inserted {
                     let header = WorkspaceGroupRowView(group: group, namespace: snapshot.model.identityNamespace,
-                        containsSelection: group.workspaceIds.contains(snapshot.model.focusedWorkspace ?? 0))
+                        containsSelection: group.workspaceIds.contains(owner.selectedWorkspace ?? 0))
                     header.target = self; header.action = #selector(toggleWorkspaceGroup(_:))
                     header.menu = workspaceGroupMenu(group, namespace: snapshot.model.identityNamespace)
                     header.translatesAutoresizingMaskIntoConstraints = false
@@ -905,6 +919,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             let row = WorkspaceRowView(workspaceID: workspace.id)
             row.target = self
             row.action = #selector(workspaceSelected(_:))
+            row.workspaceDragOwner = self
+            row.workspaceOrderTarget = { [weak self] id in self?.workspaceDragTarget(for: id) }
             let namespace = snapshot.model.identityNamespace
             let workspaceID = workspace.id
             row.onMetadata = { [weak self] source in
@@ -917,6 +933,29 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             workspaceRows[row] = workspace.id
         }
         window.recalculateKeyViewLoop()
+    }
+
+    private func workspaceSidebarOrderState() -> WorkspaceSidebarOrderState? {
+        guard let shared = coordinator.snapshot, let identity, let windowUUID,
+              shared.model.identityNamespace == identity.namespace,
+              let owner = shared.model.windows.first(where: { $0.id == identity.windowId }) else { return nil }
+        var uuidByWorkspace: [UInt64: UUID] = [:]
+        for workspace in shared.workspaceIdentities { uuidByWorkspace[workspace.workspaceId] = workspace.uuid }
+        let workspaceUUIDs = owner.workspaceIds.compactMap { uuidByWorkspace[$0] }
+        guard workspaceUUIDs.count == owner.workspaceIds.count else { return nil }
+        let groups = shared.model.workspaceGroups
+            .filter { $0.windowId == identity.windowId }
+            .map { WorkspaceSidebarOrderGroup(id: $0.id, workspaceIDs: $0.workspaceIds) }
+        return WorkspaceSidebarOrderState(namespace: shared.model.identityNamespace, window: windowUUID,
+            revision: shared.model.revision, workspaceIDs: owner.workspaceIds, workspaceUUIDs: workspaceUUIDs, groups: groups)
+    }
+
+    private func workspaceDragTarget(for workspaceID: UInt64) -> WorkspaceOrderTarget? {
+        guard let state = workspaceSidebarOrderState(),
+              let index = state.workspaceIDs.firstIndex(of: workspaceID),
+              state.workspaceUUIDs.indices.contains(index) else { return nil }
+        return WorkspaceOrderTarget(namespace: state.namespace, workspace: state.workspaceUUIDs[index],
+            window: state.window, index: index, revision: state.revision)
     }
 
     private func updateWorkspaceRows(_ snapshot: DesktopSnapshot) {
@@ -2392,6 +2431,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             "kernel_resize": true,
             "workspace_switch": true,
             "workspace_order": true,
+            "workspace_order_drag": true,
             "surface_order": true,
             "file_panel": true,
             "workspace_number": true,
@@ -3051,7 +3091,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try await BrowserEditScrollSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
         try await BrowserKeyboardSmoke.validate(origin: origin, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, browser: { self.browsers[$0] })
         try await WorkspaceNumberSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, terminals: { self.terminals }, browser: { self.browsers[$0] })
-        try await WorkspaceOrderSmoke.validate(window: window, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, rows: { self.workspaceList.arrangedSubviews.compactMap { $0 as? WorkspaceRowView } }, terminals: { self.terminals }, browser: { self.browsers[$0] })
+        try await WorkspaceOrderSmoke.validate(window: window, sidebar: workspaceList, report: report, cli: { try await self.nativeCLI($0, expectFailure: $1, externalCaller: true) }, snapshot: { self.coordinator.snapshot }, rows: { self.workspaceList.arrangedSubviews.compactMap { $0 as? WorkspaceRowView } }, terminals: { self.terminals }, browser: { self.browsers[$0] })
         @MainActor func nativeTabs(_ view: NSView) -> [TerminalTabControl] {
             if let tab = view as? TerminalTabControl { return [tab] }
             return view.subviews.flatMap { nativeTabs($0) }
