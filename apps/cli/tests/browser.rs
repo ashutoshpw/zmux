@@ -588,6 +588,9 @@ fn capture_rejection(listener: UnixListener) -> thread::JoinHandle<Value> {
                 Err(error) => panic!("capture accept: {error}"),
             }
         };
+        // BSD sockets can inherit the listener's nonblocking mode. Reads below
+        // must wait for the frame under the timeout instead of racing its sender.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
