@@ -1,4 +1,5 @@
 use super::*;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
@@ -39,6 +40,153 @@ with fixture.native_ssh_fixture(
     while not (root / ".fixture-controller-stop").exists():
         time.sleep(0.02)
 "#;
+
+#[test]
+fn fresh_scheduler_installation_writes_executable_files_through_managed_ssh() {
+    if !private_ssh_test_prerequisites_available() {
+        eprintln!("skipping scheduler installation test: private SSH prerequisites unavailable");
+        return;
+    }
+
+    let fixture = PrivateSshFixture::start();
+    let fixture_root = Path::new(fixture.configuration["root"].as_str().unwrap());
+    let (connection, _master) = fixture.connect();
+    let helper_bytes = b"#!/bin/sh\nprintf '%s\\n' \"$@\"\n";
+    let digest = format!("{:x}", Sha256::digest(helper_bytes));
+    let quote = zmux_remote_runtime::upload::quote_shell_path;
+
+    // Only the service-manager boundary is replaced. The generated installer,
+    // SSH admission/transport, checksum, file writes and wrapper execution are real.
+    for custom_path in [false, true] {
+        let home = fixture_root.join(if custom_path {
+            "custom-home"
+        } else {
+            "default-home"
+        });
+        let bin = home.join("fixture-bin");
+        fs::create_dir_all(&bin).unwrap();
+        let systemctl = bin.join("systemctl");
+        fs::write(
+            &systemctl,
+            br##"#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/systemctl-calls"
+test "$1" = --user || exit 90
+shift
+case "$1" in
+  is-active) test -e "$HOME/service-active";;
+  start|restart) touch "$HOME/service-active";;
+  daemon-reload|enable) :;;
+  *) exit 90;;
+esac
+"##,
+        )
+        .unwrap();
+        fs::set_permissions(&systemctl, fs::Permissions::from_mode(0o700)).unwrap();
+        let helper = if custom_path {
+            home.join("tools with 'quotes' \\ %s $(false)/zmux-scheduler")
+        } else {
+            home.join(".local/bin/zmux-scheduler")
+        };
+        let runtime = Runtime::new(custom_path.then(|| helper.clone())).unwrap();
+        assert!(!helper.exists(), "the helper must not be preinstalled");
+        let installer = runtime.install_command(&digest).unwrap();
+        let command = format!(
+            "HOME={}; PATH={}:\"$PATH\"; export HOME PATH; {installer}",
+            quote(home.to_str().unwrap()),
+            quote(bin.to_str().unwrap()),
+        );
+        let spec = connection
+            .operation_spec(&command)
+            .expect("fresh installer must pass the production SSH command guard");
+
+        let rejected = run_process(
+            &spec.program,
+            &spec.args,
+            b"corrupted helper payload",
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+            &AtomicBool::new(false),
+        )
+        .expect("send a mismatched payload through the installer");
+        assert_eq!(rejected.status.code(), Some(85));
+        assert!(
+            !helper.exists(),
+            "a digest mismatch must not install a helper"
+        );
+        assert!(!home.join("systemctl-calls").exists());
+
+        // First install starts the service; reinstallation restarts it.
+        for _ in 0..2 {
+            let output = run_process(
+                &spec.program,
+                &spec.args,
+                helper_bytes,
+                Duration::from_secs(10),
+                &AtomicBool::new(false),
+                &AtomicBool::new(false),
+            )
+            .expect("execute fresh installer through the authenticated master");
+            assert!(
+                output.status.success(),
+                "installer failed: {} {:?}; calls={:?}",
+                output.status,
+                output.stderr,
+                fs::read_to_string(home.join("systemctl-calls"))
+            );
+            assert!(has_setup_install_ack(&output.stdout));
+        }
+
+        assert_eq!(fs::read(&helper).unwrap(), helper_bytes);
+        let wrapper = home.join(".local/bin/zmux-scheduler-service");
+        let unit = home.join(".config/systemd/user/zmux-scheduler.service");
+        for (path, mode) in [(&helper, 0o700), (&wrapper, 0o700), (&unit, 0o600)] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+        let unit_text = fs::read_to_string(&unit).unwrap();
+        for directive in [
+            "[Unit]",
+            "[Service]",
+            "Type=simple",
+            "ExecStart=%h/.local/bin/zmux-scheduler-service",
+            "Restart=on-failure",
+            "[Install]",
+            "WantedBy=default.target",
+        ] {
+            assert!(
+                unit_text.lines().any(|line| line == directive),
+                "missing {directive}"
+            );
+        }
+        let wrapper_command = format!(
+            "HOME={}; export HOME; exec {}",
+            quote(home.to_str().unwrap()),
+            quote(wrapper.to_str().unwrap()),
+        );
+        let wrapper_spec = connection.operation_spec(&wrapper_command).unwrap();
+        let output = run_process(
+            &wrapper_spec.program,
+            &wrapper_spec.args,
+            b"",
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+            &AtomicBool::new(false),
+        )
+        .expect("execute the installed wrapper through SSH");
+        assert!(
+            output.status.success(),
+            "wrapper failed: {:?}",
+            output.stderr
+        );
+        assert_eq!(output.stdout, b"serve\n");
+        assert_eq!(
+            fs::read_to_string(home.join("systemctl-calls")).unwrap(),
+            "--user daemon-reload\n--user enable zmux-scheduler.service\n--user is-active --quiet zmux-scheduler.service\n--user start zmux-scheduler.service\n--user daemon-reload\n--user enable zmux-scheduler.service\n--user is-active --quiet zmux-scheduler.service\n--user restart zmux-scheduler.service\n"
+        );
+    }
+}
 
 #[test]
 fn scheduler_rpc_uses_the_live_master_and_does_not_retry_a_lost_create_reply() {
@@ -120,40 +268,7 @@ fn scheduler_rpc_uses_the_live_master_and_does_not_retry_a_lost_create_reply() {
         &daemon_log,
     );
 
-    let ssh_descriptor = SshDescriptor::builder("fixture")
-        .expect("fixture destination")
-        .config_file(
-            fixture
-                .configuration
-                .get("clientConfig")
-                .and_then(serde_json::Value::as_str)
-                .expect("fixture SSH config"),
-        )
-        .identity(
-            fixture
-                .configuration
-                .get("identity")
-                .and_then(serde_json::Value::as_str)
-                .expect("fixture SSH identity"),
-        )
-        .command(["/bin/sleep", "3600"])
-        .build()
-        .expect("build fixture SSH descriptor");
-    let connection = Arc::new(
-        ManagedConnection::create(ssh_descriptor).expect("create exact private SSH owner"),
-    );
-    let terminal = connection
-        .terminal_spec(&zmux_session_runtime::shell_integration::OpenRequestNonce::generate());
-    let mut master = ChildGuard(Some(
-        Command::new(&terminal.program)
-            .args(&terminal.args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("start private loopback SSH master"),
-    ));
-    wait_for_live_master(&connection, &mut master);
+    let (connection, mut master) = fixture.connect();
 
     let runtime = Runtime::new(Some(helper_wrapper)).expect("configure scheduler helper");
     let stopping = AtomicBool::new(false);
@@ -515,6 +630,42 @@ struct PrivateSshFixture {
 }
 
 impl PrivateSshFixture {
+    fn connect(&self) -> (Arc<ManagedConnection>, ChildGuard) {
+        let ssh_descriptor = SshDescriptor::builder("fixture")
+            .expect("fixture destination")
+            .config_file(
+                self.configuration
+                    .get("clientConfig")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("fixture SSH config"),
+            )
+            .identity(
+                self.configuration
+                    .get("identity")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("fixture SSH identity"),
+            )
+            .command(["/bin/sleep", "3600"])
+            .build()
+            .expect("build fixture SSH descriptor");
+        let connection = Arc::new(
+            ManagedConnection::create(ssh_descriptor).expect("create exact private SSH owner"),
+        );
+        let terminal = connection
+            .terminal_spec(&zmux_session_runtime::shell_integration::OpenRequestNonce::generate());
+        let mut master = ChildGuard(Some(
+            Command::new(&terminal.program)
+                .args(&terminal.args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("start private loopback SSH master"),
+        ));
+        wait_for_live_master(&connection, &mut master);
+        (connection, master)
+    }
+
     fn start() -> Self {
         let controller_root = std::env::temp_dir().join(format!(
             "zmux-schedule-ssh-controller-{}-{}",

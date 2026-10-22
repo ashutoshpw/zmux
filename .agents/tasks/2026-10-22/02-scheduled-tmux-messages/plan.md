@@ -35,6 +35,13 @@ remotely, a job remains scheduled while the Mac, app, and SSH client are offline
 
 ## Current status
 
+Fresh-install repair is in progress after a user Mac rejected the generated SSH
+installer's literal newlines. Keep command validation strict; transmit file lines
+as quoted arguments to remote `printf`. Add one real managed-SSH regression for
+clean installation, file bytes/modes, executable wrapper and start/restart calls,
+then run `scripts/check`, commit/push, and verify a new downloadable Mac artifact.
+The existing RPC fixture preinstalled its helper and did not cover installation.
+
 Source `43d5111ac7f6d237fb94431d3bb7dd96ca816e6c` passed all 12 packaged scheduler
 checks, including the geometry and visible-text gate, and the retained screenshot
 confirmed a usable message view. The universal Mac artifact is verified and
