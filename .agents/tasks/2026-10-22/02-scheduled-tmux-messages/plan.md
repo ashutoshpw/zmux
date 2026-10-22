@@ -31,17 +31,16 @@ remotely, a job remains scheduled while the Mac, app, and SSH client are offline
 - [x] Add native schedule list, editor, and history views over the shared protocol.
 - [x] Document CLI/AppKit entry points, service lifecycle, limits, and receipts.
 - [x] Pass local Rust, CLI, isolated Linux/tmux/SSH, and packaging validation.
-- [ ] Pass final packaged scheduler visual acceptance and deliver the verified universal Mac artifact.
+- [x] Pass final packaged scheduler visual acceptance and deliver the verified universal Mac artifact.
 
 ## Current status
 
-Source `12fbbe905e5b6b8f571e3ddc5d90944b7cd3033f` passed all four executed CI jobs,
-including both Swift architectures, Linux helper builds, Rust/C ABI validation,
-universal app build, selection/browser checks, and packaged scheduler acceptance.
-All 11 scheduler checks passed in isolated hosted fixtures. The universal artifact
-and download checksum are verified. A final screenshot review found blocking layout
-issues in the message view, so visual acceptance and artifact delivery remain pending;
-see [status.md](status.md) for evidence and the exact findings.
+Source `43d5111ac7f6d237fb94431d3bb7dd96ca816e6c` passed all 12 packaged scheduler
+checks, including the geometry and visible-text gate, and the retained screenshot
+confirmed a usable message view. The universal Mac artifact is verified and
+deliverable. CI run [39843250131](https://github.com/ashutoshpw/zmux/actions/runs/39843250131)
+is not fully green because a separate sidebar shutdown/cleanup check failed; details
+and the validation boundary are recorded in [status.md](status.md).
 
 ## Acceptance criteria
 
@@ -53,7 +52,7 @@ see [status.md](status.md) for evidence and the exact findings.
 - [x] CLI and AppKit show and edit the same queue and history.
 - [x] Top-level, nested, and machine-catalog help describe implemented behavior offline.
 - [x] Validation exercises real isolated service/tmux/SSH owners and reports native/host limits separately.
-- [ ] Packaged scheduler screenshots show legible message content, non-overlapping table columns, and usable heading spacing.
+- [x] Packaged scheduler screenshots show legible message content, non-overlapping table columns, and usable heading spacing.
 
 ## References
 
