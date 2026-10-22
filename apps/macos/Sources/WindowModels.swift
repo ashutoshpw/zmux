@@ -36,7 +36,7 @@ struct WorkspaceMoveTarget {
     let focus: Bool
 }
 
-struct WorkspaceOrderTarget {
+struct WorkspaceOrderTarget: Codable, Equatable {
     let namespace: UUID
     let workspace: UUID
     let window: UUID
