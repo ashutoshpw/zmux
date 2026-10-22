@@ -538,6 +538,7 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
         "combined_message_and_time_edit",
         "cancel_removes_pending_job_and_history_view_retains_receipt",
         "populated_history_editor_screenshot_retained",
+        "scheduled_messages_layout_geometry_and_visible_text",
         "captured_create_edit_cancel_ids_resolve_through_managed_status",
         "dirty_refresh_retains_original_version_and_rejects_concurrent_overwrite",
     }

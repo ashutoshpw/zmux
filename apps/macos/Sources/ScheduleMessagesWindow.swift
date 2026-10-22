@@ -101,7 +101,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
     private let viewMode = NSSegmentedControl(labels: ["Pending", "History"], trackingMode: .selectOne, target: nil, action: nil)
     private let table = NSTableView()
     private let targetPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let messageText = NSTextView(frame: .zero)
+    private let messageText = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 120))
     private let deadlineField = NSTextField(string: "")
     private let occurrencePicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let resolvedDeadlineLabel = NSTextField(wrappingLabelWithString: "")
@@ -173,10 +173,10 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         viewMode.target = self
         viewMode.action = #selector(viewModeChanged)
 
-        table.addTableColumn(makeColumn("Message", identifier: "message", width: 175))
-        table.addTableColumn(makeColumn("Remote target", identifier: "target", width: 135))
-        table.addTableColumn(makeColumn("Scheduled", identifier: "deadline", width: 135))
-        table.addTableColumn(makeColumn("State", identifier: "state", width: 105))
+        table.addTableColumn(makeColumn("Message", identifier: "message", width: 150))
+        table.addTableColumn(makeColumn("Remote target", identifier: "target", width: 100))
+        table.addTableColumn(makeColumn("Scheduled", identifier: "deadline", width: 110))
+        table.addTableColumn(makeColumn("State", identifier: "state", width: 90))
         table.headerView = NSTableHeaderView()
         table.rowHeight = 42
         table.usesAlternatingRowBackgroundColors = true
@@ -187,6 +187,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
         targetPicker.setAccessibilityLabel("Remote tmux pane")
         targetPicker.setAccessibilityHelp("These targets come from the selected remote helper. Local Zmux panes are not targets.")
+        targetPicker.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         targetPicker.target = self
         targetPicker.action = #selector(targetChanged)
 
@@ -194,6 +195,15 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         messageText.importsGraphics = false
         messageText.allowsUndo = true
         messageText.font = .systemFont(ofSize: 13)
+        messageText.isVerticallyResizable = true
+        messageText.isHorizontallyResizable = false
+        messageText.autoresizingMask = [.width]
+        messageText.minSize = .zero
+        messageText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                     height: CGFloat.greatestFiniteMagnitude)
+        messageText.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                                          height: CGFloat.greatestFiniteMagnitude)
+        messageText.textContainer?.widthTracksTextView = true
         messageText.textContainerInset = NSSize(width: 8, height: 8)
         messageText.delegate = self
         messageText.setAccessibilityLabel("Scheduled message text")
@@ -257,6 +267,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         tableScroll.setAccessibilityLabel("Pending scheduled messages and history")
         let left = verticalStack([viewMode, tableScroll], spacing: 8)
         viewMode.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        tableScroll.translatesAutoresizingMaskIntoConstraints = false
+        tableScroll.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
         tableScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
         left.widthAnchor.constraint(greaterThanOrEqualToConstant: 470).isActive = true
 
@@ -269,7 +281,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         messageScroll.hasVerticalScroller = true
         messageScroll.drawsBackground = true
         messageScroll.borderType = .bezelBorder
+        messageScroll.hasHorizontalScroller = false
         messageScroll.documentView = messageText
+        messageScroll.setAccessibilityLabel("Scheduled message editor scroll area")
         messageScroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
         let messageGroup = verticalStack([messageHeading, messageScroll], spacing: 5)
 
@@ -278,7 +292,32 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         let deadlineGroup = verticalStack([deadlineHeading, deadlineField, occurrencePicker, resolvedDeadlineLabel], spacing: 5)
         let editorButtons = horizontalStack([newButton, discardDraftButton, saveButton, cancelButton], spacing: 8)
         let right = verticalStack([targetGroup, messageGroup, deadlineGroup, submitCheckbox, editorButtons, requestStatusButton], spacing: 14)
+        let rightSpacer = NSView(frame: .zero)
+        rightSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        rightSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        right.addArrangedSubview(rightSpacer)
         right.widthAnchor.constraint(greaterThanOrEqualToConstant: 430).isActive = true
+
+        for view in [targetGroup, messageGroup, deadlineGroup, submitCheckbox] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
+            view.setContentHuggingPriority(.required, for: .vertical)
+        }
+        for view in [editorButtons, requestStatusButton] {
+            view.setContentHuggingPriority(.required, for: .vertical)
+        }
+        for (view, stack) in [
+            (targetHeading as NSView, targetGroup), (targetPicker as NSView, targetGroup),
+            (messageHeading as NSView, messageGroup), (messageScroll as NSView, messageGroup),
+            (deadlineField as NSView, deadlineGroup), (occurrencePicker as NSView, deadlineGroup),
+            (resolvedDeadlineLabel as NSView, deadlineGroup)
+        ] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        messageScroll.translatesAutoresizingMaskIntoConstraints = false
+        top.setContentHuggingPriority(.required, for: .vertical)
+        top.setContentCompressionResistancePriority(.required, for: .vertical)
 
         let divider = NSSplitView()
         divider.isVertical = true
