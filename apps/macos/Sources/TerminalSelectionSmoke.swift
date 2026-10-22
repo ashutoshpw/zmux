@@ -34,6 +34,57 @@ private struct SelectionWrapPhase: Codable, Sendable {
     }
 }
 
+private struct SelectionKernelProbe: Decodable, Sendable {
+    let pid: Int32
+    let parentPID: Int32
+    let nonce: String
+    let requestID: Int
+    let expectedNextPhase: String
+    let rows: Int
+    let columns: Int
+    enum CodingKeys: String, CodingKey {
+        case pid, parentPID = "parent_pid", nonce, requestID = "request_id"
+        case expectedNextPhase = "expected_next_phase", rows, columns
+    }
+}
+
+private struct SelectionGridGeometry: Codable, Sendable {
+    let requestedRows: Int
+    let requestedColumns: Int
+    let snapshotRows: Int
+    let snapshotColumns: Int
+    let viewBoundsWidth: Double
+    let viewBoundsHeight: Double
+
+    var matchesRequestedGrid: Bool {
+        requestedRows == snapshotRows && requestedColumns == snapshotColumns
+    }
+
+    func remainsStable(from previous: Self) -> Bool {
+        requestedRows == previous.requestedRows && requestedColumns == previous.requestedColumns
+            && snapshotRows == previous.snapshotRows && snapshotColumns == previous.snapshotColumns
+            && abs(viewBoundsWidth - previous.viewBoundsWidth) <= 0.5
+            && abs(viewBoundsHeight - previous.viewBoundsHeight) <= 0.5
+    }
+}
+
+private struct SelectionKernelProbeEvidence: Codable, Sendable {
+    let phase: String
+    let requestID: Int
+    let kernelRows: Int
+    let kernelColumns: Int
+    let before: SelectionGridGeometry
+    let after: SelectionGridGeometry
+}
+
+private struct SelectionPhaseGeometry: Codable, Sendable {
+    let phase: String
+    let probeRequestID: Int
+    let kernelRows: Int
+    let kernelColumns: Int
+    let geometry: SelectionGridGeometry
+}
+
 private struct SelectionPointerCapture: Codable, Sendable {
     let pid: Int32
     let parentPID: Int32
@@ -83,6 +134,8 @@ private struct SelectionNativeReport: Codable, Sendable {
     var cellGeometry: SelectionCellGeometry?
     var wrapPhase: SelectionWrapPhase?
     var additionalPhases: [SelectionWrapPhase]
+    var kernelProbes: [SelectionKernelProbeEvidence]
+    var phaseGeometry: [SelectionPhaseGeometry]
     var parkedOffset: Int?
     var copyRows: [SelectionCopyRows]
     var pointerCapture: SelectionPointerCapture?
@@ -161,7 +214,9 @@ enum TerminalSelectionSmoke {
             keyWindow: window.isKeyWindow && NSApp.keyWindow === window,
             terminalFirstResponder: window.firstResponder === view,
             activationRequestProcessID: activationRequestProcessID, activationFailure: activationFailure,
-            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], parkedOffset: nil, copyRows: [], pointerCapture: nil, hoverPointerCapture: nil, state: "running", publicWordReferences: [], cases: [])
+            cellGeometry: nil, wrapPhase: nil, additionalPhases: [], kernelProbes: [], phaseGeometry: [],
+            parkedOffset: nil, copyRows: [], pointerCapture: nil, hoverPointerCapture: nil,
+            state: "running", publicWordReferences: [], cases: [])
         // Public system behavior is recorded separately from the independently
         // specified regression literal below. Punctuation is not guessed.
         let reference = NSTextView(frame: .zero)
@@ -586,8 +641,36 @@ enum TerminalSelectionSmoke {
               let root = ProcessInfo.processInfo.environment["ZMUX_SELECTION_ROOT"] else {
             throw failure("Actual focus or private child phase root unavailable before wrapped-copy fixture")
         }
-        // This is an actual native text key routed through the production input
-        // lane. The finite PTY child observes it before emitting its next phase.
+        let probeDeadline = ContinuousClock.now + .seconds(5)
+        var probeRequestID = 0
+        var confirmedGeometry: SelectionGridGeometry?
+        var lastProbe: SelectionKernelProbe?
+        while ContinuousClock.now < probeDeadline, probeRequestID < 64 {
+            let before = try await waitForStableGrid(coordinator: coordinator, view: view, window: window,
+                                                     result: result, deadline: probeDeadline)
+            probeRequestID += 1
+            let probe = try await readKernelProbe(phase: key, requestID: probeRequestID, root: root,
+                childPID: result.childPID, nonce: result.nonce, window: window, deadline: probeDeadline)
+            lastProbe = probe
+            let after = try await waitForStableGrid(coordinator: coordinator, view: view, window: window,
+                                                    result: result, deadline: probeDeadline)
+            result.kernelProbes.append(SelectionKernelProbeEvidence(phase: key, requestID: probe.requestID,
+                kernelRows: probe.rows, kernelColumns: probe.columns, before: before, after: after))
+            if before.remainsStable(from: after), probe.rows == after.requestedRows,
+               probe.columns == after.requestedColumns {
+                confirmedGeometry = after
+                break
+            }
+            // The acknowledged q probe is read-only. A valid grid mismatch may
+            // be sampled again with a new request ID while the queued PTY resize
+            // settles; the data-generating phase key is never replayed.
+        }
+        guard let confirmedGeometry else {
+            let sample = lastProbe.map { "kernel=\($0.rows)x\($0.columns)" } ?? "kernel probe unavailable"
+            throw failure("PTY grid did not settle before phase \(key): \(sample), probes=\(probeRequestID)")
+        }
+        // Send the data-generating native key exactly once, only after the
+        // independent child ioctl agrees with a stable mounted view and snapshot.
         try sendKey(key, code: code, modifiers: [], window: window)
         let deadline = ContinuousClock.now + .seconds(10)
         var captured: Viewport?
@@ -612,14 +695,92 @@ enum TerminalSelectionSmoke {
             return try JSONDecoder().decode(SelectionWrapPhase.self, from: data)
         }.value
         if key == "w" { result.wrapPhase = phase } else { result.additionalPhases.append(phase) }
+        let requested = view.requestedSize
+        let phaseGeometry = SelectionGridGeometry(requestedRows: requested.0, requestedColumns: requested.1,
+            snapshotRows: viewport.size.rows, snapshotColumns: viewport.size.cols,
+            viewBoundsWidth: Double(view.bounds.width), viewBoundsHeight: Double(view.bounds.height))
+        result.phaseGeometry.append(SelectionPhaseGeometry(phase: key, probeRequestID: probeRequestID,
+            kernelRows: phase.rows, kernelColumns: phase.columns, geometry: phaseGeometry))
         guard phase.phase == key, UInt32(exactly: phase.pid) == result.childPID, phase.parentPID == getpid(), phase.nonce == result.nonce,
               phase.rows == viewport.size.rows, phase.columns == viewport.size.cols,
+              requested == (viewport.size.rows, viewport.size.cols),
+              phase.rows == confirmedGeometry.requestedRows, phase.columns == confirmedGeometry.requestedColumns,
               viewport.size.rows >= 8, viewport.size.cols >= 64, viewport.size.cols <= 240,
               NSApp.isActive, window.isVisible, window.isKeyWindow, NSApp.keyWindow === window, window.firstResponder === view else {
-            throw failure("Wrapped-copy prerequisite differs: phase=\(phase.phase ?? "<missing>")/\(key) child=\(phase.pid)/\(result.childPID) parent=\(phase.parentPID)/\(getpid()) nonceMatches=\(phase.nonce == result.nonce) kernel=\(phase.rows)x\(phase.columns) viewport=\(viewport.size.rows)x\(viewport.size.cols) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) exactKey=\(NSApp.keyWindow === window) terminalResponder=\(window.firstResponder === view)")
+            throw failure("Wrapped-copy prerequisite differs: phase=\(phase.phase ?? "<missing>")/\(key) child=\(phase.pid)/\(result.childPID) parent=\(phase.parentPID)/\(getpid()) nonceMatches=\(phase.nonce == result.nonce) kernel=\(phase.rows)x\(phase.columns) requested=\(requested.0)x\(requested.1) snapshot=\(viewport.size.rows)x\(viewport.size.cols) viewBounds=\(view.bounds.width)x\(view.bounds.height) active=\(NSApp.isActive) visible=\(window.isVisible) key=\(window.isKeyWindow) exactKey=\(NSApp.keyWindow === window) terminalResponder=\(window.firstResponder === view)")
         }
         try observeRows(viewport, phase: key, result: &result)
         return viewport
+    }
+
+    private static func waitForStableGrid(coordinator: ApplicationCoordinator, view: TerminalView, window: NSWindow,
+                                          result: SelectionNativeReport,
+                                          deadline: ContinuousClock.Instant) async throws -> SelectionGridGeometry {
+        var previous: SelectionGridGeometry?
+        var observations = 0
+        while ContinuousClock.now < deadline {
+            if let current = currentGridGeometry(coordinator: coordinator, view: view, window: window, result: result),
+               current.matchesRequestedGrid {
+                observations = previous?.remainsStable(from: current) == true ? observations + 1 : 1
+                if observations >= 2 { return current }
+                previous = current
+            } else {
+                previous = nil
+                observations = 0
+            }
+            try await Task.sleep(for: .milliseconds(32))
+        }
+        let latest = currentGridGeometry(coordinator: coordinator, view: view, window: window, result: result)
+        throw failure("Terminal grid did not remain stable before phase probe: \(gridDescription(latest))")
+    }
+
+    private static func currentGridGeometry(coordinator: ApplicationCoordinator, view: TerminalView, window: NSWindow,
+                                            result: SelectionNativeReport) -> SelectionGridGeometry? {
+        guard NSApp.isActive, window.isVisible, window.isKeyWindow, NSApp.keyWindow === window,
+              window.firstResponder === view,
+              let snapshot = coordinator.snapshot,
+              let frame = snapshot.frames.first(where: { $0.sessionId == result.sessionID }),
+              frame.processId == result.childPID, frame.snapshot?.state == "running",
+              let viewport = frame.snapshot?.viewport else { return nil }
+        let requested = view.requestedSize
+        return SelectionGridGeometry(requestedRows: requested.0, requestedColumns: requested.1,
+            snapshotRows: viewport.size.rows, snapshotColumns: viewport.size.cols,
+            viewBoundsWidth: Double(view.bounds.width), viewBoundsHeight: Double(view.bounds.height))
+    }
+
+    private static func readKernelProbe(phase: String, requestID: Int, root: String, childPID: UInt32,
+                                        nonce: String, window: NSWindow,
+                                        deadline: ContinuousClock.Instant) async throws -> SelectionKernelProbe {
+        let filename = "probe-\(phase)-\(requestID).json"
+        let url = URL(fileURLWithPath: root).appendingPathComponent(filename)
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw failure("Fresh kernel-probe acknowledgment already exists: \(filename)")
+        }
+        // q is reserved by the private raw-PTY fixture as a read-only ioctl
+        // probe. The child publishes this unique acknowledgment before it
+        // accepts another input byte.
+        try sendKey("q", code: 12, modifiers: [], window: window)
+        let acknowledgementDeadline = min(deadline, ContinuousClock.now + .seconds(2))
+        while ContinuousClock.now < acknowledgementDeadline {
+            if FileManager.default.fileExists(atPath: url.path) {
+                let data = try await Task.detached(priority: .utility) { try Data(contentsOf: url) }.value
+                guard data.count <= 4096 else { throw failure("Kernel-probe acknowledgment exceeds byte bound") }
+                let probe = try JSONDecoder().decode(SelectionKernelProbe.self, from: data)
+                guard probe.pid > 0, UInt32(exactly: probe.pid) == childPID, probe.parentPID == getpid(),
+                      probe.nonce == nonce, probe.requestID == requestID, probe.expectedNextPhase == phase,
+                      probe.rows >= 8, probe.rows <= 120, probe.columns >= 64, probe.columns <= 240 else {
+                    throw failure("Kernel-probe acknowledgment identity, request, phase or grid differs: \(filename)")
+                }
+                return probe
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        throw failure("Read-only kernel-size probe acknowledgment missing: \(filename)")
+    }
+
+    private static func gridDescription(_ geometry: SelectionGridGeometry?) -> String {
+        guard let geometry else { return "requested/snapshot/view geometry unavailable" }
+        return "requested=\(geometry.requestedRows)x\(geometry.requestedColumns) snapshot=\(geometry.snapshotRows)x\(geometry.snapshotColumns) viewBounds=\(geometry.viewBoundsWidth)x\(geometry.viewBoundsHeight)"
     }
 
     private static func observeRows(_ viewport: Viewport, phase: String, result: inout SelectionNativeReport) throws {
