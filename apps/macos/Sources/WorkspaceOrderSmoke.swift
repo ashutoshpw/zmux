@@ -220,20 +220,20 @@ enum WorkspaceOrderSmoke {
             guard let clickDownResponder = window.firstResponder else {
                 throw BridgeFailure(message: "Workspace drag fixture lost its post-create content responder")
             }
-            clickRow.mouseDown(try mouseEvent(.leftMouseDown, window: window, view: clickRow))
+            clickRow.mouseDown(with: try mouseEvent(.leftMouseDown, window: window, view: clickRow))
             guard selection(snapshot()) == clickDownSelection, window.firstResponder === clickDownResponder else {
                 throw BridgeFailure(message: "Workspace row mouse-down selected or focused before a drag threshold")
             }
-            clickRow.mouseUp(try mouseEvent(.leftMouseUp, window: window, view: clickRow))
+            clickRow.mouseUp(with: try mouseEvent(.leftMouseUp, window: window, view: clickRow))
             try await wait("Workspace row mouse-up did not select its workspace") { snapshot()?.model.focusedWorkspace == clickID }
             guard let restoreRow = rows().first(where: { $0.workspaceID == selectedWorkspace }) else {
                 throw BridgeFailure(message: "Workspace drag fixture could not restore its selected row")
             }
-            restoreRow.mouseDown(try mouseEvent(.leftMouseDown, window: window, view: restoreRow))
+            restoreRow.mouseDown(with: try mouseEvent(.leftMouseDown, window: window, view: restoreRow))
             guard snapshot()?.model.focusedWorkspace == clickID else {
                 throw BridgeFailure(message: "Workspace row mouse-down changed selection during click restoration")
             }
-            restoreRow.mouseUp(try mouseEvent(.leftMouseUp, window: window, view: restoreRow))
+            restoreRow.mouseUp(with: try mouseEvent(.leftMouseUp, window: window, view: restoreRow))
             try await wait("Workspace drag fixture could not restore its selected workspace") {
                 snapshot()?.model.focusedWorkspace == selectedWorkspace
             }
@@ -279,7 +279,7 @@ enum WorkspaceOrderSmoke {
                 guard let source = rows().first(where: { $0.workspaceID == workspaceID }) else {
                     throw BridgeFailure(message: "Sidebar drag source row disappeared")
                 }
-                source.mouseDown(try mouseEvent(.leftMouseDown, window: window, view: source))
+                source.mouseDown(with: try mouseEvent(.leftMouseDown, window: window, view: source))
                 guard let target = source.activeDragTarget else { throw BridgeFailure(message: "Workspace row did not capture a drag target") }
                 try unchangedDrag()
                 return (source, target)
@@ -327,7 +327,7 @@ enum WorkspaceOrderSmoke {
             guard sidebar.prepareForDragOperation(beforeGroupInfo), sidebar.performDragOperation(beforeGroupInfo) else {
                 throw BridgeFailure(message: "Valid workspace drag was not admitted by the real sidebar callback")
             }
-            firstSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: firstSource))
+            firstSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: firstSource))
             let beforeGroupOrder = [fixtureID] + original
             try await settledDrag(beforeGroupOrder)
             try verifyGroup(beforeGroupOrder)
@@ -347,7 +347,7 @@ enum WorkspaceOrderSmoke {
                   sidebar.performDragOperation(afterGroupInfo) else {
                 throw BridgeFailure(message: "Workspace drag after the group boundary was not admitted")
             }
-            secondSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: secondSource))
+            secondSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: secondSource))
             let afterGroupOrder = Array(original.prefix(2)) + [fixtureID] + Array(original.dropFirst(2))
             try await settledDrag(afterGroupOrder)
             try verifyGroup(afterGroupOrder)
@@ -358,7 +358,7 @@ enum WorkspaceOrderSmoke {
             let noopInfo = try dragInfo(source: noopSource, target: noopTarget, sidebar: sidebar,
                                         point: NSPoint(x: noopSource.frame.midX, y: noopSource.frame.maxY + 1))
             try rejected(noopInfo, in: sidebar, message: "Workspace sidebar offered a no-op insertion")
-            noopSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: noopSource))
+            noopSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: noopSource))
 
             guard let secondMemberRow = rows().first(where: { $0.workspaceID == firstMembers[1] }) else {
                 throw BridgeFailure(message: "Workspace drag fixture lost its group-splitting destination")
@@ -367,7 +367,7 @@ enum WorkspaceOrderSmoke {
             let splitInfo = try dragInfo(source: splitSource, target: splitTarget, sidebar: sidebar,
                                          point: NSPoint(x: secondMemberRow.frame.midX, y: secondMemberRow.frame.minY + 1))
             try rejected(splitInfo, in: sidebar, message: "Workspace sidebar allowed a drop that splits a workspace group")
-            splitSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: splitSource))
+            splitSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: splitSource))
 
             let (staleSource, staleTarget) = try beginDrag(fixtureID)
             let stale = WorkspaceOrderTarget(namespace: staleTarget.namespace, workspace: staleTarget.workspace,
@@ -376,7 +376,7 @@ enum WorkspaceOrderSmoke {
             let staleInfo = try dragInfo(source: staleSource, target: staleTarget, sidebar: sidebar,
                                          point: upperHeaderPoint, payloadTarget: stale)
             try rejected(staleInfo, in: sidebar, message: "Workspace sidebar accepted a mismatched drag payload")
-            staleSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: staleSource))
+            staleSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: staleSource))
 
             let (foreignSource, foreignTarget) = try beginDrag(fixtureID)
             let validForeignInfo = try dragInfo(source: foreignSource, target: foreignTarget, sidebar: sidebar,
@@ -388,7 +388,7 @@ enum WorkspaceOrderSmoke {
             foreignSource.workspaceDragOwner = foreignOwner
             try rejected(validForeignInfo, in: sidebar, message: "Workspace sidebar accepted a foreign-owner drag source")
             foreignSource.workspaceDragOwner = originalOwner
-            foreignSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: foreignSource))
+            foreignSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: foreignSource))
             try unchangedDrag()
 
             // A revision change alone rejects a still-attached source before
@@ -410,7 +410,7 @@ enum WorkspaceOrderSmoke {
                 throw error
             }
             sidebar.orderState = currentOrderState
-            revisionSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: revisionSource))
+            revisionSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: revisionSource))
 
             // A real CLI collapse advances the revision after this source has
             // captured its token. A fresh source can target the collapsed header.
@@ -422,7 +422,7 @@ enum WorkspaceOrderSmoke {
                 snapshot()?.model.workspaceGroups.first(where: { $0.id == groupID })?.collapsed == true
             }
             try rejected(oldRevisionInfo, in: sidebar, message: "Workspace sidebar accepted a source captured before the revision changed")
-            oldRevisionSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: oldRevisionSource))
+            oldRevisionSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: oldRevisionSource))
 
             guard let collapsedHeader = sidebar.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView })
                     .first(where: { $0.groupID == groupID }) else {
@@ -437,7 +437,7 @@ enum WorkspaceOrderSmoke {
                   sidebar.prepareForDragOperation(collapsedInfo), sidebar.performDragOperation(collapsedInfo) else {
                 throw BridgeFailure(message: "Fresh workspace drag could not target the collapsed group boundary")
             }
-            collapsedSource.mouseUp(try mouseEvent(.rightMouseUp, window: window, view: collapsedSource))
+            collapsedSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: collapsedSource))
             let collapsedOrder = [fixtureID] + original
             let collapsedRows = [fixtureID] + Array(original.dropFirst(2))
             try await wait("Collapsed group drop did not preserve canonical and rendered order") {
@@ -540,7 +540,7 @@ private final class WorkspaceOrderDraggingInfo: NSObject, NSDraggingInfo {
     var springLoadingHighlight: NSSpringLoadingHighlight = .none
 
     nonisolated var draggedImage: NSImage? { nil }
-    nonisolated func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
+    nonisolated override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
 
     init(source: WorkspaceRowView, location: NSPoint, pasteboard: NSPasteboard) {
         draggingSource = source
