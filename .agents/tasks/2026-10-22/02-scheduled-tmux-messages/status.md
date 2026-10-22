@@ -1,10 +1,37 @@
 # Status
 
-- **State:** done
+- **State:** in-progress
 - **Updated:** 2026-10-22
 - **Authorization:** The user authorized implementation and a downloadable Mac artifact. Scheduler implementation, visual acceptance, and artifact verification are complete. A separate app-wide sidebar shutdown/cleanup validation gap remains unresolved.
 
 ## Current result
+
+- Fresh-install repair authorized: reproduce the user's control-character failure
+  at the generated-command/managed-SSH boundary, preserve strict command validation,
+  verify remote file contents and wrapper execution, then deliver a new Mac build.
+  Test gate: the regression guards clean installation; embedding literal newlines
+  must fail before SSH spawn. Existing RPC/UI tests preinstalled the helper, so they
+  cannot catch this path. Reuse the private SSH fixture without new production seams;
+  systemd lifecycle calls are isolated fixtures, not host service mutations.
+- The new `fresh_scheduler_installation_writes_executable_files_through_managed_ssh`
+  regression failed on the original installer with `InvalidOperationCommand`
+  (`/tmp/zmux-installer-regression-red.log`). It passes after quoting each generated
+  file line separately and reconstructing LF separators with remote `printf`.
+  Strict SSH command validation is unchanged. The same real-loopback test checks
+  default/custom paths (spaces, apostrophes, backslashes and shell metacharacters),
+  corrupt-payload rejection, helper bytes, private modes, unit directives, wrapper
+  execution and start/restart calls. Systemd calls are fixture-backed; this does not
+  establish installation on a user's real Linux/systemd account.
+- The path case exposed GNU checksum filename escaping; setup checks and installation
+  now hash file contents via stdin to keep the digest independent of path spelling.
+- `cargo test --locked -p zmux-desktop-runtime fresh_scheduler_installation_writes_executable_files_through_managed_ssh -- --nocapture`
+  passed (`/tmp/zmux-installer-regression-final.log`), the five scoped scheduler tests
+  passed, and `RUST_TEST_THREADS=2 scripts/check` exited 0
+  (`/tmp/zmux-installer-full-check.log`): workspace tests, strict Clippy, formatting,
+  license inventory and both native C ABI checks passed. New Mac artifact pending.
+- The seven earlier self-review findings are outside this installer repair and remain
+  unresolved. The prior artifact's separate sidebar notification cleanup failure
+  remains a validation limit until a new native run establishes its current result.
 
 - Source `43d5111ac7f6d237fb94431d3bb7dd96ca816e6c` passed the scheduler-specific packaged acceptance in CI run [39843250131](https://github.com/ashutoshpw/zmux/actions/runs/39843250131): both Swift architectures, Linux helpers, full Rust/C ABI validation, universal app build, terminal selection, browser checks, and packaged scheduler smoke passed. All 12 scheduler checks passed, including `scheduled_messages_layout_geometry_and_visible_text`, five Applied receipts, lost-ack/unknown-outcome behavior, selection, and dirty-refresh CAS (original version 1, remote version 2, stale save rejected without changing remote state, cleanup version 3).
 - Root's white-background HTML render of the retained populated-history screenshot confirmed legible message content, a visible State column, compact heading spacing, and no pane/table overlap. Scheduler visual acceptance is complete.
