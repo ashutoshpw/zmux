@@ -23,7 +23,24 @@ The first full pass found remaining format-10 expectations in the group persiste
 test; those now assert 11 while retaining legacy reader coverage. Native Swift and
 expanded embedded/relative UI acceptance require the hosted Mac build (no local
 Swift toolchain). The previous installer run 39858685541 is now confirmed successful.
-A new artifact, post-commit self-review and delivery verification remain pending.
+Post-commit personal `review-agent` review of `13ccf1c` found no new actionable
+defects; see [relative-tabs-review.md](references/relative-tabs-review.md). A new
+Mac artifact, hosted acceptance and delivery verification remain pending.
+
+- Build run 39867091305 passed both Swift architectures, both Linux helpers,
+  the full Mac Rust/C ABI gate, universal packaging and terminal-selection/link
+  acceptance. It stopped in `check-native-windows` before the new scheduler UI:
+  a missed fixture assertion still required session format 10. Updating that
+  assertion to 11 preserves every topology, selection, todo, identity and final
+  save check. Full local `scripts/check` passed again with exit 0 at
+  `/tmp/zmux-relative-tabs-fixture-check.log`; Python compilation also passed.
+  No application code changes are needed for this failure. Log:
+  `/tmp/zmux-relative-tabs-native-failure.log`. A repository-wide version-expectation
+  search found no other stale executable 10 expectations.
+- Candidate 12465123275 is package-verified (source 13ccf1c, SHA-256
+  `cd29a0b47b688e9020fb60e8728a3ca096698891d46a06e86a23126e3263cc74`,
+  24,344,586 bytes), but scheduler UI acceptance has not run and it is not yet
+  delivered as this feature's accepted build.
 
 ## Current result
 
