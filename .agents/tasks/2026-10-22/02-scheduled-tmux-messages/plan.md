@@ -80,3 +80,5 @@ and the validation boundary are recorded in [status.md](status.md).
 
 - [remote-contract.md](references/remote-contract.md) — identity, lifecycle, persistence, time, and delivery safety.
 - [cli-native-delivery.md](references/cli-native-delivery.md) — CLI/help shape, native ownership, and validation contract.
+
+- [relative-tabs-review.md](references/relative-tabs-review.md) — post-commit review and validation boundary.

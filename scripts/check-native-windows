@@ -13,7 +13,7 @@ import tempfile
 def validate_saved(profile, prepared, prepared_path):
     path = profile / "session.json"
     saved = json.loads(path.read_text())
-    assert saved["version"] == 10, saved
+    assert saved["version"] == 11, saved
     assert saved["workspace_groups"] == [], "This ungrouped window journey must preserve the v9 group field"
     assert saved["identity_namespace"].lower() == prepared["namespace"].lower()
     layout = saved["window_layout"]
