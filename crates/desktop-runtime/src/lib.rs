@@ -139,7 +139,7 @@ fn ensure_surface_caps(model: &Model) -> Result<(), DesktopError> {
         match surface.kind {
             SurfaceKind::Browser => browsers += 1,
             SurfaceKind::File => files += 1,
-            SurfaceKind::Terminal => {}
+            SurfaceKind::Terminal | SurfaceKind::Schedules => {}
         }
     }
     if browsers > MAX_BROWSERS {
@@ -478,11 +478,19 @@ pub struct Frame {
     pub snapshot: Option<Arc<TerminalSnapshot>>,
     pub failure: Option<String>,
 }
+/// Connection health without hidden terminal contents, for SSH-bound utility tabs.
+#[derive(Clone, Serialize)]
+pub struct SshRouteStatus {
+    pub surface_id: zmux_workspace_core::SurfaceId,
+    pub session_id: SessionId,
+    pub connected: bool,
+}
 #[derive(Clone, Serialize)]
 pub struct Snapshot {
     pub revision: u64,
     pub model: Model,
     pub frames: Vec<Frame>,
+    pub ssh_routes: Vec<SshRouteStatus>,
     pub notifications: Vec<Notification>,
     pub workspace_metadata: Vec<metadata::WorkspaceMetadata>,
     pub notifications_dropped: u64,
@@ -702,6 +710,7 @@ impl Desktop {
                 revision: 0,
                 model: model.snapshot(),
                 frames: Vec::new(),
+                ssh_routes: Vec::new(),
                 notifications: Vec::new(),
                 workspace_metadata: Vec::new(),
                 notifications_dropped: 0,
@@ -3275,6 +3284,7 @@ impl Worker {
                 | Action::FocusPane { .. }
                 | Action::SelectWorkspace { .. }
                 | Action::SelectSurface { .. }
+                | Action::OpenSchedules { .. }
                 | Action::NavigateWorkspace { .. }
                 | Action::NavigateSurface { .. }
                 | Action::NavigatePane { .. }
@@ -3804,6 +3814,26 @@ impl Worker {
                     })
             })
             .collect();
+        let ssh_routes = model
+            .workspaces
+            .iter()
+            .flat_map(|w| w.root.panes())
+            .flat_map(|p| &p.surfaces)
+            .filter(|s| s.remote.is_some())
+            .filter_map(|s| {
+                let session_id = s.session_id?;
+                let frame = control_frames.iter().find(|f| f.session_id == session_id)?;
+                Some(SshRouteStatus {
+                    surface_id: s.id,
+                    session_id,
+                    connected: !frame.starting
+                        && !frame.reconnectable
+                        && frame.snapshot.as_ref().is_some_and(|snapshot| {
+                            snapshot.state == zmux_session_runtime::State::Running
+                        }),
+                })
+            })
+            .collect();
         let focused_sessions: Vec<_> = model
             .workspaces
             .iter()
@@ -3839,6 +3869,7 @@ impl Worker {
             workspace_identities,
             model,
             frames,
+            ssh_routes,
             notifications: self.attention.items.clone(),
             workspace_metadata,
             notifications_dropped: self.attention.dropped,

@@ -283,7 +283,7 @@ struct FilesSnapshot: Decodable, Sendable {
     let worker: FileWorkerSnapshot
     let entries: [FileEntrySnapshot]
 }
-struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory?; let file: FileSurface? }
+struct Surface: Decodable, Sendable { let id: UInt64; let kind: String; let sessionId: UInt64?; let title: String; let cwd: String?; let url: String?; let navigation: UInt64; let browserProfileId: UUID?; let remote: RemoteEndpoint?; let localZellijCompletion: CompletedLocalZellijHistory?; let file: FileSurface?; let schedulerSource: UInt64? }
 struct Pane: Decodable, Sendable {
     let id: UInt64; let selectedSurface: UInt64; let surfaces: [Surface]
     var selected: Surface { surfaces.first { $0.id == selectedSurface }! }
@@ -420,7 +420,9 @@ struct BrowserProfileState: Decodable, Sendable {
     let error: String?
 }
 struct WorkspaceIdentity: Decodable, Sendable { let workspaceId: UInt64; let uuid: UUID }
+struct SshRouteStatus: Decodable, Sendable { let surfaceId: UInt64; let sessionId: UInt64; let connected: Bool }
 struct DesktopSnapshot: Decodable, Sendable {
+    let sshRoutes: [SshRouteStatus]
     let workspaceIdentities: [WorkspaceIdentity]
     let files: FilesSnapshot
     let windowEpoch: UUID

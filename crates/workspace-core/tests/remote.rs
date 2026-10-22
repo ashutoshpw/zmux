@@ -156,3 +156,157 @@ fn raw_invalid_remote_actions_fail_before_state_or_id_allocation_changes() {
     .unwrap();
     assert_eq!(core.snapshot().workspaces[0].id, WorkspaceId(1));
 }
+
+#[test]
+fn schedules_tabs_are_bound_deduplicated_and_restore_without_starting_a_session() {
+    let mut core = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
+    core.apply(Action::CreateSshWorkspace {
+        name: "Remote".into(),
+        connection: connection(),
+        focus: true,
+    })
+    .unwrap();
+    let before = core.snapshot();
+    let workspace = before.workspaces[0].id;
+    let source = before.workspaces[0].root.panes()[0].selected_surface;
+    assert!(
+        core.apply(Action::OpenSchedules { surface_id: source })
+            .unwrap()
+            .effects
+            .is_empty()
+    );
+    let panel = core.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    assert_eq!(panel.kind, SurfaceKind::Schedules);
+    assert_eq!(panel.scheduler_source, Some(source));
+    assert!(panel.session_id.is_none());
+    core.apply(Action::SelectSurface { surface_id: source })
+        .unwrap();
+    core.apply(Action::OpenSchedules { surface_id: source })
+        .unwrap();
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        panel.id
+    );
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0].surfaces.len(),
+        2
+    );
+    core.apply(Action::ReorderSurface {
+        surface_id: panel.id,
+        index: 0,
+        focus: true,
+    })
+    .unwrap();
+    let document = core.session_document().unwrap();
+    let validated = document
+        .validate(RestoreLimits {
+            terminals: 1,
+            browsers: 0,
+            files: 0,
+        })
+        .unwrap();
+    assert_eq!(validated.terminal_count(), 1);
+    let restored =
+        WorkspaceStore::prepare_session_restore(validated, &[SessionId(100)], None).unwrap();
+    assert_eq!(restored.effects.len(), 1);
+    let restored_panel = restored.store.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    assert_eq!(restored_panel.id, panel.id);
+    assert_eq!(restored_panel.scheduler_source, Some(source));
+    assert!(
+        core.apply(Action::CloseSurface {
+            surface_id: panel.id
+        })
+        .unwrap()
+        .effects
+        .is_empty()
+    );
+    assert!(
+        core.apply(Action::ReopenClosed { closed_id: None })
+            .unwrap()
+            .effects
+            .is_empty()
+    );
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0]
+            .selected()
+            .scheduler_source,
+        Some(source)
+    );
+    core.apply(Action::CloseSurface { surface_id: source })
+        .unwrap();
+    let document = core
+        .session_document()
+        .unwrap()
+        .validate(RestoreLimits {
+            terminals: 0,
+            browsers: 0,
+            files: 0,
+        })
+        .unwrap();
+    assert_eq!(
+        document.terminal_count(),
+        0,
+        "orphaned Schedules stays offline and owns no PTY"
+    );
+    assert!(
+        core.apply(Action::OpenSchedules { surface_id: source })
+            .is_err()
+    );
+    core.apply(Action::CloseWorkspace {
+        workspace_id: workspace,
+    })
+    .unwrap();
+}
+
+#[test]
+fn schedules_reject_local_sources_and_keep_binding_when_moved_to_another_workspace() {
+    let mut core = WorkspaceStore::default();
+    core.apply(Action::CreateWorkspace {
+        name: "Local".into(),
+    })
+    .unwrap();
+    let local = core.snapshot().workspaces[0].root.panes()[0].selected_surface;
+    let destination = core.snapshot().workspaces[0].focused_pane;
+    let before = core.snapshot();
+    assert!(
+        core.apply(Action::OpenSchedules { surface_id: local })
+            .is_err()
+    );
+    assert_eq!(core.snapshot(), before);
+    core.apply(Action::CreateSshWorkspace {
+        name: "Remote".into(),
+        connection: connection(),
+        focus: true,
+    })
+    .unwrap();
+    let source = core.snapshot().workspaces[1].root.panes()[0].selected_surface;
+    core.apply(Action::OpenSchedules { surface_id: source })
+        .unwrap();
+    let panel = core.snapshot().workspaces[1].root.panes()[0].selected_surface;
+    assert!(
+        core.apply(Action::MoveSurface {
+            surface_id: panel,
+            pane_id: destination,
+            index: 1
+        })
+        .unwrap()
+        .effects
+        .is_empty()
+    );
+    core.apply(Action::OpenSchedules { surface_id: source })
+        .unwrap();
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        panel
+    );
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0]
+            .selected()
+            .scheduler_source,
+        Some(source)
+    );
+}

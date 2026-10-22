@@ -1017,7 +1017,7 @@ fn snapshot_serializes_file_surface_shape() {
         file["file"],
         serde_json::json!({"path":"/Users/a/proj/README.md","mode":"markdown","dirty":false})
     );
-    assert_eq!(wire["model_version"], 7);
+    assert_eq!(wire["model_version"], 8);
     assert_eq!(
         serde_json::to_value(FileMode::Pdf).unwrap(),
         serde_json::json!("pdf")
@@ -1025,7 +1025,7 @@ fn snapshot_serializes_file_surface_shape() {
 }
 
 #[test]
-fn model_version_is_seven() {
-    assert_eq!(MODEL_VERSION, 7);
-    assert_eq!(WorkspaceStore::default().snapshot().model_version, 7);
+fn model_version_is_eight() {
+    assert_eq!(MODEL_VERSION, 8);
+    assert_eq!(WorkspaceStore::default().snapshot().model_version, 8);
 }

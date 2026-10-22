@@ -348,6 +348,30 @@ impl Surface {
     }
     pub(crate) fn validate_terminal_descriptor(&self) -> Result<(), ActionError> {
         self.validate_file_descriptor()?;
+        if self.kind == SurfaceKind::Schedules {
+            if self
+                .scheduler_source
+                .is_none_or(|id| id.0 == 0 || id == self.id)
+                || self.session_id.is_some()
+                || self.remote.is_some()
+                || self.local_tmux.is_some()
+                || self.local_zellij.is_some()
+                || self.local_zellij_completion.is_some()
+                || self.url.is_some()
+                || self.browser_profile_id.is_some()
+                || self.cwd.is_some()
+                || self.navigation != 0
+                || self.file.is_some()
+            {
+                return Err(ActionError::InvalidOperation(
+                    "invalid Schedules source or surface identity".into(),
+                ));
+            }
+        } else if self.scheduler_source.is_some() {
+            return Err(ActionError::InvalidOperation(
+                "only Schedules may carry a scheduler source".into(),
+            ));
+        }
         let count = usize::from(self.remote.is_some())
             + usize::from(self.local_tmux.is_some())
             + usize::from(self.local_zellij.is_some());

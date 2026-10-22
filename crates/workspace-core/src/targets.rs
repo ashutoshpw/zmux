@@ -625,6 +625,7 @@ pub enum TargetAction {
     },
     ClosePane,
     CreateSurface,
+    OpenSchedules,
     SelectSurface,
     CloseSurface,
     RenameSurface {
@@ -715,6 +716,9 @@ impl TargetAction {
             },
             Self::CreateSurface => Action::CreateSurface {
                 pane_id: target.pane,
+            },
+            Self::OpenSchedules => Action::OpenSchedules {
+                surface_id: target.surface,
             },
             Self::SelectSurface => Action::SelectSurface {
                 surface_id: target.surface,

@@ -14,10 +14,24 @@ zmux schedule setup --surface SURFACE_UUID --check
 ```
 
 In the macOS app, select a managed SSH terminal and choose
-**Workspace > Scheduled Messages…** to open its scheduler window. When the
-connection is available, the window shows its pending queue and delivery
-history. Select a pending message to edit its text or scheduled local date and
-time, then save the versioned change. If the acknowledgement for a create, edit,
+**Workspace > Scheduled Messages…**, or right-click its workspace and choose
+**Schedules**, to open a Schedules tab beside terminal/browser tabs. Reopening
+selects the existing tab for that SSH source. The tab can be moved and closed
+like other tabs; its SSH source stays fixed. Closing that source leaves the
+Schedules tab offline. Session restore preserves source IDs; undo-close creates
+new terminal IDs, so it never silently rebinds an old Schedules tab.
+
+Choose **In** for a delay such as `5m`, `1h30m` or `2d`, with 1m/5m/15m/1h
+presets, or **At** for a local date/time. Delays allow descending integer d/h/m/s
+units, from 1 second through 365 days, evaluated at remote acceptance.
+Pending rows show live countdowns; **Absolute** shows resolved local times.
+History always shows absolute timestamps. Countdown text uses your Mac's clock
+and never establishes delivery or changes a remote job. Narrow panes scroll
+without increasing the main window's minimum size.
+
+Select a pending message to edit its text, time or both, then save the versioned
+change. A message-only edit preserves the exact remote deadline, including seconds.
+Drafts remain transient in the tab and are not persisted in session documents. If the acknowledgement for a create, edit,
 or cancel is unclear, reconnect to that managed SSH terminal and choose
 **Check Request Status** to reconcile the original request before submitting
 anything again.
@@ -48,8 +62,13 @@ zmux schedule targets --surface SURFACE_UUID
 zmux schedule create --surface SURFACE_UUID --remote-pane TARGET_TOKEN \
   --in 30m --message "Review the deployment" --submit
 zmux schedule list --surface SURFACE_UUID
+zmux schedule list --surface SURFACE_UUID --relative
 zmux schedule show TASK_UUID --surface SURFACE_UUID
 ```
+
+Default CLI list output remains JSON for automation. `list --relative` prints a
+human-readable countdown snapshot based on this computer's clock. Run it again
+to refresh; the remote job state remains authoritative.
 
 `--at` accepts an RFC3339 timestamp with an explicit offset or `Z`. `--in` is
 measured from the remote helper's acceptance time. Messages are literal UTF-8,

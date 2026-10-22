@@ -20,6 +20,8 @@ signal-hook.workspace = true
 zmux-remote-runtime.workspace = true
 uuid.workspace = true
 
+time = { version = "=0.3.44", features = ["parsing", "formatting"] }
+
 [features]
 local-zellij-conformance = []
 

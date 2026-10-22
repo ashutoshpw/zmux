@@ -2754,16 +2754,16 @@ fn flatten(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Contract test for the rollback consequence of session format 10. `session_document()` writes
+/// Contract test for the rollback consequence of session format 11. `session_document()` writes
 /// `SESSION_DOCUMENT_VERSION` for every session (see the workspace-core test
-/// `a_session_with_no_file_surface_is_still_saved_as_version_10`), so the bridge doc must not say
-/// only sessions that carry a file surface are version 10. Fails if the doc goes back to that
+/// `a_session_with_no_file_surface_is_still_saved_as_version_11`), so the bridge doc must not say
+/// only sessions that carry a Schedules surface are version 11. Fails if the doc goes back to that
 /// claim, drops the "every session" statement, or the constant moves without the doc.
 #[test]
-fn the_bridge_doc_states_that_every_saved_session_is_version_10() {
+fn the_bridge_doc_states_that_every_saved_session_is_version_11() {
     assert_eq!(
         zmux_workspace_core::SESSION_DOCUMENT_VERSION,
-        10,
+        11,
         "the session format moved; update the version in docs/native-bridge.md and its rollback sentence"
     );
     let doc = flatten(
@@ -2773,13 +2773,13 @@ fn the_bridge_doc_states_that_every_saved_session_is_version_10() {
         .unwrap(),
     );
     assert!(
-        !doc.contains("carrying a file surface are session format version 10"),
-        "docs/native-bridge.md again claims only sessions with file surfaces are version 10"
+        !doc.contains("carrying a Schedules surface are session format version 11"),
+        "docs/native-bridge.md again claims only sessions with Schedules surfaces are version 11"
     );
     for required in [
-        "Every session this build saves is session format version 10, whether or not it has a file surface.",
-        "A build that predates version 10 refuses all of those documents, not only the ones with file tabs",
-        "Documents written by earlier builds (versions 1 to 9) restore unchanged.",
+        "Every session this build saves is session format version 11, whether or not it has a Schedules surface.",
+        "A build that predates version 11 refuses all of those documents, not only the ones with Schedules tabs",
+        "Documents written by earlier builds (versions 1 to 10) restore unchanged.",
     ] {
         assert!(
             doc.contains(required),

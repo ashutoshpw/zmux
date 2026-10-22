@@ -187,18 +187,22 @@ window or quitting asks Save, Don't Save or Cancel first. `crates/native-bridge/
 swift_file_contract.rs` checks on Linux that the Swift `Decodable` shapes and frame limits match
 what Rust actually emits; compiling and running the Swift is left to macOS CI.
 
-## Workspace model version 7
+## Workspace model version 8
 
-The JSON model carries `model_version: 7`; the function ABI/request envelope remains version 1.
+The JSON model carries `model_version: 8`; the function ABI/request envelope remains version 1.
 Each pane owns ordered `surfaces` and `selected_surface`; a terminal surface owns `session_id`,
 `title` and optional `cwd`. Browser surfaces have `kind: browser`, no session, a URL and a
 navigation generation. File surfaces (version 7) have `kind: file`, no session or URL, and a
 `file` object `{path, mode, dirty}`: an absolute canonical path, a presentation mode (`text`,
 `markdown`, `image`, `pdf`) and a dirty mirror that only the native document owner may set. File
 content never travels in the snapshot. Every session this build saves is session format
-version 10, whether or not it has a file surface. A build that predates version 10 refuses all of
-those documents, not only the ones with file tabs, so rolling back to such a build cannot restore
-any session this build saved. Documents written by earlier builds (versions 1 to 9) restore unchanged.
+version 11, whether or not it has a Schedules surface. A build that predates version 11 refuses all of
+those documents, not only the ones with Schedules tabs, so rolling back to such a build cannot restore
+any session this build saved. Documents written by earlier builds (versions 1 to 10) restore unchanged.
+Schedules surfaces (model version 8) have `kind: schedules`, no PTY/session and a
+`scheduler_source` referring to the exact SSH source surface. Session version 11 persists
+only that source ID. `ssh_routes` reports surface/session IDs and connected state without
+including hidden terminal contents.
 Native observations update metadata without issuing another navigation. The old pane-level `session_id` field is replaced by this model.
 Native UI and Rust are packaged together; older hosts must reject an unfamiliar model version.
 Legacy socket pane inspection still projects the selected session for existing CLI callers.

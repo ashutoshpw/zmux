@@ -54,6 +54,8 @@ private struct ScheduleMutationIdentity {
 private struct ScheduleEditorSnapshot {
     let selectedJob: ScheduleMessageJob?
     let message: String
+    let relativeMode: Bool
+    let durationText: String
     let deadlineText: String
     let occurrence: Int
     let targetToken: String?
@@ -64,10 +66,19 @@ private struct ScheduleEditorSnapshot {
     let submitEdited: Bool
 }
 
+private final class ScheduleDocumentView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// AppKit client for the remote helper. It owns only transient presentation and offline drafts;
 /// the helper owns queue state, deadlines, claims, and delivery history.
 @MainActor
-final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate, NSTextFieldDelegate {
+final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate, NSTextFieldDelegate {
+    let view = NSScrollView()
+    var onFocus: (() -> Void)?
+    var preferredResponder: NSResponder { messageText.isEditable ? messageText : table }
+    private var countdownTask: Task<Void, Never>?
+    private var didLoad = false
     private let bridge: NativeBridge
     private let currentRoute: @MainActor () -> ScheduleMessagesRoute?
     private var route: ScheduleMessagesRoute
@@ -78,6 +89,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
     private var selectedJob: ScheduleMessageJob?
     private var localMutation: ScheduleLocalMutation?
     private var editorBaseMessage = ""
+    private var editorBaseRelative = false
+    private var editorBaseDuration = "1h"
     private var editorBaseDeadline = ""
     private var editorBaseOccurrence = 0
     private var editorBaseTargetToken: String?
@@ -102,6 +115,10 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
     private let table = NSTableView()
     private let targetPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let messageText = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 120))
+    private let deadlineMode = NSSegmentedControl(labels: ["In", "At"], trackingMode: .selectOne, target: nil, action: nil)
+    private let durationField = NSTextField(string: "1h")
+    private let durationPresets = NSSegmentedControl(labels: ["1m", "5m", "15m", "1h"], trackingMode: .momentary, target: nil, action: nil)
+    private let timeDisplay = NSSegmentedControl(labels: ["Relative", "Absolute"], trackingMode: .selectOne, target: nil, action: nil)
     private let deadlineField = NSTextField(string: "")
     private let occurrencePicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let resolvedDeadlineLabel = NSTextField(wrappingLabelWithString: "")
@@ -117,17 +134,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         self.bridge = bridge
         self.route = route
         self.currentRoute = currentRoute
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 720),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                              backing: .buffered, defer: false)
-        window.title = "Scheduled Messages"
-        window.isReleasedWhenClosed = false
-        // 470pt queue + 430pt editor + split divider + 36pt outer margins.
-        window.minSize = NSSize(width: 960, height: 600)
-        window.center()
-        super.init(window: window)
+        super.init()
         configureControls()
-        installLayout(in: window)
+        installLayout()
         updateRoutePresentation()
         beginNewMessage()
         updateControls()
@@ -135,12 +144,43 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
     required init?(coder: NSCoder) { nil }
 
-    func open(_ newRoute: ScheduleMessagesRoute) {
-        route = newRoute
-        updateRoutePresentation()
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        refreshFromRemote()
+    func update(_ newRoute: ScheduleMessagesRoute, visible: Bool) {
+        if route != newRoute {
+            route = newRoute
+            updateRoutePresentation()
+        }
+        if visible {
+            if countdownTask == nil {
+                countdownTask = Task { @MainActor [weak self] in
+                    while !Task.isCancelled {
+                        self?.tickCountdowns()
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                }
+            }
+            if !didLoad && isRemoteReady {
+                didLoad = true
+                refreshFromRemote()
+            }
+        } else {
+            countdownTask?.cancel()
+            countdownTask = nil
+        }
+    }
+
+    func close() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        view.removeFromSuperview()
+    }
+
+    private func tickCountdowns() {
+        guard !isHistory, timeDisplay.selectedSegment == 0,
+              let column = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "deadline" }) else { return }
+        for row in visibleJobs.indices {
+            (table.view(atColumn: column, row: row, makeIfNecessary: false) as? NSTableCellView)?
+                .textField?.stringValue = Self.countdown(to: visibleJobs[row].deadline)
+        }
     }
 
     private func configureControls() {
@@ -209,6 +249,24 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         messageText.setAccessibilityLabel("Scheduled message text")
         messageText.setAccessibilityHelp("Up to 4096 UTF-8 bytes. Text is sent literally; Return is optional and defaults off.")
 
+        deadlineMode.selectedSegment = 0
+        deadlineMode.target = self
+        deadlineMode.action = #selector(deadlineChanged)
+        deadlineMode.setAccessibilityLabel("Schedule time mode")
+        durationField.placeholderString = "5m or 1h30m"
+        durationField.delegate = self
+        durationField.target = self
+        durationField.action = #selector(deadlineChanged)
+        durationField.setAccessibilityLabel("Schedule delay")
+        durationField.setAccessibilityHelp("1 second through 365 days. Combine descending d, h, m and s units, for example 1h30m. Delay begins when the remote helper accepts the request.")
+        durationPresets.target = self
+        durationPresets.action = #selector(presetPressed)
+        durationPresets.setAccessibilityLabel("Schedule delay presets")
+        timeDisplay.selectedSegment = 0
+        timeDisplay.target = self
+        timeDisplay.action = #selector(timeDisplayChanged)
+        timeDisplay.setAccessibilityLabel("Scheduled time display")
+
         deadlineField.placeholderString = "YYYY-MM-DD HH:mm"
         deadlineField.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         deadlineField.delegate = self
@@ -252,8 +310,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         return column
     }
 
-    private func installLayout(in window: NSWindow) {
-        let root = NSView()
+    private func installLayout() {
+        let root = ScheduleDocumentView()
         root.translatesAutoresizingMaskIntoConstraints = false
         let heading = verticalStack([destinationLabel, connectionLabel], spacing: 4)
         let controls = horizontalStack([refreshButton, setupCheckButton, setupInstallButton], spacing: 8)
@@ -265,7 +323,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         tableScroll.autohidesScrollers = true
         tableScroll.documentView = table
         tableScroll.setAccessibilityLabel("Pending scheduled messages and history")
-        let left = verticalStack([viewMode, tableScroll], spacing: 8)
+        let left = verticalStack([horizontalStack([viewMode, timeDisplay], spacing: 8), tableScroll], spacing: 8)
         viewMode.widthAnchor.constraint(equalToConstant: 190).isActive = true
         tableScroll.translatesAutoresizingMaskIntoConstraints = false
         tableScroll.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
@@ -287,9 +345,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         messageScroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
         let messageGroup = verticalStack([messageHeading, messageScroll], spacing: 5)
 
-        let deadlineHeading = NSTextField(labelWithString: "Scheduled local date and time")
+        let deadlineHeading = NSTextField(labelWithString: "When")
         deadlineHeading.font = .systemFont(ofSize: 12, weight: .medium)
-        let deadlineGroup = verticalStack([deadlineHeading, deadlineField, occurrencePicker, resolvedDeadlineLabel], spacing: 5)
+        let deadlineGroup = verticalStack([deadlineHeading, deadlineMode, durationField, durationPresets, deadlineField, occurrencePicker, resolvedDeadlineLabel], spacing: 5)
         let editorButtons = horizontalStack([newButton, discardDraftButton, saveButton, cancelButton], spacing: 8)
         let right = verticalStack([targetGroup, messageGroup, deadlineGroup, submitCheckbox, editorButtons, requestStatusButton], spacing: 14)
         let rightSpacer = NSView(frame: .zero)
@@ -339,7 +397,22 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
             divider.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 14),
             divider.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16)
         ])
-        window.contentView = root
+        view.hasVerticalScroller = true
+        view.hasHorizontalScroller = true
+        view.autohidesScrollers = true
+        view.drawsBackground = true
+        view.documentView = root
+        view.setAccessibilityLabel("Schedules tab")
+        let width = root.widthAnchor.constraint(equalTo: view.contentView.widthAnchor)
+        width.priority = .defaultLow
+        let height = root.heightAnchor.constraint(equalTo: view.contentView.heightAnchor)
+        height.priority = .defaultLow
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: view.contentView.leadingAnchor),
+            root.topAnchor.constraint(equalTo: view.contentView.topAnchor),
+            root.widthAnchor.constraint(greaterThanOrEqualToConstant: 950),
+            root.heightAnchor.constraint(greaterThanOrEqualToConstant: 690), width, height
+        ])
     }
 
     private func verticalStack(_ views: [NSView], spacing: CGFloat) -> NSStackView {
@@ -375,7 +448,6 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         guard let represented = targetPicker.selectedItem?.representedObject as? String else { return nil }
         return targets.first { $0.token == represented }
     }
-    private var hasResolvedDeadline: Bool { deadlineResolution() != nil }
     private var isRemoteReady: Bool {
         guard let current = currentRoute() else { return false }
         return current.identityNamespace == route.identityNamespace && current.surface == route.surface
@@ -400,6 +472,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         viewMode.isEnabled = !busy
         targetPicker.isEnabled = editable && selectedJob == nil && !targets.isEmpty
         messageText.isEditable = editable
+        deadlineMode.isEnabled = editable
+        durationField.isEnabled = editable
+        durationPresets.isEnabled = editable
         deadlineField.isEnabled = editable
         occurrencePicker.isEnabled = editable && !occurrencePicker.isHidden
         submitCheckbox.isEnabled = editable && selectedJob == nil
@@ -564,6 +639,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         ScheduleEditorSnapshot(
             selectedJob: selectedJob,
             message: messageText.string,
+            relativeMode: deadlineMode.selectedSegment == 0,
+            durationText: durationField.stringValue,
             deadlineText: deadlineField.stringValue,
             occurrence: occurrencePicker.indexOfSelectedItem,
             targetToken: selectedTarget?.token ?? draftTargetToken,
@@ -586,6 +663,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
             rebuildTargetPicker(preferredToken: snapshot.targetToken)
         }
         messageText.string = snapshot.message
+        deadlineMode.selectedSegment = snapshot.relativeMode ? 0 : 1
+        durationField.stringValue = snapshot.durationText
         deadlineField.stringValue = snapshot.deadlineText
         occurrencePicker.selectItem(at: max(0, min(snapshot.occurrence, occurrencePicker.numberOfItems - 1)))
         submitCheckbox.state = snapshot.submit ? .on : .off
@@ -749,6 +828,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         selectedJob = nil
         suppressEditorEvents = true
         messageText.string = ""
+        deadlineMode.selectedSegment = 0
+        durationField.stringValue = "1h"
         deadlineField.stringValue = Self.localFormatter.string(from: Date().addingTimeInterval(3600))
         occurrencePicker.selectItem(at: 0)
         occurrencePicker.isHidden = true
@@ -756,6 +837,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         suppressEditorEvents = false
         rebuildTargetPicker(preferredToken: draftTargetToken)
         editorBaseMessage = messageText.string
+        editorBaseRelative = deadlineMode.selectedSegment == 0
+        editorBaseDuration = durationField.stringValue
         editorBaseDeadline = deadlineField.stringValue
         editorBaseOccurrence = occurrencePicker.indexOfSelectedItem
         editorBaseTargetToken = selectedTarget?.token
@@ -771,6 +854,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
     private func loadEditor(_ job: ScheduleMessageJob?) {
         selectedJob = job
         suppressEditorEvents = true
+        deadlineMode.selectedSegment = job == nil ? 0 : 1
+        durationField.stringValue = "1h"
         if let job {
             messageText.string = job.message
             deadlineField.stringValue = Self.localFormatter.string(from: job.deadline)
@@ -788,6 +873,8 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         }
         suppressEditorEvents = false
         editorBaseMessage = messageText.string
+        editorBaseRelative = deadlineMode.selectedSegment == 0
+        editorBaseDuration = durationField.stringValue
         editorBaseDeadline = deadlineField.stringValue
         editorBaseOccurrence = occurrencePicker.indexOfSelectedItem
         editorBaseTargetToken = selectedTarget?.token
@@ -822,7 +909,66 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         )
     }
 
+    /// Strict syntax shared with the CLI contract: descending integer d/h/m/s units.
+    static func parseDelay(_ text: String) -> UInt64? {
+        guard !text.isEmpty else { return nil }
+        var number: UInt64 = 0
+        var digits = false
+        var previous: UInt64 = UInt64.max
+        var total: UInt64 = 0
+        for byte in text.utf8 {
+            if (48...57).contains(byte) {
+                let (scaled, overflow) = number.multipliedReportingOverflow(by: 10)
+                let (next, addedOverflow) = scaled.addingReportingOverflow(UInt64(byte - 48))
+                guard !overflow && !addedOverflow else { return nil }
+                number = next; digits = true
+            } else {
+                let unit: UInt64
+                switch byte { case 100: unit = 86400; case 104: unit = 3600; case 109: unit = 60; case 115: unit = 1; default: return nil }
+                guard digits && unit < previous else { return nil }
+                let (part, overflow) = number.multipliedReportingOverflow(by: unit)
+                let (sum, addedOverflow) = total.addingReportingOverflow(part)
+                guard !overflow && !addedOverflow && sum <= 31_536_000 else { return nil }
+                total = sum; number = 0; digits = false; previous = unit
+            }
+        }
+        return !digits && total > 0 ? total : nil
+    }
+
+    static func countdown(to date: Date, now: Date = Date()) -> String {
+        let delta = date.timeIntervalSince(now)
+        if abs(delta) < 1 { return "Due now" }
+        let seconds = Int(ceil(abs(delta)))
+        let clock = String(format: "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60)
+        return delta > 0 ? "In " + clock : clock + " overdue"
+    }
+
+    private func deadlineInput() -> [String: Any]? {
+        if deadlineMode.selectedSegment == 0 {
+            guard let seconds = Self.parseDelay(durationField.stringValue) else { return nil }
+            return ["kind": "in_seconds", "seconds": seconds]
+        }
+        guard let resolution = deadlineResolution(), resolution.date > Date() else { return nil }
+        return ["kind": "at", "rfc3339": Self.utcFormatter.string(from: resolution.date)]
+    }
+
     private func updateDeadlineSummary() {
+        let relative = deadlineMode.selectedSegment == 0
+        durationField.isHidden = !relative
+        durationPresets.isHidden = !relative
+        deadlineField.isHidden = relative
+        if relative {
+            occurrencePicker.isHidden = true
+            resolvedDeadlineLabel.stringValue = Self.parseDelay(durationField.stringValue).map {
+                "Delay: \($0) seconds after remote acceptance. The helper sets the exact deadline."
+            } ?? "Enter a delay from 1s to 365d, for example 5m or 1h30m."
+            return
+        }
+        if let job = selectedJob, !deadlineEdited {
+            occurrencePicker.isHidden = true
+            resolvedDeadlineLabel.stringValue = "Scheduled instant: " + Self.utcFormatter.string(from: job.deadline)
+            return
+        }
         guard Self.parseWallTime(deadlineField.stringValue) != nil else {
             resolvedDeadlineLabel.stringValue = "Enter a valid local date and time in YYYY-MM-DD HH:mm format."
             occurrencePicker.isHidden = true
@@ -853,29 +999,25 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         let message = messageText.string
         guard !message.isEmpty, message.utf8.count <= 4096,
               Self.hasAllowedMessageScalars(message) else { return false }
-        guard let resolution = deadlineResolution(), resolution.date > Date() else { return false }
-        if selectedJob == nil { return selectedTarget != nil }
+        if selectedJob == nil { return selectedTarget != nil && deadlineInput() != nil }
         guard let selectedJob, selectedJob.state == "pending" else { return false }
-        return (messageEdited && message != selectedJob.message)
-            || (deadlineEdited && resolution.date != selectedJob.deadline)
+        if deadlineEdited && deadlineInput() == nil { return false }
+        return (messageEdited && message != selectedJob.message) || deadlineEdited
     }
 
     private func buildMutationAction() -> [String: Any]? {
-        guard canBuildMutation(), let resolution = deadlineResolution() else { return nil }
+        guard canBuildMutation() else { return nil }
         let message = messageText.string
         if let job = selectedJob {
             var patch: [String: Any] = [:]
             if messageEdited && message != job.message { patch["message"] = message }
-            if deadlineEdited && resolution.date != job.deadline {
-                patch["deadline"] = ["kind": "at", "rfc3339": Self.utcFormatter.string(from: resolution.date)]
-            }
+            if deadlineEdited, let deadline = deadlineInput() { patch["deadline"] = deadline }
             guard !patch.isEmpty else { return nil }
             return ["action": "edit", "job_id": job.id.uuidString.lowercased(),
                     "expected_version": job.version, "patch": patch]
         }
-        guard let target = selectedTarget else { return nil }
-        return ["action": "create", "target_id": target.token,
-                "deadline": ["kind": "at", "rfc3339": Self.utcFormatter.string(from: resolution.date)],
+        guard let target = selectedTarget, let deadline = deadlineInput() else { return nil }
+        return ["action": "create", "target_id": target.token, "deadline": deadline,
                 "message": message, "submit": submitCheckbox.state == .on]
     }
 
@@ -901,7 +1043,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
                 description: description, expectedReplyKind: "mutation", outcomeUnknown: false)
             localMutation = mutation
             guard isRemoteReady else {
-                statusText = "Draft saved locally in this window. The remote job has not changed."
+                statusText = "Draft saved locally in this tab. The remote job has not changed."
                 statusLabel.stringValue = statusText
                 updateControls()
                 return
@@ -1156,8 +1298,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
     @objc private func deadlineChanged() {
         guard !suppressEditorEvents else { return }
-        deadlineEdited = deadlineField.stringValue != editorBaseDeadline
-            || occurrencePicker.indexOfSelectedItem != editorBaseOccurrence
+        deadlineEdited = (deadlineMode.selectedSegment == 0) != editorBaseRelative
+            || (deadlineMode.selectedSegment == 0 ? durationField.stringValue != editorBaseDuration
+                : deadlineField.stringValue != editorBaseDeadline || occurrencePicker.indexOfSelectedItem != editorBaseOccurrence)
         invalidateUnsentDraftForEditorChange()
         updateDeadlineSummary()
         updateControls()
@@ -1165,8 +1308,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
     @objc private func occurrenceChanged() {
         guard !suppressEditorEvents else { return }
-        deadlineEdited = deadlineField.stringValue != editorBaseDeadline
-            || occurrencePicker.indexOfSelectedItem != editorBaseOccurrence
+        deadlineEdited = (deadlineMode.selectedSegment == 0) != editorBaseRelative
+            || (deadlineMode.selectedSegment == 0 ? durationField.stringValue != editorBaseDuration
+                : deadlineField.stringValue != editorBaseDeadline || occurrencePicker.indexOfSelectedItem != editorBaseOccurrence)
         invalidateUnsentDraftForEditorChange()
         updateDeadlineSummary()
         updateControls()
@@ -1183,6 +1327,9 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         if localMutation?.outcomeUnknown == false { localMutation = nil }
     }
 
+    func textDidBeginEditing(_ notification: Notification) { onFocus?() }
+    func controlTextDidBeginEditing(_ notification: Notification) { onFocus?() }
+
     func textDidChange(_ notification: Notification) {
         guard !suppressEditorEvents else { return }
         messageEdited = messageText.string != editorBaseMessage
@@ -1191,8 +1338,21 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
     }
 
     func controlTextDidChange(_ notification: Notification) {
-        guard (notification.object as? NSTextField) === deadlineField else { return }
+        guard let field = notification.object as? NSTextField, field === deadlineField || field === durationField else { return }
         deadlineChanged()
+    }
+
+    @objc private func presetPressed() {
+        guard durationPresets.selectedSegment >= 0 else { return }
+        durationField.stringValue = ["1m", "5m", "15m", "1h"][durationPresets.selectedSegment]
+        deadlineMode.selectedSegment = 0
+        deadlineChanged()
+    }
+
+    @objc private func timeDisplayChanged() {
+        // Presentation only: never refresh the queue, alter selection or touch drafts.
+        table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<visibleJobs.count),
+                         columnIndexes: IndexSet(integer: 2))
     }
 
     @objc private func refreshPressed() { refreshFromRemote() }
@@ -1250,7 +1410,10 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
             showMessage("Save or explicitly discard the current editor changes before starting another message.")
             return
         }
+        isHistory = false
+        viewMode.selectedSegment = 0
         table.deselectAll(nil)
+        table.reloadData()
         beginNewMessage()
     }
 
@@ -1298,7 +1461,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         switch identifier {
         case "message": value = job.message
         case "target": value = job.targetTitle
-        case "deadline": value = parseDisplayDate(job.deadline)
+        case "deadline": value = !isHistory && timeDisplay.selectedSegment == 0 ? Self.countdown(to: job.deadline) : parseDisplayDate(job.deadline)
         case "state": value = "\(job.state) · v\(job.version)"
         default: return nil
         }
@@ -1320,6 +1483,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !suppressEditorEvents, !isWorking else { return }
+        onFocus?()
         if hasUnsavedEditorChanges {
             suppressEditorEvents = true
             if let selectedJob, let index = visibleJobs.firstIndex(where: { $0.id == selectedJob.id }) {

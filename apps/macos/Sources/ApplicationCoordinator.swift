@@ -148,6 +148,53 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     /// One retained file panel per file surface, created and pruned in `reconcile` like `browsers`.
     private(set) var files: [UInt64: FilePanelView] = [:]
     private var filesNamespace: UUID?
+    private(set) var schedules: [UInt64: ScheduleMessagesPanel] = [:]
+    private var schedulesNamespace: UUID?
+
+    func scheduleRoute(namespace: UUID?, surface source: UInt64) -> ScheduleMessagesRoute? {
+        guard let namespace, let current = snapshot, current.model.identityNamespace == namespace,
+              let surface = current.model.workspaces.flatMap({ $0.root.panes }).flatMap(\.surfaces)
+                .first(where: { $0.id == source && $0.kind == "terminal" }),
+              let remote = surface.remote else { return nil }
+        let health = current.sshRoutes.first { $0.surfaceId == source && $0.sessionId == surface.sessionId }
+        return ScheduleMessagesRoute(identityNamespace: namespace, surface: source,
+            expectedSession: surface.sessionId, destination: remote.destination,
+            connected: health?.connected == true)
+    }
+
+    private func reconcileSchedules(_ snapshot: DesktopSnapshot) {
+        let namespace = snapshot.model.identityNamespace
+        if schedulesNamespace != namespace {
+            schedules.values.forEach { $0.close() }
+            schedules.removeAll()
+            schedulesNamespace = namespace
+        }
+        let surfaces = snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap(\.surfaces)
+            .filter { $0.kind == "schedules" }
+        let live = Set(surfaces.map(\.id))
+        for (id, panel) in schedules where !live.contains(id) {
+            panel.close()
+            schedules.removeValue(forKey: id)
+        }
+        let visibleWorkspaces = Set(snapshot.model.windows.compactMap(\.selectedWorkspace))
+        let selected = Set(snapshot.model.workspaces.filter { visibleWorkspaces.contains($0.id) }
+            .flatMap { $0.root.panes }.map(\.selectedSurface))
+        for surface in surfaces {
+            guard let source = surface.schedulerSource else { continue }
+            let route = scheduleRoute(namespace: namespace, surface: source)
+                ?? ScheduleMessagesRoute(identityNamespace: namespace, surface: source,
+                    expectedSession: nil, destination: "SSH source unavailable", connected: false)
+            let panel: ScheduleMessagesPanel
+            if let existing = schedules[surface.id] { panel = existing }
+            else {
+                panel = ScheduleMessagesPanel(bridge: bridge, route: route, currentRoute: { [weak self] in
+                    self?.scheduleRoute(namespace: namespace, surface: source)
+                })
+                schedules[surface.id] = panel
+            }
+            panel.update(route, visible: selected.contains(surface.id))
+        }
+    }
     /// Panels whose tab vanished while they held unsaved text. They are never silently dropped.
     private(set) var orphanedFiles: [FilePanelView] = []
     private var presentingOrphan = false
@@ -418,6 +465,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     }
 
     func shutdown() async throws {
+        schedules.values.forEach { $0.close() }
+        schedules.removeAll()
         if let shutdownTask { return try await shutdownTask.value }
         let task = Task { try await self.performShutdown() }
         shutdownTask = task
@@ -653,6 +702,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         let liveSessions = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.compactMap { $0.sessionId })
         terminals = terminals.filter { liveSessions.contains($0.key) }
         reconcileFilePanels(snapshot)
+        reconcileSchedules(snapshot)
         let liveBrowsers = Set(snapshot.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }.filter { $0.kind == "browser" }.map { $0.id })
         browsers = browsers.filter { key, value in
             if liveBrowsers.contains(key) { return true }

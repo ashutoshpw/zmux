@@ -859,7 +859,7 @@ fn v10_round_trips_file_surfaces() {
     let before = files(&store);
     assert_eq!(before.len(), 3);
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 10);
+    assert_eq!(wire["version"], 11);
     let saved = file_surfaces(&mut wire.clone()).clone();
     assert_eq!(
         saved[2],
@@ -900,12 +900,12 @@ fn v9_rejects_file_content() {
     );
 }
 
-/// Capture never keys the version on content: a session with no file surface is version 10 too,
-/// so a build that predates version 10 refuses every document this build saves, not only the ones
+/// Capture never keys the version on content: a session with no file surface is version 11 too,
+/// so a build that predates version 11 refuses every document this build saves, not only the ones
 /// with file tabs. `docs/native-bridge.md` states this rollback consequence and is held to it by
-/// `the_bridge_doc_states_that_every_saved_session_is_version_10` in the native-bridge tests.
+/// `the_bridge_doc_states_that_every_saved_session_is_version_11` in the native-bridge tests.
 #[test]
-fn a_session_with_no_file_surface_is_still_saved_as_version_10() {
+fn a_session_with_no_file_surface_is_still_saved_as_version_11() {
     let store = fixture();
     assert_eq!(store.snapshot().workspaces.len(), 1);
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
@@ -913,20 +913,20 @@ fn a_session_with_no_file_surface_is_still_saved_as_version_10() {
         !wire.to_string().contains("\"kind\":\"file\""),
         "the fixture must not contain a file surface: {wire}"
     );
-    assert_eq!(SESSION_DOCUMENT_VERSION, 10);
+    assert_eq!(SESSION_DOCUMENT_VERSION, 11);
     assert_eq!(wire["version"], SESSION_DOCUMENT_VERSION);
-    // A reader that only knows versions up to 9 refuses it, exactly as the current reader refuses 11.
+    // A reader that only knows versions up to 10 refuses it, exactly as the current reader refuses 12.
     let mut older_reader_view = wire.clone();
-    older_reader_view["version"] = json!(11);
+    older_reader_view["version"] = json!(12);
     assert!(decode(older_reader_view, limits()).is_err());
 }
 
 #[test]
 fn legacy_versions_still_load() {
-    // Version 10 keeps every earlier reader: a v9 document without files and the
-    // v9-only workspace-group field still validate, then migrate forward to v10.
+    // Version 11 keeps every earlier reader: a v9 document without files and the
+    // v9-only workspace-group field still validate, then migrate forward to v11.
     let wire = serde_json::to_value(fixture().session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 10);
+    assert_eq!(wire["version"], 11);
     let mut v9 = wire.clone();
     v9["version"] = json!(9);
     let validated = decode(v9, limits()).expect("v9 stays readable");
@@ -939,11 +939,11 @@ fn legacy_versions_still_load() {
     .unwrap();
     assert_eq!(
         serde_json::to_value(restored.store.session_document().unwrap()).unwrap()["version"],
-        10
+        11
     );
-    // Version 11 does not exist yet.
+    // Version 12 does not exist yet.
     let mut future = wire;
-    future["version"] = json!(11);
+    future["version"] = json!(12);
     assert!(decode(future, limits()).is_err());
 }
 
@@ -1075,7 +1075,7 @@ fn restore_enforces_file_limit() {
 }
 
 #[test]
-fn model_version_is_seven() {
-    assert_eq!(MODEL_VERSION, 7);
-    assert_eq!(SESSION_DOCUMENT_VERSION, 10);
+fn model_version_is_eight() {
+    assert_eq!(MODEL_VERSION, 8);
+    assert_eq!(SESSION_DOCUMENT_VERSION, 11);
 }
