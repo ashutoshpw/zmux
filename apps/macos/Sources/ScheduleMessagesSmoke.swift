@@ -32,6 +32,7 @@ enum ScheduleMessagesSmoke {
         let permissions: UInt16
     }
 
+    @MainActor
     private struct Controls {
         let window: NSWindow
         let target: NSPopUpButton
@@ -48,6 +49,7 @@ enum ScheduleMessagesSmoke {
                 throw BridgeFailure(message: "Scheduled messages window has no content view")
             }
             let views = ScheduleMessagesSmoke.descendants(content)
+            @MainActor
             func required<T: NSView>(_ type: T.Type, label: String) throws -> T {
                 guard let value = views.first(where: { $0.accessibilityLabel() == label }) as? T else {
                     throw BridgeFailure(message: "Scheduled messages window is missing the \(label) control")
@@ -300,7 +302,7 @@ enum ScheduleMessagesSmoke {
     private static func route(coordinator: ApplicationCoordinator, workspaceID: UInt64) -> Route? {
         guard let snapshot = coordinator.snapshot,
               let workspace = snapshot.model.workspaces.first(where: { $0.id == workspaceID }),
-              let pane = workspace.root.panes.first(where: { $0.id == workspace.root.focusedPane }),
+              let pane = workspace.root.panes.first(where: { $0.id == workspace.focusedPane }),
               let surface = pane.surfaces.first(where: { $0.id == pane.selectedSurface && $0.kind == "terminal" }),
               surface.remote != nil, let session = surface.sessionId,
               let frame = snapshot.frames.first(where: { $0.sessionId == session }),
