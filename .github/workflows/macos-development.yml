@@ -143,6 +143,16 @@ jobs:
         run: scripts/check
       - name: Build universal native development app
         run: scripts/build-macos-dev --scheduler-artifacts-root dist/remote-scheduler-inputs --require-full-scheduler
+      - name: Retain testable candidate before native acceptance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zmux-macos-candidate-universal-${{ github.sha }}
+          path: |
+            dist/zmux-dev-universal-*.zip
+            dist/zmux-dev-universal-*.zip.sha256
+            dist/build-info.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Exercise terminal selection and browser links in the universal app
         run: python3 -B tools/native-terminal-selection/run.py --skip-build --output dist/native-terminal-selection-universal
       - name: Exercise packaged app and native rendering
