@@ -21,15 +21,17 @@ Use a frozen namespace/workspace/window/revision drag token and require the actu
 - [x] Implement row drag threshold, immutable source token, owner validation, valid-slot insertion cue, and shared-action drop.
 - [x] Extend packaged `WorkspaceOrderSmoke` and require its report key; cover click/drag disposition, geometry, groups, stale/foreign rejection, and live identity retention.
 - [x] Update task status and concise native-drag evidence/limitations.
-- [ ] Run `RUST_TEST_THREADS=2 scripts/check` and the scoped packaged native workflow when available.
+- [x] Run `RUST_TEST_THREADS=2 scripts/check` after fixture and documentation cleanup.
+- [x] Run the scoped packaged native workflow and report native delivery separately from physical gesture proof.
 
 ## Acceptance criteria
-- [ ] Only same-window, same-namespace, live-owner sources at the captured revision can drop.
-- [ ] Hover changes only the insertion cue; click still selects normally and a drag leaves selection/responder and live content intact.
-- [ ] Accepted slots match canonical order after removing the source and preserve group invariants; invalid slots show no cue and are rejected.
+- [x] Only same-window, same-namespace, live-owner sources at the captured revision can drop.
+- [x] Hover changes only the insertion cue; click still selects normally and a drag leaves selection/responder and live content intact.
+- [x] Accepted slots match canonical order after removing the source and preserve group invariants; invalid slots show no cue and are rejected.
 - [x] Packaged smoke requires the drag report key and verifies rendered order plus PTY/browser/responder retention.
-- [ ] Portable checks pass; native packaged execution is reported separately from physical gesture proof.
+- [x] Portable checks pass; native packaged execution is reported separately from physical gesture proof.
 
 ## References
 - `.agents/tasks/2026-10-14/05-command-ux-parity/references/t03-multiwindow-design.md` — canonical order, group invariants, and existing native smoke contract.
 - `.agents/tasks/2026-10-14/05-command-ux-parity/references/n02-workspace-context-menu.md` — current native ordering entrypoints and shared owner.
+- `.agents/tasks/2026-10-22/01-workspace-drag-order/references/native-delivery-receipt.md` — pinned successful packaged native artifact and remaining physical-gesture limit.

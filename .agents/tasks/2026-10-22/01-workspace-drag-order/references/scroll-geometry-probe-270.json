@@ -1,0 +1,201 @@
+{
+  "checks" : {
+    "constrained_scroll_is_clamped_when_document_fits" : true,
+    "constrained_scroll_moves_when_document_overflows" : true,
+    "document_fits_at_minimum_height" : true,
+    "document_overflows_after_resize" : true,
+    "overflow_scroll_attempt_starts_at_origin" : true,
+    "scroll_origin_is_positive_after_overflow" : true
+  },
+  "minimumHeightAfterScrollAttempt" : {
+    "clipBounds" : {
+      "height" : 330,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "contentBounds" : {
+      "height" : 420,
+      "width" : 680,
+      "x" : 0,
+      "y" : 0
+    },
+    "documentFrame" : {
+      "height" : 192,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "overflow" : -138,
+    "sidebarFrame" : {
+      "height" : 420,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "stage" : "minimum-after-scroll-attempt",
+    "viewportFrame" : {
+      "height" : 330,
+      "width" : 224,
+      "x" : 0,
+      "y" : 54
+    },
+    "windowFrame" : {
+      "height" : 420,
+      "width" : 680,
+      "x" : 172,
+      "y" : 257
+    }
+  },
+  "minimumHeightBefore" : {
+    "clipBounds" : {
+      "height" : 330,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "contentBounds" : {
+      "height" : 420,
+      "width" : 680,
+      "x" : 0,
+      "y" : 0
+    },
+    "documentFrame" : {
+      "height" : 192,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "overflow" : -138,
+    "sidebarFrame" : {
+      "height" : 420,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "stage" : "minimum-before-scroll",
+    "viewportFrame" : {
+      "height" : 330,
+      "width" : 224,
+      "x" : 0,
+      "y" : 54
+    },
+    "windowFrame" : {
+      "height" : 420,
+      "width" : 680,
+      "x" : 172,
+      "y" : 257
+    }
+  },
+  "minimumHeightScrollAttempt" : {
+    "constrainedOrigin" : {
+      "x" : 0,
+      "y" : 0
+    },
+    "requestedOrigin" : {
+      "x" : 0,
+      "y" : 8
+    }
+  },
+  "reducedHeightAfterScroll" : {
+    "clipBounds" : {
+      "height" : 180,
+      "width" : 209,
+      "x" : 0,
+      "y" : 8
+    },
+    "contentBounds" : {
+      "height" : 270,
+      "width" : 680,
+      "x" : 0,
+      "y" : 0
+    },
+    "documentFrame" : {
+      "height" : 192,
+      "width" : 209,
+      "x" : 0,
+      "y" : 0
+    },
+    "overflow" : 12,
+    "sidebarFrame" : {
+      "height" : 270,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "stage" : "reduced-after-scroll",
+    "viewportFrame" : {
+      "height" : 180,
+      "width" : 224,
+      "x" : 0,
+      "y" : 54
+    },
+    "windowFrame" : {
+      "height" : 270,
+      "width" : 680,
+      "x" : 172,
+      "y" : 407
+    }
+  },
+  "reducedHeightBeforeScroll" : {
+    "clipBounds" : {
+      "height" : 180,
+      "width" : 209,
+      "x" : 0,
+      "y" : 0
+    },
+    "contentBounds" : {
+      "height" : 270,
+      "width" : 680,
+      "x" : 0,
+      "y" : 0
+    },
+    "documentFrame" : {
+      "height" : 192,
+      "width" : 209,
+      "x" : 0,
+      "y" : 0
+    },
+    "overflow" : 12,
+    "sidebarFrame" : {
+      "height" : 270,
+      "width" : 224,
+      "x" : 0,
+      "y" : 0
+    },
+    "stage" : "reduced-before-scroll",
+    "viewportFrame" : {
+      "height" : 180,
+      "width" : 224,
+      "x" : 0,
+      "y" : 54
+    },
+    "windowFrame" : {
+      "height" : 270,
+      "width" : 680,
+      "x" : 172,
+      "y" : 407
+    }
+  },
+  "reducedHeightScrollAttempt" : {
+    "constrainedOrigin" : {
+      "x" : 0,
+      "y" : 8
+    },
+    "requestedOrigin" : {
+      "x" : 0,
+      "y" : 8
+    }
+  },
+  "reducedHeightScrollReset" : {
+    "constrainedOrigin" : {
+      "x" : 0,
+      "y" : 0
+    },
+    "requestedOrigin" : {
+      "x" : 0,
+      "y" : 0
+    }
+  },
+  "workflowSHA" : "d732587aad4f97757fd1087d09f6328c89b30e04"
+}

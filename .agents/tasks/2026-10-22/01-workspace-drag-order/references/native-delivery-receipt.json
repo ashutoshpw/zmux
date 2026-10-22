@@ -1,0 +1,134 @@
+{
+  "source_sha": "87dfbfe51bcbbb16289ecbf53e37e04f0ea01642",
+  "run_id": 39779731513,
+  "job_id": 119827593515,
+  "artifact_id": 12427877257,
+  "artifact_url": "https://github.com/ashutoshpw/zmux/actions/runs/39779731513/artifacts/12427877257",
+  "artifact_name": "zmux-macos-dev-universal-87dfbfe51bcbbb16289ecbf53e37e04f0ea01642",
+  "archive": "zmux-dev-universal-87dfbfe.zip",
+  "sha256": "adea306a713be07347a0dbfc9051dd52a65d3e324987c04acd47ed4f40620d3f",
+  "outer_artifact_sha256": "a41fb19870bbeb4b144d99383bd62f34605f2d2e7c30997ce8c06035372ecc96",
+  "github_api_outer_digest": "sha256:a41fb19870bbeb4b144d99383bd62f34605f2d2e7c30997ce8c06035372ecc96",
+  "architectures": {
+    "zmux.app/Contents/Frameworks/libzmux_native_bridge.dylib": [
+      "arm64",
+      "x86_64"
+    ],
+    "zmux.app/Contents/MacOS/zmux-app": [
+      "arm64",
+      "x86_64"
+    ],
+    "zmux.app/Contents/Resources/bin/zmux": [
+      "arm64",
+      "x86_64"
+    ]
+  },
+  "build_info": {
+    "source_sha": "87dfbfe51bcbbb16289ecbf53e37e04f0ea01642",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "minimum_macos": "14.0",
+    "bundle_id": "app.w3dev.zmux.dev",
+    "signing": "ad-hoc",
+    "notarized": false,
+    "cloud_origin": "https://zmux.w3api.dev",
+    "optional_ghostty_linked": false,
+    "default_terminal_engine": "vt100",
+    "optional_zellij_packaged": false
+  },
+  "packaged_native_smoke": "passed",
+  "native_smoke": {
+    "success": true,
+    "workspace_order_drag": true,
+    "workspace_order": true,
+    "ssh_reconnect_native_icon": true,
+    "ctrl_tab_navigation": true,
+    "ctrl_tab_single_tab_no_input": true,
+    "ctrl_tab_multipane_scoping": true,
+    "native_save_dialog_accessibility": "skipped_user_deferred",
+    "browser_downloads_native": false
+  },
+  "native_shortcut_and_reconnect_receipts": {
+    "ssh_reconnect_native_icon": true,
+    "ctrl_tab_navigation": true,
+    "ctrl_tab_single_tab_no_input": true,
+    "ctrl_tab_multipane_scoping": true
+  },
+  "native_selection_cases": 41,
+  "terminal_link_requests": [
+    "/p-532f9c107b0e4dae",
+    "/o-532f9c107b0e4dae"
+  ],
+  "retained_source_files_verified": 341,
+  "sidebar_and_status_menu": "passed",
+  "cloud_terminal_lifecycle": "passed",
+  "hosted_strict_codesign_verification": "passed",
+  "hosted_codesign_log": {
+    "source": "gh run view --log",
+    "sha256": "525273337ef0481d60eb6496104e1913d8d0a67e9d702560ed05d98fad96a0fe",
+    "valid_on_disk": true,
+    "satisfies_designated_requirement": true
+  },
+  "workspace_sidebar_drag_evidence": {
+    "workspace_order_drag": true,
+    "workspace_order": true,
+    "source_capture": "source row mouseDown capture path exercised",
+    "destination_callback_delivery": "synthetic NSDraggingInfo delivered to the packaged AppKit destination callbacks",
+    "mouse_dragged_threshold_verified": false,
+    "begin_dragging_session_verified": false,
+    "ns_dragging_source_os_loop_verified": false,
+    "physical_os_gesture_dispatch_verified": false,
+    "physical_user_mac_verified": false,
+    "limitation": "The smoke exercises source mouseDown capture and destination callbacks; it does not prove mouseDragged threshold handling, beginDraggingSession, NSDraggingSource participation in the OS drag loop, or physical OS gesture dispatch."
+  },
+  "screenshots": [
+    {
+      "file": "Zmux-native-smoke.png",
+      "sha256": "42b08b3ca98bb7ef8192327959604d3006da266b7882e6066a4116c42315633a"
+    },
+    {
+      "file": "native-terminal-selection-universal/source/apps/macos/Resources/AppIcon.png",
+      "sha256": "aa76668d20bf69e583c15a1d5cf11ba79b7b0c8f24fe4374d36335bf4a8ef8ad"
+    },
+    {
+      "file": "zmux-browser-smoke.png",
+      "sha256": "be276b0ee79c7fc1a097725466a085a2805c0cd57e37ed42faddfe4af41ff1ba"
+    },
+    {
+      "file": "zmux-local-tmux-smoke.png",
+      "sha256": "25be815e2d92e538994d0b59cd5df524ae0885bd092d61e8bfcee2789e0f5581"
+    },
+    {
+      "file": "zmux-sidebar-collapsed.png",
+      "sha256": "9dba3e50b30734b4f3cee71802c45e33455834bbb72939ac30a935d9acbd96cd"
+    },
+    {
+      "file": "zmux-sidebar.png",
+      "sha256": "fb3e891bc7104b9d7af80119d64df100bbb82a8d846a707431a84a61219cddcd"
+    },
+    {
+      "file": "zmux-ssh-reconnect.png",
+      "sha256": "44514ecdf527244776ab523959c7be2533ff9463ee78c93358f7d7c4d08cf4c5"
+    },
+    {
+      "file": "zmux-status-icon.png",
+      "sha256": "1a8893e896639379626069ac9071e7c4d303c9e05bd6f355df4c9e4d7f9c4814"
+    },
+    {
+      "file": "zmux-workspace-drag.png",
+      "sha256": "afbc82d67bf17e3be266be94c04278ed118caff2f5bdb876895c0f3d8d39b8d2"
+    }
+  ],
+  "screenshot_visually_verified": true,
+  "screenshot_observation": "Root inspected zmux-workspace-drag.png (SHA-256 afbc82d6\u2026d39b8d2): a thin horizontal insertion marker at the top edge of the sidebar, above the expanded group header; Terminal remained selected with 2 local terminals and the other workspace rows visible. This confirms the rendered insertion cue, not physical drag dispatch.",
+  "excluded_checks": {
+    "native_save_dialog_accessibility": "skipped_user_deferred",
+    "browser_downloads_native": false,
+    "mouseDragged_threshold": "not established by synthetic destination callback delivery",
+    "beginDraggingSession": "not established by synthetic destination callback delivery",
+    "NSDraggingSource_OS_loop": "not established by synthetic destination callback delivery",
+    "physical_os_gesture_dispatch": "not established by synthetic destination callback delivery"
+  }
+}
