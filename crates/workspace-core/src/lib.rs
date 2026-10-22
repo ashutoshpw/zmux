@@ -50,7 +50,7 @@ identifier!(SurfaceId);
 identifier!(WindowId);
 identifier!(WorkspaceGroupId);
 
-pub const MODEL_VERSION: u32 = 7;
+pub const MODEL_VERSION: u32 = 8;
 pub const MAX_SURFACES_PER_PANE: usize = 32;
 pub const MAX_CLOSED_ITEMS: usize = 32;
 
@@ -269,6 +269,9 @@ pub enum Action {
         identity_namespace: uuid::Uuid,
         surface_id: SurfaceId,
         expected_session_id: SessionId,
+    },
+    OpenSchedules {
+        surface_id: SurfaceId,
     },
     CreateBrowser {
         #[serde(default)]

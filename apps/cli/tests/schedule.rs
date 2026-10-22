@@ -394,3 +394,26 @@ fn message_bodies_are_omitted_from_journal_diagnostics_and_json_errors() {
         0o600
     );
 }
+
+#[test]
+fn relative_display_is_rejected_for_mutations_before_connecting() {
+    let home = Home::new();
+    let output = home
+        .command(&[
+            "--socket",
+            "/tmp/zmux-absent-schedule.sock",
+            "schedule",
+            "targets",
+            "--surface",
+            SURFACE,
+            "--relative",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        text.contains("unknown or repeated schedule targets option"),
+        "{text}"
+    );
+}

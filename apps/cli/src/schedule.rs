@@ -80,6 +80,7 @@ enum Operation {
 
 pub(super) struct Invocation {
     surface: Uuid,
+    pub(super) relative: bool,
     request_id: Option<Uuid>,
     operation: Operation,
 }
@@ -199,6 +200,7 @@ impl Invocation {
     fn clone_for_discovery(&self) -> Self {
         Self {
             surface: self.surface,
+            relative: self.relative,
             request_id: self.request_id,
             operation: self.operation.clone(),
         }
@@ -470,6 +472,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     let mut check = false;
     let mut expected_version = None;
     let mut limit = None;
+    let mut relative = false;
     let mut positionals = Vec::new();
     let mut index = 1;
     while index < args.len() {
@@ -511,6 +514,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
                 once(&mut message, MessageSource::Text(value), flag)?;
             }
             "--stdin" if message.is_none() => message = Some(MessageSource::Stdin),
+            "--relative" if !relative && verb == "list" => relative = true,
             "--submit" if !submit => submit = true,
             "--check" if !check => check = true,
             "--expect-version" => {
@@ -736,6 +740,7 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     };
     let invocation = Invocation {
         surface,
+        relative,
         request_id,
         operation,
     };
@@ -1469,4 +1474,54 @@ fn error_result(
         output["local_unresolved_requests"] = json!(local_unresolved);
     }
     output
+}
+
+/// Snapshot presentation only; the helper remains authoritative for job state.
+pub(super) fn relative_list(result: &Value) -> Result<String, CliError> {
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+    let jobs = result
+        .pointer("/response/result/data/jobs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CliError("schedule list response has no jobs".into()))?;
+    let now = OffsetDateTime::now_utc();
+    let mut output = String::from(
+        "TASK UUID                             VERSION  WHEN                  STATE\n",
+    );
+    if jobs.is_empty() {
+        output.push_str("No pending messages.\n");
+    }
+    for job in jobs {
+        let deadline = job["deadline_utc"]
+            .as_str()
+            .ok_or_else(|| CliError("job has no deadline".into()))?;
+        let date = OffsetDateTime::parse(deadline, &Rfc3339)
+            .map_err(|_| CliError("job has an invalid deadline".into()))?;
+        let delta = (date - now).whole_seconds();
+        let seconds = delta.unsigned_abs();
+        let clock = format!(
+            "{:02}:{:02}:{:02}",
+            seconds / 3600,
+            (seconds / 60) % 60,
+            seconds % 60
+        );
+        let when = match delta.cmp(&0) {
+            std::cmp::Ordering::Greater => format!("in {clock}"),
+            std::cmp::Ordering::Equal => "due now".into(),
+            std::cmp::Ordering::Less => format!("{clock} overdue"),
+        };
+        let id = job["id"]
+            .as_str()
+            .ok_or_else(|| CliError("job has no ID".into()))?;
+        let version = job["version"]
+            .as_u64()
+            .ok_or_else(|| CliError("job has no version".into()))?;
+        let state = job["state"]
+            .as_str()
+            .ok_or_else(|| CliError("job has no state".into()))?;
+        output.push_str(&format!("{id}  {version:<7}  {when:<20}  {state}\n"));
+    }
+    output.push_str(
+        "Times are a snapshot based on this computer's clock; remote state is authoritative.\n",
+    );
+    Ok(output)
 }

@@ -187,7 +187,7 @@ fn version_nine_groups_round_trip_stable_logical_identity_and_reject_malformed_o
     .unwrap();
     group(&mut store,json!({"operation":"create","window_id":window,"name":"G","workspace_ids":[ids[1],ids[3]],"external_id":"two"})).unwrap();
     let wire = serde_json::to_value(store.session_document().unwrap()).unwrap();
-    assert_eq!(wire["version"], 10);
+    assert_eq!(wire["version"], 11);
     let limits = RestoreLimits {
         terminals: 8,
         browsers: 4,
@@ -269,7 +269,7 @@ fn version_nine_groups_round_trip_stable_logical_identity_and_reject_malformed_o
     )
     .unwrap();
     assert!(migrated.store.snapshot().workspace_groups.is_empty());
-    assert_eq!(migrated.store.session_document().unwrap().version, 10);
+    assert_eq!(migrated.store.session_document().unwrap().version, 11);
 }
 
 #[test]

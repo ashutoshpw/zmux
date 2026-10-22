@@ -33,6 +33,19 @@ remotely, a job remains scheduled while the Mac, app, and SSH client are offline
 - [x] Pass local Rust, CLI, isolated Linux/tmux/SSH, and packaging validation.
 - [x] Pass final packaged scheduler visual acceptance and deliver the verified universal Mac artifact.
 
+## Current extension
+
+The user requested relative scheduling, countdowns in the list, and a Schedules tab
+inside the main UI (including SSH workspace context menu), rather than a new window.
+
+- [x] Rust-owned Schedules surface/action with exact SSH source binding and persistence.
+- [x] Embedded native panel with relative input, presets and display-only countdown.
+- [x] CLI relative list output, help and user documentation.
+- [ ] Focused behavioral checks, full portable gate, self-review and verified Mac artifact.
+
+A closed source leaves its panel offline; undo-close does not silently bind it to a
+newly created SSH terminal. Only topology/source IDs are persisted, never message drafts.
+
 ## Current status
 
 Fresh-install repair is complete: the SSH installer quotes each generated file

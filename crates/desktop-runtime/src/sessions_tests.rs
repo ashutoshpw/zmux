@@ -95,6 +95,7 @@ fn worker(directory: &Directory) -> Worker {
             revision: 0,
             model: model.snapshot(),
             frames: Vec::new(),
+            ssh_routes: Vec::new(),
             notifications: Vec::new(),
             workspace_metadata: Vec::new(),
             notifications_dropped: 0,
@@ -1448,6 +1449,23 @@ fn scheduler_route_capture_fences_surface_session_and_exact_managed_connection()
         slot.connection = Some(Arc::clone(&connection));
         slot.cached = Some(running);
     }
+
+    worker
+        .model
+        .apply(Action::OpenSchedules { surface_id })
+        .unwrap();
+    let published = worker.publish(false);
+    assert!(
+        published.frames.is_empty(),
+        "utility tabs do not publish hidden terminal content"
+    );
+    assert_eq!(published.ssh_routes.len(), 1);
+    assert_eq!(published.ssh_routes[0].surface_id, surface_id);
+    assert_eq!(published.ssh_routes[0].session_id, session_id);
+    assert!(
+        published.ssh_routes[0].connected,
+        "hidden source retains current connection health"
+    );
 
     let route = worker
         .capture_schedule_route(crate::schedule::TargetSelector::Native {

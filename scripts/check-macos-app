@@ -529,7 +529,9 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
             raise SystemExit("Packaged scheduled-message smoke failed: " + failure[:2048])
         raise SystemExit("Packaged scheduled-message smoke evidence has an invalid scope or state")
     required_schedule_checks = {
-        "workspace_menu_opens_real_scheduler_window",
+        "workspace_menu_opens_embedded_scheduler_tab",
+        "workspace_context_menu_uses_clicked_ssh_source_and_deduplicates_tab",
+        "relative_create_edit_countdown_and_exact_message_only_deadline",
         "managed_ssh_refresh_shows_remote_tmux_target",
         "lost_create_reply_enters_unknown_outcome_ui",
         "applied_create_receipt_selects_one_populated_job_without_duplicate",

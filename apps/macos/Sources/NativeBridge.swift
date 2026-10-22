@@ -161,7 +161,7 @@ actor NativeBridge {
               envelope.baseRevision == nil || (envelope.baseRevision == revision && frameNamespace == envelope.snapshot.model.identityNamespace),
               envelope.framePackets.count <= paneCount else { throw BridgeFailure(message: "Invalid native frame baseline") }
         var snapshot = envelope.snapshot
-        guard snapshot.model.modelVersion == 7 else { throw BridgeFailure(message: "Unsupported workspace model version") }
+        guard snapshot.model.modelVersion == 8 else { throw BridgeFailure(message: "Unsupported workspace model version") }
         var next: [UInt64: Frame] = [:]
         for packet in envelope.framePackets {
             let frame = packet.frame

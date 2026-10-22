@@ -194,7 +194,7 @@ fn cli_create_show_combined_edit_cancel_and_receipt_status_use_real_store() {
     fs::create_dir(&control_directory).unwrap();
     fs::set_permissions(&control_directory, fs::Permissions::from_mode(0o700)).unwrap();
     let control_socket = control_directory.join("c");
-    let server = scheduler_control_server(&control_socket, service, 9);
+    let server = scheduler_control_server(&control_socket, service, 11);
 
     let (targets, _) = run_cli(
         &fixture,
@@ -277,6 +277,30 @@ fn cli_create_show_combined_edit_cancel_and_receipt_status_use_real_store() {
         shown_again["response"]["result"]["data"]["job"]["version"],
         2
     );
+
+    let (listed, _) = run_cli(
+        &fixture,
+        &control_socket,
+        &["schedule", "list", "--surface", SURFACE],
+    );
+    assert_eq!(
+        listed["response"]["result"]["data"]["jobs"][0]["id"],
+        task_id
+    );
+    let relative = fixture
+        .command(
+            &control_socket,
+            &["schedule", "list", "--surface", SURFACE, "--relative"],
+        )
+        .output()
+        .unwrap();
+    assert_success(&relative, "relative schedule list");
+    let text = String::from_utf8(relative.stdout).unwrap();
+    assert!(
+        text.contains(task_id) && text.contains("in 01:") && text.contains("pending"),
+        "{text}"
+    );
+    assert!(text.contains("snapshot"));
 
     let (cancelled, cancel_stderr) = run_cli(
         &fixture,

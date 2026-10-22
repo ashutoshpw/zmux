@@ -7,6 +7,7 @@ pub enum SurfaceKind {
     Terminal,
     Browser,
     File,
+    Schedules,
 }
 
 /// How a file tab is presented. Fixed at creation; the owner picks it from the extension.
@@ -94,6 +95,8 @@ pub struct Surface {
     pub local_zellij: Option<LocalZellijIdentity>,
     pub local_zellij_completion: Option<Box<LocalZellijCompletion>>,
     pub file: Option<FileSurface>,
+    /// Exact source surface; never rebound to a different SSH terminal.
+    pub scheduler_source: Option<SurfaceId>,
 }
 impl Surface {
     pub(crate) fn terminal(id: SurfaceId, session_id: SessionId) -> Self {
@@ -110,6 +113,7 @@ impl Surface {
             local_tmux: None,
             local_zellij: None,
             local_zellij_completion: None,
+            scheduler_source: None,
             file: None,
         }
     }
@@ -264,6 +268,38 @@ impl WorkspaceStore {
             _ => {}
         }
         match action {
+            Action::OpenSchedules { surface_id } => {
+                let (wi, pane_id, index) = self.location(surface_id)?;
+                let source = &self.pane(pane_id)?.surfaces[index];
+                if source.kind != SurfaceKind::Terminal || source.remote.is_none() {
+                    return Err(ActionError::InvalidOperation(
+                        "Schedules requires a managed SSH terminal".into(),
+                    ));
+                }
+                let existing = self
+                    .state
+                    .workspaces
+                    .iter()
+                    .flat_map(|w| w.root.panes())
+                    .flat_map(|p| &p.surfaces)
+                    .find(|s| s.scheduler_source == Some(surface_id))
+                    .map(|s| s.id);
+                if let Some(id) = existing {
+                    self.select_surface(id)?;
+                } else {
+                    Self::check_tab_capacity(self.pane(pane_id)?.surfaces.len() + 1)?;
+                    let id = SurfaceId(self.reserve(1)?);
+                    let mut surface = Surface::terminal(id, SessionId(0));
+                    surface.kind = SurfaceKind::Schedules;
+                    surface.session_id = None;
+                    surface.scheduler_source = Some(surface_id);
+                    surface.title = "Schedules".into();
+                    let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
+                    pane.surfaces.insert(index + 1, surface);
+                    pane.selected_surface = id;
+                    self.focus(wi, pane_id);
+                }
+            }
             Action::CreateBrowser {
                 pane_id,
                 url,
@@ -293,6 +329,7 @@ impl WorkspaceStore {
                     local_tmux: None,
                     local_zellij: None,
                     local_zellij_completion: None,
+                    scheduler_source: None,
                     file: None,
                 };
                 let pane = self.state.workspaces[wi].root.pane_mut(pane_id).unwrap();
@@ -327,6 +364,7 @@ impl WorkspaceStore {
                     local_tmux: None,
                     local_zellij: None,
                     local_zellij_completion: None,
+                    scheduler_source: None,
                     file: Some(FileSurface {
                         path,
                         mode,
@@ -907,6 +945,7 @@ impl WorkspaceStore {
             local_zellij: old.local_zellij.clone(),
             local_zellij_completion: old.local_zellij_completion.clone(),
             // The unsaved text died with its view; a reopened file always reloads from disk.
+            scheduler_source: old.scheduler_source,
             file: old.file.as_ref().map(|file| FileSurface {
                 dirty: false,
                 ..file.clone()

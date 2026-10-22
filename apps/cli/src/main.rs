@@ -152,13 +152,18 @@ fn run() -> Result<u8, Box<dyn Error>> {
         }
         Parsed::Schedule(invocation) => {
             let options = client_options(socket_override, timeout, password)?;
+            let relative = invocation.relative;
             let result = schedule::run(&options, invocation)?;
             let exit_code = if result.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
                 0
             } else {
                 1
             };
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            if relative && exit_code == 0 {
+                print!("{}", schedule::relative_list(&result)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
             Ok(exit_code)
         }
         Parsed::Buffers(invocation) => {

@@ -1,8 +1,29 @@
 # Status
 
-- **State:** done
+- **State:** in progress
 - **Updated:** 2026-10-22
 - **Authorization:** The user authorized implementation, the helper-install repair and a new downloadable Mac build. Installer repair and candidate verification are complete. Broader native acceptance for the new source was still running at delivery; earlier review findings remain unresolved.
+
+## Active extension
+
+Implemented relative entry (`1h30m`, presets, In/At), display-only live countdowns,
+and `schedule list --relative` while preserving default JSON. Schedules is a real
+Rust surface with no PTY, exact SSH source ID, deduplication and session format 11
+(model 8); older sessions remain readable. Native panels are retained across tab
+switches/moves, go offline if their source disappears, and never rebind by index.
+Hidden SSH health is published separately without hidden terminal content.
+Both main-menu and correctly scoped workspace context-menu actions share the core
+action. Message-only edits preserve the remote deadline including seconds.
+
+Focused CLI, source/restore and hidden-route checks passed in the workspace run.
+The required `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
+`/tmp/zmux-relative-tabs-final-check.log`: all workspace tests, strict Clippy,
+formatting, license inventory and both C ABI checks.
+The first full pass found remaining format-10 expectations in the group persistence
+test; those now assert 11 while retaining legacy reader coverage. Native Swift and
+expanded embedded/relative UI acceptance require the hosted Mac build (no local
+Swift toolchain). The previous installer run 39858685541 is now confirmed successful.
+A new artifact, post-commit self-review and delivery verification remain pending.
 
 ## Current result
 

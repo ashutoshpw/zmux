@@ -5,6 +5,7 @@
 //! V6 adds attach-only local Zellij identity; V7 adds bounded completed history;
 //! V8 adds explicit admitted-lifetime execution history while retaining V7 reads;
 //! V9 adds workspace groups; V10 adds file surfaces (absolute path and mode only).
+//! V11 adds SSH-bound Schedules tabs without storing drafts or remote queue contents.
 //! Earlier versions retain explicit readers.
 //! No version preserves undo-close or WebKit navigation history. Browser query
 //! strings/fragments and observed browser titles are deliberately omitted for privacy.
@@ -15,7 +16,7 @@ use crate::*;
 use std::collections::HashSet;
 use zmux_remote_runtime::{JumpConfig, SshConnectionConfig};
 
-pub const SESSION_DOCUMENT_VERSION: u32 = 10;
+pub const SESSION_DOCUMENT_VERSION: u32 = 11;
 const FORMAT: &str = "zmux.session";
 // A starter workspace needs its original four IDs and one checked window ID.
 pub const MAX_NEXT_IDENTIFIER: u64 = u64::MAX - 5;
@@ -161,6 +162,10 @@ pub enum SavedContent {
         url: String,
         #[serde(default, skip_serializing_if = "SavedBrowserProfile::is_missing")]
         profile_id: SavedBrowserProfile,
+    },
+    /// Session version 11 and later. No message text or queue is persisted.
+    Schedules {
+        source_surface_id: SurfaceId,
     },
     /// Session version 10 and later.
     File {
@@ -433,6 +438,16 @@ impl Validation {
                             }
                             self.browsers += 1;
                         }
+                        SavedContent::Schedules { source_surface_id } => {
+                            if self.version < 11
+                                || source_surface_id.0 == 0
+                                || source_surface_id.0 >= self.next_id
+                                || *source_surface_id == surface.id
+                            {
+                                return Err(invalid("invalid Schedules source or session version"));
+                            }
+                            // A closed source is a supported offline panel. IDs are never reused.
+                        }
                         SavedContent::File { path, .. } => {
                             if self.version < 10 {
                                 return Err(invalid("file surfaces require session version 10"));
@@ -637,6 +652,11 @@ impl SavedTree {
                                         cwd: surface.cwd.clone(),
                                     },
                                 },
+                                SurfaceKind::Schedules => SavedContent::Schedules {
+                                    source_surface_id: surface
+                                        .scheduler_source
+                                        .expect("validated scheduler source"),
+                                },
                                 SurfaceKind::File => {
                                     let file =
                                         surface.file.as_ref().expect("validated file descriptor");
@@ -696,8 +716,17 @@ impl SavedTree {
                             local_tmux: None,
                             local_zellij: None,
                             local_zellij_completion: None,
+                            scheduler_source: None,
                             file: None,
                         },
+                        SavedContent::Schedules { source_surface_id } => {
+                            let mut surface = Surface::terminal(saved.id, SessionId(0));
+                            surface.kind = SurfaceKind::Schedules;
+                            surface.session_id = None;
+                            surface.scheduler_source = Some(source_surface_id);
+                            surface.title = saved.title;
+                            surface
+                        }
                         SavedContent::File { path, mode } => Surface {
                             id: saved.id,
                             kind: SurfaceKind::File,
@@ -711,6 +740,7 @@ impl SavedTree {
                             local_tmux: None,
                             local_zellij: None,
                             local_zellij_completion: None,
+                            scheduler_source: None,
                             file: Some(FileSurface {
                                 path,
                                 mode,
@@ -737,6 +767,7 @@ impl SavedTree {
                                 owner_uuid,
                             }),
                             local_zellij_completion: Some(history),
+                            scheduler_source: None,
                             file: None,
                         },
                         content => {

@@ -937,6 +937,7 @@ final class TerminalTabControl: BackgroundView, NSDraggingSource {
     private static func symbolName(for surface: Surface) -> String {
         switch surface.kind {
         case "browser": return "globe"
+        case "schedules": return "clock"
         case "file":
             switch surface.file?.mode {
             case "markdown"?: return "doc.richtext"

@@ -137,7 +137,6 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
     private let browserProfilesMenu = NSMenu(title: "Browser Profiles")
     private var browserProfilesWindow: BrowserProfilesWindowController?
-    private var scheduledMessagesWindows: [UInt64: ScheduleMessagesWindowController] = [:]
     private var workspaceCount = 1
     private var presentedUnreadCount: Int?
     private var didSetInitialTerminalFocus = false
@@ -862,6 +861,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 window.makeFirstResponder(history.outputResponder)
                 didSetInitialTerminalFocus = true
             }
+        } else if let pane = focusedPane, let panel = coordinator.schedules[pane.selectedSurface] {
+            pendingBrowserFocus = nil
+            if selectionChanged || !didSetInitialTerminalFocus || (layoutChanged && detachedContentResponder) {
+                window.makeFirstResponder(panel.preferredResponder)
+                didSetInitialTerminalFocus = true
+            }
         } else if let pane = focusedPane, let panel = files[pane.selectedSurface] {
             pendingBrowserFocus = nil
             if selectionChanged || !didSetInitialTerminalFocus || (layoutChanged && detachedContentResponder) {
@@ -1035,6 +1040,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             detail = error
         } else if let pane = focusedPane, pane.selected.kind == "browser" {
             detail = pane.selected.url == "about:blank" ? "Private browser" : (pane.selected.url ?? "Private browser")
+        } else if let pane = focusedPane, pane.selected.kind == "schedules" {
+            detail = "Schedules · " + (scheduleRoute(namespace: snapshot.model.identityNamespace, surface: pane.selectedSurface)?.destination ?? "SSH source unavailable")
         } else if let pane = focusedPane, pane.selected.kind == "file", let file = pane.selected.file {
             let edited = files[pane.selectedSurface]?.hasUnsavedChanges ?? file.dirty
             detail = (file.path as NSString).abbreviatingWithTildeInPath + (edited ? " — edited" : "")
@@ -1169,6 +1176,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                     self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil))
                 }
                 view = coordinator.completedHistory(surface: pane.selectedSurface, history: completion, onFocus: focus)
+            } else if pane.selected.kind == "schedules", let panel = coordinator.schedules[pane.selectedSurface] {
+                panel.onFocus = { [weak self] in self?.enqueue(.action("focus_pane", pane.id, nil, nil, nil)) }
+                view = panel.view
             } else if pane.selected.kind == "file" {
                 // Reconciliation owns panel creation; presentation never builds one itself.
                 if let panel = files[pane.selectedSurface] {
@@ -1254,6 +1264,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     private func populateWorkspaceMenu(_ menu: NSMenu, workspace: Workspace) {
         menu.removeAllItems()
+        let schedules = menu.addItem(withTitle: "Schedules", action: #selector(openWorkspaceSchedules(_:)), keyEquivalent: "")
+        schedules.target = self
+        schedules.identifier = NSUserInterfaceItemIdentifier("zmux.workspace.schedules")
+        schedules.representedObject = workspaceMenuContexts.object(forKey: menu)
+        schedules.isEnabled = schedules.representedObject != nil && schedulerSource(in: workspace) != nil
         let rename = menu.addItem(withTitle: "Rename Workspace…", action: #selector(renameWorkspaceFromMenu(_:)), keyEquivalent: "")
         rename.target = self
         rename.representedObject = NSNumber(value: workspace.id)
@@ -1561,36 +1576,41 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             showError("Select a managed SSH terminal to schedule remote tmux messages")
             return
         }
-        let controller: ScheduleMessagesWindowController
-        if let existing = scheduledMessagesWindows[route.surface] {
-            controller = existing
-        } else {
-            controller = ScheduleMessagesWindowController(
-                bridge: bridge,
-                route: route,
-                currentRoute: { [weak self] in
-                    self?.scheduleRoute(namespace: route.identityNamespace, surface: route.surface)
-                })
-            scheduledMessagesWindows[route.surface] = controller
-        }
-        controller.open(route)
+        enqueue(.surface("open_schedules", route.surface, nil, nil, nil))
         _ = sender
     }
     private func scheduleRoute(namespace: UUID?, surface surfaceID: UInt64) -> ScheduleMessagesRoute? {
-        guard let namespace, let current = coordinator.snapshot,
-              current.model.identityNamespace == namespace,
-              let surface = current.model.workspaces.flatMap({ $0.root.panes }).flatMap(\.surfaces)
-                .first(where: { $0.id == surfaceID && $0.kind == "terminal" }),
-              let remote = surface.remote else { return nil }
-        let frame = surface.sessionId.flatMap { session in current.frames.first(where: { $0.sessionId == session }) }
-        let connected = frame?.snapshot?.state == "running" && frame?.reconnectable == false
-        return ScheduleMessagesRoute(
-            identityNamespace: namespace,
-            surface: surfaceID,
-            expectedSession: surface.sessionId,
-            destination: remote.destination,
-            connected: connected
-        )
+        let surface = coordinator.snapshot?.model.workspaces.flatMap { $0.root.panes }.flatMap(\.surfaces)
+            .first { $0.id == surfaceID }
+        return coordinator.scheduleRoute(namespace: namespace, surface: surface?.schedulerSource ?? surfaceID)
+    }
+    func smokeWorkspaceSchedulesContextMenu(workspace: UInt64, focusElsewhere: UInt64) async throws {
+        guard let menu = workspaceRows.first(where: { $0.value == workspace })?.key.menu,
+              let item = menu.items.first(where: { $0.identifier?.rawValue == "zmux.workspace.schedules" }), item.isEnabled else {
+            throw BridgeFailure(message: "SSH workspace row has no enabled Schedules context menu item")
+        }
+        _ = try await nativeCLI(["select-workspace", String(focusElsewhere)], externalCaller: true)
+        menu.performActionForItem(at: menu.index(of: item))
+    }
+    @objc private func openWorkspaceSchedules(_ item: NSMenuItem) {
+        guard let target = item.representedObject as? WorkspaceContextTarget,
+              let current = coordinator.snapshot, current.model.identityNamespace == target.namespace,
+              current.workspaceIdentities.contains(where: { $0.workspaceId == target.workspace && $0.uuid == target.uuid }),
+              let workspace = current.model.workspaces.first(where: { $0.id == target.workspace }),
+              let source = schedulerSource(in: workspace) else {
+            showError("The SSH workspace is no longer available")
+            return
+        }
+        enqueue(.surface("open_schedules", source, nil, nil, nil))
+    }
+    private func schedulerSource(in workspace: Workspace) -> UInt64? {
+        let panes = workspace.root.panes
+        let selected = panes.first { $0.id == workspace.focusedPane }?.selected
+        if let selected, let route = scheduleRoute(namespace: coordinator.snapshot?.model.identityNamespace, surface: selected.id) {
+            return route.surface
+        }
+        // The context menu is scoped to this workspace, never the focused workspace elsewhere.
+        return panes.flatMap(\.surfaces).first { $0.kind == "terminal" && $0.remote != nil }?.id
     }
     @objc func closeTab() { if let pane = focusedPane { closeTerminalTab(pane.selectedSurface) } }
     @objc func reopenClosed() { if let identity { enqueue(.windowReopen(identity.windowId, nil)) } }

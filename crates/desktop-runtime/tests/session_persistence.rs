@@ -2096,7 +2096,7 @@ fn workspace_groups_preserve_live_children_and_survive_actual_save_shutdown_and_
     });
     let disk: serde_json::Value =
         serde_json::from_slice(&fs::read(directory.0.join("session.json")).unwrap()).unwrap();
-    assert_eq!(disk["version"], 10);
+    assert_eq!(disk["version"], 11);
     assert_eq!(
         disk["workspace_groups"],
         serde_json::to_value(&expected_groups).unwrap()

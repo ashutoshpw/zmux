@@ -44,6 +44,10 @@ enum ScheduleMessagesSmoke {
         let target: NSPopUpButton
         let message: NSTextView
         let deadline: NSTextField
+        let deadlineMode: NSSegmentedControl
+        let duration: NSTextField
+        let timeDisplay: NSSegmentedControl
+        let discard: NSButton
         let viewMode: NSSegmentedControl
         let table: NSTableView
         let split: NSSplitView
@@ -71,6 +75,10 @@ enum ScheduleMessagesSmoke {
             target = try required(NSPopUpButton.self, label: "Remote tmux pane")
             message = try required(NSTextView.self, label: "Scheduled message text")
             deadline = try required(NSTextField.self, label: "Scheduled local date and time")
+            deadlineMode = try required(NSSegmentedControl.self, label: "Schedule time mode")
+            duration = try required(NSTextField.self, label: "Schedule delay")
+            timeDisplay = try required(NSSegmentedControl.self, label: "Scheduled time display")
+            discard = try required(NSButton.self, label: "Discard the unsent local draft")
             viewMode = try required(NSSegmentedControl.self, label: "Scheduled message list view")
             table = try required(NSTableView.self, label: "Scheduled message list")
             split = try required(NSSplitView.self, label: "Scheduled message queue and editor")
@@ -111,6 +119,11 @@ enum ScheduleMessagesSmoke {
                 throw BridgeFailure(message: "Initial focused workspace disappeared from the coordinator model")
             }
             originalWorkspace = initialWorkspace
+            guard ScheduleMessagesPanel.parseDelay("1h30m") == 5400,
+                  ScheduleMessagesPanel.parseDelay("365d") == 31_536_000,
+                  ["0s", "366d", "1m1h", "1h1h", "1.5h", "1", "-1m", "1m ", "18446744073709551616s"].allSatisfy({ ScheduleMessagesPanel.parseDelay($0) == nil }) else {
+                throw BridgeFailure(message: "Relative duration grammar or bounds failed")
+            }
             let workspaceName = "Native scheduled messages " + String(UUID().uuidString.prefix(8))
             _ = try await host.nativeCLI([
                 "ssh", "fixture", "--ssh-config", config.clientConfig, "--identity", config.identity,
@@ -129,6 +142,7 @@ enum ScheduleMessagesSmoke {
             evidence["remote_surface"] = route.surface
             evidence["remote_session"] = route.session
 
+            host.window.setContentSize(NSSize(width: 1400, height: 900))
             host.window.makeKeyAndOrderFront(nil)
             host.installMenus()
             NSApp.activate(ignoringOtherApps: true)
@@ -141,10 +155,18 @@ enum ScheduleMessagesSmoke {
                   scheduleItem.isEnabled else {
                 throw BridgeFailure(message: "Workspace menu did not enable Scheduled Messages for the managed SSH terminal")
             }
+            let windowsBefore = Set(NSApp.windows.filter { $0.isVisible && $0.styleMask.contains(.titled) }.map { ObjectIdentifier($0) })
             workspaceMenu.performActionForItem(at: workspaceMenu.index(of: scheduleItem))
-            try await waitUntil("the Scheduled Messages window") {
-                scheduleWindow = NSApp.windows.first(where: { $0.title == "Scheduled Messages" && $0.isVisible })
-                return scheduleWindow != nil
+            try await waitUntil("the embedded Schedules tab") {
+                guard let snapshot = coordinator.snapshot,
+                      let panel = snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap(\.surfaces)
+                        .first(where: { $0.kind == "schedules" && $0.schedulerSource == route.surface }),
+                      coordinator.schedules[panel.id]?.view.window === host.window else { return false }
+                scheduleWindow = host.window
+                return true
+            }
+            guard Set(NSApp.windows.filter { $0.isVisible && $0.styleMask.contains(.titled) }.map { ObjectIdentifier($0) }) == windowsBefore else {
+                throw BridgeFailure(message: "Schedules created a separate native window")
             }
             guard let scheduleWindow else {
                 throw BridgeFailure(message: "The Workspace menu did not open Scheduled Messages")
@@ -159,7 +181,20 @@ enum ScheduleMessagesSmoke {
             guard controls.target.selectedItem?.representedObject as? String != nil else {
                 throw BridgeFailure(message: "Remote scheduler did not select an identity-fenced tmux target")
             }
-            append("workspace_menu_opens_real_scheduler_window", to: &evidence)
+            append("workspace_menu_opens_embedded_scheduler_tab", to: &evidence)
+            try await host.smokeWorkspaceSchedulesContextMenu(workspace: remoteWorkspace.id, focusElsewhere: initialWorkspace)
+            try await waitUntil("context menu selects the existing bound Schedules tab") {
+                guard let snapshot = coordinator.snapshot else { return false }
+                let panels = snapshot.model.workspaces.flatMap({ $0.root.panes }).flatMap(\.surfaces).filter { $0.kind == "schedules" }
+                return panels.count == 1 && snapshot.model.focusedWorkspace == remoteWorkspace.id
+                    && panels[0].schedulerSource == route.surface && coordinator.schedules[panels[0].id]?.view.window === host.window
+            }
+            guard Set(NSApp.windows.filter { $0.isVisible && $0.styleMask.contains(.titled) }.map { ObjectIdentifier($0) }) == windowsBefore else {
+                throw BridgeFailure(message: "Workspace context menu created a separate window")
+            }
+            append("workspace_context_menu_uses_clicked_ssh_source_and_deduplicates_tab", to: &evidence)
+            controls.timeDisplay.selectedSegment = 1
+            try sendAction(controls.timeDisplay, named: "Absolute schedule display")
             append("managed_ssh_refresh_shows_remote_tmux_target", to: &evidence)
 
             let token = String(UUID().uuidString.prefix(10))
@@ -376,10 +411,72 @@ enum ScheduleMessagesSmoke {
                 "cleanup_version": 3
             ]
             append("dirty_refresh_retains_original_version_and_rejects_concurrent_overwrite", to: &evidence)
+            // Exercise relative creation/edit through the real UI, preserving exact helper deadlines.
+            try click(controls.discard, named: "Discard CAS draft")
+            try click(controls.new, named: "New relative message")
+            let relativeMessage = "Native relative schedule \(token)"
+            try replaceMessage(relativeMessage, in: controls)
+            controls.deadlineMode.selectedSegment = 0
+            controls.duration.stringValue = "1h30m"
+            try sendAction(controls.duration, named: "Relative delay")
+            try click(controls.save, named: "Schedule relative message")
+            try await waitUntil("relative created row") {
+                guard let row = rowIndex(message: relativeMessage, in: controls.table) else { return false }
+                return cellText(column: 3, row: row, in: controls.table) == "pending · v1" && !controls.save.isEnabled
+            }
+            let relativeList = try await schedulerAction(["action": "list", "limit": 100], bridge: coordinator.bridge, route: route)
+            guard let relativeJobs = relativeList.value["jobs"] as? [[String: Any]],
+                  let relativeJob = relativeJobs.first(where: { $0["message"] as? String == relativeMessage }),
+                  let relativeID = relativeJob["id"] as? String,
+                  let input = relativeJob["deadline_input"] as? [String: Any],
+                  input["kind"] as? String == "in_seconds", (input["seconds"] as? NSNumber)?.intValue == 5400,
+                  let originalInstant = relativeJob["deadline_utc"] as? String else {
+                throw BridgeFailure(message: "Relative UI creation did not preserve remote in_seconds input")
+            }
+            controls.timeDisplay.selectedSegment = 0
+            try sendAction(controls.timeDisplay, named: "Relative schedule display")
+            guard let relativeRow = rowIndex(message: relativeMessage, in: controls.table),
+                  let beforeCountdown = cellText(column: 2, row: relativeRow, in: controls.table) else {
+                throw BridgeFailure(message: "Relative row is unavailable")
+            }
+            try replaceMessage(relativeMessage + " edited", in: controls)
+            let selectedRow = controls.table.selectedRow
+            try await waitUntil("live countdown changes without altering draft") {
+                cellText(column: 2, row: relativeRow, in: controls.table) != beforeCountdown
+            }
+            controls.timeDisplay.selectedSegment = 1
+            try sendAction(controls.timeDisplay, named: "Absolute schedule display")
+            guard controls.message.string == relativeMessage + " edited", controls.table.selectedRow == selectedRow, controls.save.isEnabled else {
+                throw BridgeFailure(message: "Countdown/display toggle changed selection or draft")
+            }
+            try click(controls.save, named: "Message-only relative job edit")
+            try await waitUntil("relative job message-only edit") {
+                guard let row = rowIndex(message: relativeMessage + " edited", in: controls.table) else { return false }
+                return cellText(column: 3, row: row, in: controls.table) == "pending · v2"
+            }
+            let shownRelative = try await schedulerAction(["action": "show", "job_id": relativeID], bridge: coordinator.bridge, route: route)
+            guard let exactJob = shownRelative.value["job"] as? [String: Any], exactJob["deadline_utc"] as? String == originalInstant else {
+                throw BridgeFailure(message: "Message-only edit rounded the exact relative deadline")
+            }
+            controls.deadlineMode.selectedSegment = 0
+            controls.duration.stringValue = "5m"
+            try sendAction(controls.duration, named: "Relative delay edit")
+            try click(controls.save, named: "Save relative deadline edit")
+            try await waitUntil("relative job time edit") {
+                guard let row = rowIndex(message: relativeMessage + " edited", in: controls.table) else { return false }
+                return cellText(column: 3, row: row, in: controls.table) == "pending · v3"
+            }
+            let editedRelative = try await schedulerAction(["action": "show", "job_id": relativeID], bridge: coordinator.bridge, route: route)
+            guard let editedJob = editedRelative.value["job"] as? [String: Any],
+                  let editedInput = editedJob["deadline_input"] as? [String: Any],
+                  editedInput["kind"] as? String == "in_seconds", (editedInput["seconds"] as? NSNumber)?.intValue == 300 else {
+                throw BridgeFailure(message: "Relative UI edit did not send in_seconds")
+            }
+            _ = try await schedulerAction(["action": "cancel", "job_id": relativeID, "expected_version": 3], requestID: UUID(), bridge: coordinator.bridge, route: route)
+            append("relative_create_edit_countdown_and_exact_message_only_deadline", to: &evidence)
             evidence["state"] = "passed"
             try await writeEvidence(evidence, to: report)
 
-            scheduleWindow.close()
             try await cleanUpRemoteWorkspace(remoteWorkspaceID, restoring: originalWorkspace, host: host,
                                              coordinator: coordinator)
         } catch {
@@ -400,7 +497,6 @@ enum ScheduleMessagesSmoke {
             } else {
                 evidence["failure_screenshot_error"] = "Scheduled Messages window was unavailable at failure"
             }
-            scheduleWindow?.close()
             do {
                 try await cleanUpRemoteWorkspace(remoteWorkspaceID, restoring: originalWorkspace, host: host,
                                                  coordinator: coordinator)
@@ -467,6 +563,8 @@ enum ScheduleMessagesSmoke {
     }
 
     private static func setDeadline(_ value: String, in controls: Controls) throws {
+        controls.deadlineMode.selectedSegment = 1
+        try sendAction(controls.deadlineMode, named: "At schedule mode")
         controls.deadline.stringValue = value
         try sendAction(controls.deadline, named: "Scheduled local date and time")
     }
@@ -487,8 +585,8 @@ enum ScheduleMessagesSmoke {
 
     private static func assertLayoutGeometryAndVisibleText(_ controls: Controls,
                                                            expectedMessage: String) throws {
-        guard let content = controls.window.contentView else {
-            throw BridgeFailure(message: "Scheduled messages window has no content view for its layout check")
+        guard let content = controls.split.superview else {
+            throw BridgeFailure(message: "Embedded Schedules tab has no content for its layout check")
         }
         content.layoutSubtreeIfNeeded()
         controls.split.layoutSubtreeIfNeeded()
@@ -521,7 +619,7 @@ enum ScheduleMessagesSmoke {
         }
 
         let contentHeight = content.bounds.height
-        let headerHeight = content.bounds.maxY - controls.split.frame.maxY
+        let headerHeight = content.isFlipped ? controls.split.frame.minY : content.bounds.maxY - controls.split.frame.maxY
         guard contentHeight > 0, headerHeight >= 0, headerHeight <= contentHeight * 0.35 else {
             throw BridgeFailure(message: "Scheduled messages header consumes too much vertical space")
         }
