@@ -199,6 +199,9 @@ jobs:
         with:
           name: Zmux-native-diagnostics-${{ github.sha }}
           path: |
+            dist/zmux-dev-universal-*.zip
+            dist/zmux-dev-universal-*.zip.sha256
+            dist/build-info.json
             dist/native-*.log
             dist/native-window-*.json
             dist/native-smoke.json

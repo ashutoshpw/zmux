@@ -12,6 +12,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from threading import Thread
 import uuid
 import zipfile
@@ -37,9 +39,26 @@ with (root/'child.json').open('x') as out:
 rows=['alpha beta','alpha.beta  value_name /tmp/file','A界 e\\u0301🙂 Z','ab\\x1b[31mcd\\x1b[0mef','NATIVE_SELECTION_READY_'+nonce]
 os.write(1,('\\x1b[2J\\x1b[H'+'\\r\\n'.join(rows)+'\\r\\n').encode())
 for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_'),('u','UNICODE_READY_'),('h','HARD_READY_'),('p','PARK_READY_'),('b','WORD_READY_'),('c','WORD_UNICODE_READY_'),('t','POINTER_READY_'),('y','HOVER_READY_'),('l','TERMINAL_LINK_READY_')]:
- ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
+ probe_sequence=0
+ while True:
+  ready,_,_=select.select([0],[],[],max(0,deadline-time.monotonic()))
+  if not ready:break
+  command=os.read(0,1)
+  if command==b'q':
+   probe_sequence+=1
+   rows_count,columns=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,bytes(8)))[:2]
+   if not 8<=rows_count<=120 or not 64<=columns<=240:raise RuntimeError('invalid probe PTY size')
+   name='probe-'+key+'-'+str(probe_sequence)+'.json'
+   payload={'pid':os.getpid(),'parent_pid':os.getppid(),'nonce':nonce,'request_id':probe_sequence,
+            'expected_next_phase':key,'rows':rows_count,'columns':columns}
+   pending=root/(name+'.pending')
+   descriptor=os.open(pending,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+   with os.fdopen(descriptor,'w') as out:json.dump(payload,out)
+   os.replace(pending,root/name)
+   continue
+  assert command==key.encode()
+  break
  if not ready:break
- assert os.read(0,1)==key.encode()
  rows_count,columns=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,bytes(8)))[:2]
  assert 8<=rows_count<=120 and 64<=columns<=240
  name='wrap-child.json' if key=='w' else 'copy-child-'+key+'.json'
@@ -87,6 +106,118 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def verify_probe_protocol():
+    """Exercise the exact bounded child protocol against a real PTY."""
+    import errno
+    import fcntl
+    import pty
+    import select
+    import stat
+    import struct
+    import termios
+
+    nonce = str(uuid.uuid4())
+    with tempfile.TemporaryDirectory(prefix='zsel-probe-', dir='/tmp') as directory:
+        fixture = Path(directory)
+        fixture_metadata = fixture.lstat()
+        if fixture_metadata.st_uid != os.getuid() or stat.S_IMODE(fixture_metadata.st_mode) & 0o077:
+            raise RuntimeError('Selection probe fixture root is not private to this user')
+        master, slave = pty.openpty()
+        process = None
+        output = bytearray()
+
+        def drain():
+            while select.select([master], [], [], 0)[0]:
+                try:
+                    chunk = os.read(master, 4096)
+                except BlockingIOError:
+                    return
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        return
+                    raise
+                if not chunk:
+                    return
+                output.extend(chunk)
+
+        def wait_for_file(path, timeout):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                drain()
+                if path.is_file():
+                    data = path.read_bytes()
+                    if len(data) > 4096:
+                        raise RuntimeError('Selection probe fixture file exceeds byte bound')
+                    return json.loads(data)
+                if process.poll() is not None:
+                    raise RuntimeError('Selection probe child exited before publishing ' + path.name)
+                time.sleep(0.01)
+            raise RuntimeError('Selection probe child did not publish ' + path.name)
+
+        def wait_for_marker(marker, timeout):
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                drain()
+                if marker in output:
+                    return
+                if process.poll() is not None:
+                    raise RuntimeError('Selection probe child exited before its phase marker')
+                time.sleep(0.01)
+            raise RuntimeError('Selection probe child did not emit its phase marker')
+
+        def resize(rows, columns):
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+
+        try:
+            resize(24, 80)
+            environment = dict(os.environ, ZMUX_SELECTION_ROOT=str(fixture), ZMUX_SELECTION_NONCE=nonce)
+            process = subprocess.Popen([sys.executable, '-c', CHILD], stdin=slave, stdout=slave, stderr=slave,
+                                       env=environment, start_new_session=True)
+            os.close(slave)
+            registration = wait_for_file(fixture / 'child.json', 5)
+            if registration != {'pid': process.pid, 'parent_pid': os.getpid(), 'nonce': nonce}:
+                raise RuntimeError('Selection probe child registration identity differs')
+
+            os.write(master, b'q')
+            first = wait_for_file(fixture / 'probe-w-1.json', 5)
+            if first != {'pid': process.pid, 'parent_pid': os.getpid(), 'nonce': nonce, 'request_id': 1,
+                         'expected_next_phase': 'w', 'rows': 24, 'columns': 80}:
+                raise RuntimeError('First read-only probe did not report the original PTY geometry')
+            if stat.S_IMODE((fixture / 'probe-w-1.json').stat().st_mode) & 0o077:
+                raise RuntimeError('First read-only probe acknowledgment is not private')
+
+            resize(31, 103)
+            os.write(master, b'q')
+            second = wait_for_file(fixture / 'probe-w-2.json', 5)
+            if second != {'pid': process.pid, 'parent_pid': os.getpid(), 'nonce': nonce, 'request_id': 2,
+                          'expected_next_phase': 'w', 'rows': 31, 'columns': 103}:
+                raise RuntimeError('Fresh read-only probe did not observe the real PTY resize')
+            if stat.S_IMODE((fixture / 'probe-w-2.json').stat().st_mode) & 0o077:
+                raise RuntimeError('Second read-only probe acknowledgment is not private')
+
+            marker = ('WRAP_READY_' + nonce).encode()
+            os.write(master, b'w')
+            wait_for_marker(marker, 5)
+            phase = json.loads((fixture / 'wrap-child.json').read_text())
+            if (phase != {'pid': process.pid, 'parent_pid': os.getpid(), 'nonce': nonce,
+                          'rows': 31, 'columns': 103, 'phase': 'w'}
+                    or output.count(marker) != 1 or process.poll() is not None):
+                raise RuntimeError('One post-probe data phase did not use the resized PTY geometry')
+        finally:
+            if process is not None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            os.close(master)
+            try:
+                os.close(slave)
+            except OSError:
+                pass
 
 
 def start_terminal_link_fixture(nonce):
@@ -149,8 +280,10 @@ def main():
     if any(name not in frozen for name in METADATA_INPUTS):
         raise RuntimeError('Selection decoder dependency is absent from retained sources')
     if args.check_inputs:
+        verify_probe_protocol()
         print(json.dumps({'sources': len(frozen), 'actual_native_execution': False,
-                          'app_seconds': 45, 'independent_child_seconds': 120}))
+                          'app_seconds': 45, 'independent_child_seconds': 120,
+                          'pty_probe_protocol': 'passed'}))
         return 0
     if platform.system() != 'Darwin' or platform.machine() != 'arm64' or args.output is None:
         parser.error('Native selection execution requires Darwin ARM64 and --output')
