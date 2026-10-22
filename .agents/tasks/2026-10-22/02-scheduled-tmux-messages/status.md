@@ -6,6 +6,26 @@
 
 ## Current result
 
+- Repair commit `e7e4b8e171dc7ff329c3cf6e1b4f2d7299ce9109` was pushed with
+  exact remote-SHA parity. Read-only self-review using `review-agent` found no new
+  defects in the installer diff; the earlier seven scheduler findings remain.
+- Build run [39855041065](https://github.com/ashutoshpw/zmux/actions/runs/39855041065)
+  passed both Swift architectures and both static Linux helpers, then failed before
+  the app build in `browser_wire_preserves_scripts_options_and_existing_target_precedence`.
+  Its capture peer accepted a nonblocking listener socket and hit macOS `WouldBlock`
+  on the frame header (`apps/cli/tests/browser.rs:595`). This test file is unchanged
+  by the installer commit. Make the accepted fixture stream explicitly blocking
+  before applying its existing two-second read timeout; retain all framing assertions.
+  Failure log: `/tmp/zmux-installer-macos-failure.log`. New native build still pending.
+- The browser fixture repair passed its focused check
+  (`/tmp/zmux-installer-browser-fixture-check.log`). The subsequent full check passed
+  workspace tests, formatting, strict Clippy and inventory, but its C ABI caller
+  intermittently failed at the unrelated terminal-sharing replacement-grant assertion
+  (`abi.c:412`). No native/runtime code changed for the fixture repair. An immediate
+  unchanged `scripts/check-native-bridge` rerun passed both ABI executables
+  (`/tmp/zmux-installer-final-abi-check.log`). Retain this transient as a validation
+  limit; do not describe that full-check invocation as exit 0.
+
 - Fresh-install repair authorized: reproduce the user's control-character failure
   at the generated-command/managed-SSH boundary, preserve strict command validation,
   verify remote file contents and wrapper execution, then deliver a new Mac build.
