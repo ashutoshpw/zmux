@@ -504,6 +504,16 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
     except Exception:
         for path in (schedule_stdout, schedule_stderr):
             if path.exists(): print(path.read_text(errors="replace"))
+        if schedule_report.is_file():
+            try:
+                failed_schedule = json.loads(schedule_report.read_text())
+            except (OSError, ValueError):
+                failed_schedule = None
+            if isinstance(failed_schedule, dict) and failed_schedule.get("scope") == "native_schedule_messages" \
+                    and failed_schedule.get("state") == "failed":
+                failure = failed_schedule.get("failure")
+                detail = failure[:2048] if isinstance(failure, str) and failure else "report state is failed"
+                print("Scheduled-message smoke report failure: " + detail)
         diagnose_failure()
         raise
     if not schedule_report.exists():
@@ -512,6 +522,12 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
         diagnose_failure()
         raise SystemExit("The packaged app did not produce scheduled-message smoke evidence")
     schedule_evidence = json.loads(schedule_report.read_text())
+    if schedule_evidence.get("scope") != "native_schedule_messages" or schedule_evidence.get("state") != "passed":
+        failure = schedule_evidence.get("failure")
+        if schedule_evidence.get("scope") == "native_schedule_messages" \
+                and schedule_evidence.get("state") == "failed" and isinstance(failure, str) and failure:
+            raise SystemExit("Packaged scheduled-message smoke failed: " + failure[:2048])
+        raise SystemExit("Packaged scheduled-message smoke evidence has an invalid scope or state")
     required_schedule_checks = {
         "workspace_menu_opens_real_scheduler_window",
         "managed_ssh_refresh_shows_remote_tmux_target",
@@ -524,18 +540,16 @@ with local_tmux_fixture() as native_environment, scheduler_fixture() as schedule
         "populated_history_editor_screenshot_retained",
         "captured_create_edit_cancel_ids_resolve_through_managed_status",
     }
-    if schedule_evidence.get("screenshot") != schedule_screenshot.name or not schedule_screenshot.is_file() \
-            or schedule_screenshot.stat().st_size <= 4096:
-        raise SystemExit("The populated scheduled-message history screenshot was not retained")
     receipts = schedule_evidence.get("mutation_receipts", [])
-    if schedule_evidence.get("scope") != "native_schedule_messages" \
-            or schedule_evidence.get("state") != "passed" \
-            or schedule_evidence.get("source_sha") != info.get("ZmuxSourceSHA") \
+    if schedule_evidence.get("source_sha") != info.get("ZmuxSourceSHA") \
             or not required_schedule_checks.issubset(schedule_evidence.get("checks", [])) \
             or [item.get("action") for item in receipts] != ["create", "edit", "edit", "edit", "cancel"] \
             or any(item.get("receipt_state") != "applied" for item in receipts) \
             or schedule_evidence.get("unknown_outcome_ui_exercised") is not True:
         raise SystemExit("Packaged scheduled-message evidence has an invalid scope, receipt set, or state")
+    if schedule_evidence.get("screenshot") != schedule_screenshot.name or not schedule_screenshot.is_file() \
+            or schedule_screenshot.stat().st_size <= 4096:
+        raise SystemExit("The populated scheduled-message history screenshot was not retained")
 
     sampler = resource_module.NativeResourceSampler(
         bundle / "MacOS/zmux-app", bundle / "Resources/bin/zmux",

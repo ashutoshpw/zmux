@@ -81,13 +81,21 @@ enum ScheduleMessagesSmoke {
             "checks": [],
             "unknown_outcome_ui_exercised": false
         ]
-        let originalWorkspace = coordinator.snapshot?.model.focusedWorkspace
+        var originalWorkspace: UInt64?
         var remoteWorkspaceID: UInt64?
         var scheduleWindow: NSWindow?
         do {
-            guard let originalWorkspace else {
-                throw BridgeFailure(message: "Scheduled messages smoke has no initial workspace")
+            try await waitUntil("a valid initial coordinator workspace") {
+                guard let snapshot = coordinator.snapshot,
+                      let focusedWorkspace = snapshot.model.focusedWorkspace else { return false }
+                return snapshot.model.workspaces.contains(where: { $0.id == focusedWorkspace })
             }
+            guard let initialSnapshot = coordinator.snapshot,
+                  let initialWorkspace = initialSnapshot.model.focusedWorkspace,
+                  initialSnapshot.model.workspaces.contains(where: { $0.id == initialWorkspace }) else {
+                throw BridgeFailure(message: "Initial focused workspace disappeared from the coordinator model")
+            }
+            originalWorkspace = initialWorkspace
             let workspaceName = "Native scheduled messages " + String(UUID().uuidString.prefix(8))
             _ = try await host.nativeCLI([
                 "ssh", "fixture", "--ssh-config", config.clientConfig, "--identity", config.identity,
