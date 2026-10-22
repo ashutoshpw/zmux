@@ -1,10 +1,40 @@
 # Status
 
-- **State:** in-progress
+- **State:** done
 - **Updated:** 2026-10-22
-- **Authorization:** The user authorized implementation and a downloadable Mac artifact. Scheduler implementation, visual acceptance, and artifact verification are complete. A separate app-wide sidebar shutdown/cleanup validation gap remains unresolved.
+- **Authorization:** The user authorized implementation, the helper-install repair and a new downloadable Mac build. Installer repair and candidate verification are complete. Broader native acceptance for the new source was still running at delivery; earlier review findings remain unresolved.
 
 ## Current result
+
+- Verified fixed candidate
+  [12461339273](https://github.com/ashutoshpw/zmux/actions/runs/39858685541/artifacts/12461339273)
+  contains `zmux-dev-universal-d58bf47.zip` (24,262,463 bytes), SHA-256
+  `2308a7105d69dde505609f577647d5cc8525239ba8d0d929d1c25016e3760f1f`.
+  Source is `d58bf473fdbbf759dd5da949389ba31135d527de`, including installer fix
+  `e7e4b8e171dc7ff329c3cf6e1b4f2d7299ce9109`. Root downloaded the actual candidate,
+  extracted it, and verified its sidecar checksum, matching bundled/outer build
+  metadata and Info SHA, macOS 14 minimum, all four universal binaries, all three
+  helper manifests/hashes/executable modes and static Linux ELF architecture.
+  Receipt: `/tmp/zmux-installer-candidate-39858685541/download-verification.json`.
+- The new candidate is ad-hoc signed and not notarized. The real-SSH installer
+  regression, full local check, full macOS Rust/C ABI check, universal build and
+  candidate upload passed. **Full CI is not established**: terminal selection,
+  browser/native UI and sidebar acceptance were still in progress or pending at
+  handoff. Prior seven scheduler review findings and the unconfirmed late-pipe
+  observation below remain outside this repair. No user/production systemd service
+  was installed; systemd lifecycle calls in the installation regression are fixtures.
+- Handoff: quit the old Zmux app, extract the inner archive, launch the new app,
+  and retry **Install Helper**. The original rejection happened before installer
+  spawn, so that failed attempt did not install the scheduler.
+
+- Final code/test source `d58bf473fdbbf759dd5da949389ba31135d527de` is on
+  `origin/main` with exact SHA parity. Run
+  [39858685541](https://github.com/ashutoshpw/zmux/actions/runs/39858685541) passed
+  both Swift architecture checks, both Linux helpers and the **full macOS Rust/C
+  ABI `scripts/check` gate** at 21:48:38 UTC. This includes the new real-SSH fresh
+  installation regression and the repaired browser fixture. Universal packaging
+  is in progress. Read-only self-review of the installer and follow-up diffs found
+  no new actionable defects; prior seven scheduler findings remain outside scope.
 
 - Final local `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 after the
   wrapper-contract adjustment (`/tmp/zmux-installer-delivery-check.log`), including
