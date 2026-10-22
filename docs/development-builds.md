@@ -29,7 +29,8 @@ Release signing, notarization and automatic updates are later distribution gates
 - Native AppKit terminal drawing with ANSI colors, cursor and wide-character grid positions.
 - Wheel/trackpad and keyboard history navigation, anchored output and post-exit browsing;
   typing/paste returns to live output. Mouse-aware applications receive negotiated wheel bytes.
-- Workspace creation, renaming and switching; horizontal/vertical pane splits and closure.
+- Workspace creation, renaming and switching; drag workspaces to reorder them within a window;
+  horizontal/vertical pane splits and closure.
 - Independent terminal tabs, selection/traversal, renaming, drag between panes, and close-other.
 - In-process Recently Closed history with retryable restoration of tabs and grouped layouts.
 - Collapsible sidebar (⌘B), Workspaces/Notifications tabs, unread workspace/tab badges and an

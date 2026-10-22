@@ -1,6 +1,6 @@
 # Workspace sidebar drag ordering status
 
-**Date:** 2026-10-22. **State:** source implementation and portable verification complete; independent review clear; compact sidebar scroll geometry validated on a native runner; patched packaged smoke and AppKit drag/gesture proof outstanding.
+**Date:** 2026-10-22. **State:** source implementation, portable verification and packaged native smoke passed; independent review clear; compact sidebar scroll geometry validated on a native runner. Physical AppKit drag-threshold and OS gesture proof remain outstanding.
 
 The sidebar now captures the workspace UUID, namespace, window, canonical source
 index and revision on row mouse-down. Crossing the drag threshold starts a move
@@ -79,7 +79,8 @@ A second geometry probe passed at source
 270-point content height, the same 192-point document had a 180-point viewport
 and 12 points of overflow; the constrained reset and 8-point scroll reached
 origin 8. This leaves the fixture's valid after-group target inside the visible
-viewport.
+viewport. The exact geometry report is retained in
+[`references/scroll-geometry-probe-270.json`](references/scroll-geometry-probe-270.json).
 
 `WorkspaceOrderSmoke` now applies that 270-point content size only to its
 existing CI window, lowers and restores that window's minimum size, and restores
@@ -89,7 +90,16 @@ and checks that expanded-group and after-group targets are visible. The change
 does not create additional workspaces or alter production sidebar code.
 `git diff --check` and `RUST_TEST_THREADS=2 scripts/check` pass; the full
 portable-check log is `/tmp/zmux-workspace-drag-scroll-check.log`.
+After preserving the successful geometry report and removing the one-off probe
+workflow, `git diff --check` and `RUST_TEST_THREADS=2 scripts/check` passed
+again.
 
-The patched packaged smoke has not yet run. The geometry probes do not exercise
-the smoke's destination callbacks, AppKit drag-threshold dispatch, or the OS
-drag loop; physical gesture behavior remains unverified.
+The patched packaged smoke passed at source
+`87dfbfe51bcbbb16289ecbf53e37e04f0ea01642`, run `39779731513` (job
+`119827593515`), and the retained artifact's `workspace_order_drag` and
+`workspace_order` report values are true. The screenshot and full artifact
+receipt are in
+[`references/native-delivery-receipt.md`](references/native-delivery-receipt.md).
+The geometry probes do not exercise the smoke's destination callbacks,
+AppKit drag-threshold dispatch, or the OS drag loop; physical gesture behavior
+remains unverified.
