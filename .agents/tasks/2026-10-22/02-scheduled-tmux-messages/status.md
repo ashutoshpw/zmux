@@ -1,19 +1,22 @@
 # Status
 
-- **State:** in progress
+- **State:** done
 - **Updated:** 2026-10-22
-- **Authorization:** The user authorized implementation and a downloadable Mac artifact. Functional packaged acceptance and artifact verification passed; visual layout remediation and a fresh packaged run remain pending.
+- **Authorization:** The user authorized implementation and a downloadable Mac artifact. Scheduler implementation, visual acceptance, and artifact verification are complete. A separate app-wide sidebar shutdown/cleanup validation gap remains unresolved.
 
 ## Current result
 
-- Source `12fbbe905e5b6b8f571e3ddc5d90944b7cd3033f` passed all four executed CI jobs: Swift checks for both architectures, Linux scheduler helper builds, and development validation covering Rust/C ABI, universal app build, selection/browser checks, and packaged app/sidebar acceptance.
-- The packaged scheduler smoke passed all 11 checks, including five Applied receipts, unknown-outcome UI, selection receipt, and dirty-refresh CAS: original version 1, remote version 2, stale save rejected with remote state unchanged, cleanup version 3.
-- Artifact [12453995367](https://github.com/ashutoshpw/zmux/actions/runs/39837043831/artifacts/12453995367), `zmux-dev-universal-12fbbe9.zip`, is 24,241,882 bytes with SHA-256 `d144313e331d822a820ed144a4b7f178628a4c4c70e3fc369b168e129cb02fd8`. Root verified its checksum, build metadata and Info SHA, helper manifest/hashes/modes, static ELF, and universal macOS binaries. Receipt: `/tmp/zmux-scheduler-verified-39837043831/zmux-macos-dev-universal-12fbbe905e5b6b8f571e3ddc5d90944b7cd3033f/download-verification.json`.
-- Final screenshot review exposed a usability blocker: the message scroll area is about 50 px wide and hides the body, table columns overlap at both edges, and excessive heading gaps distort the view. Keep the task in progress until the layout is fixed and a new packaged macOS acceptance run confirms the screenshots are usable.
-- The packaged checker now requires the native smoke key `scheduled_messages_layout_geometry_and_visible_text` alongside the existing 11 checks, five Applied receipts, unknown-outcome gate, and dirty-refresh CAS evidence. The new gate must confirm usable message width, contained non-overlapping panes/columns, visible State column, compact top spacing, and visible actual message text; a fresh CI run is pending the native layout fix.
-- Native acceptance ran in a hosted macOS job with isolated fixtures. No physical/user Mac acceptance or user/production remote service setup or scheduled job was performed. The artifact is universal and ad-hoc signed; it is not notarized.
+- Source `43d5111ac7f6d237fb94431d3bb7dd96ca816e6c` passed the scheduler-specific packaged acceptance in CI run [39843250131](https://github.com/ashutoshpw/zmux/actions/runs/39843250131): both Swift architectures, Linux helpers, full Rust/C ABI validation, universal app build, terminal selection, browser checks, and packaged scheduler smoke passed. All 12 scheduler checks passed, including `scheduled_messages_layout_geometry_and_visible_text`, five Applied receipts, lost-ack/unknown-outcome behavior, selection, and dirty-refresh CAS (original version 1, remote version 2, stale save rejected without changing remote state, cleanup version 3).
+- Root's white-background HTML render of the retained populated-history screenshot confirmed legible message content, a visible State column, compact heading spacing, and no pane/table overlap. Scheduler visual acceptance is complete.
+- The overall CI run is **failed**, not fully green: a separate sidebar shutdown job reported all 10 sidebar checks and all 10 status assertions true, but physical cleanup was false. It reported `Notification synchronization: Native notificationEvent(_:) failed (-6)`; the cause of the cleanup failure is unconfirmed. The sidebar smoke does not open `ScheduleMessagesWindow`, and no causal link to scheduler layout was found. App-wide notification synchronization and physical cleanup remain unresolved validation limits; no remediation was performed here. The normal success-artifact upload was skipped.
+- Verified downloadable diagnostic artifact [12455043815](https://github.com/ashutoshpw/zmux/actions/runs/39843250131/artifacts/12455043815) contains `zmux-dev-universal-43d5111.zip` (24,253,392 bytes; SHA-256 `b6e7735d568ccfd6e1c14ec25de72e2f909ca283b0963c9051528d4a721eeb80`). Root verified build metadata and Info SHA, all three helper manifest hashes and executable modes, static Linux ELF, universal app/CLI/bridge/Darwin helper binaries, the 12-check report, CAS, receipts, selection, and screenshot. Verification receipt: `/tmp/zmux-scheduler-diagnostics-39843250131/Zmux-native-diagnostics-43d5111ac7f6d237fb94431d3bb7dd96ca816e6c/download-verification.json`.
+- The artifact is universal and ad-hoc signed, not notarized. Acceptance ran on a hosted macOS job with isolated fixtures; no physical/user Mac acceptance or user/production remote service setup or scheduled job was performed.
+- Deferred follow-ups remain: a conditional DST fixture edge can miss the exact transition minute; an early bridge-create failure can still loop on `Desktop is closed`; three dependencies lack bundled top-level license text and need upstream review before distribution.
 
-## Notes
+## Prior run history
+
+The entries below document earlier attempts and are superseded by the current result above.
+
 - The remote service/API implementation now includes the versioned scheduler contract,
   durable store and request receipts, tmux target validation and delivery, recovery,
   and the foreground `serve`/`rpc` helper. `SchedulerService::open_with_tmux` is a
