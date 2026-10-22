@@ -418,7 +418,7 @@ enum WorkspaceOrderSmoke {
             let oldRevisionInfo = try dragInfo(source: oldRevisionSource, target: oldRevisionTarget,
                                                sidebar: sidebar, point: upperHeaderPoint)
             _ = try await cli(["workspace-group", "collapse", String(groupID)] + scope, false)
-            let collapsedVisibleRows = [firstMembers[0], fixtureID] + Array(original.dropFirst(2))
+            let collapsedVisibleRows = [fixtureID] + Array(original.dropFirst(2))
             try await wait("Workspace drag fixture did not collapse its group") {
                 snapshot()?.model.workspaceGroups.first(where: { $0.id == groupID })?.collapsed == true &&
                     rows().map(\.workspaceID) == collapsedVisibleRows &&
