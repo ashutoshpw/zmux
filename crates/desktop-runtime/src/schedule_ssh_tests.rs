@@ -165,16 +165,18 @@ esac
             quote(home.to_str().unwrap()),
             quote(wrapper.to_str().unwrap()),
         );
-        let wrapper_spec = connection.operation_spec(&wrapper_command).unwrap();
+        // The loopback host shares this private filesystem. Execute the installed
+        // wrapper directly; SSH installation is covered above, and RPC transport
+        // has its own live-master/lost-reply regression below.
         let output = run_process(
-            &wrapper_spec.program,
-            &wrapper_spec.args,
+            "/bin/sh",
+            &["-c".into(), wrapper_command],
             b"",
             Duration::from_secs(10),
             &AtomicBool::new(false),
             &AtomicBool::new(false),
         )
-        .expect("execute the installed wrapper through SSH");
+        .expect("execute the installed wrapper on the isolated loopback host");
         assert!(
             output.status.success(),
             "wrapper failed: {:?}",

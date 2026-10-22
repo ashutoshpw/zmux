@@ -6,6 +6,30 @@
 
 ## Current result
 
+- Final local `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 after the
+  wrapper-contract adjustment (`/tmp/zmux-installer-delivery-check.log`), including
+  the real-SSH fresh installer, all workspace tests, strict Clippy, formatting,
+  license inventory and both C ABI executables. The focused regression also passed
+  (`/tmp/zmux-installer-loopback-wrapper-check.log`). Workflow YAML and preservation
+  of all later acceptance steps were checked. A new Mac candidate is pending.
+
+- Build [39856709153](https://github.com/ashutoshpw/zmux/actions/runs/39856709153)
+  passed Swift and Linux helpers, and the browser wire fixture passed on macOS.
+  Its new installer regression completed the install/checksum/file assertions but
+  failed on the extra wrapper-execution SSH operation with `ssh_process_leaked_pipe`:
+  the multiplex client exited before all output handles closed within 250 ms.
+  Root cause of that late close is unconfirmed; transport watchdogs remain strict.
+  Keep real managed-SSH execution for installation and its corrupted-payload case;
+  execute the installed wrapper directly on the shared private loopback filesystem
+  to guard its executable-file contract without repeating the independent RPC
+  transport regression. Preserve every file, mode, unit and lifecycle assertion.
+  Failure log: `/tmp/zmux-installer-macos-final-failure.log`.
+- Retain a clearly named `zmux-macos-candidate-universal-SHA` archive immediately
+  after successful packaging. All native acceptance steps and the final gated
+  development-artifact upload remain in place. Candidate delivery requires exact
+  source binding, archive checksum, universal app/CLI/bridge, all bundled helpers,
+  and disclosure of pending or failed later gates; it does not mean full CI passed.
+
 - Repair commit `e7e4b8e171dc7ff329c3cf6e1b4f2d7299ce9109` was pushed with
   exact remote-SHA parity. Read-only self-review using `review-agent` found no new
   defects in the installer diff; the earlier seven scheduler findings remain.
