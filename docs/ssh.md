@@ -91,6 +91,11 @@ rules, durable remote sessions, automatic reconnect, mosh and remote CLI relays 
 unavailable. Additional SSH options use a bounded allowlist; full option compatibility
 remains open. No cloud deployment is required for this SSH path.
 
+Persistent messages can be scheduled on an exact remote tmux pane through a managed
+SSH surface. They are stored and dispatched by the remote per-user service rather than
+by a local timer. See [Persistent scheduled messages](scheduling.md) for setup,
+capacity, receipts and service lifecycle.
+
 The isolated loopback test covers actual key authentication, input/output, remote PTY,
 no-focus creation, fresh reopen without command replay, authenticated upload after the
 fixture's authorized key is removed, exact binary bytes and Unicode/quote/shell-shaped

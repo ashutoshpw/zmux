@@ -1054,6 +1054,34 @@ pub unsafe extern "C" fn zmux_desktop_download(
     })
 }
 
+/// Execute one identity-fenced request through the selected managed SSH connection.
+/// The bounded response is the desktop scheduler transport envelope. Call off the
+/// UI thread; if `outcome_unknown` is true, query the original request ID before retrying.
+///
+/// # Safety
+/// Request storage must remain readable for length bytes throughout the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zmux_desktop_schedule_request(
+    id: u64,
+    request: *const u8,
+    length: usize,
+) -> ZmuxResult {
+    guard(|| {
+        if length == 0 || length > MAX_REQUEST_BYTES || request.is_null() {
+            return Err(INVALID_ARGUMENT);
+        }
+        let desktop = desktop(id)?;
+        let reservation = Reservation::new()?;
+        // SAFETY: caller guarantees checked bounded storage remains readable.
+        let bytes = unsafe { std::slice::from_raw_parts(request, length) };
+        let request =
+            serde_json::from_slice::<zmux_desktop_runtime::schedule::NativeRequest>(bytes)
+                .map_err(|_| INVALID_ARGUMENT)?;
+        let execution = desktop.native_schedule_request(request);
+        reservation.publish(serde_json::to_vec(&execution).map_err(|_| INTERNAL)?)
+    })
+}
+
 /// Drain trusted native browser work. May wait for executor acknowledgement; call off UI.
 /// A failed call must not be replayed automatically: delivery may have occurred.
 #[unsafe(no_mangle)]

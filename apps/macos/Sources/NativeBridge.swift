@@ -252,6 +252,41 @@ actor NativeBridge {
             return try Self.consume(result.value)
         }.value
     }
+    /// Sends one bounded schedule-helper request through the exact managed SSH surface/session
+    /// admitted by the Rust owner. The returned wrapper distinguishes an acknowledged helper
+    /// reply from a transport error and preserves outcome uncertainty for the UI to reconcile.
+    func scheduleRequest(identityNamespace: UUID, surface: UInt64, expectedSession: UInt64, request: Data) async throws -> Data {
+        guard handle != 0 else { throw BridgeFailure(message: "Desktop is closed") }
+        guard request.count <= 16_384,
+              (try? JSONSerialization.jsonObject(with: request)) is [String: Any] else {
+            throw BridgeFailure(message: "Schedule request exceeds its size limit or is not an object")
+        }
+        let envelope = try JSONSerialization.data(withJSONObject: [
+            "identity_namespace": identityNamespace.uuidString.lowercased(),
+            "surface_id": surface,
+            "expected_session_id": expectedSession,
+            "request": try JSONSerialization.jsonObject(with: request)
+        ], options: [.sortedKeys])
+        guard envelope.count <= 16_384 else {
+            throw BridgeFailure(message: "Schedule request envelope exceeds its size limit")
+        }
+        let desktop = handle
+        return try await Task.detached(priority: .userInitiated) {
+            let result = envelope.withUnsafeBytes { bytes in
+                zmux_desktop_schedule_request(desktop, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
+            }
+            guard result.status == 0 else { throw Self.failure(result.status) }
+            let response = try Self.consume(result.value)
+            guard response.count <= 1_048_576,
+                  let wrapper = try JSONSerialization.jsonObject(with: response) as? [String: Any],
+                  let ok = wrapper["ok"] as? Bool,
+                  (wrapper["outcome_unknown"] as? Bool) != nil,
+                  (ok ? wrapper["reply"] != nil : wrapper["error"] != nil) else {
+                throw BridgeFailure(message: "Schedule bridge returned an invalid response wrapper")
+            }
+            return response
+        }.value
+    }
     func selectWorkspaceNumber(_ digit: Int, window: UUID) async throws {
         try await send(["command":"targeted", "request":[
             "scope":["window":window.uuidString.lowercased()],

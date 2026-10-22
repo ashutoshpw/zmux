@@ -74,6 +74,11 @@ pub enum ControlCommand {
     LocalTmux {
         request: crate::local_tmux::Request,
     },
+    /// Send one bounded scheduler request through the selected managed SSH session.
+    Schedule {
+        surface: uuid::Uuid,
+        request: zmux_remote_runtime::scheduler::SchedulerRequest,
+    },
     LocalTmuxStatus {
         operation_id: u64,
         epoch: uuid::Uuid,
@@ -691,6 +696,13 @@ fn dispatch(
                 request: tmux_request,
             },
         ),
+        ControlCommand::Schedule { surface, request } => desktop
+            .schedule_request_authorized(surface, request, admission.clone())
+            .and_then(|execution| {
+                serde_json::to_value(execution)
+                    .map_err(|error| DesktopError::Failure(error.to_string()))
+            })
+            .map_err(desktop_error),
         ControlCommand::LocalTmuxStatus {
             operation_id,
             epoch,

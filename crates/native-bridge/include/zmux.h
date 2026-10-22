@@ -94,6 +94,13 @@ ZmuxResult zmux_desktop_profile_native(const uint8_t *request, size_t length);
    off the UI thread. Missing acknowledgement must not replay admission/publication.
    Caller-generated fenced tokens correlate uncertain outcomes with later snapshots. */
 ZmuxResult zmux_desktop_download(uint64_t desktop, const uint8_t *request, size_t length);
+/* Managed-SSH scheduler request JSON <= 16384 bytes:
+   {identity_namespace, surface_id, expected_session_id, request}. Captures the
+   canonical SSH route on the desktop executor, then performs bounded SSH I/O on
+   this caller. Route capture is limited to two seconds and RPC to fifteen seconds.
+   MUST run off the UI thread. The owned JSON result contains {ok, reply?, error?,
+   outcome_unknown}; never replay an uncertain mutation without checking its original ID. */
+ZmuxResult zmux_desktop_schedule_request(uint64_t desktop, const uint8_t *request, size_t length);
 /* Trusted native file channel, excluded from sockets and generic dispatch. Frame in both
    directions: u32 big-endian header_len | header JSON (UTF-8) | raw body bytes.
    Requests: header_len <= ZMUX_FILE_MAX_HEADER and the whole frame <= 16384 bytes, except op

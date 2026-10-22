@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Build and retain one native static-musl scheduler helper and manifest receipt."""
+import argparse
+import json
+import os
+from pathlib import Path
+import platform
+import shutil
+import subprocess
+import sys
+
+root = Path(__file__).resolve().parent.parent
+targets = {
+    "x86_64-unknown-linux-musl": {
+        "key": "linux-x86_64",
+        "machine": {"x86_64", "amd64"},
+    },
+    "aarch64-unknown-linux-musl": {
+        "key": "linux-aarch64",
+        "machine": {"aarch64", "arm64"},
+    },
+}
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--target", choices=targets, required=True)
+parser.add_argument("--output", type=Path, required=True, help="Output directory for per-target binary and manifest receipt")
+args = parser.parse_args()
+
+if platform.system() != "Linux":
+    parser.error("scheduler Linux helpers must be built on a native Linux runner")
+spec = targets[args.target]
+if platform.machine().lower() not in spec["machine"]:
+    parser.error(f"{args.target} must be built natively; runner architecture is {platform.machine()}")
+if shutil.which("musl-gcc") is None:
+    parser.error("install musl-gcc before building the scheduler helper")
+
+output_root = args.output.resolve()
+target_dir = output_root / spec["key"]
+if target_dir.exists():
+    parser.error(f"refusing to replace existing helper output: {target_dir}")
+target_dir.mkdir(parents=True)
+
+def run(command, *, env=None, capture=False):
+    return subprocess.run(
+        command,
+        cwd=root,
+        check=True,
+        env=env,
+        text=True,
+        capture_output=capture,
+    )
+
+
+target = args.target
+linker_variable = "CARGO_TARGET_" + target.replace("-", "_").upper() + "_LINKER"
+build_env = dict(os.environ)
+build_env[linker_variable] = "musl-gcc"
+run(["rustup", "target", "add", target])
+run(["cargo", "build", "--locked", "--release", "--target", target,
+     "-p", "zmux-remote-runtime", "--bin", "zmux-scheduler"], env=build_env)
+target_directory = json.loads(run(
+    ["cargo", "metadata", "--no-deps", "--locked", "--format-version", "1"],
+    capture=True,
+).stdout)["target_directory"]
+binary = Path(target_directory) / target / "release/zmux-scheduler"
+if not binary.is_file():
+    parser.error(f"Cargo did not produce the scheduler executable: {binary}")
+sys.path.insert(0, str(root / "tools/remote-scheduler-artifacts"))
+import manifest
+
+try:
+    manifest.validate_linux_helper(binary, spec["key"])
+except manifest.ManifestError as error:
+    parser.error(str(error))
+run([str(binary), "--help"])
+
+destination = target_dir / "zmux-scheduler"
+shutil.copy2(binary, destination)
+destination.chmod(0o755)
+source_sha = run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
+receipt = manifest.make_manifest(source_sha, {spec["key"]: manifest.sha256(destination)})
+(target_dir / "manifest.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+manifest.validate_manifest(receipt, output_root, expected_source_sha=source_sha, required_keys={spec["key"]})
+print(f"Built native {target} scheduler helper: {destination}")

@@ -32,6 +32,7 @@ mod local_zellij;
 mod open;
 mod pull_request;
 mod registry;
+mod schedule;
 mod session;
 mod ssh;
 mod surface_order;
@@ -43,6 +44,7 @@ mod workspace_order;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+const SCHEDULE_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_TIMEOUT_MS: u64 = 50;
 const MAX_TIMEOUT_MS: u64 = 30_000;
 
@@ -69,9 +71,37 @@ struct ClientOptions {
     password: Option<SocketPassword>,
 }
 
+struct RequestFailure {
+    error: CliError,
+    may_have_sent: bool,
+}
+
+impl RequestFailure {
+    fn before_send(error: CliError) -> Self {
+        Self {
+            error,
+            may_have_sent: false,
+        }
+    }
+
+    fn after_send(error: CliError) -> Self {
+        Self {
+            error,
+            may_have_sent: true,
+        }
+    }
+}
+
+impl fmt::Display for RequestFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.error, formatter)
+    }
+}
+
 enum Parsed {
     Hooks(hooks::Invocation),
     AgentMessages(agent_messages::Invocation),
+    Schedule(schedule::Invocation),
     Buffers(buffers::Invocation),
     PullRequest(pull_request::Invocation),
     Offline(Offline),
@@ -119,6 +149,17 @@ fn run() -> Result<u8, Box<dyn Error>> {
                 serde_json::to_string_pretty(&agent_messages::run(&options, invocation)?)?
             );
             Ok(0)
+        }
+        Parsed::Schedule(invocation) => {
+            let options = client_options(socket_override, timeout, password)?;
+            let result = schedule::run(&options, invocation)?;
+            let exit_code = if result.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                0
+            } else {
+                1
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(exit_code)
         }
         Parsed::Buffers(invocation) => {
             println!(
@@ -322,6 +363,13 @@ fn parse(
     if command == Some("agent") {
         return Ok((agent_messages::parse(tail)?, socket, timeout, password));
     }
+    if command == Some("schedule") {
+        let parsed = schedule::parse(tail)?;
+        if !explicit_timeout {
+            timeout = SCHEDULE_DEFAULT_TIMEOUT;
+        }
+        return Ok((parsed, socket, timeout, password));
+    }
     if command == Some("local-zellij") {
         return Ok((local_zellij::parse(tail)?, socket, timeout, password));
     }
@@ -422,18 +470,22 @@ fn parse(
         None | Some("-h" | "--help") => Parsed::Offline(Offline::Help(None)),
         Some("-V" | "--version") => Parsed::Offline(Offline::Version),
         Some("help") => {
-            if tail.len() > 1 {
-                return Err(CliError("help accepts at most one command".into()));
-            }
-            let command = tail
-                .first()
-                .map(|value| utf8_arg(Some(value), "command"))
-                .transpose()?;
-            Parsed::Offline(Offline::Help(match command {
-                Some("-h" | "--help") => Some("help".into()),
-                Some(command) => Some(command.to_owned()),
-                None => None,
-            }))
+            let values = utf8_args(tail)?;
+            let topic = match values.as_slice() {
+                [] => None,
+                [command] if command == "-h" || command == "--help" => Some("help".into()),
+                [command] => Some(command.clone()),
+                [root, help] if root == "schedule" && (help == "-h" || help == "--help") => {
+                    Some("schedule".into())
+                }
+                [root, verb] if root == "schedule" => Some(format!("schedule {verb}")),
+                _ => {
+                    return Err(CliError(
+                        "help accepts one command or `schedule VERB`".into(),
+                    ));
+                }
+            };
+            Parsed::Offline(Offline::Help(topic))
         }
         Some("guide") => help_or_no_args("guide", tail, Offline::Guide)?,
         Some("commands") if tail == [OsString::from("--check")] => {
@@ -687,6 +739,13 @@ fn default_socket_path() -> Result<PathBuf, CliError> {
 }
 
 fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlResponse, CliError> {
+    request_with_phase(options, command).map_err(|failure| failure.error)
+}
+
+fn request_with_phase(
+    options: &ClientOptions,
+    command: ControlCommand,
+) -> Result<ControlResponse, RequestFailure> {
     let deadline = Instant::now() + options.timeout;
     let request_id = request_id();
     let request = ControlRequest {
@@ -695,12 +754,13 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
         password: options.password.clone(),
         command,
     };
-    let bytes = serde_json::to_vec(&request)
-        .map_err(|error| CliError(format!("encode local-control request: {error}")))?;
+    let bytes = serde_json::to_vec(&request).map_err(|error| {
+        RequestFailure::before_send(CliError(format!("encode local-control request: {error}")))
+    })?;
     if bytes.len() > MAX_CONTROL_REQUEST_BYTES {
-        return Err(CliError(format!(
+        return Err(RequestFailure::before_send(CliError(format!(
             "request exceeds {MAX_CONTROL_REQUEST_BYTES} bytes"
-        )));
+        ))));
     }
     let connect = || -> io::Result<UnixStream> {
         let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
@@ -717,36 +777,52 @@ fn request(options: &ClientOptions, command: ControlCommand) -> Result<ControlRe
             io::ErrorKind::PermissionDenied => "; verify that the socket belongs to your user",
             _ => "",
         };
-        CliError(format!(
+        RequestFailure::before_send(CliError(format!(
             "cannot connect to {}: {error}{guidance}",
             options.socket.display()
-        ))
+        )))
     })?;
-    write_before(&mut stream, &(bytes.len() as u32).to_be_bytes(), deadline)
-        .and_then(|()| write_before(&mut stream, &bytes, deadline))
-        .map_err(|error| CliError(format!(
-            "sending zmux request failed: {error}; its outcome may be unknown and the command was not retried"
-        )))?;
+    let mut any_request_bytes_sent = false;
+    let send_result = write_before_tracking(
+        &mut stream,
+        &(bytes.len() as u32).to_be_bytes(),
+        deadline,
+        &mut any_request_bytes_sent,
+    )
+    .and_then(|()| {
+        write_before_tracking(&mut stream, &bytes, deadline, &mut any_request_bytes_sent)
+    });
+    if let Err(error) = send_result {
+        let detail = if any_request_bytes_sent {
+            "its outcome may be unknown and the command was not retried"
+        } else {
+            "no request bytes were sent"
+        };
+        return Err(RequestFailure {
+            error: CliError(format!("sending zmux request failed: {error}; {detail}")),
+            may_have_sent: any_request_bytes_sent,
+        });
+    }
     let mut response_length = [0_u8; 4];
     read_before(&mut stream, &mut response_length, deadline).map_err(|error| {
-        CliError(format!(
+        RequestFailure::after_send(CliError(format!(
             "waiting for zmux at {} failed: {error}; the command was not retried",
             options.socket.display()
-        ))
+        )))
     })?;
     let response_length = u32::from_be_bytes(response_length) as usize;
     if response_length == 0 || response_length > MAX_CONTROL_RESPONSE_BYTES {
-        return Err(CliError(
+        return Err(RequestFailure::after_send(CliError(
             "running app returned an invalid response length".into(),
-        ));
+        )));
     }
     let mut response = vec![0; response_length];
     read_before(&mut stream, &mut response, deadline).map_err(|error| {
-        CliError(format!(
+        RequestFailure::after_send(CliError(format!(
             "reading zmux response failed: {error}; the command was not retried"
-        ))
+        )))
     })?;
-    decode_response(&response, request_id, deadline)
+    decode_response(&response, request_id, deadline).map_err(RequestFailure::after_send)
 }
 
 fn decode_response(
@@ -823,7 +899,17 @@ fn read_before(stream: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant)
     socket_budget(deadline).map(|_| ())
 }
 
-fn write_before(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
+fn write_before(stream: &mut UnixStream, bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    let mut any_request_bytes_sent = false;
+    write_before_tracking(stream, bytes, deadline, &mut any_request_bytes_sent)
+}
+
+fn write_before_tracking(
+    stream: &mut UnixStream,
+    mut bytes: &[u8],
+    deadline: Instant,
+    any_request_bytes_sent: &mut bool,
+) -> io::Result<()> {
     while !bytes.is_empty() {
         socket_budget(deadline)?;
         match stream.write(bytes) {
@@ -833,7 +919,10 @@ fn write_before(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant) ->
                     "incomplete zmux request",
                 ));
             }
-            Ok(count) => bytes = &bytes[count..],
+            Ok(count) => {
+                *any_request_bytes_sent = true;
+                bytes = &bytes[count..];
+            }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 wait_socket_ready(stream, PollFlags::POLLOUT, deadline)?;
             }

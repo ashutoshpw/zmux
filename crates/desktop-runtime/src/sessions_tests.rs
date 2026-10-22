@@ -87,6 +87,7 @@ fn worker(directory: &Directory) -> Worker {
     let worker_shared = Arc::new(Shared {
         files: Arc::clone(&files),
         profile_native: None,
+        schedule: crate::schedule::Runtime::new(None).unwrap(),
         stop: AtomicBool::new(false),
         shutdown: Mutex::new(None),
         terminal_sharing: RwLock::new(None),
@@ -1414,6 +1415,150 @@ fn ssh_reconnect_appears_after_process_exit_and_replaces_through_worker_action()
             })
             .is_err()
     );
+    close_writer(&mut worker);
+}
+
+#[test]
+fn scheduler_route_capture_fences_surface_session_and_exact_managed_connection() {
+    let directory = Directory::new();
+    let mut worker = worker(&directory);
+    let (namespace, surface_id, session_id) = install_ssh_surface(&mut worker);
+    let remote = worker.model.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .remote
+        .clone()
+        .expect("fixture surface has managed SSH metadata");
+    let connection = Arc::new(
+        ManagedConnection::create(remote.validate().expect("valid SSH fixture descriptor"))
+            .expect("create managed connection owner without opening a network route"),
+    );
+    let session = Session::spawn(Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "sleep 60".into()],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    let running = session.snapshot().expect("capture live fixture session");
+    assert_eq!(running.state, zmux_session_runtime::State::Running);
+    {
+        let slot = worker.slots.get_mut(&session_id).unwrap();
+        slot.starting = false;
+        slot.session = Some(session);
+        slot.connection = Some(Arc::clone(&connection));
+        slot.cached = Some(running);
+    }
+
+    let route = worker
+        .capture_schedule_route(crate::schedule::TargetSelector::Native {
+            identity_namespace: namespace,
+            surface_id,
+            expected_session_id: session_id,
+        })
+        .expect("capture canonical live managed SSH route");
+    assert_eq!(route.identity_namespace, namespace);
+    assert_eq!(route.surface_id, surface_id);
+    assert_eq!(route.session_id, session_id);
+    assert_eq!(route.launch_generation, 1);
+    assert!(Arc::ptr_eq(&route.connection, &connection));
+    assert!(Arc::ptr_eq(
+        &route.cancellation,
+        &worker.slots[&session_id].cancellation
+    ));
+
+    let changed_identity = worker
+        .capture_schedule_route(crate::schedule::TargetSelector::Native {
+            identity_namespace: Uuid::new_v4(),
+            surface_id,
+            expected_session_id: session_id,
+        })
+        .err()
+        .expect("changed identity is denied");
+    assert!(matches!(
+        changed_identity,
+        crate::schedule::CaptureError::Route {
+            code: "desktop_identity_changed",
+            ..
+        }
+    ));
+
+    let changed_session = worker
+        .capture_schedule_route(crate::schedule::TargetSelector::Native {
+            identity_namespace: namespace,
+            surface_id,
+            expected_session_id: SessionId(session_id.0.saturating_add(1)),
+        })
+        .err()
+        .expect("changed session is denied");
+    assert!(matches!(
+        changed_session,
+        crate::schedule::CaptureError::Route {
+            code: "session_changed",
+            ..
+        }
+    ));
+
+    let replacement_connection = Arc::new(
+        ManagedConnection::create(remote.validate().expect("valid replacement SSH descriptor"))
+            .expect("create replacement managed connection owner"),
+    );
+    let replacement_session = Session::spawn(Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "sleep 60".into()],
+        cwd: None,
+        size: Size { rows: 24, cols: 80 },
+    })
+    .unwrap();
+    let replacement_snapshot = replacement_session
+        .snapshot()
+        .expect("capture replacement fixture session");
+    let mut retired_session = {
+        let slot = worker.slots.get_mut(&session_id).unwrap();
+        let retired_session = slot.session.replace(replacement_session).unwrap();
+        slot.launch_id = slot
+            .launch_id
+            .checked_add(1)
+            .expect("next launch generation");
+        slot.cancellation.store(true, Ordering::Release);
+        slot.cancellation = Arc::new(AtomicBool::new(false));
+        slot.connection = Some(Arc::clone(&replacement_connection));
+        slot.cached = Some(replacement_snapshot);
+        retired_session
+    };
+    assert!(route.cancellation.load(Ordering::Acquire));
+    let replacement_route = worker
+        .capture_schedule_route(crate::schedule::TargetSelector::Native {
+            identity_namespace: namespace,
+            surface_id,
+            expected_session_id: session_id,
+        })
+        .expect("capture route for replacement SSH launch");
+    assert_eq!(
+        replacement_route.launch_generation,
+        route.launch_generation + 1
+    );
+    assert!(Arc::ptr_eq(
+        &replacement_route.connection,
+        &replacement_connection
+    ));
+    assert!(!Arc::ptr_eq(
+        &replacement_route.cancellation,
+        &route.cancellation
+    ));
+    assert!(!replacement_route.cancellation.load(Ordering::Acquire));
+    retired_session.shutdown(Duration::from_secs(5)).unwrap();
+
+    drop(route);
+    drop(replacement_route);
+    worker
+        .slots
+        .get_mut(&session_id)
+        .unwrap()
+        .session
+        .as_mut()
+        .unwrap()
+        .shutdown(Duration::from_secs(5))
+        .unwrap();
     close_writer(&mut worker);
 }
 

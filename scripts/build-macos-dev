@@ -18,11 +18,15 @@ parser.add_argument("--with-ghostty", action="store_true", help="Link the option
 parser.add_argument("--ghostty-artifact-root", type=Path, help="Explicit retained engine artifact root; never rebuilt or downloaded")
 parser.add_argument("--with-zellij", action="store_true", help="Package the explicit retained dependency; does not select a terminal backend")
 parser.add_argument("--zellij-package-root", type=Path, help="Explicit retained package artifact directory; never downloaded or rebuilt")
+parser.add_argument("--scheduler-artifacts-root", type=Path, help="Same-source native Linux scheduler helper artifacts produced by the workflow matrix")
+parser.add_argument("--require-full-scheduler", action="store_true", help="Require both Linux helpers and the universal macOS helper in the app")
 args = parser.parse_args()
 if args.with_ghostty != (args.ghostty_artifact_root is not None):
     parser.error("--with-ghostty and --ghostty-artifact-root must be supplied together")
 if args.with_zellij != (args.zellij_package_root is not None):
     parser.error("--with-zellij and --zellij-package-root must be supplied together")
+if args.require_full_scheduler and args.scheduler_artifacts_root is None:
+    parser.error("--require-full-scheduler requires --scheduler-artifacts-root")
 zellij_acceptance = None
 if args.with_zellij:
     sys.path.insert(0, str(root / "tools/local-zellij-feasibility"))
@@ -37,7 +41,11 @@ if platform.system() != "Darwin":
 def run(argv, **kwargs):
     return subprocess.run(argv, cwd=root, check=True, **kwargs)
 sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+sys.path.insert(0, str(root / "tools/remote-scheduler-artifacts"))
+import manifest as scheduler_manifest
+
 architectures = ["arm64", "x86_64"] if args.architecture == "universal" else ["arm64" if platform.machine() == "arm64" else "x86_64"]
+scheduler_architectures = ["arm64", "x86_64"]
 artifact_root = args.ghostty_artifact_root.resolve(strict=True) if args.with_ghostty else None
 if artifact_root:
     for arch in architectures:
@@ -76,16 +84,67 @@ else:
     env.pop("ZMUX_GHOSTTY_ARTIFACT_ROOT", None)
 libraries = []
 cli_binaries = []
+scheduler_binaries = {}
 for arch in architectures:
     target = "aarch64-apple-darwin" if arch == "arm64" else "x86_64-apple-darwin"
     run(["rustup", "target", "add", target])
     features = ["--features", "zmux-native-bridge/ghostty"] if artifact_root else []
-    run(["cargo", "build", "--locked", "--release", "--target", target, "-p", "zmux-native-bridge", "-p", "zmux", *features], env=env)
+    run(["cargo", "build", "--locked", "--release", "--target", target, "-p", "zmux-native-bridge", "-p", "zmux", "-p", "zmux-remote-runtime", *features], env=env)
     libraries.append(targetdir / target / "release/libzmux_native_bridge.dylib")
     cli_binaries.append(targetdir / target / "release/zmux")
+    scheduler_binaries[arch] = targetdir / target / "release/zmux-scheduler"
+for arch in scheduler_architectures:
+    if arch in scheduler_binaries:
+        continue
+    target = "aarch64-apple-darwin" if arch == "arm64" else "x86_64-apple-darwin"
+    run(["rustup", "target", "add", target])
+    run(["cargo", "build", "--locked", "--release", "--target", target, "-p", "zmux-remote-runtime"], env=env)
+    scheduler_binaries[arch] = targetdir / target / "release/zmux-scheduler"
 library = frameworks / "libzmux_native_bridge.dylib"
 run(["lipo", "-create", *map(str, libraries), "-output", str(library)])
 run(["install_name_tool", "-id", "@rpath/libzmux_native_bridge.dylib", str(library)])
+scheduler_root = resources / "remote-scheduler"
+scheduler_directory = scheduler_root / "darwin-universal"
+scheduler_directory.mkdir(parents=True, exist_ok=True)
+scheduler_helper = scheduler_directory / "zmux-scheduler"
+run(["lipo", "-create", *[str(scheduler_binaries[arch]) for arch in scheduler_architectures], "-output", str(scheduler_helper)])
+scheduler_helper.chmod(0o755)
+run(["codesign", "--force", "--sign", "-", str(scheduler_helper)])
+run(["codesign", "--verify", "--strict", "--verbose=2", str(scheduler_helper)])
+actual_scheduler_architectures = set(subprocess.check_output(["lipo", "-archs", str(scheduler_helper)], text=True).split())
+if actual_scheduler_architectures != set(scheduler_architectures):
+    raise SystemExit(f"Scheduler helper architecture mismatch: {actual_scheduler_architectures}")
+scheduler_digests = {"darwin-universal": scheduler_manifest.sha256(scheduler_helper)}
+if args.scheduler_artifacts_root is not None:
+    linux_root = args.scheduler_artifacts_root.resolve(strict=True)
+    required_linux = {"linux-x86_64", "linux-aarch64"}
+    for key in sorted(required_linux):
+        receipt_path = linux_root / key / "manifest.json"
+        receipt = scheduler_manifest.read_manifest(receipt_path)
+        if set(receipt.get("helpers", {})) != {key}:
+            raise SystemExit(f"Linux artifact receipt must contain exactly {key}: {receipt_path}")
+        scheduler_manifest.validate_manifest(
+            receipt,
+            linux_root,
+            expected_source_sha=sha,
+            required_keys={key},
+        )
+        destination = scheduler_root / key / "zmux-scheduler"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(linux_root / scheduler_manifest.helper_path(key), destination)
+        destination.chmod(0o755)
+        scheduler_digests[key] = scheduler_manifest.sha256(destination)
+if args.require_full_scheduler and not {"linux-x86_64", "linux-aarch64", "darwin-universal"}.issubset(scheduler_digests):
+    raise SystemExit("Full downloadable app requires x86_64 Linux, aarch64 Linux and universal macOS scheduler helpers")
+scheduler_document = scheduler_manifest.make_manifest(sha, scheduler_digests)
+scheduler_manifest_path = scheduler_root / "manifest.json"
+scheduler_manifest_path.write_text(json.dumps(scheduler_document, indent=2) + "\n", encoding="utf-8")
+scheduler_manifest.validate_manifest(
+    scheduler_document,
+    scheduler_root,
+    expected_source_sha=sha,
+    required_keys={"darwin-universal"} | ({"linux-x86_64", "linux-aarch64"} if args.require_full_scheduler else set()),
+)
 sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
 sources = sorted((root / "apps/macos/Sources").glob("*.swift"))
 binaries = []
@@ -131,6 +190,9 @@ with (bundle / "Contents/Info.plist").open("wb") as file:
 for name in ["LICENSE", "THIRD_PARTY_NOTICES.md"]:
     shutil.copy2(root / name, resources / name)
 metadata = {"source_sha":sha,"architectures":architectures,"minimum_macos":"14.0","bundle_id":info["CFBundleIdentifier"],"signing":"ad-hoc","notarized":False,"cloud_origin":deployment["cloud_origin"],"optional_ghostty_linked":bool(artifact_root),"default_terminal_engine":"vt100"}
+metadata["scheduler_manifest"] = {"path": "remote-scheduler/manifest.json", "schema_version": 1,
+                                  "scheduler_protocol_version": scheduler_manifest.PROTOCOL_VERSION,
+                                  "helpers": sorted(scheduler_digests)}
 metadata["optional_zellij_packaged"] = bool(zellij_acceptance)
 if zellij_acceptance:
     metadata["optional_zellij"] = {**zellij_acceptance, "retained_artifact_expires_at": pin()["download"]["expires_at"],
@@ -140,6 +202,12 @@ run(["codesign","--force","--sign","-",str(library)])
 run(["codesign","--force","--sign","-",str(cli)])
 run(["codesign","--force","--sign","-",str(bundle)])
 run(["codesign","--verify","--deep","--strict","--verbose=2",str(bundle)])
+scheduler_manifest.validate_manifest(
+    scheduler_manifest.read_manifest(scheduler_manifest_path),
+    scheduler_root,
+    expected_source_sha=sha,
+    required_keys={"darwin-universal"} | ({"linux-x86_64", "linux-aarch64"} if args.require_full_scheduler else set()),
+)
 if zellij:
     run(["codesign", "--verify", "--strict", "--verbose=2", str(zellij)])
     if verify_payload(zellij.parent.parent) != zellij_acceptance:

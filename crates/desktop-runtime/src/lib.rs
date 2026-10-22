@@ -18,6 +18,8 @@ pub mod profile_leases;
 pub mod profile_native;
 pub mod profiles;
 mod replies;
+pub mod schedule;
+mod schedule_bundle;
 pub mod sessions;
 pub mod shared_terminals;
 pub mod shutdown;
@@ -324,6 +326,12 @@ pub enum Command {
     },
     #[serde(skip)]
     BrowserDrain,
+    /// Executor-only capture of a canonical managed SSH route for scheduler I/O.
+    #[serde(skip)]
+    ScheduleCapture {
+        target: schedule::TargetSelector,
+        response: SyncSender<Result<schedule::PreparedRoute, schedule::CaptureError>>,
+    },
     #[serde(skip)]
     NativeAttention {
         action: NativeAttentionAction,
@@ -516,6 +524,7 @@ struct Shared {
     snapshot: Mutex<Arc<Snapshot>>,
     terminal_sharing: RwLock<Option<TerminalSharingGrant>>,
     profile_native: Option<Arc<profile_native::NativeProfileOperations>>,
+    schedule: schedule::Runtime,
     files: Arc<files::FileService>,
 }
 pub struct Desktop {
@@ -614,6 +623,10 @@ pub struct DesktopOptions {
     pub terminal_engine: terminal_engine::TerminalEngineConfig,
     /// `None` uses the production file service configuration.
     pub files: Option<files::FilesConfig>,
+    /// Optional absolute path to the remote scheduler executable. If absent,
+    /// `ZMUX_SCHEDULER_REMOTE_HELPER` is captured when the desktop is created;
+    /// an unset value uses the helper under the remote user's home directory.
+    pub scheduler_remote_helper: Option<PathBuf>,
 }
 impl Desktop {
     pub fn new(shell: Shell) -> Result<Self, DesktopError> {
@@ -633,6 +646,8 @@ impl Desktop {
             configuration.validate().map_err(DesktopError::Failure)?;
         }
         let terminal_engine = options.terminal_engine.session_options()?;
+        let schedule = schedule::Runtime::new(options.scheduler_remote_helper)
+            .map_err(|error| DesktopError::Failure(error.to_string()))?;
         let persistence = options
             .state_directory
             .clone()
@@ -647,6 +662,7 @@ impl Desktop {
             options.local_zellij,
             terminal_engine,
             options.files.unwrap_or_default(),
+            schedule,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -659,6 +675,7 @@ impl Desktop {
         zellij_configuration: Option<local_zellij::Configuration>,
         terminal_engine: Option<zmux_session_runtime::EngineOptions>,
         files_config: files::FilesConfig,
+        schedule: schedule::Runtime,
     ) -> Result<Self, DesktopError> {
         let files = Arc::new(files::FileService::start(files_config)?);
         let model = WorkspaceStore::with_identity_namespace(uuid::Uuid::new_v4());
@@ -677,6 +694,7 @@ impl Desktop {
         let shared = Arc::new(Shared {
             files: Arc::clone(&files),
             profile_native,
+            schedule,
             stop: AtomicBool::new(false),
             shutdown: Mutex::new(None),
             terminal_sharing: RwLock::new(None),
@@ -883,6 +901,132 @@ impl Desktop {
             revision: execution.snapshot.revision,
             upload_id: execution.created_uploads.into_iter().next(),
         })
+    }
+
+    /// Execute one identity-fenced scheduler request from the native host. This
+    /// performs route capture on the desktop executor, then bounded SSH I/O on
+    /// the caller's worker. Call off the UI thread.
+    pub fn native_schedule_request(&self, request: schedule::NativeRequest) -> schedule::Execution {
+        let selector = schedule::TargetSelector::Native {
+            identity_namespace: request.identity_namespace,
+            surface_id: request.surface_id,
+            expected_session_id: request.expected_session_id,
+        };
+        self.execute_schedule_request(selector, request.request)
+            .unwrap_or_else(|error| {
+                schedule::Execution::failure(None, "desktop_error", error.to_string(), false)
+            })
+    }
+
+    /// Control-socket scheduler requests retain their authorization through the
+    /// worker capture and remote operation. Policy errors stay in the generic
+    /// local-control response; scheduler/transport failures use the schedule envelope.
+    pub(crate) fn schedule_request_authorized(
+        &self,
+        surface: uuid::Uuid,
+        request: zmux_remote_runtime::scheduler::SchedulerRequest,
+        authorization: control_policy::ControlAdmission,
+    ) -> Result<schedule::Execution, DesktopError> {
+        let _policy_guard = authorization.check()?;
+        self.execute_schedule_request(schedule::TargetSelector::SurfaceUuid(surface), request)
+    }
+
+    fn execute_schedule_request(
+        &self,
+        target: schedule::TargetSelector,
+        request: zmux_remote_runtime::scheduler::SchedulerRequest,
+    ) -> Result<schedule::Execution, DesktopError> {
+        let request_id = request.request_id;
+        if let Err(error) = request.validate() {
+            return Ok(schedule::Execution::failure(
+                request_id,
+                serde_json::to_value(error.error_code())
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "invalid_request".into()),
+                error.to_string(),
+                false,
+            ));
+        }
+        if self.shared.stop.load(Ordering::Acquire) {
+            return Ok(schedule::Execution::failure(
+                request_id,
+                "desktop_closed",
+                "desktop shutdown has started",
+                false,
+            ));
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let envelope = Envelope {
+            request: Request {
+                version: 1,
+                request_id: 0,
+                payload: Command::ScheduleCapture {
+                    target,
+                    response: sender,
+                },
+            },
+            acknowledgement: None,
+            authorization: None,
+            reply_deadline: None,
+            shared_terminal: None,
+        };
+        if let Err(error) = self.send(envelope) {
+            return match error {
+                DesktopError::Policy(error) => Err(DesktopError::Policy(error)),
+                DesktopError::QueueFull => Ok(schedule::Execution::failure(
+                    request_id,
+                    "capacity",
+                    "desktop command queue is full; no scheduler request was sent",
+                    false,
+                )),
+                other => Ok(schedule::Execution::failure(
+                    request_id,
+                    "desktop_closed",
+                    other.to_string(),
+                    false,
+                )),
+            };
+        }
+        let route = match receiver.recv_timeout(schedule::route_capture_timeout()) {
+            Ok(Ok(route)) => route,
+            Ok(Err(schedule::CaptureError::Desktop(error @ DesktopError::Policy(_)))) => {
+                return Err(error);
+            }
+            Ok(Err(schedule::CaptureError::Desktop(error))) => {
+                return Ok(schedule::Execution::failure(
+                    request_id,
+                    schedule::desktop_error_code(&error),
+                    error.to_string(),
+                    false,
+                ));
+            }
+            Ok(Err(schedule::CaptureError::Route { code, message })) => {
+                return Ok(schedule::Execution::failure(
+                    request_id, code, message, false,
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Ok(schedule::Execution::failure(
+                    request_id,
+                    "executor_timeout",
+                    "desktop did not capture the managed SSH route within two seconds",
+                    false,
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Ok(schedule::Execution::failure(
+                    request_id,
+                    "desktop_closed",
+                    "desktop closed before capturing the managed SSH route",
+                    false,
+                ));
+            }
+        };
+        Ok(self
+            .shared
+            .schedule
+            .execute(route, request, &self.shared.stop))
     }
 
     /// Execute one workspace action or window command on the executor and return the executor's
@@ -1611,6 +1755,114 @@ struct Worker {
     revision: u64,
 }
 impl Worker {
+    fn capture_schedule_route(
+        &self,
+        target: schedule::TargetSelector,
+    ) -> Result<schedule::PreparedRoute, schedule::CaptureError> {
+        use schedule::{CaptureError, PreparedRoute, TargetSelector};
+        use zmux_session_runtime::State;
+        use zmux_workspace_core::{SurfaceKind, targets::TargetKind};
+
+        let model = self.model.snapshot();
+        let (surface_id, expected_session_id) = match target {
+            TargetSelector::SurfaceUuid(uuid) => {
+                let surface_id = model
+                    .workspaces
+                    .iter()
+                    .flat_map(|workspace| workspace.root.panes())
+                    .flat_map(|pane| &pane.surfaces)
+                    .find(|surface| model.object_uuid(TargetKind::Surface, surface.id.0) == uuid)
+                    .map(|surface| surface.id)
+                    .ok_or(CaptureError::Route {
+                        code: "surface_not_found",
+                        message: "the selected scheduler surface does not exist",
+                    })?;
+                (surface_id, None)
+            }
+            TargetSelector::Native {
+                identity_namespace,
+                surface_id,
+                expected_session_id,
+            } => {
+                if model.identity_namespace != identity_namespace {
+                    return Err(CaptureError::Route {
+                        code: "desktop_identity_changed",
+                        message: "the desktop identity changed before the scheduler request",
+                    });
+                }
+                (surface_id, Some(expected_session_id))
+            }
+        };
+        let surface = model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .find(|surface| surface.id == surface_id)
+            .ok_or(CaptureError::Route {
+                code: "surface_not_found",
+                message: "the selected scheduler surface does not exist",
+            })?;
+        if surface.kind != SurfaceKind::Terminal || surface.remote.is_none() {
+            return Err(CaptureError::Route {
+                code: "not_managed_ssh",
+                message: "scheduled messages require a managed SSH terminal",
+            });
+        }
+        let session_id = surface.session_id.ok_or(CaptureError::Route {
+            code: "connection_unavailable",
+            message: "the managed SSH terminal has no live session",
+        })?;
+        if expected_session_id.is_some_and(|expected| expected != session_id) {
+            return Err(CaptureError::Route {
+                code: "session_changed",
+                message: "the managed SSH terminal session changed before the request",
+            });
+        }
+        let slot = self.slots.get(&session_id).ok_or(CaptureError::Route {
+            code: "connection_unavailable",
+            message: "the managed SSH session is no longer available",
+        })?;
+        if slot.starting {
+            return Err(CaptureError::Route {
+                code: "connection_unavailable",
+                message: "the managed SSH session is still starting",
+            });
+        }
+        if slot.cancellation.load(Ordering::Acquire) {
+            return Err(CaptureError::Route {
+                code: "connection_unavailable",
+                message: "the managed SSH session is closing",
+            });
+        }
+        let session = slot.session.as_ref().ok_or(CaptureError::Route {
+            code: "connection_unavailable",
+            message: "the managed SSH session is no longer available",
+        })?;
+        let snapshot = session.snapshot().map_err(|_| CaptureError::Route {
+            code: "connection_unavailable",
+            message: "the managed SSH session state is unavailable",
+        })?;
+        if snapshot.state != State::Running {
+            return Err(CaptureError::Route {
+                code: "ssh_disconnected",
+                message: "the managed SSH terminal is disconnected",
+            });
+        }
+        let connection = slot.connection.as_ref().ok_or(CaptureError::Route {
+            code: "not_managed_ssh",
+            message: "the terminal has no managed SSH connection",
+        })?;
+        Ok(PreparedRoute {
+            identity_namespace: model.identity_namespace,
+            surface_id,
+            session_id,
+            launch_generation: slot.launch_id,
+            cancellation: Arc::clone(&slot.cancellation),
+            connection: Arc::clone(connection),
+        })
+    }
+
     fn run(&mut self, receiver: Receiver<Envelope>) {
         while !self.shared.stop.load(Ordering::Acquire) {
             let mut dirty = false;
@@ -2065,6 +2317,26 @@ impl Worker {
         }
     }
     fn execute_command(&mut self, command: Command) -> Result<(), DesktopError> {
+        let command = match command {
+            Command::ScheduleCapture { target, response } => {
+                let result = if self.windows.terminating() {
+                    Err(schedule::CaptureError::Route {
+                        code: "desktop_transition",
+                        message: "scheduler requests are unavailable during application shutdown",
+                    })
+                } else if self.session_transition_pending() {
+                    Err(schedule::CaptureError::Route {
+                        code: "desktop_transition",
+                        message: "scheduler requests are unavailable during session restore",
+                    })
+                } else {
+                    self.capture_schedule_route(target)
+                };
+                let _ = response.try_send(result);
+                return Ok(());
+            }
+            other => other,
+        };
         if self.windows.terminating()
             && !matches!(
                 &command,
@@ -2109,6 +2381,7 @@ impl Worker {
             Command::AgentMessages { .. } | Command::AgentMessagesStatus { .. } => Err(
                 DesktopError::Failure("message commands require their admission envelope".into()),
             ),
+            Command::ScheduleCapture { .. } => unreachable!("captured above"),
             command @ (Command::Windows { .. } | Command::NativeWindow { .. }) => {
                 self.execute_window_command(command)
             }

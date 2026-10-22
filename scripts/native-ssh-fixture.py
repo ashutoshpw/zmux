@@ -65,7 +65,9 @@ def stop_fixture_processes(daemon):
 
 
 @contextmanager
-def native_ssh_fixture(configuration, diagnostic, *, session_environment=None):
+def native_ssh_fixture(configuration, diagnostic, *, session_environment=None,
+                       scheduler_rpc_request_log=None,
+                       drop_scheduler_rpc_response_after_execution=False):
     root = Path(tempfile.mkdtemp(prefix="zns-", dir="/tmp"))
     root.chmod(0o700)
     daemon = None
@@ -82,17 +84,54 @@ def native_ssh_fixture(configuration, diagnostic, *, session_environment=None):
             port = reservation.getsockname()[1]
         quoted = shlex.quote(str(root))
         session_environment = session_environment or {}
-        if set(session_environment) - {'HOME', 'SHELL', 'PATH'}:
+        if set(session_environment) - {'HOME', 'SHELL', 'PATH', 'ZMUX_SCHEDULER_ROOT', 'ZMUX_SCHEDULER_TMUX_SOCKET'}:
             raise ValueError('Unsupported private SSH fixture environment')
         exports = ''.join('export ' + key + '=' + shlex.quote(str(value)) + '\n'
                           for key, value in session_environment.items())
+        scheduler_rpc_capture = ''
+        scheduler_request_log = None
+        scheduler_drop_marker = None
+        if scheduler_rpc_request_log is not None:
+            if scheduler_rpc_request_log is True:
+                scheduler_request_log = root / "scheduler-rpc-requests.jsonl"
+            else:
+                scheduler_request_log = Path(scheduler_rpc_request_log).resolve()
+            scheduler_request_log.touch(mode=0o600, exist_ok=False)
+            scheduler_request_log.chmod(0o600)
+            request_log = shlex.quote(str(scheduler_request_log))
+            scheduler_drop = ''
+            if drop_scheduler_rpc_response_after_execution:
+                scheduler_drop_marker = root / "drop-next-scheduler-rpc-response"
+                quoted_marker = shlex.quote(str(scheduler_drop_marker))
+                request_template = shlex.quote(str(root / ".scheduler-request.XXXXXX"))
+                response_template = shlex.quote(str(root / ".scheduler-response.XXXXXX"))
+                scheduler_drop = f'''if [ -e {quoted_marker} ]; then
+    request_file=$(/usr/bin/mktemp {request_template}) || exit 76
+    response_file=$(/usr/bin/mktemp {response_template}) || exit 76
+    /bin/cat > "$request_file" || exit 76
+    /bin/cat "$request_file" >> {request_log} || exit 76
+    /bin/sh -c "$SSH_ORIGINAL_COMMAND" < "$request_file" > "$response_file" 2>/dev/null
+    result=$?
+    /usr/bin/printf '\\n' >> {request_log}
+    /bin/rm -f -- "$request_file" "$response_file" {quoted_marker}
+    /bin/kill -KILL "$$"
+    exit 77
+  fi
+'''
+            scheduler_rpc_capture = f'''  *zmux-scheduler*rpc*)
+    {scheduler_drop}    /usr/bin/tee -a {request_log} | /bin/sh -c "$SSH_ORIGINAL_COMMAND"
+    result=$?
+    /usr/bin/printf '\\n' >> {request_log}
+    exit "$result"
+  ;;
+'''
         shell = root / "shell"
         shell.write_text(f'''#!/bin/sh
 cd {quoted} || exit 79
 export TMPDIR={shlex.quote(str(uploads))}
 {exports}
 case "$SSH_ORIGINAL_COMMAND" in
-  *zmux-upload*)
+{scheduler_rpc_capture}  *zmux-upload*)
     /bin/sh -c "$SSH_ORIGINAL_COMMAND" > {quoted}/ack
     result=$?
     [ "$result" -eq 0 ] || exit "$result"
@@ -153,7 +192,12 @@ ForceCommand {shell}
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Private fixture sshd did not listen on loopback")
                 time.sleep(0.02)
-        configuration.write_text(json.dumps({"root": str(root), "clientConfig": str(client), "identity": str(root / "client key"), "uploads": str(uploads)}))
+        config = {"root": str(root), "clientConfig": str(client), "identity": str(root / "client key"), "uploads": str(uploads)}
+        if scheduler_request_log is not None:
+            config["schedulerRpcRequestLog"] = str(scheduler_request_log)
+        if scheduler_drop_marker is not None:
+            config["schedulerRpcDropResponseMarker"] = str(scheduler_drop_marker)
+        configuration.write_text(json.dumps(config))
         configuration.chmod(0o600)
         yield
     finally:
