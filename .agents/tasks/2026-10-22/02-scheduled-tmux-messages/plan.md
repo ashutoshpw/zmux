@@ -35,12 +35,14 @@ remotely, a job remains scheduled while the Mac, app, and SSH client are offline
 
 ## Current status
 
-Fresh-install repair is in progress after a user Mac rejected the generated SSH
-installer's literal newlines. Keep command validation strict; transmit file lines
-as quoted arguments to remote `printf`. Add one real managed-SSH regression for
-clean installation, file bytes/modes, executable wrapper and start/restart calls,
-then run `scripts/check`, commit/push, and verify a new downloadable Mac artifact.
-The existing RPC fixture preinstalled its helper and did not cover installation.
+Fresh-install repair is complete: the SSH installer quotes each generated file
+line separately and restores LF separators with remote `printf`. Command and
+checksum guards remain strict. The real managed-SSH regression and full local and
+macOS Rust/C ABI checks passed. Verified candidate
+[12461339273](https://github.com/ashutoshpw/zmux/actions/runs/39858685541/artifacts/12461339273)
+contains `zmux-dev-universal-d58bf47.zip`. Broader native UI acceptance was still
+running at delivery; this candidate is not a full-CI success receipt. See status
+for checksum, source binding and remaining review findings.
 
 Source `43d5111ac7f6d237fb94431d3bb7dd96ca816e6c` passed all 12 packaged scheduler
 checks, including the geometry and visible-text gate, and the retained screenshot
