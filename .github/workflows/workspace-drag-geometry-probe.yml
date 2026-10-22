@@ -174,7 +174,7 @@ jobs:
                   let minimumAfter = measure("minimum-after-scroll-attempt", window, content, sidebar, scroll, document)
 
                   window.minSize = NSSize(width: originalMinimum.width, height: 180)
-                  window.setContentSize(NSSize(width: content.bounds.width, height: 260))
+                  window.setContentSize(NSSize(width: content.bounds.width, height: 270))
                   settle(window: window, content: content, scroll: scroll, document: document)
                   let reducedScrollReset = requestConstrainedScroll(scroll.contentView, to: .zero)
                   scroll.reflectScrolledClipView(scroll.contentView)
