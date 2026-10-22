@@ -1107,7 +1107,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
 
     private func parseDisplayDate(_ date: Date) -> String { Self.localFormatter.string(from: date) }
 
-    private func deadlineChanged() {
+    @objc private func deadlineChanged() {
         guard !suppressEditorEvents else { return }
         deadlineEdited = deadlineField.stringValue != editorBaseDeadline
             || occurrencePicker.indexOfSelectedItem != editorBaseOccurrence
@@ -1116,7 +1116,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         updateControls()
     }
 
-    private func occurrenceChanged() {
+    @objc private func occurrenceChanged() {
         guard !suppressEditorEvents else { return }
         deadlineEdited = deadlineField.stringValue != editorBaseDeadline
             || occurrencePicker.indexOfSelectedItem != editorBaseOccurrence
@@ -1125,7 +1125,7 @@ final class ScheduleMessagesWindowController: NSWindowController, NSTableViewDat
         updateControls()
     }
 
-    private func editorChanged() {
+    @objc private func editorChanged() {
         guard !suppressEditorEvents else { return }
         submitEdited = (submitCheckbox.state == .on) != editorBaseSubmit
         invalidateUnsentDraftForEditorChange()
