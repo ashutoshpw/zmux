@@ -256,11 +256,16 @@ enum WorkspaceOrderSmoke {
                     throw BridgeFailure(message: "Sidebar drag changed selection, key/responder, a live process or browser identity")
                 }
             }
+            @MainActor func layoutSidebar() {
+                window.contentView?.layoutSubtreeIfNeeded()
+                sidebar.layoutSubtreeIfNeeded()
+            }
             @MainActor func settledDrag(_ expected: [UInt64]) async throws {
                 try await wait("Sidebar drag did not reconcile canonical and rendered workspace order") {
                     snapshot()?.model.windows.first(where: { $0.id == windowID })?.workspaceIds == expected &&
                         rows().map(\.workspaceID) == expected
                 }
+                layoutSidebar()
                 try unchangedDrag()
             }
             @MainActor func verifyGroup(_ order: [UInt64]) throws {
@@ -283,8 +288,7 @@ enum WorkspaceOrderSmoke {
 
             // The drag callback receives window-base coordinates, so convert a
             // real row/header point through the flipped sidebar and its clip view.
-            sidebar.layoutSubtreeIfNeeded()
-            window.contentView?.layoutSubtreeIfNeeded()
+            layoutSidebar()
             guard sidebar.isFlipped, let clipView, let scrollView, let savedClipOrigin else {
                 throw BridgeFailure(message: "Workspace drag fixture has no flipped, scrolled sidebar")
             }
@@ -414,9 +418,14 @@ enum WorkspaceOrderSmoke {
             let oldRevisionInfo = try dragInfo(source: oldRevisionSource, target: oldRevisionTarget,
                                                sidebar: sidebar, point: upperHeaderPoint)
             _ = try await cli(["workspace-group", "collapse", String(groupID)] + scope, false)
+            let collapsedVisibleRows = [firstMembers[0], fixtureID] + Array(original.dropFirst(2))
             try await wait("Workspace drag fixture did not collapse its group") {
-                snapshot()?.model.workspaceGroups.first(where: { $0.id == groupID })?.collapsed == true
+                snapshot()?.model.workspaceGroups.first(where: { $0.id == groupID })?.collapsed == true &&
+                    rows().map(\.workspaceID) == collapsedVisibleRows &&
+                    sidebar.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView })
+                        .contains(where: { $0.groupID == groupID && !$0.isHidden })
             }
+            layoutSidebar()
             try rejected(oldRevisionInfo, in: sidebar, message: "Workspace sidebar accepted a source captured before the revision changed")
             oldRevisionSource.mouseUp(with: try mouseEvent(.rightMouseUp, window: window, view: oldRevisionSource))
 
