@@ -1,6 +1,6 @@
 # Workspace sidebar drag ordering status
 
-**Date:** 2026-10-22. **State:** source implementation and portable verification complete; independent review clear; packaged AppKit execution pending.
+**Date:** 2026-10-22. **State:** source implementation and portable verification complete; independent review clear; compact sidebar scroll geometry validated on a native runner; patched packaged smoke and AppKit drag/gesture proof outstanding.
 
 The sidebar now captures the workspace UUID, namespace, window, canonical source
 index and revision on row mouse-down. Crossing the drag threshold starts a move
@@ -33,5 +33,63 @@ full portable-check log is `/tmp/zmux-workspace-drag-check.log`. The
 collapsed-header smoke point is one point above the exact midpoint so it
 resolves to the group-start slot.
 
-Packaged macOS compilation and execution have not run in this Linux environment
-because `swiftc` and `xcrun` are unavailable.
+## Readiness fixture rerun — 2026-10-22
+
+A prior native run at source `87f…` passed strict Swift, Rust, universal-build,
+and selection checks, then failed the fixture before drag evaluation. Readiness
+compared aggregate frame counts even though the new selected workspace replaces
+the previous workspace's visible frames; cleanup also placed the `--window`
+scope after the positional close-workspace target. At source
+`9b92bbd7607063ca8c5dad3132ae14735ed94431`, readiness targets the created
+workspace's focused-pane session and requires its `TerminalView` plus a matching
+running frame with a process ID. Cleanup now places `--window` before the
+positional workspace ID.
+
+The full portable rerun passed at
+`/tmp/zmux-workspace-drag-readiness-check.log`; focused verification passed
+33/33. The packaged native run for source
+`9b92bbd7607063ca8c5dad3132ae14735ed94431` is run `39772139796`, job
+`119802044013`. Fixture setup completed, but the run failed its scroll
+precondition before evaluating drag behavior. In that run, setting the clip
+view origin with `setBoundsOrigin` and calling `reflectScrolledClipView` left
+the observed origin unchanged. This is a fixture-specific observation and does
+not establish that AppKit generally clamps scroll origins. Native drag-threshold
+handling and the AppKit OS gesture remain unverified.
+
+## Scroll geometry diagnostic — 2026-10-22
+
+The first manual probe run, `39776999819`, compiled cleanly and measured a
+260-point content height, 170-point viewport, 192-point document, and 22 points
+of overflow. Its overflow scroll moved the clip origin from 8 to 16. The run
+failed only its fit-state assertion: plain `scroll(to:)` moved the origin from
+0 to 8 even though the document fit. That invalidated the probe's guessed
+clamping precondition; it does not prove app drag/drop behavior.
+
+Probe commit `b93a668bc3fbc11c286cb1ade1d25b4b4b63c016` now passes proposed
+bounds through `constrainBoundsRect` before `scroll(to:)` in both fit and
+overflow attempts, records requested and constrained origins, and resets the
+overflow case to origin zero before testing movement. Manual run `39777707141`
+(`119820781348`) passed strict Swift validation and the overflow case using the
+real sidebar anchors: the document was 192 points high, the content viewport
+170 points high, and the 22-point overflow allowed a constrained reset to zero
+followed by an 8-point scroll to origin 8.
+
+A second geometry probe passed at source
+`d732587aad4f97757fd1087d09f6328c89b30e04`, run `39778466296`. At the selected
+270-point content height, the same 192-point document had a 180-point viewport
+and 12 points of overflow; the constrained reset and 8-point scroll reached
+origin 8. This leaves the fixture's valid after-group target inside the visible
+viewport.
+
+`WorkspaceOrderSmoke` now applies that 270-point content size only to its
+existing CI window, lowers and restores that window's minimum size, and restores
+its frame and sidebar origin from a defer even when fixture cleanup throws. It
+waits for measured document overflow, scrolls from a legal constrained origin,
+and checks that expanded-group and after-group targets are visible. The change
+does not create additional workspaces or alter production sidebar code.
+`git diff --check` and `RUST_TEST_THREADS=2 scripts/check` pass; the full
+portable-check log is `/tmp/zmux-workspace-drag-scroll-check.log`.
+
+The patched packaged smoke has not yet run. The geometry probes do not exercise
+the smoke's destination callbacks, AppKit drag-threshold dispatch, or the OS
+drag loop; physical gesture behavior remains unverified.

@@ -143,6 +143,23 @@ enum WorkspaceOrderSmoke {
         let scrollView = sidebar.enclosingScrollView
         let clipView = scrollView?.contentView
         let savedClipOrigin = clipView?.bounds.origin
+        let savedWindowFrame = window.frame
+        let savedWindowMinSize = window.minSize
+        var compactWindowApplied = false
+
+        @MainActor func layoutSidebar() {
+            window.contentView?.layoutSubtreeIfNeeded()
+            sidebar.layoutSubtreeIfNeeded()
+        }
+        @MainActor func restoreWindowGeometry() {
+            window.minSize = savedWindowMinSize
+            window.setFrame(savedWindowFrame, display: true)
+            layoutSidebar()
+            if let clipView, let savedClipOrigin {
+                clipView.scroll(to: savedClipOrigin)
+                scrollView?.reflectScrolledClipView(clipView)
+            }
+        }
 
         @MainActor func cleanup() async throws {
             let group = snapshot()?.model.workspaceGroups.first { $0.windowId == windowID && $0.workspaceIds == firstMembers }
@@ -180,6 +197,9 @@ enum WorkspaceOrderSmoke {
         }
 
         do {
+            defer {
+                if compactWindowApplied { restoreWindowGeometry() }
+            }
             _ = try await cli(["new-workspace", workspaceName], false)
             try await wait("Workspace drag fixture did not create its temporary workspace") {
                 snapshot()?.model.windows.first(where: { $0.id == windowID })?.workspaceIds.count == original.count + 1
@@ -243,6 +263,32 @@ enum WorkspaceOrderSmoke {
                 throw BridgeFailure(message: "Workspace row click did not permit restoring the original content responder")
             }
 
+            guard sidebar.isFlipped, let clipView, let scrollView, let savedClipOrigin else {
+                throw BridgeFailure(message: "Workspace drag fixture has no flipped, scrolled sidebar")
+            }
+            compactWindowApplied = true
+            window.minSize = NSSize(width: savedWindowMinSize.width, height: 180)
+            let contentWidth = window.contentView?.bounds.width ?? savedWindowFrame.width
+            window.setContentSize(NSSize(width: contentWidth, height: 270))
+            layoutSidebar()
+            try await wait("Workspace drag fixture did not create a truly scrollable sidebar") {
+                layoutSidebar()
+                guard let document = scrollView.documentView else { return false }
+                return document.frame.height > clipView.bounds.height + 8
+            }
+            @MainActor func scrollSidebar(to requestedOrigin: NSPoint) {
+                let proposedBounds = NSRect(origin: requestedOrigin, size: clipView.bounds.size)
+                clipView.scroll(to: clipView.constrainBoundsRect(proposedBounds).origin)
+                scrollView.reflectScrolledClipView(clipView)
+            }
+            scrollSidebar(to: .zero)
+            let topOrigin = clipView.bounds.origin
+            scrollSidebar(to: NSPoint(x: topOrigin.x, y: topOrigin.y + 8))
+            guard clipView.bounds.origin.y - topOrigin.y >= 1,
+                  (scrollView.documentView?.frame.height ?? 0) > clipView.bounds.height + 8 else {
+                throw BridgeFailure(message: "Workspace drag fixture could not establish a real nonzero sidebar scroll offset")
+            }
+
             guard let dragBaseline = snapshot(), window.isKeyWindow, NSApp.keyWindow === window else {
                 throw BridgeFailure(message: "Workspace drag fixture lost its key window")
             }
@@ -261,10 +307,6 @@ enum WorkspaceOrderSmoke {
                       }) else {
                     throw BridgeFailure(message: "Sidebar drag changed selection, key/responder, a live process or browser identity")
                 }
-            }
-            @MainActor func layoutSidebar() {
-                window.contentView?.layoutSubtreeIfNeeded()
-                sidebar.layoutSubtreeIfNeeded()
             }
             @MainActor func settledDrag(_ expected: [UInt64]) async throws {
                 try await wait("Sidebar drag did not reconcile canonical and rendered workspace order") {
@@ -295,14 +337,6 @@ enum WorkspaceOrderSmoke {
             // The drag callback receives window-base coordinates, so convert a
             // real row/header point through the flipped sidebar and its clip view.
             layoutSidebar()
-            guard sidebar.isFlipped, let clipView, let scrollView, let savedClipOrigin else {
-                throw BridgeFailure(message: "Workspace drag fixture has no flipped, scrolled sidebar")
-            }
-            clipView.setBoundsOrigin(NSPoint(x: savedClipOrigin.x, y: savedClipOrigin.y + 8))
-            scrollView.reflectScrolledClipView(clipView)
-            guard abs(clipView.bounds.origin.y - savedClipOrigin.y) >= 1 else {
-                throw BridgeFailure(message: "Workspace drag fixture could not exercise a nonzero sidebar scroll offset")
-            }
             guard let header = sidebar.arrangedSubviews.compactMap({ $0 as? WorkspaceGroupRowView })
                     .first(where: { $0.groupID == groupID }),
                   let anchorRow = rows().first(where: { $0.workspaceID == firstMembers[0] }),
@@ -321,6 +355,9 @@ enum WorkspaceOrderSmoke {
             let upperHeaderPoint = NSPoint(x: header.frame.midX, y: header.frame.midY - 1)
             let lowerHeaderPoint = NSPoint(x: header.frame.midX, y: header.frame.maxY - 1)
             let upperAnchorPoint = NSPoint(x: anchorRow.frame.midX, y: anchorRow.frame.minY + 1)
+            guard [upperHeaderPoint, lowerHeaderPoint, upperAnchorPoint].allSatisfy({ sidebar.visibleRect.contains($0) }) else {
+                throw BridgeFailure(message: "Expanded workspace group drop points are outside the visible sidebar viewport")
+            }
             let (firstSource, firstTarget) = try beginDrag(fixtureID)
             try verifyGroupStartCue(at: upperHeaderPoint, source: firstSource, target: firstTarget, label: "upper-header hover")
             try verifyGroupStartCue(at: lowerHeaderPoint, source: firstSource, target: firstTarget, label: "lower-header hover")
@@ -346,6 +383,9 @@ enum WorkspaceOrderSmoke {
                 afterGroupPoint = NSPoint(x: next.frame.midX, y: next.frame.minY + 1)
             } else {
                 afterGroupPoint = NSPoint(x: lastMember.frame.midX, y: lastMember.frame.maxY + 1)
+            }
+            guard sidebar.visibleRect.contains(afterGroupPoint) else {
+                throw BridgeFailure(message: "Workspace drag after-group drop point is outside the visible sidebar viewport")
             }
             let (secondSource, secondTarget) = try beginDrag(fixtureID)
             let afterGroupInfo = try dragInfo(source: secondSource, target: secondTarget, sidebar: sidebar, point: afterGroupPoint)
