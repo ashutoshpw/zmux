@@ -106,7 +106,8 @@ enum WorkspaceOrderSmoke {
 
         try await validateSidebarDrag(window: window, sidebar: sidebar, report: report, cli: cli,
                                       snapshot: snapshot, rows: rows, terminals: terminals, browser: browser,
-                                      original: original, windowID: owner.id, selectedWorkspace: owner.selectedWorkspace ?? subject)
+                                      browserViews: browserViews, original: original, windowID: owner.id,
+                                      selectedWorkspace: owner.selectedWorkspace ?? subject)
         FileHandle.standardError.write(Data("Native workspace reorder: CLI preview/apply/bulk, real row menu and sidebar drag callbacks, canonical order and live focus/content retention passed\n".utf8))
     }
 
@@ -119,6 +120,7 @@ enum WorkspaceOrderSmoke {
         rows: @MainActor () -> [WorkspaceRowView],
         terminals: @MainActor () -> [UInt64: TerminalView],
         browser: @MainActor (UInt64) -> BrowserView?,
+        browserViews: [(UInt64, ObjectIdentifier, UUID, UInt64)],
         original: [UInt64],
         windowID: UInt64,
         selectedWorkspace: UInt64
@@ -132,12 +134,6 @@ enum WorkspaceOrderSmoke {
         let beforeSelection = selection(before)
         let beforeTerminalViews = terminals().mapValues { ObjectIdentifier($0) }
         let beforeProcesses = Dictionary(uniqueKeysWithValues: before.frames.map { ($0.sessionId, $0.processId) })
-        let beforeBrowsers = before.model.workspaces.flatMap { $0.root.panes }.flatMap { $0.surfaces }
-            .filter { $0.kind == "browser" }.compactMap { surface -> (UInt64, ObjectIdentifier, UUID, UInt64)? in
-                guard let view = browser(surface.id) else { return nil }
-                return (surface.id, ObjectIdentifier(view), view.hostID, view.documentGeneration)
-            }
-        guard !beforeBrowsers.isEmpty else { throw BridgeFailure(message: "Workspace drag fixture lost its browser identity") }
 
         let scope = ["--window", String(windowID)]
         let firstMembers = Array(original.prefix(2))
@@ -175,7 +171,7 @@ enum WorkspaceOrderSmoke {
                   selection(snapshot()) == beforeSelection,
                   terminals().mapValues({ ObjectIdentifier($0) }) == beforeTerminalViews,
                   Dictionary(uniqueKeysWithValues: (snapshot()?.frames ?? []).map { ($0.sessionId, $0.processId) }) == beforeProcesses,
-                  beforeBrowsers.allSatisfy({ id, identity, host, generation in
+                  browserViews.allSatisfy({ id, identity, host, generation in
                       guard let view = browser(id) else { return false }
                       return ObjectIdentifier(view) == identity && view.hostID == host && view.documentGeneration == generation
                   }) else {
@@ -253,7 +249,7 @@ enum WorkspaceOrderSmoke {
                       window.firstResponder === dragResponder,
                       terminals().mapValues({ ObjectIdentifier($0) }) == dragTerminalViews,
                       Dictionary(uniqueKeysWithValues: (snapshot()?.frames ?? []).map { ($0.sessionId, $0.processId) }) == dragProcesses,
-                      beforeBrowsers.allSatisfy({ id, identity, host, generation in
+                      browserViews.allSatisfy({ id, identity, host, generation in
                           guard let view = browser(id) else { return false }
                           return ObjectIdentifier(view) == identity && view.hostID == host && view.documentGeneration == generation
                       }) else {
