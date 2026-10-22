@@ -149,7 +149,7 @@ enum WorkspaceOrderSmoke {
             if let group { _ = try await cli(["workspace-group", "ungroup", String(group.id)] + scope, false) }
             let fixtureID = temporaryID ?? snapshot()?.model.workspaces.first(where: { $0.name == workspaceName })?.id
             if let fixtureID, snapshot()?.model.workspaces.contains(where: { $0.id == fixtureID }) == true {
-                _ = try await cli(["close-workspace", String(fixtureID)] + scope, false)
+                _ = try await cli(["close-workspace"] + scope + [String(fixtureID)], false)
             }
             if snapshot()?.model.windows.first(where: { $0.id == windowID })?.workspaceIds != original {
                 _ = try await cli(["reorder-workspaces", "--order", original.map(String.init).joined(separator: ",")] + scope, false)
@@ -190,7 +190,13 @@ enum WorkspaceOrderSmoke {
             }
             temporaryID = created
             try await wait("Temporary workspace terminal was not attached") {
-                terminals().count > beforeTerminalViews.count && (snapshot()?.frames.count ?? 0) > beforeProcesses.count
+                guard let state = snapshot(),
+                      let workspace = state.model.workspaces.first(where: { $0.id == created }),
+                      let pane = workspace.root.panes.first(where: { $0.id == workspace.focusedPane }),
+                      let sessionID = pane.sessionId,
+                      terminals()[sessionID] != nil,
+                      let frame = state.frames.first(where: { $0.sessionId == sessionID }) else { return false }
+                return frame.processId != nil && frame.snapshot?.state == "running"
             }
 
             _ = try await cli(["workspace-group", "create", "--name", groupName,
