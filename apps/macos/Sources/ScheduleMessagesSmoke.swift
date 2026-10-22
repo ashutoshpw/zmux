@@ -46,6 +46,9 @@ enum ScheduleMessagesSmoke {
         let deadline: NSTextField
         let viewMode: NSSegmentedControl
         let table: NSTableView
+        let split: NSSplitView
+        let queueScroll: NSScrollView
+        let editorScroll: NSScrollView
         let new: NSButton
         let save: NSButton
         let cancel: NSButton
@@ -70,6 +73,9 @@ enum ScheduleMessagesSmoke {
             deadline = try required(NSTextField.self, label: "Scheduled local date and time")
             viewMode = try required(NSSegmentedControl.self, label: "Scheduled message list view")
             table = try required(NSTableView.self, label: "Scheduled message list")
+            split = try required(NSSplitView.self, label: "Scheduled message queue and editor")
+            queueScroll = try required(NSScrollView.self, label: "Pending scheduled messages and history")
+            editorScroll = try required(NSScrollView.self, label: "Scheduled message editor scroll area")
             new = try required(NSButton.self, label: "Create a new scheduled message")
             save = try required(NSButton.self, label: "Save or schedule message")
             cancel = try required(NSButton.self, label: "Cancel selected pending scheduled message")
@@ -247,6 +253,8 @@ enum ScheduleMessagesSmoke {
                     && controls.message.string == combinedMessage
                     && controls.deadline.stringValue == combinedDeadline
             }
+            try assertLayoutGeometryAndVisibleText(controls, expectedMessage: combinedMessage)
+            append("scheduled_messages_layout_geometry_and_visible_text", to: &evidence)
             append("cancel_removes_pending_job_and_history_view_retains_receipt", to: &evidence)
             scheduleWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -475,6 +483,92 @@ enum ScheduleMessagesSmoke {
             throw BridgeFailure(message: "Scheduled messages smoke tried to click a disabled control: \(name)")
         }
         button.performClick(nil)
+    }
+
+    private static func assertLayoutGeometryAndVisibleText(_ controls: Controls,
+                                                           expectedMessage: String) throws {
+        guard let content = controls.window.contentView else {
+            throw BridgeFailure(message: "Scheduled messages window has no content view for its layout check")
+        }
+        content.layoutSubtreeIfNeeded()
+        controls.split.layoutSubtreeIfNeeded()
+        controls.queueScroll.layoutSubtreeIfNeeded()
+        controls.editorScroll.layoutSubtreeIfNeeded()
+        controls.table.layoutSubtreeIfNeeded()
+        controls.message.layoutSubtreeIfNeeded()
+
+        let panes = controls.split.arrangedSubviews
+        guard panes.count == 2 else {
+            throw BridgeFailure(message: "Scheduled messages split view does not contain both panes")
+        }
+        let splitRect = rect(controls.split, in: content)
+        let queuePaneRect = rect(panes[0], in: controls.split)
+        let editorPaneRect = rect(panes[1], in: controls.split)
+        guard contains(content.bounds, splitRect),
+              contains(controls.split.bounds, queuePaneRect),
+              contains(controls.split.bounds, editorPaneRect),
+              !queuePaneRect.intersects(editorPaneRect) else {
+            throw BridgeFailure(message: "Scheduled messages panes escape or overlap their split view")
+        }
+
+        let queueScrollRect = rect(controls.queueScroll, in: panes[0])
+        let editorScrollRect = rect(controls.editorScroll, in: panes[1])
+        guard contains(panes[0].bounds, queueScrollRect),
+              contains(panes[1].bounds, editorScrollRect),
+              !rect(controls.queueScroll, in: content).intersects(rect(controls.editorScroll, in: content)),
+              controls.editorScroll.contentView.bounds.width >= 300 else {
+            throw BridgeFailure(message: "Scheduled messages scroll views escape their panes, overlap, or leave the editor too narrow")
+        }
+
+        let contentHeight = content.bounds.height
+        let headerHeight = content.bounds.maxY - controls.split.frame.maxY
+        guard contentHeight > 0, headerHeight >= 0, headerHeight <= contentHeight * 0.35 else {
+            throw BridgeFailure(message: "Scheduled messages header consumes too much vertical space")
+        }
+
+        guard controls.table.tableColumns.last?.title == "State",
+              let stateColumn = controls.table.tableColumns.indices.last else {
+            throw BridgeFailure(message: "Scheduled messages queue has no final State column")
+        }
+        let stateColumnRect = controls.table.rect(ofColumn: stateColumn)
+        let tableVisibleRect = controls.table.visibleRect
+        guard stateColumnRect.minX >= tableVisibleRect.minX - 1,
+              stateColumnRect.maxX <= tableVisibleRect.maxX + 1 else {
+            throw BridgeFailure(message: "Scheduled messages State column is outside the visible queue viewport")
+        }
+
+        guard controls.message.string == expectedMessage,
+              let textContainer = controls.message.textContainer,
+              let layoutManager = controls.message.layoutManager else {
+            throw BridgeFailure(message: "Scheduled messages editor does not contain the selected history message")
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let viewportInTextView = controls.editorScroll.contentView.convert(
+            controls.editorScroll.contentView.bounds, to: controls.message
+        ).intersection(controls.message.bounds)
+        let viewportInTextContainer = viewportInTextView.offsetBy(
+            dx: -controls.message.textContainerOrigin.x,
+            dy: -controls.message.textContainerOrigin.y
+        )
+        let visibleGlyphs = layoutManager.glyphRange(forBoundingRect: viewportInTextContainer,
+                                                     in: textContainer)
+        let visibleCharacters = layoutManager.characterRange(forGlyphRange: visibleGlyphs,
+                                                             actualGlyphRange: nil)
+        let expectedNSString = expectedMessage as NSString
+        guard visibleGlyphs.length > 0,
+              visibleCharacters.length > 0,
+              NSMaxRange(visibleCharacters) <= expectedNSString.length,
+              expectedNSString.substring(with: visibleCharacters).contains(where: { !$0.isWhitespace }) else {
+            throw BridgeFailure(message: "Scheduled messages editor viewport contains no visible message glyphs")
+        }
+    }
+
+    private static func rect(_ view: NSView, in ancestor: NSView) -> NSRect {
+        view.convert(view.bounds, to: ancestor).standardized
+    }
+
+    private static func contains(_ outer: NSRect, _ inner: NSRect) -> Bool {
+        outer.insetBy(dx: -1, dy: -1).contains(inner)
     }
 
     private static func createPrivateMarker(at marker: URL, privateRoot: URL) throws {
