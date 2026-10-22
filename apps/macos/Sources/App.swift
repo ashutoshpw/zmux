@@ -137,6 +137,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private let recentlyClosedMenu = NSMenu(title: "Recently Closed")
     private let browserProfilesMenu = NSMenu(title: "Browser Profiles")
     private var browserProfilesWindow: BrowserProfilesWindowController?
+    private var scheduledMessagesWindows: [UInt64: ScheduleMessagesWindowController] = [:]
     private var workspaceCount = 1
     private var presentedUnreadCount: Int?
     private var didSetInitialTerminalFocus = false
@@ -711,6 +712,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             ("New Workspace", #selector(newWorkspace), "n"),
             ("New Workspace Group…", #selector(newWorkspaceGroup), ""),
             ("New Terminal Tab", #selector(newTerminal), "t"),
+            ("Scheduled Messages…", #selector(showScheduledMessages(_:)), ""),
             ("New Browser Tab", #selector(newBrowser), ""),
             ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
             ("Toggle Sidebar", #selector(toggleSidebar), "b"),
@@ -1554,6 +1556,42 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     @objc func newTerminal() {
         if let pane = focusedPane { newTerminalInPane(pane.id) } else { newWorkspace() }
     }
+    @objc private func showScheduledMessages(_ sender: Any?) {
+        guard let pane = focusedPane, let route = scheduleRoute(namespace: snapshot?.model.identityNamespace, surface: pane.selectedSurface) else {
+            showError("Select a managed SSH terminal to schedule remote tmux messages")
+            return
+        }
+        let controller: ScheduleMessagesWindowController
+        if let existing = scheduledMessagesWindows[route.surface] {
+            controller = existing
+        } else {
+            controller = ScheduleMessagesWindowController(
+                bridge: bridge,
+                route: route,
+                currentRoute: { [weak self] in
+                    self?.scheduleRoute(namespace: route.identityNamespace, surface: route.surface)
+                })
+            scheduledMessagesWindows[route.surface] = controller
+        }
+        controller.open(route)
+        _ = sender
+    }
+    private func scheduleRoute(namespace: UUID?, surface surfaceID: UInt64) -> ScheduleMessagesRoute? {
+        guard let namespace, let current = coordinator.snapshot,
+              current.model.identityNamespace == namespace,
+              let surface = current.model.workspaces.flatMap({ $0.root.panes }).flatMap(\.surfaces)
+                .first(where: { $0.id == surfaceID && $0.kind == "terminal" }),
+              let remote = surface.remote else { return nil }
+        let frame = surface.sessionId.flatMap { session in current.frames.first(where: { $0.sessionId == session }) }
+        let connected = frame?.snapshot?.state == "running" && frame?.reconnectable == false
+        return ScheduleMessagesRoute(
+            identityNamespace: namespace,
+            surface: surfaceID,
+            expectedSession: surface.sessionId,
+            destination: remote.destination,
+            connected: connected
+        )
+    }
     @objc func closeTab() { if let pane = focusedPane { closeTerminalTab(pane.selectedSurface) } }
     @objc func reopenClosed() { if let identity { enqueue(.windowReopen(identity.windowId, nil)) } }
     @objc private func reopenHistoryItem(_ sender: NSMenuItem) {
@@ -1697,6 +1735,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(showScheduledMessages(_:)):
+            guard let pane = focusedPane else { return false }
+            return scheduleRoute(namespace: snapshot?.model.identityNamespace, surface: pane.selectedSurface) != nil
         case #selector(reopenClosed): return snapshot?.model.closedItems.last.map { !$0.restoring } ?? false
         case #selector(reopenHistoryItem(_:)):
             guard let id = item.representedObject as? NSNumber else { return false }
@@ -3549,6 +3590,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--window-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 2], isDirectory: true))
+                } else if let index = CommandLine.arguments.firstIndex(of: "--schedule-messages-smoke"), CommandLine.arguments.count > index + 2 {
+                    storage = .persistentDirectory(URL(fileURLWithPath: CommandLine.arguments[index + 1]).deletingLastPathComponent().appendingPathComponent("profile-schedule-fixture-" + UUID().uuidString, isDirectory: true))
                 } else if let index = CommandLine.arguments.firstIndex(of: "--smoke-test"), CommandLine.arguments.count > index + 1 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     storage = .persistentDirectory(report.deletingLastPathComponent().appendingPathComponent("profile-fixture-" + UUID().uuidString, isDirectory: true))
@@ -3556,6 +3599,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowLifecycleSmoke.trace("before coordinator.start")
                 try await coordinator.start(storage: storage, terminalEngine: ProcessInfo.processInfo.environment["ZMUX_TERMINAL_ENGINE"])
                 WindowLifecycleSmoke.trace("after coordinator.start")
+                if let index = CommandLine.arguments.firstIndex(of: "--schedule-messages-smoke"), CommandLine.arguments.count > index + 2 {
+                    let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                    let configuration = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+                    do {
+                        try await ScheduleMessagesSmoke.run(coordinator: coordinator, host: controller,
+                            report: report, configuration: configuration)
+                        try await coordinator.shutdown()
+                        exit(0)
+                    } catch {
+                        FileHandle.standardError.write(Data("Native scheduled messages smoke failed: \(error.localizedDescription)\n".utf8))
+                        do { try await coordinator.shutdown() } catch {
+                            FileHandle.standardError.write(Data("Scheduled messages cleanup failed: \(error)\n".utf8))
+                        }
+                        exit(1)
+                    }
+                }
                 if let index = CommandLine.arguments.firstIndex(of: "--cloud-terminal-lifecycle-smoke"), CommandLine.arguments.count > index + 3 {
                     let report = URL(fileURLWithPath: CommandLine.arguments[index + 1])
                     do {
@@ -3688,7 +3747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 FileHandle.standardError.write(Data("zmux startup failed: \(error)\n".utf8))
-                if CommandLine.arguments.contains("--cloud-terminal-lifecycle-smoke") || CommandLine.arguments.contains("--sidebar-grouping-smoke") || CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") {
+                if CommandLine.arguments.contains("--cloud-terminal-lifecycle-smoke") || CommandLine.arguments.contains("--sidebar-grouping-smoke") || CommandLine.arguments.contains("--smoke-test") || CommandLine.arguments.contains("--profile-operations-smoke") || CommandLine.arguments.contains("--window-lifecycle-smoke") || CommandLine.arguments.contains("--terminal-engine-smoke") || CommandLine.arguments.contains("--idle-workload-smoke") || CommandLine.arguments.contains("--terminal-selection-smoke") || CommandLine.arguments.contains("--completed-history-smoke") || CommandLine.arguments.contains("--schedule-messages-smoke") {
                     do { try await coordinator.shutdown() } catch {
                         FileHandle.standardError.write(Data("Startup cleanup failed: \(error)\n".utf8))
                     }

@@ -6,7 +6,12 @@ use std::{
     collections::{BTreeMap, HashSet},
     ffi::OsString,
 };
+use uuid::Uuid;
 use zmux_desktop_runtime::{browser, downloads};
+use zmux_remote_runtime::scheduler::{
+    MAX_AHEAD_SECONDS, MAX_HISTORY_LIMIT, MAX_LIST_LIMIT, MAX_MESSAGE_BYTES, MAX_PENDING_JOBS,
+    MAX_RETAINED_HISTORY, RECEIPT_RETENTION_SECONDS, TargetIdentity,
+};
 
 const INVENTORY: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -1178,7 +1183,244 @@ fn definitions() -> Vec<Contract> {
         c.limitations = "List is non-consuming history; no-path wait consumes a terminal event via a repeatable ticket. --path observes a nonempty file only, never download provenance or a save destination. Relative paths use current directory. Wait numbers clamp, they do not cancel work. ls aliases list; omitted verb means wait. No --expect-revision support.";
         result.push(c);
     }
+    let surface = "00000000-0000-0000-0000-000000000010";
+    let request_id = "00000000-0000-0000-0000-000000000011";
+    let task_id = "00000000-0000-0000-0000-000000000012";
+    let target_id = schedule_probe_target();
+    let list_limit = MAX_LIST_LIMIT.to_string();
+    let history_limit = MAX_HISTORY_LIMIT.to_string();
+    let mut schedule_contracts = Vec::new();
+    let mut setup_check = contract(
+        "schedule setup --check",
+        &["--surface", surface],
+        vec![option("surface", &["--surface"], ValueKind::Uuid)],
+        "schedule",
+    );
+    setup_check
+        .arguments
+        .iter_mut()
+        .find(|argument| argument.name == "surface")
+        .expect("schedule setup surface argument")
+        .required = true;
+    setup_check.route = "schedule";
+    setup_check.requirements = &["running_app", "managed_ssh", "remote_scheduler"];
+    setup_check.output = "scheduler_json_response";
+    setup_check.limitations = "Read-only compatibility preflight through a managed SSH surface; it never installs the remote service. Remote capability depends on host support and the managed SSH master.";
+    schedule_contracts.push(setup_check);
+    let mut setup_install = contract(
+        "schedule setup",
+        &["--surface", surface, "--request-id", request_id],
+        vec![
+            option("surface", &["--surface"], ValueKind::Uuid),
+            option("request_id", &["--request-id"], ValueKind::Uuid),
+        ],
+        "schedule",
+    );
+    setup_install
+        .arguments
+        .iter_mut()
+        .find(|argument| argument.name == "surface")
+        .expect("schedule setup surface argument")
+        .required = true;
+    setup_install.route = "schedule";
+    setup_install.requirements = &["running_app", "managed_ssh", "remote_scheduler"];
+    setup_install.output = "scheduler_json_response";
+    setup_install.argument_rules.push(json!({
+        "request_id": {"generated_when_omitted": true, "printed_before_remote_io": true, "durable_receipt": false},
+        "uncertain_recovery": "repeat setup --check; do not query status --request-id or automatically reinstall"
+    }));
+    setup_install.limitations = "Explicit, idempotent setup installation. An uncertain install is checked with setup --check, not status --request-id; setup installation has no durable queue mutation receipt.";
+    schedule_contracts.push(setup_install);
+
+    for (verb, operands, mut args, description) in [
+        (
+            "status",
+            vec!["--surface", surface],
+            vec![
+                option("surface", &["--surface"], ValueKind::Uuid),
+                option("receipt_request_id", &["--request-id"], ValueKind::Uuid),
+            ],
+            "Remote helper state and an optional original mutation receipt; without a receipt ID, include unresolved local request IDs.",
+        ),
+        (
+            "targets",
+            vec!["--surface", surface],
+            vec![option("surface", &["--surface"], ValueKind::Uuid)],
+            "Identity-fenced remote target discovery. Returned target tokens are opaque and accepted only as --remote-pane values.",
+        ),
+        (
+            "create",
+            vec![
+                "--surface",
+                surface,
+                "--remote-pane",
+                target_id.as_str(),
+                "--in",
+                "5m",
+                "--message",
+                "Build reminder",
+                "--request-id",
+                request_id,
+            ],
+            vec![
+                option("surface", &["--surface"], ValueKind::Uuid),
+                option("remote_pane", &["--remote-pane"], ValueKind::Text),
+                option("at", &["--at"], ValueKind::Text),
+                option("in", &["--in"], ValueKind::Text),
+                option("message", &["--message"], ValueKind::Text),
+                option("stdin", &["--stdin"], ValueKind::Flag),
+                option("submit", &["--submit"], ValueKind::Flag),
+                option("request_id", &["--request-id"], ValueKind::Uuid),
+            ],
+            "Create a durable task on an exact target token with one deadline and one message source.",
+        ),
+        (
+            "list",
+            vec!["--surface", surface, "--limit", list_limit.as_str()],
+            vec![
+                option("surface", &["--surface"], ValueKind::Uuid),
+                option(
+                    "limit",
+                    &["--limit"],
+                    ValueKind::Integer(1, MAX_LIST_LIMIT as u64),
+                ),
+            ],
+            "List pending tasks with current versions and exact target identities.",
+        ),
+        (
+            "show",
+            vec![task_id, "--surface", surface],
+            vec![
+                positional("task_uuid", ValueKind::Uuid, true),
+                option("surface", &["--surface"], ValueKind::Uuid),
+            ],
+            "Show one task's current version and pinned target before a versioned edit or cancel.",
+        ),
+        (
+            "edit",
+            vec![
+                task_id,
+                "--surface",
+                surface,
+                "--expect-version",
+                "3",
+                "--message",
+                "Build reminder",
+                "--request-id",
+                request_id,
+            ],
+            vec![
+                positional("task_uuid", ValueKind::Uuid, true),
+                option("surface", &["--surface"], ValueKind::Uuid),
+                option(
+                    "expected_version",
+                    &["--expect-version"],
+                    ValueKind::Integer(1, u64::MAX),
+                ),
+                option("at", &["--at"], ValueKind::Text),
+                option("in", &["--in"], ValueKind::Text),
+                option("message", &["--message"], ValueKind::Text),
+                option("stdin", &["--stdin"], ValueKind::Flag),
+                option("request_id", &["--request-id"], ValueKind::Uuid),
+            ],
+            "Apply a nonempty optimistic-version patch to a pending task; retargeting is unavailable.",
+        ),
+        (
+            "cancel",
+            vec![
+                task_id,
+                "--surface",
+                surface,
+                "--expect-version",
+                "3",
+                "--request-id",
+                request_id,
+            ],
+            vec![
+                positional("task_uuid", ValueKind::Uuid, true),
+                option("surface", &["--surface"], ValueKind::Uuid),
+                option(
+                    "expected_version",
+                    &["--expect-version"],
+                    ValueKind::Integer(1, u64::MAX),
+                ),
+                option("request_id", &["--request-id"], ValueKind::Uuid),
+            ],
+            "Cancel a pending task only when its current version matches.",
+        ),
+        (
+            "history",
+            vec!["--surface", surface, "--limit", history_limit.as_str()],
+            vec![
+                option("surface", &["--surface"], ValueKind::Uuid),
+                option(
+                    "limit",
+                    &["--limit"],
+                    ValueKind::Integer(1, MAX_HISTORY_LIMIT as u64),
+                ),
+            ],
+            "Read bounded terminal delivery history with explicit retention metadata.",
+        ),
+    ] {
+        args.iter_mut()
+            .find(|argument| argument.name == "surface")
+            .expect("schedule surface argument")
+            .required = true;
+        let mut c = contract(&format!("schedule {verb}"), &operands, args, "schedule");
+        c.route = "schedule";
+        c.requirements = &["running_app", "managed_ssh", "remote_scheduler"];
+        c.output = "scheduler_json_response";
+        c.limitations = description;
+        match verb {
+            "create" => c.argument_rules.push(json!({
+                "exactly_one": [["at", "in"], ["message", "stdin"]],
+                "message_utf8_bytes": MAX_MESSAGE_BYTES,
+                "duration_seconds": {"minimum": 1, "maximum": MAX_AHEAD_SECONDS},
+                "submit_default": false,
+                "target": "opaque_identity_fenced_token; raw_tmux_pane_id_rejected",
+                "request_id": {"generated_when_omitted": true, "journaled_before_remote_io": true, "automatic_retry": false}
+            })),
+            "edit" => c.argument_rules.push(json!({
+                "nonempty_patch": ["message", "deadline", "or both"],
+                "expected_version": "required_and_positive",
+                "message_utf8_bytes": MAX_MESSAGE_BYTES,
+                "request_id": {"generated_when_omitted": true, "journaled_before_remote_io": true, "automatic_retry": false}
+            })),
+            "cancel" => c.argument_rules.push(json!({
+                "expected_version": "required_and_positive",
+                "request_id": {"generated_when_omitted": true, "journaled_before_remote_io": true, "automatic_retry": false}
+            })),
+            "list" => c.argument_rules.push(json!({
+                "default_limit": MAX_PENDING_JOBS,
+                "maximum_limit": MAX_LIST_LIMIT
+            })),
+            "history" => c.argument_rules.push(json!({
+                "default_limit": MAX_HISTORY_LIMIT,
+                "maximum_limit": MAX_HISTORY_LIMIT,
+                "retained_jobs": MAX_RETAINED_HISTORY,
+                "receipt_retention_seconds": RECEIPT_RETENTION_SECONDS
+            })),
+            _ => (),
+        }
+        schedule_contracts.push(c);
+    }
+    result.extend(schedule_contracts);
     result
+}
+
+fn schedule_probe_target() -> String {
+    TargetIdentity {
+        helper_instance_id: Uuid::from_u128(0x10),
+        remote_uid: 1000,
+        tmux_socket_id: "/tmp/tmux-1000/default".into(),
+        server_incarnation: Uuid::from_u128(0x11),
+        server_pid: 1234,
+        server_start_time: 5678,
+        session_id: "$1".into(),
+        pane_id: "%2".into(),
+    }
+    .target_id()
+    .expect("static schedule parser probe target is valid")
 }
 
 fn failure(message: impl Into<String>) -> CliError {
@@ -1190,6 +1432,7 @@ fn parsed(c: &Contract) -> Result<(Value, u128), CliError> {
     let value = |command| serde_json::to_value(command).map_err(|e| failure(e.to_string()));
     let (route, request) = match parsed {
         Parsed::AgentMessages(invocation) => ("agent_messages", invocation.discovery()),
+        Parsed::Schedule(invocation) => ("schedule", invocation.discovery()),
         Parsed::Buffers(invocation) => ("buffers", invocation.discovery()),
         Parsed::PullRequest(invocation) => ("pull_request", invocation.discovery()),
         Parsed::App(command) => ("app", value(command)?),

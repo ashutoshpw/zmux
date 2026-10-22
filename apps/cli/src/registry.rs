@@ -329,6 +329,14 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "Create an SSH terminal workspace. Connection arguments are validated and retained on the surface; reopening starts a fresh remote login without replaying commands. After the SSH process exits or launch fails, the native app's same-tab reconnect icon can start a fresh login without resuming the shell or replaying the startup command or terminal input. Regular file/image uploads reuse this terminal's private authenticated connection. The native app supports clipboard image paste/drop; this CLI accepts image file paths through paste-files. Cross-tab sharing, automatic or durable reconnect, and CLI reconnect are unavailable. Extra SSH options use a bounded allowlist; mosh is unavailable."
     ),
     command!(
+        "schedule",
+        "remote",
+        false,
+        true,
+        "schedule setup --surface UUID [--check]\n       zmux schedule status --surface UUID [--request-id UUID]\n       zmux schedule targets --surface UUID\n       zmux schedule create --surface UUID --remote-pane TARGET_TOKEN (--at RFC3339 | --in DURATION) (--message TEXT | --stdin) [--submit] [--request-id UUID]\n       zmux schedule list --surface UUID [--limit N]\n       zmux schedule show TASK_UUID --surface UUID\n       zmux schedule edit TASK_UUID --surface UUID --expect-version N [--at RFC3339 | --in DURATION] [--message TEXT | --stdin] [--request-id UUID]\n       zmux schedule cancel TASK_UUID --surface UUID --expect-version N [--request-id UUID]\n       zmux schedule history --surface UUID [--limit N]",
+        "Schedule literal text on an exact remote tmux pane through the selected managed SSH surface. Every verb requires --surface UUID and an available supported remote scheduler; there is no local timer fallback. Run `zmux schedule targets` and pass its identity-fenced target token as --remote-pane; raw tmux pane IDs are rejected. Create requires one deadline and one message source. --submit is create-only and defaults off. Edits atomically change message, deadline or both, require --expect-version, and cannot retarget a job. Message text is limited to 4096 UTF-8 bytes and is never included in diagnostics or the local request journal. The service allows at most 100 pending jobs, 1024 mutation receipts retained for 30 days, and 16 MiB of private state. It reserves one receipt slot per pending job for valid version-matched cancellation; a new create needs two free receipt slots, and an edit needs one unreserved slot. Create/edit/cancel print and privately retain their request UUID before remote I/O; after an uncertain result, query `schedule status --request-id UUID` or `schedule status --surface UUID` to reconcile. Setup install also has a request UUID, but no durable receipt; after an uncertain result, run `schedule setup --surface UUID --check`. No task mutation is automatically retried. Read `zmux help schedule` for edit examples, remote service setup, retention and delivery limits."
+    ),
+    command!(
         "new-workspace",
         "start",
         false,
@@ -801,6 +809,9 @@ pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
     let Some(name) = name else {
         return Ok(top_help());
     };
+    if let Some(verb) = name.strip_prefix("schedule ") {
+        return schedule_verb_help(verb);
+    }
     if let Some(spec) = find(name) {
         let mut out = format!(
             "Usage: zmux [OPTIONS] {}\n\n{}\n",
@@ -844,6 +855,53 @@ pub(super) fn help(name: Option<&str>) -> Result<String, CliError> {
         out.push_str("No executable commands in this topic are available in this build.\n");
     }
     Ok(out)
+}
+
+fn schedule_verb_help(verb: &str) -> Result<String, CliError> {
+    let (usage, description) = match verb {
+        "setup" => (
+            "schedule setup --surface UUID [--check]",
+            "Without --check, explicitly install and enable the remote per-user scheduler. --check performs a read-only compatibility preflight. This command requires a managed SSH surface and never installs anything implicitly during create. Setup install has no durable mutation receipt; if its outcome is uncertain, use `zmux schedule setup --surface UUID --check`, not `schedule status --request-id`.",
+        ),
+        "status" => (
+            "schedule status --surface UUID [--request-id UUID]",
+            "Report remote helper and service state. With --request-id, retrieve the original mutation receipt, including the task UUID if a create acknowledgement was lost. Without it, include locally retained unresolved request IDs. Mutation receipts are kept for up to 30 days, subject to the service's 1024-receipt and 16 MiB state bounds. Status never resends a mutation.",
+        ),
+        "targets" => (
+            "schedule targets --surface UUID",
+            "List remote tmux sessions and panes that can be bound. Use the returned identity-fenced target token with create --remote-pane. The token is bound to the helper, remote account, tmux server incarnation, session and exact pane; raw pane IDs and name/index substitutions are rejected.",
+        ),
+        "create" => (
+            "schedule create --surface UUID --remote-pane TARGET_TOKEN (--at RFC3339 | --in DURATION) (--message TEXT | --stdin) [--submit] [--request-id UUID]",
+            "Create a task pinned to the exact target token returned by targets. Supply one absolute RFC3339 deadline with an explicit offset or Z, or one relative duration evaluated when the remote helper accepts the request. Supply one literal message source; --stdin is bounded to 4096 UTF-8 bytes. --submit optionally adds Return after the text and defaults off. Dispatch has a five-second grace: if the task is more than five seconds late before text is sent, it is marked missed with no input. If text is accepted but optional Return becomes stale, the partial result is outcome_unknown; no Return is sent and neither phase is replayed. There may be at most 100 pending tasks. A new create needs two free receipt slots: one for its mutation receipt and one reserved for a valid version-matched cancellation. The private store is capped at 16 MiB. The task UUID and request receipt are returned by the remote helper.",
+        ),
+        "list" => (
+            "schedule list --surface UUID [--limit N]",
+            "List pending tasks with task UUID, version, exact target identity and resolved deadline. Use show before editing so --expect-version comes from the current task.",
+        ),
+        "show" => (
+            "schedule show TASK_UUID --surface UUID",
+            "Show one task's current version, status, exact target and resolved deadline. Use the returned version with edit or cancel.",
+        ),
+        "edit" => (
+            "schedule edit TASK_UUID --surface UUID --expect-version N [--at RFC3339 | --in DURATION] [--message TEXT | --stdin] [--request-id UUID]",
+            "Apply a nonempty versioned patch to a pending task. Change the message, deadline or both atomically; omitting the deadline preserves it exactly, and omitting the message preserves its exact bytes. --in is measured from remote acceptance. Retargeting requires a new task. Each edit needs one unreserved mutation receipt slot, because a slot stays reserved for each pending task's valid cancellation. Fetch the latest version after every successful edit. Example alternatives based on version 3:\n\n  zmux schedule show TASK_UUID --surface SURFACE_UUID\n  zmux schedule edit TASK_UUID --surface SURFACE_UUID --expect-version 3 --message \"Build reminder\"\n  zmux schedule edit TASK_UUID --surface SURFACE_UUID --expect-version 3 --at 2026-10-23T09:00:00-07:00\n  zmux schedule edit TASK_UUID --surface SURFACE_UUID --expect-version 3 --at 2026-10-23T09:00:00-07:00 --message \"New reminder\"\n\nEach edit is a separate choice starting from version 3. After one succeeds, show the task again before another edit.",
+        ),
+        "cancel" => (
+            "schedule cancel TASK_UUID --surface UUID --expect-version N [--request-id UUID]",
+            "Cancel a pending task using its current version. A stale version or a task already claimed by the dispatcher is rejected. One mutation receipt slot per pending task is reserved so a valid version-matched cancellation remains recordable at capacity.",
+        ),
+        "history" => (
+            "schedule history --surface UUID [--limit N]",
+            "List bounded terminal delivery history, including known partial phases for uncertain results. A sent result means tmux accepted the input; it does not establish that the target application acted on it.",
+        ),
+        _ => {
+            return Err(CliError(format!(
+                "unknown schedule help topic `{verb}`; run `zmux help schedule`"
+            )));
+        }
+    };
+    Ok(format!("Usage: zmux {usage}\n\n{description}\n"))
 }
 pub(super) fn catalog() -> Result<Value, CliError> {
     let (leaves, coverage) = contracts::validated()?;

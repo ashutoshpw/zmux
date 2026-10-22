@@ -20,6 +20,7 @@ pub use config::{JumpConfig, SshConnectionConfig};
 
 pub mod local_multiplexer;
 pub mod local_zellij;
+pub mod scheduler;
 
 use std::{fmt, net::IpAddr};
 use thiserror::Error;

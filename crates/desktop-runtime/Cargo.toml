@@ -12,6 +12,7 @@ ghostty = ["zmux-session-runtime/ghostty"]
 [dependencies]
 uuid = { workspace = true, features = ["v4"] }
 nix = { workspace = true, features = ["socket", "user"] }
+filedescriptor.workspace = true
 rustix = { version = "=1.1.5", features = ["fs", "process", "time"] }
 serde.workspace = true
 serde_json.workspace = true

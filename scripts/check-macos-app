@@ -134,6 +134,80 @@ def local_tmux_fixture():
                     raise RuntimeError("Owned native tmux fixture cleanup failed: " + result.stderr)
 
 @contextlib.contextmanager
+def scheduler_fixture():
+    helper = bundle / "Resources/remote-scheduler/darwin-universal/zmux-scheduler"
+    tmux_binary = shutil.which("tmux")
+    if not helper.is_file() or not os.access(helper, os.X_OK):
+        raise SystemExit("Packaged Darwin scheduler helper is required for native schedule acceptance")
+    if tmux_binary is None:
+        raise SystemExit("Packaged scheduler acceptance requires an installed tmux executable")
+    with tempfile.TemporaryDirectory(prefix="zsc-", dir="/tmp") as directory:
+        root = Path(directory).resolve()
+        state = root / "scheduler-state"
+        state.mkdir(mode=0o700)
+        socket_path = root / "tmux.sock"
+        for path in (state / "control.sock", socket_path):
+            if len(os.fsencode(path)) >= 104:
+                raise RuntimeError("Private scheduler fixture socket path exceeds the Darwin Unix-domain limit")
+        tmux_binary = str(Path(tmux_binary).resolve())
+        search_path = os.pathsep.join([str(Path(tmux_binary).parent), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+        environment = dict(os.environ)
+        environment.pop("INVOCATION_ID", None)
+        environment.update({
+            "PATH": search_path,
+            "ZMUX_SCHEDULER_ROOT": str(state),
+            "ZMUX_SCHEDULER_TMUX_SOCKET": str(socket_path),
+        })
+        daemon_log = root / "scheduler-daemon.log"
+        daemon = None
+        try:
+            subprocess.run([tmux_binary, "-f", "/dev/null", "-S", str(socket_path), "new-session", "-d",
+                            "-s", "zmux-schedule-native", "/bin/sleep 3600"],
+                           check=True, timeout=10, capture_output=True, text=True)
+            with daemon_log.open("wb") as output:
+                daemon = subprocess.Popen([str(helper), "serve"], env=environment,
+                                          stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
+            status_request = json.dumps({"protocol_version": 1, "action": {"action": "status"}}) + "\n"
+            deadline = time.monotonic() + 8
+            while True:
+                if daemon.poll() is not None:
+                    raise RuntimeError("Isolated scheduler daemon exited: " + daemon_log.read_text(errors="replace")[-8192:])
+                try:
+                    result = subprocess.run([str(helper), "rpc"], env=environment, input=status_request,
+                                            capture_output=True, text=True, timeout=1)
+                    if result.returncode == 0:
+                        response = json.loads(result.stdout)
+                        if response.get("result", {}).get("status") == "success":
+                            break
+                except (subprocess.TimeoutExpired, json.JSONDecodeError):
+                    pass
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Isolated scheduler daemon did not accept its private readiness request")
+                time.sleep(0.05)
+            yield {
+                "helper": str(helper),
+                "root": str(state),
+                "socket": str(socket_path),
+                "session_environment": {
+                    "PATH": search_path,
+                    "ZMUX_SCHEDULER_ROOT": str(state),
+                    "ZMUX_SCHEDULER_TMUX_SOCKET": str(socket_path),
+                },
+            }
+        finally:
+            if daemon is not None:
+                daemon.terminate()
+                try:
+                    daemon.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    daemon.kill()
+                    daemon.wait(timeout=5)
+            result = subprocess.run([tmux_binary, "-N", "-f", "/dev/null", "-S", str(socket_path), "kill-server"],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode and "no server running" not in result.stderr.lower() and "no server running" not in result.stdout.lower():
+                raise RuntimeError("Owned isolated scheduler tmux cleanup failed: " + result.stderr)
+
+@contextlib.contextmanager
 def browser_fixture():
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -302,7 +376,10 @@ def cloud_terminal_fixture():
         for worker in workers:
             worker.join(timeout=2)
 
-with local_tmux_fixture() as native_environment, browser_fixture(), cloud_terminal_fixture() as cloud_origins, fixture_module.native_ssh_fixture(dist / "native-ssh-fixture.json", dist / "native-sshd.log"):
+with local_tmux_fixture() as native_environment, scheduler_fixture() as scheduler_environment, browser_fixture(), cloud_terminal_fixture() as cloud_origins, fixture_module.native_ssh_fixture(
+        dist / "native-ssh-fixture.json", dist / "native-sshd.log",
+        session_environment=scheduler_environment["session_environment"], scheduler_rpc_request_log=True,
+        drop_scheduler_rpc_response_after_execution=True):
     lifecycle_report = dist / "native-cloud-terminal-lifecycle.json"
     lifecycle_stdout = dist / "native-cloud-terminal-lifecycle.stdout.log"
     lifecycle_stderr = dist / "native-cloud-terminal-lifecycle.stderr.log"
@@ -399,6 +476,59 @@ with local_tmux_fixture() as native_environment, browser_fixture(), cloud_termin
             or account_switch.get("post_old_stop_gate_error_code") != "sharing_disabled" \
             or account_switch.get("post_new_stop_gate_error_code") != "sharing_disabled":
         raise SystemExit("The expired-session account switch did not retain old presence truth and require a separate new-account enable")
+
+    schedule_report = dist / "native-schedule-messages-smoke.json"
+    schedule_stdout = dist / "native-schedule-messages-smoke.stdout.log"
+    schedule_stderr = dist / "native-schedule-messages-smoke.stderr.log"
+    schedule_screenshot = dist / "zmux-scheduled-messages.png"
+    for stale in (schedule_report, schedule_stdout, schedule_stderr, schedule_screenshot):
+        if stale.exists(): stale.unlink()
+    schedule_control = dist / "native-schedule-control.sock"
+    try:
+        subprocess.run([
+            "/usr/bin/open", "-n", "-W", "--stdout", str(schedule_stdout), "--stderr", str(schedule_stderr),
+            "--env", "ZMUX_SOCKET_PATH=" + str(schedule_control),
+            "--env", "ZMUX_SCHEDULER_REMOTE_HELPER=" + scheduler_environment["helper"],
+            "--env", "ZMUX_LOCAL_TMUX_ROOT=" + native_environment["ZMUX_LOCAL_TMUX_ROOT"],
+            "--env", "ZMUX_LOCAL_TMUX_BIN=" + native_environment["ZMUX_LOCAL_TMUX_BIN"],
+            str(dist / "zmux.app"), "--args", "--schedule-messages-smoke", str(schedule_report),
+            str(dist / "native-ssh-fixture.json")
+        ], check=True, timeout=180)
+    except Exception:
+        for path in (schedule_stdout, schedule_stderr):
+            if path.exists(): print(path.read_text(errors="replace"))
+        diagnose_failure()
+        raise
+    if not schedule_report.exists():
+        for path in (schedule_stdout, schedule_stderr):
+            if path.exists(): print(path.read_text(errors="replace"))
+        diagnose_failure()
+        raise SystemExit("The packaged app did not produce scheduled-message smoke evidence")
+    schedule_evidence = json.loads(schedule_report.read_text())
+    required_schedule_checks = {
+        "workspace_menu_opens_real_scheduler_window",
+        "managed_ssh_refresh_shows_remote_tmux_target",
+        "lost_create_reply_enters_unknown_outcome_ui",
+        "applied_create_receipt_selects_one_populated_job_without_duplicate",
+        "message_only_edit_preserves_deadline",
+        "time_only_edit_preserves_message",
+        "combined_message_and_time_edit",
+        "cancel_removes_pending_job_and_history_view_retains_receipt",
+        "populated_history_editor_screenshot_retained",
+        "captured_create_edit_cancel_ids_resolve_through_managed_status",
+    }
+    if schedule_evidence.get("screenshot") != schedule_screenshot.name or not schedule_screenshot.is_file() \
+            or schedule_screenshot.stat().st_size <= 4096:
+        raise SystemExit("The populated scheduled-message history screenshot was not retained")
+    receipts = schedule_evidence.get("mutation_receipts", [])
+    if schedule_evidence.get("scope") != "native_schedule_messages" \
+            or schedule_evidence.get("state") != "passed" \
+            or schedule_evidence.get("source_sha") != info.get("ZmuxSourceSHA") \
+            or not required_schedule_checks.issubset(schedule_evidence.get("checks", [])) \
+            or [item.get("action") for item in receipts] != ["create", "edit", "edit", "edit", "cancel"] \
+            or any(item.get("receipt_state") != "applied" for item in receipts) \
+            or schedule_evidence.get("unknown_outcome_ui_exercised") is not True:
+        raise SystemExit("Packaged scheduled-message evidence has an invalid scope, receipt set, or state")
 
     sampler = resource_module.NativeResourceSampler(
         bundle / "MacOS/zmux-app", bundle / "Resources/bin/zmux",

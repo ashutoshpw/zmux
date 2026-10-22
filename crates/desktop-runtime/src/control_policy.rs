@@ -267,6 +267,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         | ControlCommand::ListPanes { .. }
         | ControlCommand::ReadScreen { .. } => true,
         ControlCommand::Browser { request } => request.action.is_read(),
+        ControlCommand::Schedule { request, .. } => request.action.is_read(),
         ControlCommand::Downloads { request } => !matches!(
             request.action,
             crate::downloads::DownloadAction::Cancel { .. }
@@ -300,7 +301,61 @@ mod tests {
     use super::*;
     use crate::{Command, Desktop, DesktopError, Request, Shell};
     use std::time::{Duration, Instant};
+    use zmux_remote_runtime::scheduler::{
+        SCHEDULER_PROTOCOL_VERSION, SchedulerAction, SchedulerRequest,
+    };
     use zmux_workspace_core::Action;
+
+    fn schedule_command(action: SchedulerAction) -> ControlCommand {
+        ControlCommand::Schedule {
+            surface: uuid::Uuid::new_v4(),
+            request: SchedulerRequest {
+                protocol_version: SCHEDULER_PROTOCOL_VERSION,
+                request_id: Some(uuid::Uuid::new_v4()),
+                action,
+            },
+        }
+    }
+
+    #[test]
+    fn scheduler_status_is_readonly_but_install_and_mutations_are_not_relayable() {
+        let status = schedule_command(SchedulerAction::Status {
+            receipt_request_id: None,
+        });
+        let install = schedule_command(SchedulerAction::SetupInstall);
+        let create = schedule_command(SchedulerAction::Create {
+            target_id: "v1.fixture".into(),
+            deadline: zmux_remote_runtime::scheduler::DeadlineInput::InSeconds { seconds: 60 },
+            message: "policy fixture".into(),
+            submit: false,
+        });
+        assert!(is_read(&status));
+        assert!(!is_read(&install));
+        assert!(!is_read(&create));
+
+        let readonly = ControlGate::new(ControlPolicy::same_user(ControlAccess::ReadOnly));
+        assert!(
+            readonly
+                .admit(ControlOrigin::LocalOwner, &status, None)
+                .is_ok()
+        );
+        assert!(matches!(
+            readonly.admit(ControlOrigin::LocalOwner, &install, None),
+            Err(PolicyError::ReadOnly)
+        ));
+        assert!(matches!(
+            readonly.admit(ControlOrigin::LocalOwner, &create, None),
+            Err(PolicyError::ReadOnly)
+        ));
+
+        let full = ControlGate::new(ControlPolicy::default());
+        for command in [&status, &install, &create] {
+            assert!(matches!(
+                full.admit(ControlOrigin::RemoteRelay, command, None),
+                Err(PolicyError::RelayDenied)
+            ));
+        }
+    }
 
     #[test]
     fn a_revoked_admission_cannot_mutate_the_workspace_executor() {

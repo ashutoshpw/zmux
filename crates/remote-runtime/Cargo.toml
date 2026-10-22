@@ -19,6 +19,7 @@ signal-hook.workspace = true
 sha2.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 zmux-session-runtime.workspace = true
+time = { version = "=0.3.44", features = ["parsing", "formatting"] }
 
 [lints]
 workspace = true

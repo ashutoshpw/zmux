@@ -13,7 +13,7 @@ enum AppStartup {
         let cliDirectory = resources.appendingPathComponent("bin")
         var arguments = Array(CommandLine.arguments.dropFirst())
         if arguments.first == "--cli" { arguments.removeFirst() }
-        if !arguments.isEmpty && arguments.first != "--sidebar-grouping-smoke" && arguments.first != "--smoke-test" && arguments.first != "--window-lifecycle-smoke" && arguments.first != "--terminal-engine-smoke" && arguments.first != "--idle-workload-smoke" && arguments.first != "--terminal-selection-smoke" && arguments.first != "--completed-history-smoke" && arguments.first != "--profile-operations-smoke" && arguments.first != "--cloud-terminal-lifecycle-smoke" && !(arguments.first?.hasPrefix("-psn_") ?? false) {
+        if !arguments.isEmpty && arguments.first != "--sidebar-grouping-smoke" && arguments.first != "--smoke-test" && arguments.first != "--window-lifecycle-smoke" && arguments.first != "--terminal-engine-smoke" && arguments.first != "--idle-workload-smoke" && arguments.first != "--terminal-selection-smoke" && arguments.first != "--completed-history-smoke" && arguments.first != "--profile-operations-smoke" && arguments.first != "--cloud-terminal-lifecycle-smoke" && arguments.first != "--schedule-messages-smoke" && !(arguments.first?.hasPrefix("-psn_") ?? false) {
             let process = Process()
             process.executableURL = cliDirectory.appendingPathComponent("zmux")
             process.arguments = arguments

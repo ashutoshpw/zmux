@@ -110,6 +110,7 @@ impl Operation {
 }
 pub(crate) fn cleanup_command(command: &Command) -> bool {
     matches!(command, Command::NativeDownload { request } if !matches!(request, crate::downloads::NativeDownload::Begin { .. }))
+        || matches!(command, Command::ScheduleCapture { .. })
 }
 impl Desktop {
     /// Installs one deadline. Repeated calls never renew it or register new barriers.
@@ -391,7 +392,7 @@ impl Worker {
                 files: usize::from(!files_done),
                 native_downloads,
                 native_cleanup: false,
-                control: 0,
+                control: self.shared.schedule.active_count(),
             };
             let done = if let Ok(mut operation) = self.shared.shutdown.lock() {
                 let operation = operation.as_mut().expect("shutdown installed");

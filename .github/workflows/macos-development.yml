@@ -34,8 +34,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scheduler-linux:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: linux-x86_64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - key: linux-aarch64
+            target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Install native musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+      - name: Install pinned Rust and native musl target
+        env:
+          SCHEDULER_TARGET: ${{ matrix.target }}
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target "$SCHEDULER_TARGET"
+      - name: Build and validate native static-musl scheduler helper
+        env:
+          SCHEDULER_TARGET: ${{ matrix.target }}
+        run: python3 -B scripts/build-remote-scheduler-linux --target "$SCHEDULER_TARGET" --output "$RUNNER_TEMP/remote-scheduler"
+      - name: Retain native helper and manifest receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zmux-scheduler-${{ matrix.key }}-${{ github.sha }}
+          path: ${{ runner.temp }}/remote-scheduler/${{ matrix.key }}
+          if-no-files-found: error
+          retention-days: 14
+
+  swift-typecheck:
+    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Type-check native sources independently of Rust builds
+        run: scripts/check-macos-sources
+
   development:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'full'
+    needs: [scheduler-linux, swift-typecheck]
     runs-on: macos-15
     # Cold universal builds plus native acceptance can exceed 25 minutes.
     timeout-minutes: 45
@@ -52,8 +102,6 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
-      - name: Type-check native sources before compiling Rust
-        run: scripts/check-macos-sources
       - name: Validate native terminal selection and link smoke inputs
         run: python3 -B tools/native-terminal-selection/run.py --check-inputs
       - name: Verify native persistence directory paths
@@ -74,14 +122,27 @@ jobs:
         run: scripts/check-file-load-gate
       - name: Install pinned Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Download same-source native Linux scheduler helpers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zmux-scheduler-linux-x86_64-${{ github.sha }}
+          path: dist/remote-scheduler-inputs/linux-x86_64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zmux-scheduler-linux-aarch64-${{ github.sha }}
+          path: dist/remote-scheduler-inputs/linux-aarch64
+      - name: Restore downloaded scheduler helper executable bits
+        run: chmod 755 dist/remote-scheduler-inputs/linux-x86_64/zmux-scheduler dist/remote-scheduler-inputs/linux-aarch64/zmux-scheduler
       - name: Install isolated tmux fixture dependency
         run: |
           if ! command -v tmux >/dev/null; then brew install tmux; fi
           tmux -V
       - name: Validate Rust core and foreign ABI
+        env:
+          RUST_TEST_THREADS: 2
         run: scripts/check
       - name: Build universal native development app
-        run: scripts/build-macos-dev
+        run: scripts/build-macos-dev --scheduler-artifacts-root dist/remote-scheduler-inputs --require-full-scheduler
       - name: Exercise terminal selection and browser links in the universal app
         run: python3 -B tools/native-terminal-selection/run.py --skip-build --output dist/native-terminal-selection-universal
       - name: Exercise packaged app and native rendering
@@ -111,6 +172,10 @@ jobs:
             dist/zmux-browser-smoke.png
             dist/zmux-workspace-drag.png
             dist/zmux-local-tmux-smoke.png
+            dist/zmux-scheduled-messages.png
+            dist/native-schedule-messages-smoke.json
+            dist/native-schedule-messages-smoke.stdout.log
+            dist/native-schedule-messages-smoke.stderr.log
             dist/native-sidebar*.json
             dist/native-sidebar*.log
             dist/native-status-menu.json
@@ -152,6 +217,10 @@ jobs:
             dist/zmux-browser-smoke.png
             dist/zmux-workspace-drag.png
             dist/zmux-local-tmux-smoke.png
+            dist/zmux-scheduled-messages.png
+            dist/native-schedule-messages-smoke.json
+            dist/native-schedule-messages-smoke.stdout.log
+            dist/native-schedule-messages-smoke.stderr.log
             dist/native-sidebar*.json
             dist/native-sidebar*.log
             dist/native-status-menu.json
