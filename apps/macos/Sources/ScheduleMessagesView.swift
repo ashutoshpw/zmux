@@ -78,6 +78,10 @@ final class ScheduleMessagesView: NSView {
         resolvedDeadlineLabel.font = .systemFont(ofSize: 11)
         resolvedDeadlineLabel.textColor = .secondaryLabelColor
         resolvedDeadlineLabel.maximumNumberOfLines = 3
+        resolvedDeadlineLabel.setContentHuggingPriority(.required, for: .vertical)
+        for control in [targetPicker, durationPresets, occurrencePicker] as [NSView] {
+            control.setContentHuggingPriority(.required, for: .vertical)
+        }
         deadlineField.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         for control in [refreshButton, setupCheckButton, setupInstallButton, newButton,
                         discardDraftButton, saveButton, cancelButton, requestStatusButton,
@@ -210,6 +214,8 @@ final class ScheduleMessagesView: NSView {
         let targetGroup = column([label("Remote tmux pane"), targetPicker], spacing: 5)
         let messageGroup = column([label("Message"), messageScroll], spacing: 5)
         let timeEntry = row([deadlineMode, durationField, deadlineField, spacer()], spacing: 8)
+        // A stack has no intrinsic height; spare space belongs to the message editor.
+        timeEntry.heightAnchor.constraint(lessThanOrEqualToConstant: 28).isActive = true
         let deadlineGroup = column([label("When"), timeEntry, durationPresets, occurrencePicker, resolvedDeadlineLabel], spacing: 6)
         let editorTitleRow = row([editorHeading, spacer(), editorState])
         editorTitleRow.heightAnchor.constraint(equalToConstant: 18).isActive = true
@@ -352,6 +358,7 @@ final class ScheduleMessagesView: NSView {
     private func label(_ text: String, size: CGFloat = 12, weight: NSFont.Weight = .regular) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.font = .systemFont(ofSize: size, weight: weight)
+        field.setContentHuggingPriority(.required, for: .vertical)
         return field
     }
 

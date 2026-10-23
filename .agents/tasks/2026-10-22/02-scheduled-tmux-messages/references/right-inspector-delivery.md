@@ -66,3 +66,15 @@ background in the production owner so component captures have the same opaque
 appearance as the host; capture the dark appearance used by the application.
 Full local recheck passed with exit 0 at
 `/tmp/zmux-right-inspector-alignment-check.log`; native follow-up is pending.
+
+Source `86602d8` passed the expanded native gate including all 16 top-aligned
+cases, width/draft retention and setup popover, plus both Swift architectures.
+Evidence: `/tmp/zmux-right-inspector-layout-39929007328/`. Its dark native capture
+showed that the remaining flexible time-entry stack could still absorb spare
+height. Bound that row to a native control height, give fixed labels/pickers
+required vertical hugging and leave expansion to the message editor. Add a
+geometry assertion for the gaps around the time controls. This closes the gap
+in the first layout assertions instead of weakening the visible-content checks.
+The repeated full local gate passed with exit 0 at
+`/tmp/zmux-right-inspector-final-check.log`. The final native visual gate remains
+pending; do not treat an earlier candidate as the accepted right-inspector build.
