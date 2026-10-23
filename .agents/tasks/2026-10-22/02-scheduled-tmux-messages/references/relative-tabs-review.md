@@ -46,3 +46,21 @@ is retained, with actual dimensions added to its failure diagnostic.
 Full portable verification passed again at `/tmp/zmux-relative-tabs-layout-check.log`.
 Native acceptance remains required; relative create/edit/countdown checks run after
 the layout check and have not yet been reached.
+
+## Reassessment after the third native attempt
+
+The original repair did not resolve the native column extent. Run 39875315431
+reports a 483-point table/viewport with a State column ending at 523 points.
+Stop repeated broad builds and isolate the real queue geometry owner first.
+`ScheduleQueueView.swift` is the application's actual scroll/table configuration;
+the native probe compiles that file directly without a bridge stub or test-only
+production hook. Its invariant is that every column stays within the visible
+viewport through initial 483-point, narrow, wide and repeated resize transitions.
+Existing packaged acceptance remains necessary for the parent pane, editor and
+SSH lifecycle; the fast component check provides distinct resize feedback before
+any expensive build. First demonstrate the existing failure, then repair sizing.
+
+Local `scripts/check` passed at `/tmp/zmux-relative-tabs-queue-owner-final-check.log`.
+The first invocation hit an unrelated existing terminal/browser-link `Busy` error;
+an unchanged focused rerun passed, followed by the successful full gate. No Rust
+or link test code changed. Python compilation and workflow YAML parsing passed.

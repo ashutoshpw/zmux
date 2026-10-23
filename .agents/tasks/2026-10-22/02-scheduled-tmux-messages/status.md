@@ -1,7 +1,7 @@
 # Status
 
 - **State:** in progress
-- **Updated:** 2026-10-22
+- **Updated:** 2026-10-23
 - **Authorization:** The user authorized implementation, the helper-install repair and a new downloadable Mac build. Installer repair and candidate verification are complete. Broader native acceptance for the new source was still running at delivery; earlier review findings remain unresolved.
 
 ## Active extension
@@ -60,6 +60,26 @@ Mac artifact, hosted acceptance and delivery verification remain pending.
   (`/tmp/zmux-relative-tabs-layout-check.log`). AppKit acceptance must rerun.
   Evidence: `/tmp/zmux-relative-tabs-diagnostics-39870897287/`, failure log
   `/tmp/zmux-relative-tabs-native-second-failure.log`.
+
+- Layout repair `db18ba227063fc92378bb075e03f5d31b81ad200` is on origin/main
+  with exact parity. Its personal post-commit review found no further defect.
+  Run [39875315431](https://github.com/ashutoshpw/zmux/actions/runs/39875315431)
+  is the current pending Mac build and native acceptance run. Do not deliver the
+  earlier candidate as accepted; the retained strict geometry gate has not passed yet.
+
+- Run 39875315431 failed the same strict column visibility check. Measurements
+  prove table frame/viewport both 483 points, but the final column ends at 523.
+  Stop broad build retries and use a native component-owner check first. Extract
+  the real production queue/table configuration to `ScheduleQueueView.swift`,
+  reused by the application and a standalone AppKit resize fixture. No copied
+  layout algorithm, stub bridge or test-only production hook. The existing packaged
+  check remains the native-host integration gate. The focused fixture must show
+  the overflow red before repairing style/column sizing, then pass width/resizes.
+  It runs before Swift checking and the costly universal build in CI. Existing
+  queued smoke remains strict; no artifact is delivered as accepted yet.
+  Local full verification passed at
+  `/tmp/zmux-relative-tabs-queue-owner-final-check.log`; one unrelated existing
+  link-test Busy transient passed unchanged on focused and full reruns.
 
 ## Current result
 
