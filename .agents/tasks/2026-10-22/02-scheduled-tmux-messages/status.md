@@ -1,10 +1,54 @@
 # Status
 
-- **State:** in progress
+- **State:** done
 - **Updated:** 2026-10-23
-- **Authorization:** The user authorized implementation, the helper-install repair and a new downloadable Mac build. Installer repair and candidate verification are complete. Broader native acceptance for the new source was still running at delivery; earlier review findings remain unresolved.
+- **Authorization:** The user authorized implementation, relative times, an embedded Schedules tab, main delivery, post-commit self-review and a downloadable Mac build. This extension is complete; earlier scheduler follow-ups remain tracked.
 
-## Active extension
+## Accepted relative scheduling and embedded-tab build
+
+- Download final artifact
+  [12471043165](https://github.com/ashutoshpw/zmux/actions/runs/39880328272/artifacts/12471043165):
+  `zmux-dev-universal-93f36fc.zip`, 24,347,784 bytes, SHA-256
+  `045ad8b1378bbaf96edfa54728cc9572b2a74283a0347d21670bd735c6321765`.
+  Application/test source is `93f36fcab3ac89fa0fa32639a8b140f5bfd5066a`, pushed
+  on main. The final delivery receipt changes documentation only.
+- [Run 39880328272](https://github.com/ashutoshpw/zmux/actions/runs/39880328272)
+  completed **successfully**: both Swift architectures, both Linux helpers, the
+  full Mac Rust/C ABI gate, universal build, terminal-selection/browser links,
+  packaged app/rendering/scheduler, sidebar and system-status-menu checks passed.
+- All **14 packaged scheduler checks** passed: true embedded tab (no extra window),
+  clicked-workspace source scope and deduplication, remote refresh, lost-ack receipt
+  reconciliation, create, separate/combined edits, cancellation/history, geometry
+  and visible message text, five Applied receipts, original-version CAS preservation,
+  relative create/edit/countdown and exact deadline preservation on message-only edit.
+  The separate fast AppKit owner check passed all **10 resize cases**, including
+  overlay and legacy scrollers with a 455-point dense legacy viewport.
+- Root downloaded the final artifact and verified the archive checksum, matching
+  outer/bundled build metadata and Info SHA, macOS 14 minimum, all four universal
+  Mac binaries, all three helper manifest hashes/modes/static Linux architectures,
+  scheduler source/checks/receipts/CAS and completed selection receipt. Root visually
+  inspected the final screenshot: Schedules is beside the SSH terminal in the main
+  UI, message text is legible, and State/version is fully visible without overlap.
+  Receipt: `/tmp/zmux-relative-tabs-delivery-39880328272/download-verification.json`.
+  Fast owner evidence: `/tmp/zmux-queue-layout-green-39880328272/`.
+- Build is ad-hoc signed and **not notarized**. Hosted UI/SSH/systemd fixtures do
+  not establish physical-user-Mac or production remote-account acceptance. Existing
+  explicit accessibility Save acceptance remains deferred by the established workflow;
+  this extension does not modify file/browser Save behavior. No production service
+  or scheduled message was installed/created during this extension.
+- Quit the older Zmux app, extract the inner ZIP and launch the new app. Right-click
+  a managed SSH workspace and choose **Schedules**, or use Workspace > Scheduled
+  Messages. Both open the same bound tab. New messages support In/At with presets;
+  pending rows support live relative/absolute display. CLI `schedule list --relative`
+  prints a snapshot; default JSON and remote deadline authority are preserved.
+- Personal read-only post-commit review is recorded in
+  [relative-tabs-review.md](references/relative-tabs-review.md). Hosted verification
+  found and closed the stale format assertion and native column-spacing defects.
+  Earlier message-only-minute-rounding and New-from-History issues are also fixed;
+  the remaining previously recorded scheduler issues were not re-audited in this slice.
+  Latest full local gate passed at `/tmp/zmux-relative-tabs-spacing-check.log`.
+
+## Implementation and validation history
 
 Implemented relative entry (`1h30m`, presets, In/At), display-only live countdowns,
 and `schedule list --relative` while preserving default JSON. Schedules is a real
@@ -91,7 +135,17 @@ Mac artifact, hosted acceptance and delivery verification remain pending.
   Full local `scripts/check` passed with exit 0 at
   `/tmp/zmux-relative-tabs-spacing-check.log`. Native red is recorded before this fix.
 
-## Current result
+- Spacing repair `93f36fcab3ac89fa0fa32639a8b140f5bfd5066a` is pushed.
+  Fast native run [39880328272](https://github.com/ashutoshpw/zmux/actions/runs/39880328272)
+  passed all 10 real AppKit geometry cases: overlay row count 1 and legacy row
+  count 30, widths 483/470/640/470/483. At the original case, State now ends at
+  483 within 483; at narrow legacy, it ends at 455 within 455. Style is explicit
+  full-width and intercell spacing is (0,0). Report source matches 93f36fc.
+  Evidence: `/tmp/zmux-queue-layout-green-39880328272/`, artifact 12470351277.
+  Post-commit personal review found no additional defects; full app Swift checks,
+  packaging and packaged scheduler acceptance remain pending in that run.
+
+## Prior installer result
 
 - Verified fixed candidate
   [12461339273](https://github.com/ashutoshpw/zmux/actions/runs/39858685541/artifacts/12461339273)

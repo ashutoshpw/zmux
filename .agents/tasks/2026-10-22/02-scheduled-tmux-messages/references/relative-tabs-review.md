@@ -76,3 +76,18 @@ cell renderer's own padding. Extend the same owner-level resize cases to overlay
 and legacy scrollers, including enough legacy rows to require a vertical scroller.
 The original packaged geometry assertion is unchanged. The full portable gate
 passed at `/tmp/zmux-relative-tabs-spacing-check.log`. Native green is still required.
+
+
+## Final accepted result
+
+Source `93f36fcab3ac89fa0fa32639a8b140f5bfd5066a` passed native run 39880328272.
+The component-owner regression is red on 21730fc and green on 93f36fc (10 native
+resize cases). The packaged 14-check scheduler journey, including strict geometry,
+relative create/edit/countdowns and exact message-only deadline preservation, passed.
+Archive source/checksum/universal binaries/helpers and native reports were verified;
+the final screenshot shows the full State/version column and readable editor.
+
+No additional actionable defects were found in the final personal read-only review.
+The native defects discovered after earlier reviews are fixed and verified; earlier
+unrelated scheduler follow-ups remain tracked. Physical-user-Mac and production
+remote-account acceptance remain outside the hosted-fixture proof.
