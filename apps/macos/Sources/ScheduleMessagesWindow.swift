@@ -66,17 +66,13 @@ private struct ScheduleEditorSnapshot {
     let submitEdited: Bool
 }
 
-private final class ScheduleDocumentView: NSView {
-    override var isFlipped: Bool { true }
-}
-
 /// AppKit client for the remote helper. It owns only transient presentation and offline drafts;
 /// the helper owns queue state, deadlines, claims, and delivery history.
 @MainActor
 final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate, NSTextFieldDelegate {
-    let view = NSScrollView()
+    let view = ScheduleMessagesView(frame: .zero)
     var onFocus: (() -> Void)?
-    var preferredResponder: NSResponder { messageText.isEditable ? messageText : table }
+    var preferredResponder: NSResponder { view.isInspectorVisible && messageText.isEditable ? messageText : table }
     private var countdownTask: Task<Void, Never>?
     private var didLoad = false
     private let bridge: NativeBridge
@@ -103,32 +99,32 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
     private var isHistory = false
     private var suppressEditorEvents = false
     private var setupInfo: [String: Any]?
-    private var statusText = "Not checked"
+    private var statusText = "Not checked" { didSet { view.presentStatus(statusText) } }
 
-    private let destinationLabel = NSTextField(labelWithString: "")
-    private let connectionLabel = NSTextField(labelWithString: "")
-    private let statusLabel = NSTextField(wrappingLabelWithString: "Not checked")
-    private let refreshButton = NSButton(title: "Refresh", target: nil, action: nil)
-    private let setupCheckButton = NSButton(title: "Check Setup", target: nil, action: nil)
-    private let setupInstallButton = NSButton(title: "Install / Enable", target: nil, action: nil)
-    private let viewMode = NSSegmentedControl(labels: ["Pending", "History"], trackingMode: .selectOne, target: nil, action: nil)
-    private let queueScroll = ScheduleQueueScrollView(frame: .zero)
-    private var table: NSTableView { queueScroll.table }
-    private let targetPicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let messageText = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 120))
-    private let deadlineMode = NSSegmentedControl(labels: ["In", "At"], trackingMode: .selectOne, target: nil, action: nil)
-    private let durationField = NSTextField(string: "1h")
-    private let durationPresets = NSSegmentedControl(labels: ["1m", "5m", "15m", "1h"], trackingMode: .momentary, target: nil, action: nil)
-    private let timeDisplay = NSSegmentedControl(labels: ["Relative", "Absolute"], trackingMode: .selectOne, target: nil, action: nil)
-    private let deadlineField = NSTextField(string: "")
-    private let occurrencePicker = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let resolvedDeadlineLabel = NSTextField(wrappingLabelWithString: "")
-    private let submitCheckbox = NSButton(checkboxWithTitle: "Press Return after the message is sent", target: nil, action: nil)
-    private let newButton = NSButton(title: "New", target: nil, action: nil)
-    private let discardDraftButton = NSButton(title: "Discard Draft", target: nil, action: nil)
-    private let saveButton = NSButton(title: "Schedule Message", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "Cancel Job", target: nil, action: nil)
-    private let requestStatusButton = NSButton(title: "Check Request Status", target: nil, action: nil)
+    private var destinationLabel: NSTextField { view.destinationLabel }
+    private var connectionLabel: NSTextField { view.connectionLabel }
+    private var statusLabel: NSTextField { view.statusLabel }
+    private var refreshButton: NSButton { view.refreshButton }
+    private var setupCheckButton: NSButton { view.setupCheckButton }
+    private var setupInstallButton: NSButton { view.setupInstallButton }
+    private var viewMode: NSSegmentedControl { view.viewMode }
+    private var queueScroll: ScheduleQueueScrollView { view.queueScroll }
+    private var table: NSTableView { view.table }
+    private var targetPicker: NSPopUpButton { view.targetPicker }
+    private var messageText: NSTextView { view.messageText }
+    private var deadlineMode: NSSegmentedControl { view.deadlineMode }
+    private var durationField: NSTextField { view.durationField }
+    private var durationPresets: NSSegmentedControl { view.durationPresets }
+    private var timeDisplay: NSSegmentedControl { view.timeDisplay }
+    private var deadlineField: NSTextField { view.deadlineField }
+    private var occurrencePicker: NSPopUpButton { view.occurrencePicker }
+    private var resolvedDeadlineLabel: NSTextField { view.resolvedDeadlineLabel }
+    private var submitCheckbox: NSButton { view.submitCheckbox }
+    private var newButton: NSButton { view.newButton }
+    private var discardDraftButton: NSButton { view.discardDraftButton }
+    private var saveButton: NSButton { view.saveButton }
+    private var cancelButton: NSButton { view.cancelButton }
+    private var requestStatusButton: NSButton { view.requestStatusButton }
 
     init(bridge: NativeBridge, route: ScheduleMessagesRoute,
          currentRoute: @escaping @MainActor () -> ScheduleMessagesRoute?) {
@@ -137,7 +133,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         self.currentRoute = currentRoute
         super.init()
         configureControls()
-        installLayout()
         updateRoutePresentation()
         beginNewMessage()
         updateControls()
@@ -166,16 +161,19 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         } else {
             countdownTask?.cancel()
             countdownTask = nil
+            view.closeSetup()
         }
     }
 
     func close() {
         countdownTask?.cancel()
         countdownTask = nil
+        view.closeSetup()
         view.removeFromSuperview()
     }
 
     private func tickCountdowns() {
+        updateNextDeliverySummary()
         guard !isHistory, timeDisplay.selectedSegment == 0,
               let column = table.tableColumns.firstIndex(where: { $0.identifier.rawValue == "deadline" }) else { return }
         for row in visibleJobs.indices {
@@ -223,20 +221,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         targetPicker.target = self
         targetPicker.action = #selector(targetChanged)
 
-        messageText.isRichText = false
-        messageText.importsGraphics = false
-        messageText.allowsUndo = true
-        messageText.font = .systemFont(ofSize: 13)
-        messageText.isVerticallyResizable = true
-        messageText.isHorizontallyResizable = false
-        messageText.autoresizingMask = [.width]
-        messageText.minSize = .zero
-        messageText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
-                                     height: CGFloat.greatestFiniteMagnitude)
-        messageText.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
-                                                          height: CGFloat.greatestFiniteMagnitude)
-        messageText.textContainer?.widthTracksTextView = true
-        messageText.textContainerInset = NSSize(width: 8, height: 8)
         messageText.delegate = self
         messageText.setAccessibilityLabel("Scheduled message text")
         messageText.setAccessibilityHelp("Up to 4096 UTF-8 bytes. Text is sent literally; Return is optional and defaults off.")
@@ -279,138 +263,18 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         submitCheckbox.action = #selector(editorChanged)
         submitCheckbox.setAccessibilityHelp("Unchecked by default. When checked, one Return is sent after the message text.")
 
-        destinationLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        destinationLabel.font = .systemFont(ofSize: 12, weight: .medium)
         destinationLabel.lineBreakMode = .byTruncatingMiddle
         connectionLabel.font = .systemFont(ofSize: 12)
         connectionLabel.textColor = .secondaryLabelColor
-        connectionLabel.lineBreakMode = .byTruncatingMiddle
+        connectionLabel.lineBreakMode = .byWordWrapping
         statusLabel.font = .systemFont(ofSize: 12)
         statusLabel.textColor = .secondaryLabelColor
-        statusLabel.maximumNumberOfLines = 2
+        statusLabel.maximumNumberOfLines = 1
 
         resolvedDeadlineLabel.font = .systemFont(ofSize: 11)
         resolvedDeadlineLabel.textColor = .secondaryLabelColor
         resolvedDeadlineLabel.maximumNumberOfLines = 3
-    }
-
-    private func installLayout() {
-        let root = ScheduleDocumentView()
-        root.translatesAutoresizingMaskIntoConstraints = false
-        let heading = verticalStack([destinationLabel, connectionLabel], spacing: 4)
-        let controls = horizontalStack([refreshButton, setupCheckButton, setupInstallButton], spacing: 8)
-        let top = verticalStack([heading, controls, statusLabel], spacing: 8)
-
-        let tableScroll = queueScroll
-        let left = verticalStack([horizontalStack([viewMode, timeDisplay], spacing: 8), tableScroll], spacing: 8)
-        viewMode.widthAnchor.constraint(equalToConstant: 190).isActive = true
-        tableScroll.translatesAutoresizingMaskIntoConstraints = false
-        tableScroll.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
-        tableScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
-        left.widthAnchor.constraint(greaterThanOrEqualToConstant: 470).isActive = true
-
-        let targetHeading = NSTextField(labelWithString: "Remote tmux pane")
-        targetHeading.font = .systemFont(ofSize: 12, weight: .medium)
-        let targetGroup = verticalStack([targetHeading, targetPicker], spacing: 5)
-        let messageHeading = NSTextField(labelWithString: "Message")
-        messageHeading.font = .systemFont(ofSize: 12, weight: .medium)
-        let messageScroll = NSScrollView()
-        messageScroll.hasVerticalScroller = true
-        messageScroll.drawsBackground = true
-        messageScroll.borderType = .bezelBorder
-        messageScroll.hasHorizontalScroller = false
-        messageScroll.documentView = messageText
-        messageScroll.setAccessibilityLabel("Scheduled message editor scroll area")
-        messageScroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
-        let messageGroup = verticalStack([messageHeading, messageScroll], spacing: 5)
-
-        let deadlineHeading = NSTextField(labelWithString: "When")
-        deadlineHeading.font = .systemFont(ofSize: 12, weight: .medium)
-        let deadlineGroup = verticalStack([deadlineHeading, deadlineMode, durationField, durationPresets, deadlineField, occurrencePicker, resolvedDeadlineLabel], spacing: 5)
-        let editorButtons = horizontalStack([newButton, discardDraftButton, saveButton, cancelButton], spacing: 8)
-        let right = verticalStack([targetGroup, messageGroup, deadlineGroup, submitCheckbox, editorButtons, requestStatusButton], spacing: 14)
-        let rightSpacer = NSView(frame: .zero)
-        rightSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
-        rightSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-        right.addArrangedSubview(rightSpacer)
-        right.widthAnchor.constraint(greaterThanOrEqualToConstant: 430).isActive = true
-
-        for view in [targetGroup, messageGroup, deadlineGroup, submitCheckbox] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalTo: right.widthAnchor).isActive = true
-            view.setContentHuggingPriority(.required, for: .vertical)
-        }
-        for view in [editorButtons, requestStatusButton] {
-            view.setContentHuggingPriority(.required, for: .vertical)
-        }
-        for (view, stack) in [
-            (targetHeading as NSView, targetGroup), (targetPicker as NSView, targetGroup),
-            (messageHeading as NSView, messageGroup), (messageScroll as NSView, messageGroup),
-            (deadlineField as NSView, deadlineGroup), (occurrencePicker as NSView, deadlineGroup),
-            (resolvedDeadlineLabel as NSView, deadlineGroup)
-        ] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        messageScroll.translatesAutoresizingMaskIntoConstraints = false
-        top.setContentHuggingPriority(.required, for: .vertical)
-        top.setContentCompressionResistancePriority(.required, for: .vertical)
-
-        let divider = NSSplitView()
-        divider.isVertical = true
-        divider.dividerStyle = .thin
-        divider.addArrangedSubview(left)
-        divider.addArrangedSubview(right)
-        divider.setAccessibilityLabel("Scheduled message queue and editor")
-
-        top.translatesAutoresizingMaskIntoConstraints = false
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(top)
-        root.addSubview(divider)
-        NSLayoutConstraint.activate([
-            top.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
-            top.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
-            top.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
-            divider.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
-            divider.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
-            divider.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 14),
-            divider.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16)
-        ])
-        view.hasVerticalScroller = true
-        view.hasHorizontalScroller = true
-        view.autohidesScrollers = true
-        view.drawsBackground = true
-        view.documentView = root
-        view.setAccessibilityLabel("Schedules tab")
-        let width = root.widthAnchor.constraint(equalTo: view.contentView.widthAnchor)
-        width.priority = .defaultLow
-        let height = root.heightAnchor.constraint(equalTo: view.contentView.heightAnchor)
-        height.priority = .defaultLow
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: view.contentView.leadingAnchor),
-            root.topAnchor.constraint(equalTo: view.contentView.topAnchor),
-            root.widthAnchor.constraint(greaterThanOrEqualToConstant: 950),
-            root.heightAnchor.constraint(greaterThanOrEqualToConstant: 690), width, height
-        ])
-    }
-
-    private func verticalStack(_ views: [NSView], spacing: CGFloat) -> NSStackView {
-        let stack = NSStackView(views: views)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.distribution = .fill
-        stack.spacing = spacing
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        return stack
-    }
-
-    private func horizontalStack(_ views: [NSView], spacing: CGFloat) -> NSStackView {
-        let stack = NSStackView(views: views)
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.distribution = .fill
-        stack.spacing = spacing
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        return stack
     }
 
     private func updateRoutePresentation() {
@@ -418,6 +282,7 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         connectionLabel.stringValue = route.connected && route.expectedSession != nil
             ? "Managed SSH connected · remote scheduler state is authoritative"
             : "Managed SSH disconnected · drafts remain local until you send them"
+        view.presentConnection(connected: route.connected && route.expectedSession != nil)
         updateControls()
     }
 
@@ -437,7 +302,16 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         hasOfflineDraft || messageEdited || deadlineEdited || targetEdited || submitEdited
     }
 
+    private func updateNextDeliverySummary() {
+        view.nextDeliveryLabel.stringValue = currentJobs.map(\.deadline).min()
+            .map { "Next: " + Self.countdown(to: $0) } ?? "No pending messages"
+    }
+
     private func updateControls() {
+        view.editorHeading.stringValue = isHistory ? "Scheduled message details" : selectedJob == nil ? "New scheduled message" : "Edit scheduled message"
+        view.editorState.stringValue = selectedJob?.state.capitalized ?? "Draft"
+        view.queueCountLabel.stringValue = "\(visibleJobs.count) " + (isHistory ? "history items" : "pending messages")
+        updateNextDeliverySummary()
         let busy = isWorking
         let canSubmitDraft = hasOfflineDraft && isRemoteReady && !busy
         let currentPending = selectedJob.map { $0.state == "pending" && !isHistory } ?? false
@@ -482,7 +356,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
     private func beginWork(_ message: String) {
         isWorking = true
         statusText = message
-        statusLabel.stringValue = message
         updateControls()
     }
 
@@ -504,7 +377,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         updateRoutePresentation()
         guard isRemoteReady else {
             statusText = "Remote data is unavailable. Your editor contents remain a local draft."
-            statusLabel.stringValue = statusText
             updateControls()
             return
         }
@@ -592,7 +464,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                 if historyReply.value["truncated"] as? Bool == true {
                     self.statusText += " Showing the latest 100 history records; older records were omitted."
                 }
-                self.statusLabel.stringValue = self.statusText
                 if let resolvingMutationRequestID {
                     guard let mutation = self.localMutation,
                           mutation.outcomeUnknown,
@@ -603,7 +474,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                     }
                     self.localMutation = nil
                     self.statusText = "Applied request receipt reconciled. \(self.statusText)"
-                    self.statusLabel.stringValue = self.statusText
                     self.updateControls()
                 }
             } catch {
@@ -728,7 +598,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         } else {
             statusText = error.localizedDescription
         }
-        statusLabel.stringValue = statusText
         updateControls()
     }
 
@@ -937,9 +806,9 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         deadlineField.isHidden = relative
         if relative {
             occurrencePicker.isHidden = true
-            resolvedDeadlineLabel.stringValue = Self.parseDelay(durationField.stringValue).map {
-                "Delay: \($0) seconds after remote acceptance. The helper sets the exact deadline."
-            } ?? "Enter a delay from 1s to 365d, for example 5m or 1h30m."
+            resolvedDeadlineLabel.stringValue = Self.parseDelay(durationField.stringValue) != nil
+                ? "Delay begins when the remote host accepts the message."
+                : "Enter a delay from 1s to 365d, for example 5m or 1h30m."
             return
         }
         if let job = selectedJob, !deadlineEdited {
@@ -1022,7 +891,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
             localMutation = mutation
             guard isRemoteReady else {
                 statusText = "Draft saved locally in this tab. The remote job has not changed."
-                statusLabel.stringValue = statusText
                 updateControls()
                 return
             }
@@ -1035,7 +903,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
     private func sendMutation(_ mutation: ScheduleLocalMutation) {
         guard !isWorking, !unresolvedMutation, isRemoteReady else {
             statusText = "Draft retained locally. Reconnect to the same managed SSH terminal before sending it."
-            statusLabel.stringValue = statusText
             updateControls()
             return
         }
@@ -1062,7 +929,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                 self.targetEdited = false
                 self.submitEdited = false
                 self.statusText = "Remote scheduler acknowledged: \(mutation.description)."
-                self.statusLabel.stringValue = self.statusText
                 if reply.kind == "setup", let setup = reply.value["setup"] as? [String: Any] {
                     self.setupInfo = setup
                     self.showSetup(setup)
@@ -1170,10 +1036,8 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                        setup["service_active"] as? Bool == true {
                         self.localMutation = nil
                         self.statusText = "The scheduler helper and service are active. Setup state was verified; the installation was not repeated."
-                        self.statusLabel.stringValue = self.statusText
                     } else {
                         self.statusText = "Current setup state was checked. The original install result remains uncertain, so it was not retried."
-                        self.statusLabel.stringValue = self.statusText
                     }
                     self.endWork()
                     return
@@ -1191,7 +1055,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                 let receiptState = receipt["state"] as? String ?? receipt["status"] as? String
                 guard let receiptState, ["applied", "rejected"].contains(receiptState) else {
                     self.statusText = "The helper cannot prove whether this request was applied. It will not be sent again. Inspect the remote queue before creating another job."
-                    self.statusLabel.stringValue = self.statusText
                     self.endWork()
                     return
                 }
@@ -1204,7 +1067,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                 if receiptState == "rejected" {
                     self.localMutation = nil
                     self.statusText = "Request receipt found (rejected). Refreshing remote queue and history; the attempted editor draft is retained."
-                    self.statusLabel.stringValue = self.statusText
                     self.endWork()
                     self.refreshFromRemote()
                     return
@@ -1221,7 +1083,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
                 let job = try self.parseJob(jobValue)
                 guard job.id == receiptJobID else { throw self.unresolvedReceiptFailure() }
                 self.statusText = "Applied request receipt verified. Loading the created job and refreshing remote queue and history."
-                self.statusLabel.stringValue = self.statusText
                 self.endWork()
                 self.refreshFromRemote(selectingJobID: receiptJobID, preloadedJob: job,
                     resolvingMutationRequestID: mutation.requestID)
@@ -1268,7 +1129,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         let installed = (value["helper_installed"] as? Bool).map { $0 ? "installed" : "not installed" } ?? "unknown helper state"
         let active = (value["service_active"] as? Bool).map { $0 ? "active" : "inactive" } ?? "manual daemon state unavailable"
         statusText = "\(os) · helper \(installed) · service \(active). \(message)"
-        statusLabel.stringValue = statusText
         updateControls()
     }
 
@@ -1392,6 +1252,7 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         viewMode.selectedSegment = 0
         table.deselectAll(nil)
         table.reloadData()
+        view.showInspector()
         beginNewMessage()
     }
 
@@ -1447,7 +1308,7 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         let text = NSTextField(labelWithString: value)
         text.lineBreakMode = .byTruncatingTail
         text.toolTip = value
-        text.font = .systemFont(ofSize: 11)
+        text.font = .systemFont(ofSize: 12)
         text.translatesAutoresizingMaskIntoConstraints = false
         cell.textField = text
         cell.addSubview(text)
@@ -1485,12 +1346,10 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func displayJob(_ job: ScheduleMessageJob) {
         statusText = "\(job.state.capitalized) · version \(job.version) · \(job.targetTitle)"
-        statusLabel.stringValue = statusText
     }
 
     private func showMessage(_ message: String) {
         statusText = message
-        statusLabel.stringValue = message
     }
 
     private func updateVisibleRowsAfterMutation() {

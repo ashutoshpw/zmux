@@ -43,6 +43,7 @@ inside the main UI (including SSH workspace context menu), rather than a new win
 - [x] CLI relative list output, help and user documentation.
 - [x] Focused behavioral checks, full portable gate, self-review and verified Mac artifact.
 - [x] Strengthen source lifecycle/capacity and CLI relative/edit coverage; pass focused and full checks.
+- [ ] Implement the selected native right inspector, verify its AppKit behavior and deliver a new universal Mac build.
 
 A closed source leaves its panel offline; undo-close does not silently bind it to a
 newly created SSH terminal. Only topology/source IDs are persisted, never message drafts.
@@ -76,6 +77,8 @@ See [status.md](status.md) for verification boundaries, receipts and prior histo
 
 ## References
 
+- [scheduler-design-options.md](references/scheduler-design-options.md) — desktop proposals; option 1 is selected.
+- [right-inspector-delivery.md](references/right-inspector-delivery.md) — native layout implementation, test contracts and artifact evidence.
 - [remote-contract.md](references/remote-contract.md) — identity, lifecycle, persistence, time, and delivery safety.
 - [cli-native-delivery.md](references/cli-native-delivery.md) — CLI/help shape, native ownership, and validation contract.
 
