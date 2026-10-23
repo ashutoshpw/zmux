@@ -45,9 +45,11 @@ final class ScheduleMessagesView: NSView {
     private let splitController = NSSplitViewController()
     private var inspectorItem: NSSplitViewItem?
     private var positionedDivider = false
+    private var inspectorWidthBeforeCollapse: CGFloat = 358
     var split: NSSplitView { splitController.splitView }
     var isInspectorVisible: Bool { inspectorItem?.isCollapsed == false }
     override var isFlipped: Bool { true }
+    override var isOpaque: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -209,7 +211,11 @@ final class ScheduleMessagesView: NSView {
         let messageGroup = column([label("Message"), messageScroll], spacing: 5)
         let timeEntry = row([deadlineMode, durationField, deadlineField, spacer()], spacing: 8)
         let deadlineGroup = column([label("When"), timeEntry, durationPresets, occurrencePicker, resolvedDeadlineLabel], spacing: 6)
-        let fields = column([row([editorHeading, spacer(), editorState]), targetGroup,
+        let editorTitleRow = row([editorHeading, spacer(), editorState])
+        editorTitleRow.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        editorTitleRow.setContentHuggingPriority(.required, for: .vertical)
+        submitCheckbox.setContentHuggingPriority(.required, for: .vertical)
+        let fields = column([editorTitleRow, targetGroup,
                              messageGroup, deadlineGroup, submitCheckbox], spacing: 12)
         pin(fields, in: document, inset: 16, verticalInset: 14)
         for group in [targetGroup, messageGroup, deadlineGroup] {
@@ -263,12 +269,15 @@ final class ScheduleMessagesView: NSView {
         editorItem.maximumThickness = 520
         editorItem.holdingPriority = NSLayoutConstraint.Priority(rawValue: 251)
         editorItem.canCollapse = true
+        editorItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         inspectorItem = editorItem
         split.isVertical = true
         split.dividerStyle = .thin
         split.setAccessibilityLabel("Scheduled message queue and editor")
         splitController.addSplitViewItem(queueItem)
         splitController.addSplitViewItem(editorItem)
+        NotificationCenter.default.addObserver(self, selector: #selector(splitResized),
+                                               name: NSSplitView.didResizeSubviewsNotification, object: split)
 
         let status = NSView()
         pin(row([setupButton, statusLabel, requestStatusButton, nextDeliveryLabel], spacing: 7), in: status, inset: 10, verticalInset: 3)
@@ -290,6 +299,11 @@ final class ScheduleMessagesView: NSView {
         }
     }
 
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.windowBackgroundColor.setFill()
+        dirtyRect.fill()
+    }
+
     func presentStatus(_ message: String) {
         statusLabel.stringValue = message
         statusLabel.toolTip = message
@@ -304,17 +318,30 @@ final class ScheduleMessagesView: NSView {
     }
 
     func showInspector() {
+        let wasCollapsed = inspectorItem?.isCollapsed == true
         inspectorItem?.isCollapsed = false
         inspectorButton.state = .on
+        if wasCollapsed {
+            split.layoutSubtreeIfNeeded()
+            split.setPosition(max(300, split.bounds.width - inspectorWidthBeforeCollapse - split.dividerThickness), ofDividerAt: 0)
+        }
     }
 
     func closeSetup() { setupPopover.close() }
 
     @objc private func toggleInspector() {
         guard let inspectorItem else { return }
-        inspectorItem.isCollapsed.toggle()
-        inspectorButton.state = inspectorItem.isCollapsed ? .off : .on
-        if inspectorItem.isCollapsed { window?.makeFirstResponder(table) }
+        if inspectorItem.isCollapsed { showInspector() }
+        else {
+            inspectorWidthBeforeCollapse = split.arrangedSubviews.last?.frame.width ?? 358
+            inspectorItem.isCollapsed = true
+            inspectorButton.state = .off
+            window?.makeFirstResponder(table)
+        }
+    }
+
+    @objc private func splitResized(_ notification: Notification) {
+        inspectorButton.state = isInspectorVisible ? .on : .off
     }
 
     @objc private func toggleSetup() {
