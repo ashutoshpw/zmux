@@ -4,7 +4,8 @@ import Darwin
 
 @MainActor
 private final class Rows: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int { 1 }
+    var count = 1
+    func numberOfRows(in tableView: NSTableView) -> Int { count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let cell = NSTableCellView()
         let value: String
@@ -47,26 +48,33 @@ struct SchedulerQueueLayout {
         var observations: [[String: Any]] = []
         var failed = false
         let widths: [CGFloat] = [483, 470, 640, 470, 483]
-        for width in widths {
-            window.setContentSize(NSSize(width: width, height: 527))
-            queue.table.reloadData()
-            for _ in 0..<3 {
-                window.contentView?.layoutSubtreeIfNeeded()
-                queue.tile()
-                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let scenarios: [(NSScroller.Style, Int)] = [(.overlay, 1), (.legacy, 30)]
+        for (scrollerStyle, rowCount) in scenarios {
+            queue.scrollerStyle = scrollerStyle
+            rows.count = rowCount
+            for width in widths {
+                window.setContentSize(NSSize(width: width, height: 527))
+                queue.table.reloadData()
+                for _ in 0..<3 {
+                    window.contentView?.layoutSubtreeIfNeeded()
+                    queue.tile()
+                    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+                }
+                let visible = queue.table.visibleRect
+                let rects = queue.table.tableColumns.indices.map { queue.table.rect(ofColumn: $0) }
+                let fits = rects.allSatisfy { $0.minX >= visible.minX - 1 && $0.maxX <= visible.maxX + 1 }
+                observations.append([
+                    "requested_width": width, "fits": fits, "rows": rowCount,
+                    "scroller_style": scrollerStyle.rawValue,
+                    "visible": String(describing: visible), "table": String(describing: queue.table.frame),
+                    "columns": rects.map { String(describing: $0) },
+                    "column_widths": queue.table.tableColumns.map(\.width),
+                    "spacing": String(describing: queue.table.intercellSpacing),
+                    "style": queue.table.style.rawValue
+                ])
+                if !fits { failed = true; break }
             }
-            let visible = queue.table.visibleRect
-            let rects = queue.table.tableColumns.indices.map { queue.table.rect(ofColumn: $0) }
-            let fits = rects.allSatisfy { $0.minX >= visible.minX - 1 && $0.maxX <= visible.maxX + 1 }
-            observations.append([
-                "requested_width": width, "fits": fits,
-                "visible": String(describing: visible), "table": String(describing: queue.table.frame),
-                "columns": rects.map { String(describing: $0) },
-                "column_widths": queue.table.tableColumns.map(\.width),
-                "spacing": String(describing: queue.table.intercellSpacing),
-                "style": queue.table.style.rawValue
-            ])
-            if !fits { failed = true; break }
+            if failed { break }
         }
         var report: [String: Any] = ["source_sha": source, "state": failed ? "failed" : "passed", "observations": observations]
         if let content = window.contentView,

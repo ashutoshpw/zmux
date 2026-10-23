@@ -10,6 +10,9 @@ final class ScheduleQueueScrollView: NSScrollView {
         table.addTableColumn(makeColumn("Remote target", identifier: "target", width: 100))
         table.addTableColumn(makeColumn("Scheduled", identifier: "deadline", width: 110))
         table.addTableColumn(makeColumn("State", identifier: "state", width: 90))
+        // Automatic inset styling adds spacing outside the configured column widths.
+        table.style = .fullWidth
+        table.intercellSpacing = .zero
         table.autoresizingMask = [.width]
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.headerView = NSTableHeaderView()
@@ -44,4 +47,3 @@ final class ScheduleQueueScrollView: NSScrollView {
         }
     }
 }
-
