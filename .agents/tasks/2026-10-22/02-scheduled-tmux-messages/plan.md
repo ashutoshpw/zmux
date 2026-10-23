@@ -43,23 +43,24 @@ inside the main UI (including SSH workspace context menu), rather than a new win
 - [x] CLI relative list output, help and user documentation.
 - [x] Focused behavioral checks, full portable gate, self-review and verified Mac artifact.
 - [x] Strengthen source lifecycle/capacity and CLI relative/edit coverage; pass focused and full checks.
-- [ ] Implement the selected native right inspector, verify its AppKit behavior and deliver a new universal Mac build.
+- [x] Implement the selected native right inspector, verify its AppKit behavior and deliver a new universal Mac build.
 
 A closed source leaves its panel offline; undo-close does not silently bind it to a
 newly created SSH terminal. Only topology/source IDs are persisted, never message drafts.
 
 ## Current status
 
-Relative scheduling and embedded Schedules tabs are complete. Source
-`93f36fcab3ac89fa0fa32639a8b140f5bfd5066a` passed the complete Mac run
-[39880328272](https://github.com/ashutoshpw/zmux/actions/runs/39880328272), including
-10 focused AppKit resize cases and all 14 packaged scheduler checks. Personal
-post-commit review and archive/screenshot inspection are complete.
+Relative scheduling, embedded Schedules tabs and the native right inspector are
+complete. Source `cbc7ac3ced002ff8a519d17c6b7c517c82396f21` passed the complete
+Mac run [39929941810](https://github.com/ashutoshpw/zmux/actions/runs/39929941810),
+including ten queue and 16 full-inspector layout cases and all 16 packaged
+scheduler checks. Personal post-commit review and archive/screenshot inspection
+are complete.
 
 Verified final artifact
-[12471043165](https://github.com/ashutoshpw/zmux/actions/runs/39880328272/artifacts/12471043165)
-contains `zmux-dev-universal-93f36fc.zip`, SHA-256
-`045ad8b1378bbaf96edfa54728cc9572b2a74283a0347d21670bd735c6321765`.
+[12491858416](https://github.com/ashutoshpw/zmux/actions/runs/39929941810/artifacts/12491858416)
+contains `zmux-dev-universal-cbc7ac3.zip`, SHA-256
+`2c8b62dbdc5cf20cb3789d1983fbfd4171c68a46976750b8d34d340a13d17383`.
 The build is universal, requires macOS 14+, and is ad-hoc signed, not notarized.
 See [status.md](status.md) for verification boundaries, receipts and prior history.
 

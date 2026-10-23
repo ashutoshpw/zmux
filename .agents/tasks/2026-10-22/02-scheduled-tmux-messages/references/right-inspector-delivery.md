@@ -78,3 +78,49 @@ in the first layout assertions instead of weakening the visible-content checks.
 The repeated full local gate passed with exit 0 at
 `/tmp/zmux-right-inspector-final-check.log`. The final native visual gate remains
 pending; do not treat an earlier candidate as the accepted right-inspector build.
+
+Final layout source `cbc7ac3ced002ff8a519d17c6b7c517c82396f21` is on main.
+Run `39929941810` passed all ten queue cases and all 16 full inspector cases,
+including compact time-control gaps, top alignment, width/draft retention and the
+setup popover. Root downloaded the actual native report and dark screenshot to
+`/tmp/zmux-right-inspector-layout-39929941810/` and visually confirmed the compact
+form with spare space going to the message editor. Full app compilation and
+packaged scheduler acceptance remain pending. Personal post-commit review of the
+follow-up changes found no new state/transport changes or actionable defects.
+
+## Accepted build
+
+Run [39929941810](https://github.com/ashutoshpw/zmux/actions/runs/39929941810)
+completed successfully for source `cbc7ac3ced002ff8a519d17c6b7c517c82396f21`.
+Both Swift architectures, both Linux helper builds, the full Mac Rust/C ABI gate,
+universal build, terminal-selection/browser-link journey, packaged rendering and
+scheduler suite, sidebar and system-status-menu checks passed. All **16 packaged
+scheduler checks** passed, including the setup popover and dirty-draft inspector
+collapse/reveal, alongside the existing create/edit/cancel/relative-time/receipt
+and CAS contracts. The fast actual-AppKit gate passed ten queue cases and 16 full
+inspector cases plus draft/width retention and setup-popover checks.
+
+Final download:
+[artifact 12491858416](https://github.com/ashutoshpw/zmux/actions/runs/39929941810/artifacts/12491858416),
+`zmux-dev-universal-cbc7ac3.zip`, 24,394,882 bytes, SHA-256
+`2c8b62dbdc5cf20cb3789d1983fbfd4171c68a46976750b8d34d340a13d17383`.
+Root downloaded it to `/tmp/zmux-right-inspector-delivery-39929941810/` and
+extracted the application to `/tmp/zmux-right-inspector-app-39929941810/`.
+`download-verification.json` records matching ZIP/checksum, outer/bundled build
+metadata and Info source, macOS 14 minimum, four universal Mach-O binaries, all
+three scheduler helper manifests/hashes/modes, 16 scheduler checks, five distinct
+Applied mutation receipts, original-version CAS rejection, and completed
+same-source terminal-selection acceptance.
+
+Root inspected the actual packaged `zmux-scheduled-messages.png`: the embedded
+scheduler has a compact toolbar, queue and native right inspector, readable message
+content, compact time controls, and actions/status within the window. No extra
+scheduler window is introduced. The inspector is resizable and its collapse test
+preserves the dirty message, selection and enabled Save action.
+
+Build is universal Apple Silicon/Intel, requires macOS 14+, is ad-hoc signed and
+not notarized. Hosted fixture checks do not prove behavior on the user's physical
+Mac or production remote account. The established accessibility Save-test deferral
+is unchanged. This delivery does not install a production scheduler or create any
+production scheduled messages. Final receipt commit changes documentation only;
+the downloadable application's source remains `cbc7ac3`.
