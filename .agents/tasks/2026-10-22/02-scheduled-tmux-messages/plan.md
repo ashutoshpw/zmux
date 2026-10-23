@@ -42,6 +42,7 @@ inside the main UI (including SSH workspace context menu), rather than a new win
 - [x] Embedded native panel with relative input, presets and display-only countdown.
 - [x] CLI relative list output, help and user documentation.
 - [x] Focused behavioral checks, full portable gate, self-review and verified Mac artifact.
+- [x] Strengthen source lifecycle/capacity and CLI relative/edit coverage; pass focused and full checks.
 
 A closed source leaves its panel offline; undo-close does not silently bind it to a
 newly created SSH terminal. Only topology/source IDs are persisted, never message drafts.
@@ -79,3 +80,4 @@ See [status.md](status.md) for verification boundaries, receipts and prior histo
 - [cli-native-delivery.md](references/cli-native-delivery.md) — CLI/help shape, native ownership, and validation contract.
 
 - [relative-tabs-review.md](references/relative-tabs-review.md) — post-commit review and validation boundary.
+- [scheduler-test-coverage.md](references/scheduler-test-coverage.md) — test owners, authoring decisions and follow-up results.

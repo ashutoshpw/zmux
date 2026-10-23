@@ -252,6 +252,13 @@ fn schedules_tabs_are_bound_deduplicated_and_restore_without_starting_a_session(
         0,
         "orphaned Schedules stays offline and owns no PTY"
     );
+    let offline = WorkspaceStore::prepare_session_restore(document, &[], None).unwrap();
+    assert!(offline.effects.is_empty());
+    let offline_snapshot = offline.store.snapshot();
+    let offline_panel = offline_snapshot.workspaces[0].root.panes()[0].selected();
+    assert_eq!(offline_panel.kind, SurfaceKind::Schedules);
+    assert_eq!(offline_panel.scheduler_source, Some(source));
+    assert!(offline_panel.session_id.is_none());
     assert!(
         core.apply(Action::OpenSchedules { surface_id: source })
             .is_err()
@@ -309,4 +316,172 @@ fn schedules_reject_local_sources_and_keep_binding_when_moved_to_another_workspa
             .scheduler_source,
         Some(source)
     );
+}
+
+#[test]
+fn same_host_schedules_follow_exact_source_through_reconnect_but_not_undo_close() {
+    let mut core = WorkspaceStore::default();
+    core.apply(Action::CreateSshWorkspace {
+        name: "Remote".into(),
+        connection: connection().for_restore(),
+        focus: true,
+    })
+    .unwrap();
+    let initial = core.snapshot();
+    let pane = initial.workspaces[0].focused_pane;
+    let source = initial.workspaces[0].root.panes()[0].selected().clone();
+    core.apply(Action::CreateSurface { pane_id: pane }).unwrap();
+    let other_source = core.snapshot().workspaces[0].root.panes()[0].selected_surface;
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0]
+            .selected()
+            .remote,
+        source.remote,
+        "both sources deliberately use the same SSH configuration"
+    );
+
+    let mut panels = Vec::new();
+    for source_id in [source.id, other_source] {
+        assert!(
+            core.apply(Action::OpenSchedules {
+                surface_id: source_id
+            })
+            .unwrap()
+            .effects
+            .is_empty()
+        );
+        let snapshot = core.snapshot();
+        let panel = snapshot.workspaces[0].root.panes()[0].selected();
+        assert_eq!(panel.kind, SurfaceKind::Schedules);
+        assert_eq!(panel.scheduler_source, Some(source_id));
+        panels.push(panel.id);
+    }
+    assert_ne!(panels[0], panels[1], "same host is not the source identity");
+
+    core.apply(Action::ReconnectSsh {
+        identity_namespace: initial.identity_namespace,
+        surface_id: source.id,
+        expected_session_id: source.session_id.unwrap(),
+    })
+    .unwrap();
+    assert!(
+        core.apply(Action::OpenSchedules {
+            surface_id: source.id
+        })
+        .unwrap()
+        .effects
+        .is_empty()
+    );
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        panels[0],
+        "a new SSH session in the same source retains its panel"
+    );
+
+    core.apply(Action::CloseSurface {
+        surface_id: source.id,
+    })
+    .unwrap();
+    core.apply(Action::ReopenClosed { closed_id: None })
+        .unwrap();
+    let reopened = core.snapshot().workspaces[0].root.panes()[0]
+        .selected()
+        .clone();
+    assert_ne!(reopened.id, source.id);
+    assert_eq!(reopened.remote, Some(connection().for_restore()));
+    core.apply(Action::OpenSchedules {
+        surface_id: reopened.id,
+    })
+    .unwrap();
+    let snapshot = core.snapshot();
+    let pane = snapshot.workspaces[0].root.panes()[0];
+    let new_panel = pane.selected();
+    assert!(!panels.contains(&new_panel.id));
+    assert_eq!(new_panel.scheduler_source, Some(reopened.id));
+    for (id, source_id) in panels.into_iter().zip([source.id, other_source]) {
+        let panel = pane.surfaces.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(panel.scheduler_source, Some(source_id));
+        assert!(panel.session_id.is_none());
+    }
+    assert_eq!(
+        pane.surfaces
+            .iter()
+            .filter(|s| s.kind == SurfaceKind::Schedules)
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn schedules_select_existing_at_tab_capacity_and_reject_new_panel_atomically() {
+    let mut core = WorkspaceStore::default();
+    core.apply(Action::CreateSshWorkspace {
+        name: "Full remote".into(),
+        connection: connection(),
+        focus: true,
+    })
+    .unwrap();
+    let initial = core.snapshot();
+    let pane = initial.workspaces[0].focused_pane;
+    let source = initial.workspaces[0].root.panes()[0].selected_surface;
+    core.apply(Action::CreateSurface { pane_id: pane }).unwrap();
+    let other_source = core.snapshot().workspaces[0].root.panes()[0].selected_surface;
+    core.apply(Action::OpenSchedules { surface_id: source })
+        .unwrap();
+    let panel = core.snapshot().workspaces[0].root.panes()[0].selected_surface;
+    for _ in 3..MAX_SURFACES_PER_PANE {
+        core.apply(Action::CreateBrowser {
+            pane_id: pane,
+            url: "https://example.com/".into(),
+            focus: true,
+            profile_id: None,
+        })
+        .unwrap();
+    }
+    let last_browser = core.snapshot().workspaces[0].root.panes()[0].selected_surface;
+    assert!(
+        core.apply(Action::OpenSchedules { surface_id: source })
+            .unwrap()
+            .effects
+            .is_empty()
+    );
+    assert_eq!(
+        core.snapshot().workspaces[0].root.panes()[0].selected_surface,
+        panel
+    );
+    let full = core.snapshot();
+    assert_eq!(
+        full.workspaces[0].root.panes()[0].surfaces.len(),
+        MAX_SURFACES_PER_PANE
+    );
+    assert_eq!(
+        core.apply(Action::OpenSchedules {
+            surface_id: other_source
+        }),
+        Err(ActionError::Capacity {
+            resource: "tabs per pane",
+            limit: MAX_SURFACES_PER_PANE
+        })
+    );
+    assert_eq!(
+        core.snapshot(),
+        full,
+        "rejection must preserve selection and topology"
+    );
+    core.apply(Action::CloseSurface {
+        surface_id: last_browser,
+    })
+    .unwrap();
+    assert!(
+        core.apply(Action::OpenSchedules {
+            surface_id: other_source
+        })
+        .unwrap()
+        .effects
+        .is_empty()
+    );
+    let snapshot = core.snapshot();
+    let pane = snapshot.workspaces[0].root.panes()[0];
+    assert_eq!(pane.surfaces.len(), MAX_SURFACES_PER_PANE);
+    assert_eq!(pane.selected().scheduler_source, Some(other_source));
 }
