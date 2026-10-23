@@ -88,6 +88,7 @@ struct SchedulerQueueLayout {
         layout.occurrencePicker.addItems(withTitles: ["Choose occurrence…", "First occurrence", "Second occurrence"])
         layout.occurrencePicker.isHidden = true
         layout.messageText.string = "Continue the test run and report any failing tests."
+        layout.deadlineField.stringValue = "2026-10-23 13:45"
         layout.discardDraftButton.title = "Discard Changes"
         layout.saveButton.title = "Save Changes"
         layout.presentConnection(connected: true)
@@ -126,14 +127,20 @@ struct SchedulerQueueLayout {
                         .intersects(layout.messageText.enclosingScrollView!.convert(layout.messageText.enclosingScrollView!.bounds, to: layout))
                     let topAligned = layout.targetPicker.convert(layout.targetPicker.bounds, to: layout).minY
                         - layout.split.convert(layout.split.bounds, to: layout).minY < 120
+                    let timeRect = layout.deadlineMode.convert(layout.deadlineMode.bounds, to: layout)
+                    let messageRect = layout.messageText.enclosingScrollView!.convert(layout.messageText.enclosingScrollView!.bounds, to: layout)
+                    let beforeTime = timeRect.minY - messageRect.maxY
+                    let afterTime = layout.resolvedDeadlineLabel.convert(layout.resolvedDeadlineLabel.bounds, to: layout).minY - timeRect.maxY
+                    let compactTime = (0..<65).contains(beforeTime) && (0..<65).contains(afterTime)
                     inspectorObservations.append([
                         "width": size.width, "height": size.height, "relative": relative,
-                        "scroller_style": style.rawValue, "fits": fits && columnsFit && noOverlap && topAligned,
+                        "scroller_style": style.rawValue, "fits": fits && columnsFit && noOverlap && topAligned && compactTime,
                         "root": String(describing: layout.frame), "split": String(describing: layout.split.frame),
                         "save": String(describing: layout.saveButton.convert(layout.saveButton.bounds, to: layout)),
-                        "columns_fit": columnsFit, "no_overlap": noOverlap, "top_aligned": topAligned
+                        "columns_fit": columnsFit, "no_overlap": noOverlap, "top_aligned": topAligned,
+                        "compact_time_controls": compactTime
                     ])
-                    if !fits || !columnsFit || !noOverlap || !topAligned { failed = true }
+                    if !fits || !columnsFit || !noOverlap || !topAligned || !compactTime { failed = true }
                 }
             }
         }
