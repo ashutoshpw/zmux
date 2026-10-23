@@ -1,16 +1,28 @@
 # Status
 
-- **State:** in-progress
+- **State:** complete
 - **Updated:** 2026-10-23
 - **Authorization:** The user authorized implementation, relative times, an embedded Schedules tab, main delivery, post-commit self-review and a downloadable Mac build. This extension is complete; earlier scheduler follow-ups remain tracked.
 
 ## Test coverage follow-up
 
-The user selected the native **1 · Right inspector** on 2026-10-23 and authorized
-implementation and a fresh downloadable Mac build. Implement a bounded native
-toolbar, queue/inspector split, compact status bar and setup popover using the
-existing AppKit scheduling state owner. Preserve existing remote/CLI contracts.
-Current work and verification are tracked in
+The selected native **1 · Right inspector** is implemented and verified in source
+`cbc7ac3ced002ff8a519d17c6b7c517c82396f21`. It uses a compact native toolbar,
+resizable queue/inspector split, pinned actions, status bar and setup popover,
+preserving the existing AppKit scheduling state owner and remote/CLI contracts.
+Download [12491858416](https://github.com/ashutoshpw/zmux/actions/runs/39929941810/artifacts/12491858416):
+`zmux-dev-universal-cbc7ac3.zip`, 24,394,882 bytes, SHA-256
+`2c8b62dbdc5cf20cb3789d1983fbfd4171c68a46976750b8d34d340a13d17383`.
+The complete Mac workflow passed, including all 16 packaged scheduler checks,
+ten queue and 16 full-inspector layout cases, both Mac architectures, both Linux
+helpers, full Rust/C ABI validation, terminal selection/browser links, packaged
+rendering, sidebar and system status menu. Root downloaded and verified the final
+archive, bundled metadata, four universal binaries, three helper manifests/hashes,
+five Applied mutation receipts, CAS protection and the same-source selection
+receipt, then visually inspected the packaged scheduler screenshot. Universal,
+macOS 14+, ad-hoc signed and not notarized. Hosted fixture acceptance does not
+establish acceptance on the user's physical Mac or production remote account.
+Personal post-commit review and delivery evidence are recorded in
 [right-inspector-delivery.md](references/right-inspector-delivery.md).
 
 Test-strengthening follow-up authorized on 2026-10-23: add same-host SSH source
@@ -27,8 +39,8 @@ Test commit `b5f2ac3b1da0edb820f5978826324ac44120a34d` is complete. Personal
 read-only post-commit review found no actionable defects in the test diff: fixtures
 use the production owners, the source/config preconditions discriminate identity,
 the CLI uses real store replies and receipts, and no production seam was added.
-Main push and fresh hosted checks are pending at this receipt; local verification
-is complete. App source/behavior is unchanged from the accepted build below.
+The tests are pushed and included in the successful right-inspector Mac workflow
+above. This test-only slice preserved the scheduler's application behavior.
 
 ## Accepted relative scheduling and embedded-tab build
 
