@@ -40,7 +40,13 @@ store data or public output, not source spelling or copied implementations.
   cases, the expanded real-store CLI journey, real managed SSH installation/RPC,
   and eight daemon integration cases), strict Clippy, formatting, license inventory
   and both C ABI executables. Log: `/tmp/zmux-scheduler-coverage-check.log`.
-  Personal post-commit review pending.
+- Personal read-only post-commit review of
+  `b5f2ac3b1da0edb820f5978826324ac44120a34d` found no actionable defects.
+  Checked the exact committed diff, production action/descriptor contracts,
+  source/config preconditions, real-store deadline/patch/receipt assertions,
+  request counts/cleanup, CLI error paths and existing CI discovery. No delegation,
+  source-grep tests, copied implementations, mocked scheduler acknowledgements or
+  test-only production exports were introduced.
 - No native source or packaged acceptance code changed; existing accepted native
   results remain tied to source `93f36fc` (14 packaged scheduler checks and ten
   actual AppKit queue resize cases). Both remain wired into macOS CI. Linux has no
