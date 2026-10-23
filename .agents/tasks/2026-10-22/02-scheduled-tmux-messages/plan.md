@@ -41,28 +41,25 @@ inside the main UI (including SSH workspace context menu), rather than a new win
 - [x] Rust-owned Schedules surface/action with exact SSH source binding and persistence.
 - [x] Embedded native panel with relative input, presets and display-only countdown.
 - [x] CLI relative list output, help and user documentation.
-- [ ] Focused behavioral checks, full portable gate, self-review and verified Mac artifact.
+- [x] Focused behavioral checks, full portable gate, self-review and verified Mac artifact.
 
 A closed source leaves its panel offline; undo-close does not silently bind it to a
 newly created SSH terminal. Only topology/source IDs are persisted, never message drafts.
 
 ## Current status
 
-Fresh-install repair is complete: the SSH installer quotes each generated file
-line separately and restores LF separators with remote `printf`. Command and
-checksum guards remain strict. The real managed-SSH regression and full local and
-macOS Rust/C ABI checks passed. Verified candidate
-[12461339273](https://github.com/ashutoshpw/zmux/actions/runs/39858685541/artifacts/12461339273)
-contains `zmux-dev-universal-d58bf47.zip`. Broader native UI acceptance was still
-running at delivery; this candidate is not a full-CI success receipt. See status
-for checksum, source binding and remaining review findings.
+Relative scheduling and embedded Schedules tabs are complete. Source
+`93f36fcab3ac89fa0fa32639a8b140f5bfd5066a` passed the complete Mac run
+[39880328272](https://github.com/ashutoshpw/zmux/actions/runs/39880328272), including
+10 focused AppKit resize cases and all 14 packaged scheduler checks. Personal
+post-commit review and archive/screenshot inspection are complete.
 
-Source `43d5111ac7f6d237fb94431d3bb7dd96ca816e6c` passed all 12 packaged scheduler
-checks, including the geometry and visible-text gate, and the retained screenshot
-confirmed a usable message view. The universal Mac artifact is verified and
-deliverable. CI run [39843250131](https://github.com/ashutoshpw/zmux/actions/runs/39843250131)
-is not fully green because a separate sidebar shutdown/cleanup check failed; details
-and the validation boundary are recorded in [status.md](status.md).
+Verified final artifact
+[12471043165](https://github.com/ashutoshpw/zmux/actions/runs/39880328272/artifacts/12471043165)
+contains `zmux-dev-universal-93f36fc.zip`, SHA-256
+`045ad8b1378bbaf96edfa54728cc9572b2a74283a0347d21670bd735c6321765`.
+The build is universal, requires macOS 14+, and is ad-hoc signed, not notarized.
+See [status.md](status.md) for verification boundaries, receipts and prior history.
 
 ## Acceptance criteria
 
