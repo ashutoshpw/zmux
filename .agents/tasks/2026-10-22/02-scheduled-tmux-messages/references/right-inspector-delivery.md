@@ -47,3 +47,22 @@ setup-popover and dirty-draft collapse/reveal checks. Native gates remain pendin
 Pending: post-commit personal review, hosted macOS build/acceptance, actual archive
 download/checksum/metadata verification and updated screenshot inspection. Linux
 has no AppKit compiler; portable checks do not establish native UI acceptance.
+
+## First native pass
+
+Source `966b68fa41115516b2ff51fd71594d332913cf9e` is pushed on main. Run
+`39928042752` passed the fast actual-AppKit gate (ten queue cases and all 16
+inspector combinations, draft retention and setup popover), both architecture
+source checks and both Linux helper builds. Root downloaded fast evidence
+artifact `12489459839` to `/tmp/zmux-right-inspector-layout-39928042752/`.
+Personal post-commit source review found no new scheduler state/route defects.
+
+Image inspection exposed excess space in the inspector title row and restoration
+to a wider pane after hide/show. Pin that row to its native 18-point height,
+give surplus vertical space to the message editor, preserve the previous width,
+and explicitly resize siblings within the fixed window on collapse. Extend the
+native component check for top alignment and width retention. Paint the native
+background in the production owner so component captures have the same opaque
+appearance as the host; capture the dark appearance used by the application.
+Full local recheck passed with exit 0 at
+`/tmp/zmux-right-inspector-alignment-check.log`; native follow-up is pending.

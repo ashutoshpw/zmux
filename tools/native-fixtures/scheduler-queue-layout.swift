@@ -38,6 +38,7 @@ struct SchedulerQueueLayout {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 483, height: 527),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
         let queue = ScheduleQueueScrollView(frame: .zero)
         let rows = Rows()
         queue.table.dataSource = rows
@@ -123,29 +124,36 @@ struct SchedulerQueueLayout {
                     }
                     let noOverlap = !layout.queueScroll.convert(layout.queueScroll.bounds, to: layout)
                         .intersects(layout.messageText.enclosingScrollView!.convert(layout.messageText.enclosingScrollView!.bounds, to: layout))
+                    let topAligned = layout.targetPicker.convert(layout.targetPicker.bounds, to: layout).minY
+                        - layout.split.convert(layout.split.bounds, to: layout).minY < 120
                     inspectorObservations.append([
                         "width": size.width, "height": size.height, "relative": relative,
-                        "scroller_style": style.rawValue, "fits": fits && columnsFit && noOverlap,
+                        "scroller_style": style.rawValue, "fits": fits && columnsFit && noOverlap && topAligned,
                         "root": String(describing: layout.frame), "split": String(describing: layout.split.frame),
                         "save": String(describing: layout.saveButton.convert(layout.saveButton.bounds, to: layout)),
-                        "columns_fit": columnsFit, "no_overlap": noOverlap
+                        "columns_fit": columnsFit, "no_overlap": noOverlap, "top_aligned": topAligned
                     ])
-                    if !fits || !columnsFit || !noOverlap { failed = true }
+                    if !fits || !columnsFit || !noOverlap || !topAligned { failed = true }
                 }
             }
         }
+        let widthBefore = layout.split.arrangedSubviews.last!.frame.width
         layout.inspectorButton.performClick(nil)
         let collapsed = !layout.isInspectorVisible
         layout.inspectorButton.performClick(nil)
+        layout.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let widthRetained = abs(layout.split.arrangedSubviews.last!.frame.width - widthBefore) < 2
         let retained = layout.isInspectorVisible && layout.messageText.string == "Continue the test run and report any failing tests."
         layout.setupButton.performClick(nil)
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         let setupShown = layout.setupPopover.isShown && layout.setupCheckButton.window != nil
         layout.closeSetup()
-        if !collapsed || !retained || !setupShown { failed = true }
+        if !collapsed || !retained || !setupShown || !widthRetained { failed = true }
         var report: [String: Any] = ["source_sha": source, "state": failed ? "failed" : "passed", "observations": observations,
                                    "inspector_observations": inspectorObservations,
-                                   "collapse_retains_editor": collapsed && retained, "setup_popover": setupShown]
+                                   "collapse_retains_editor": collapsed && retained, "collapse_retains_width": widthRetained,
+                                   "setup_popover": setupShown]
         if let content = window.contentView,
            let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
             content.cacheDisplay(in: content.bounds, to: bitmap)
