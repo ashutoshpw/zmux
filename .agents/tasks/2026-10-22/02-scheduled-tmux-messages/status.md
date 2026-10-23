@@ -1,6 +1,6 @@
 # Status
 
-- **State:** in-progress
+- **State:** done
 - **Updated:** 2026-10-23
 - **Authorization:** The user authorized implementation, relative times, an embedded Schedules tab, main delivery, post-commit self-review and a downloadable Mac build. This extension is complete; earlier scheduler follow-ups remain tracked.
 
@@ -16,7 +16,12 @@ The full `RUST_TEST_THREADS=2 scripts/check` passed with exit 0, including all
 workspace tests, strict Clippy, formatting, license inventory and both C ABI
 executables (`/tmp/zmux-scheduler-coverage-check.log`). Three deliberate mutation
 controls failed at the intended new assertions; production sources were restored.
-Commit, personal post-commit review and authorized main push remain pending.
+Test commit `b5f2ac3b1da0edb820f5978826324ac44120a34d` is complete. Personal
+read-only post-commit review found no actionable defects in the test diff: fixtures
+use the production owners, the source/config preconditions discriminate identity,
+the CLI uses real store replies and receipts, and no production seam was added.
+Main push and fresh hosted checks are pending at this receipt; local verification
+is complete. App source/behavior is unchanged from the accepted build below.
 
 ## Accepted relative scheduling and embedded-tab build
 
