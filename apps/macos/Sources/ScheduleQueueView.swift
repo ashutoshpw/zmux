@@ -7,7 +7,7 @@ final class ScheduleQueueScrollView: NSScrollView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         table.addTableColumn(makeColumn("Message", identifier: "message", width: 150))
-        table.addTableColumn(makeColumn("Remote target", identifier: "target", width: 100))
+        table.addTableColumn(makeColumn("tmux pane", identifier: "target", width: 100))
         table.addTableColumn(makeColumn("Scheduled", identifier: "deadline", width: 110))
         table.addTableColumn(makeColumn("State", identifier: "state", width: 90))
         // Automatic inset styling adds spacing outside the configured column widths.
@@ -16,8 +16,8 @@ final class ScheduleQueueScrollView: NSScrollView {
         table.autoresizingMask = [.width]
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.headerView = NSTableHeaderView()
-        table.rowHeight = 42
-        table.usesAlternatingRowBackgroundColors = true
+        table.rowHeight = 28
+        table.usesAlternatingRowBackgroundColors = false
         table.allowsMultipleSelection = false
         table.setAccessibilityLabel("Scheduled message list")
         hasVerticalScroller = true

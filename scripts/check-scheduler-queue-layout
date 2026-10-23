@@ -17,6 +17,7 @@ with tempfile.TemporaryDirectory(prefix="zmux-queue-layout-") as directory:
         "xcrun", "swiftc", "-parse-as-library", "-swift-version", "6",
         "-strict-concurrency=complete", "-warnings-as-errors", "-O",
         str(root / "apps/macos/Sources/ScheduleQueueView.swift"),
+        str(root / "apps/macos/Sources/ScheduleMessagesView.swift"),
         str(root / "tools/native-fixtures/scheduler-queue-layout.swift"),
         "-framework", "AppKit", "-o", str(executable),
     ], check=True, timeout=90)

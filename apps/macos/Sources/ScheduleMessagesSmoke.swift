@@ -57,6 +57,8 @@ enum ScheduleMessagesSmoke {
         let save: NSButton
         let cancel: NSButton
         let requestStatus: NSButton
+        let inspectorToggle: NSButton
+        let setup: NSButton
 
         init(window: NSWindow) throws {
             guard let content = window.contentView else {
@@ -88,6 +90,8 @@ enum ScheduleMessagesSmoke {
             save = try required(NSButton.self, label: "Save or schedule message")
             cancel = try required(NSButton.self, label: "Cancel selected pending scheduled message")
             requestStatus = try required(NSButton.self, label: "Check the remote receipt for the unresolved request")
+            inspectorToggle = try required(NSButton.self, label: "Show or hide scheduled message inspector")
+            setup = try required(NSButton.self, label: "Show remote scheduler setup details")
         }
     }
 
@@ -142,7 +146,7 @@ enum ScheduleMessagesSmoke {
             evidence["remote_surface"] = route.surface
             evidence["remote_session"] = route.session
 
-            host.window.setContentSize(NSSize(width: 1400, height: 900))
+            host.window.setContentSize(NSSize(width: 1034, height: 670))
             host.window.makeKeyAndOrderFront(nil)
             host.installMenus()
             NSApp.activate(ignoringOtherApps: true)
@@ -176,8 +180,16 @@ enum ScheduleMessagesSmoke {
             try await waitUntil("remote scheduler targets and first queue refresh") {
                 controls.target.numberOfItems > 0
                     && Self.visibleText(in: scheduleWindow).contains("Remote scheduler refreshed")
-                    && Self.visibleText(in: scheduleWindow).contains("tmux available")
             }
+            try click(controls.setup, named: "Scheduler setup details")
+            try await waitUntil("remote setup diagnostics in the native popover") {
+                NSApp.windows.contains { window in
+                    window.isVisible && window !== scheduleWindow
+                        && Self.visibleText(in: window).contains("tmux available")
+                }
+            }
+            try click(controls.setup, named: "Close scheduler setup details")
+            append("native_setup_popover_keeps_diagnostics_off_the_toolbar", to: &evidence)
             guard controls.target.selectedItem?.representedObject as? String != nil else {
                 throw BridgeFailure(message: "Remote scheduler did not select an identity-fenced tmux target")
             }
@@ -441,6 +453,20 @@ enum ScheduleMessagesSmoke {
             }
             try replaceMessage(relativeMessage + " edited", in: controls)
             let selectedRow = controls.table.selectedRow
+            let queueWidthBeforeCollapse = controls.queueScroll.bounds.width
+            try click(controls.inspectorToggle, named: "Hide inspector with a dirty draft")
+            try await waitUntil("collapsed native inspector") {
+                controls.split.arrangedSubviews.count == 2
+                    && controls.split.isSubviewCollapsed(controls.split.arrangedSubviews[1])
+                    && controls.queueScroll.bounds.width > queueWidthBeforeCollapse + 100
+            }
+            try click(controls.inspectorToggle, named: "Show retained inspector")
+            try await waitUntil("the same retained draft after expanding inspector") {
+                !controls.split.isSubviewCollapsed(controls.split.arrangedSubviews[1])
+                    && controls.message.string == relativeMessage + " edited"
+                    && controls.table.selectedRow == selectedRow && controls.save.isEnabled
+            }
+            append("native_inspector_collapse_preserves_dirty_draft", to: &evidence)
             try await waitUntil("live countdown changes without altering draft") {
                 cellText(column: 2, row: relativeRow, in: controls.table) != beforeCountdown
             }
@@ -614,8 +640,17 @@ enum ScheduleMessagesSmoke {
         guard contains(panes[0].bounds, queueScrollRect),
               contains(panes[1].bounds, editorScrollRect),
               !rect(controls.queueScroll, in: content).intersects(rect(controls.editorScroll, in: content)),
-              controls.editorScroll.contentView.bounds.width >= 300 else {
+              controls.editorScroll.contentView.bounds.width >= 280 else {
             throw BridgeFailure(message: "Scheduled messages scroll views escape their panes, overlap, or leave the editor too narrow")
+        }
+        guard let windowContent = controls.window.contentView else {
+            throw BridgeFailure(message: "Schedules has no host window content")
+        }
+        for control in [controls.save, controls.cancel, controls.refresh, controls.new, controls.inspectorToggle] {
+            guard contains(windowContent.bounds, rect(control, in: windowContent)),
+                  control.bounds.width > 0, control.bounds.height > 0 else {
+                throw BridgeFailure(message: "Native scheduler action is outside the 1034 × 670 window")
+            }
         }
 
         let contentHeight = content.bounds.height

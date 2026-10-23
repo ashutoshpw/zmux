@@ -1,10 +1,17 @@
 # Status
 
-- **State:** done
+- **State:** in-progress
 - **Updated:** 2026-10-23
 - **Authorization:** The user authorized implementation, relative times, an embedded Schedules tab, main delivery, post-commit self-review and a downloadable Mac build. This extension is complete; earlier scheduler follow-ups remain tracked.
 
 ## Test coverage follow-up
+
+The user selected the native **1 · Right inspector** on 2026-10-23 and authorized
+implementation and a fresh downloadable Mac build. Implement a bounded native
+toolbar, queue/inspector split, compact status bar and setup popover using the
+existing AppKit scheduling state owner. Preserve existing remote/CLI contracts.
+Current work and verification are tracked in
+[right-inspector-delivery.md](references/right-inspector-delivery.md).
 
 Test-strengthening follow-up authorized on 2026-10-23: add same-host SSH source
 identity/reconnect/reopen and full-pane atomicity coverage at the Rust action

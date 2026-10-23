@@ -21,13 +21,21 @@ like other tabs; its SSH source stays fixed. Closing that source leaves the
 Schedules tab offline. Session restore preserves source IDs; undo-close creates
 new terminal IDs, so it never silently rebinds an old Schedules tab.
 
+The native queue has a resizable right-side inspector. Use its toolbar button to
+hide or show the inspector; the same draft is retained. **New message** shows the
+inspector again. The status bar's information button opens setup details with
+**Check Setup** and **Install / Enable**. Full status text is available there and
+in the status bar tooltip; **Check Request Status** remains directly available
+when an acknowledgement is unresolved.
+
 Choose **In** for a delay such as `5m`, `1h30m` or `2d`, with 1m/5m/15m/1h
 presets, or **At** for a local date/time. Delays allow descending integer d/h/m/s
 units, from 1 second through 365 days, evaluated at remote acceptance.
 Pending rows show live countdowns; **Absolute** shows resolved local times.
 History always shows absolute timestamps. Countdown text uses your Mac's clock
-and never establishes delivery or changes a remote job. Narrow panes scroll
-without increasing the main window's minimum size.
+and never establishes delivery or changes a remote job. The queue and inspector
+resize inside the tab. On shorter windows the inspector form scrolls while its
+save/cancel buttons stay available.
 
 Select a pending message to edit its text, time or both, then save the versioned
 change. A message-only edit preserves the exact remote deadline, including seconds.
