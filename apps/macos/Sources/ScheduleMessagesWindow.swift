@@ -66,18 +66,6 @@ private struct ScheduleEditorSnapshot {
     let submitEdited: Bool
 }
 
-/// Keep columns inside the actual clip width, including split and scroller changes.
-private final class ScheduleQueueScrollView: NSScrollView {
-    override func tile() {
-        super.tile()
-        guard let table = documentView as? NSTableView else { return }
-        let width = contentView.bounds.width
-        if width > 0, abs(table.frame.width - width) > 0.5 {
-            table.setFrameSize(NSSize(width: width, height: table.frame.height))
-        }
-    }
-}
-
 private final class ScheduleDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
@@ -124,7 +112,8 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
     private let setupCheckButton = NSButton(title: "Check Setup", target: nil, action: nil)
     private let setupInstallButton = NSButton(title: "Install / Enable", target: nil, action: nil)
     private let viewMode = NSSegmentedControl(labels: ["Pending", "History"], trackingMode: .selectOne, target: nil, action: nil)
-    private let table = NSTableView()
+    private let queueScroll = ScheduleQueueScrollView(frame: .zero)
+    private var table: NSTableView { queueScroll.table }
     private let targetPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let messageText = NSTextView(frame: NSRect(x: 0, y: 0, width: 430, height: 120))
     private let deadlineMode = NSSegmentedControl(labels: ["In", "At"], trackingMode: .selectOne, target: nil, action: nil)
@@ -225,19 +214,8 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         viewMode.target = self
         viewMode.action = #selector(viewModeChanged)
 
-        table.addTableColumn(makeColumn("Message", identifier: "message", width: 150))
-        table.addTableColumn(makeColumn("Remote target", identifier: "target", width: 100))
-        table.addTableColumn(makeColumn("Scheduled", identifier: "deadline", width: 110))
-        table.addTableColumn(makeColumn("State", identifier: "state", width: 90))
-        table.autoresizingMask = [.width]
-        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        table.headerView = NSTableHeaderView()
-        table.rowHeight = 42
-        table.usesAlternatingRowBackgroundColors = true
-        table.allowsMultipleSelection = false
         table.dataSource = self
         table.delegate = self
-        table.setAccessibilityLabel("Scheduled message list")
 
         targetPicker.setAccessibilityLabel("Remote tmux pane")
         targetPicker.setAccessibilityHelp("These targets come from the selected remote helper. Local Zmux panes are not targets.")
@@ -315,15 +293,6 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         resolvedDeadlineLabel.maximumNumberOfLines = 3
     }
 
-    private func makeColumn(_ title: String, identifier: String, width: CGFloat) -> NSTableColumn {
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(identifier))
-        column.title = title
-        column.width = width
-        column.minWidth = 72
-        column.resizingMask = [.userResizingMask, .autoresizingMask]
-        return column
-    }
-
     private func installLayout() {
         let root = ScheduleDocumentView()
         root.translatesAutoresizingMaskIntoConstraints = false
@@ -331,12 +300,7 @@ final class ScheduleMessagesPanel: NSObject, NSTableViewDataSource, NSTableViewD
         let controls = horizontalStack([refreshButton, setupCheckButton, setupInstallButton], spacing: 8)
         let top = verticalStack([heading, controls, statusLabel], spacing: 8)
 
-        let tableScroll = ScheduleQueueScrollView()
-        tableScroll.hasVerticalScroller = true
-        tableScroll.hasHorizontalScroller = true
-        tableScroll.autohidesScrollers = true
-        tableScroll.documentView = table
-        tableScroll.setAccessibilityLabel("Pending scheduled messages and history")
+        let tableScroll = queueScroll
         let left = verticalStack([horizontalStack([viewMode, timeDisplay], spacing: 8), tableScroll], spacing: 8)
         viewMode.widthAnchor.constraint(equalToConstant: 190).isActive = true
         tableScroll.translatesAutoresizingMaskIntoConstraints = false
