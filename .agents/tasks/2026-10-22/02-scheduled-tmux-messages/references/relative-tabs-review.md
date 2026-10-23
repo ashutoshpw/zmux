@@ -64,3 +64,15 @@ Local `scripts/check` passed at `/tmp/zmux-relative-tabs-queue-owner-final-check
 The first invocation hit an unrelated existing terminal/browser-link `Busy` error;
 an unchanged focused rerun passed, followed by the successful full gate. No Rust
 or link test code changed. Python compilation and workflow YAML parsing passed.
+
+## Native red result and explicit spacing fix
+
+Fast run 39879610961 reproduced the same failing 483-point case using the actual
+production owner. Its native JSON reports unchanged column widths [150,100,110,90]
+and automatic-style intercell spacing (17,0): State extends to 523 although the
+viewport/table width is 483. Evidence is at `/tmp/zmux-queue-layout-red-39879610961/`.
+Use explicit `fullWidth` style and zero extra intercell spacing, preserving the
+cell renderer's own padding. Extend the same owner-level resize cases to overlay
+and legacy scrollers, including enough legacy rows to require a vertical scroller.
+The original packaged geometry assertion is unchanged. The full portable gate
+passed at `/tmp/zmux-relative-tabs-spacing-check.log`. Native green is still required.

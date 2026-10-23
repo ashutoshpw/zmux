@@ -81,6 +81,16 @@ Mac artifact, hosted acceptance and delivery verification remain pending.
   `/tmp/zmux-relative-tabs-queue-owner-final-check.log`; one unrelated existing
   link-test Busy transient passed unchanged on focused and full reruns.
 
+- Fast native run 39879610961 reproduced the exact overflow against the extracted
+  production owner before a full build: column widths remain [150,100,110,90],
+  automatic style adds 17-point intercell spacing, and State ends at 523 versus
+  a 483-point viewport. Receipt and screenshot are retained at
+  `/tmp/zmux-queue-layout-red-39879610961/`; the expensive build was correctly skipped.
+  Fix the production owner with explicit full-width style and zero extra spacing;
+  also verify both overlay and legacy scrollers through the same resize sequence.
+  Full local `scripts/check` passed with exit 0 at
+  `/tmp/zmux-relative-tabs-spacing-check.log`. Native red is recorded before this fix.
+
 ## Current result
 
 - Verified fixed candidate
