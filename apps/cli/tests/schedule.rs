@@ -396,24 +396,91 @@ fn message_bodies_are_omitted_from_journal_diagnostics_and_json_errors() {
 }
 
 #[test]
-fn relative_display_is_rejected_for_mutations_before_connecting() {
+fn relative_display_is_list_only_and_rejected_before_connecting_or_journaling() {
     let home = Home::new();
-    let output = home
-        .command(&[
-            "--socket",
-            "/tmp/zmux-absent-schedule.sock",
-            "schedule",
-            "targets",
-            "--surface",
-            SURFACE,
-            "--relative",
-        ])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let text = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        text.contains("unknown or repeated schedule targets option"),
-        "{text}"
-    );
+    let target = target_token();
+    let task_id = Uuid::from_u128(42).to_string();
+    let request_id = Uuid::from_u128(43).to_string();
+    for args in [
+        vec!["targets"],
+        vec![
+            "create",
+            "--remote-pane",
+            &target,
+            "--in",
+            "5m",
+            "--message",
+            "draft",
+        ],
+        vec![
+            "edit",
+            &task_id,
+            "--expect-version",
+            "1",
+            "--message",
+            "patch",
+        ],
+        vec!["cancel", &task_id, "--expect-version", "1"],
+        vec!["status", "--request-id", &request_id],
+    ] {
+        let output = home
+            .command(&["--socket", "/no/such/zmux/control.sock", "schedule"])
+            .args(&args)
+            .args(["--surface", SURFACE, "--relative"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{args:?}");
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            text.contains(&format!("unknown or repeated schedule {} option", args[0])),
+            "{args:?}: {text}"
+        );
+        assert!(!text.contains("cannot connect"), "{text}");
+    }
+    assert!(!home.0.join(".config/zmux/schedule-requests").exists());
+}
+
+#[test]
+fn invalid_relative_durations_fail_before_connecting_or_journaling() {
+    let home = Home::new();
+    let target = target_token();
+    for duration in [
+        "",
+        "0s",
+        "366d",
+        "365d1s",
+        "1m1h",
+        "1h1h",
+        "1.5h",
+        "1",
+        "-1m",
+        "1m ",
+        "1h 30m",
+        "1H",
+        "18446744073709551616s",
+        "18446744073709551615d",
+    ] {
+        let output = home
+            .command(&[
+                "--socket",
+                "/no/such/zmux/control.sock",
+                "schedule",
+                "create",
+                "--surface",
+                SURFACE,
+                "--remote-pane",
+                &target,
+                "--in",
+                duration,
+                "--message",
+                "draft",
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "accepted duration {duration:?}");
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(text.contains("--in"), "{duration:?}: {text}");
+        assert!(!text.contains("cannot connect"), "{duration:?}: {text}");
+    }
+    assert!(!home.0.join(".config/zmux/schedule-requests").exists());
 }

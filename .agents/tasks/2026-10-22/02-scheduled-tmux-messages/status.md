@@ -1,8 +1,22 @@
 # Status
 
-- **State:** done
+- **State:** in-progress
 - **Updated:** 2026-10-23
 - **Authorization:** The user authorized implementation, relative times, an embedded Schedules tab, main delivery, post-commit self-review and a downloadable Mac build. This extension is complete; earlier scheduler follow-ups remain tracked.
+
+## Test coverage follow-up
+
+Test-strengthening follow-up authorized on 2026-10-23: add same-host SSH source
+identity/reconnect/reopen and full-pane atomicity coverage at the Rust action
+owner; extend the real CLI/store/tmux journey for compound relative durations,
+independent message/time patches and empty relative lists. Existing native gates
+remain intact. Authoring decisions and current evidence are in
+[scheduler-test-coverage.md](references/scheduler-test-coverage.md).
+The full `RUST_TEST_THREADS=2 scripts/check` passed with exit 0, including all
+workspace tests, strict Clippy, formatting, license inventory and both C ABI
+executables (`/tmp/zmux-scheduler-coverage-check.log`). Three deliberate mutation
+controls failed at the intended new assertions; production sources were restored.
+Commit, personal post-commit review and authorized main push remain pending.
 
 ## Accepted relative scheduling and embedded-tab build
 
