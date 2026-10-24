@@ -393,6 +393,11 @@ def main():
                 or registration != {'pid': result['childPID'], 'parent_pid': result['appPID'], 'nonce': nonce}
                 or not result['cases'] or any(case['expected'] != case['observed'] for case in result['cases'])):
             raise RuntimeError('Selection native source, real child, cases or shared shutdown differs')
+        required_copy_cases = {'pointer_drag_copy_without_shift', 'pointer_reverse_drag_copy_without_shift',
+                               'pointer_coalesced_drag_copy_without_shift',
+                               'pointer_control_c_clears_copy_candidate', 'pointer_click_clears_copy_candidate'}
+        if not required_copy_cases.issubset({case['name'] for case in result['cases']}):
+            raise RuntimeError('Selection report omitted direct-copy or stale-candidate acceptance')
         link_token = nonce.replace('-', '')[:16]
         if not all(path in link_requests for path in ('/p-' + link_token, '/o-' + link_token)):
             raise RuntimeError('Embedded browser did not request both loopback-only terminal-link pages')

@@ -393,6 +393,36 @@ enum TerminalSelectionSmoke {
         }
         let pointer = try await beginCopyPhase(key: "t", code: 17, marker: "POINTER_READY_",
             coordinator: coordinator, view: view, window: window, result: &result, report: report)
+        try await check("pointer_drag_copy_without_shift", expected: "pointer", window: window, result: &result, report: report) {
+            for (type, cell) in [(NSEvent.EventType.leftMouseDown, (0, 0)),
+                                 (.leftMouseDragged, (0, 7)), (.leftMouseUp, (0, 7))] {
+                try pointerEvent(type, cell: cell, modifiers: [], view: view, window: window, viewport: pointer)
+            }
+        }
+        try await check("pointer_control_c_clears_copy_candidate", expected: "ZMUX_SELECTION_SENTINEL", window: window, result: &result, report: report) {
+            guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.control],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                characters: "\u{3}", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8) else {
+                throw failure("Could not construct terminal Control-C input")
+            }
+            view.keyDown(with: event)
+        }
+        try await check("pointer_reverse_drag_copy_without_shift", expected: "pointer", window: window, result: &result, report: report) {
+            for (type, cell) in [(NSEvent.EventType.leftMouseDown, (0, 7)),
+                                 (.leftMouseDragged, (0, 0)), (.leftMouseUp, (0, 0))] {
+                try pointerEvent(type, cell: cell, modifiers: [], view: view, window: window, viewport: pointer)
+            }
+        }
+        try await check("pointer_click_clears_copy_candidate", expected: "ZMUX_SELECTION_SENTINEL", window: window, result: &result, report: report) {
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                try pointerEvent(type, cell: (0, 1), modifiers: [], view: view, window: window, viewport: pointer)
+            }
+        }
+        try await check("pointer_coalesced_drag_copy_without_shift", expected: "pointer", window: window, result: &result, report: report) {
+            for (type, cell) in [(NSEvent.EventType.leftMouseDown, (0, 0)), (.leftMouseUp, (0, 7))] {
+                try pointerEvent(type, cell: cell, modifiers: [], view: view, window: window, viewport: pointer)
+            }
+        }
         // These are actual mounted AppKit handlers and the same bounded native
         // queue as keyboard input. Expected bytes below are public SGR literals,
         // independently captured by the raw PTY child, never returned by an encoder.
@@ -433,7 +463,10 @@ enum TerminalSelectionSmoke {
                 try pointerEvent(type, cell: cell, modifiers: modifiers, view: view, window: window, viewport: pointer)
             }
         }
-        let expectedPointer = "\u{1b}[<0;3;1M\u{1b}[<32;5;2M\u{1b}[<40;5;2M\u{1b}[<36;5;2M\u{1b}[<4;5;2m"
+        let expectedPointer = "\u{1b}[<0;1;1M\u{1b}[<32;8;1M\u{1b}[<0;8;1m\u{3}"
+            + "\u{1b}[<0;8;1M\u{1b}[<32;1;1M\u{1b}[<0;1;1m"
+            + "\u{1b}[<0;2;1M\u{1b}[<0;2;1m\u{1b}[<0;1;1M\u{1b}[<0;8;1m"
+            + "\u{1b}[<0;3;1M\u{1b}[<32;5;2M\u{1b}[<40;5;2M\u{1b}[<36;5;2M\u{1b}[<4;5;2m"
             + "\u{1b}[<2;2;3M\u{1b}[<1;4;3M\u{1b}[<42;3;3M\u{1b}[<49;5;3M\u{1b}[<2;3;3m\u{1b}[<1;5;3m"
             + "\u{1b}[<0;2;4M\u{1b}[<32;1;1M\u{1b}[<32;3;4M\u{1b}[<0;3;4m\u{1b}[<0;5;4M\u{1b}[<0;5;4m"
         let pointerCapture = try await capturePointer(phase: "t", filename: "pointer-child.json", expected: expectedPointer,
