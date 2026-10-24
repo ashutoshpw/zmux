@@ -1,7 +1,7 @@
 # T01 copying inside interactive applications
 
 **Date:** 2026-10-24
-**State:** implementation authorized; native regression pending
+**State:** done — direct Cmd+C repair and universal build verified
 
 ## Objective and scope
 
@@ -152,5 +152,51 @@ independently of suppressed/clamped reports, and a real rightmost `Z` in the chi
 screen must copy correctly without changing the expected application stream.
 The fixture now adds seven direct-copy/lifecycle cases to the original 41.
 
-Pending: final-source native verification, personal post-commit review and the
-verified universal artifact download.
+Repair source `cf36588620d6f16431b09664ef74697e8fb4d0d7` is committed and pushed
+to main; full workflow [40123955568](https://github.com/ashutoshpw/zmux/actions/runs/40123955568)
+is running. Personal read-only post-commit review traced native/menu routing,
+selection and snapshot lifetime, admitted/refused pointer gestures, right-edge
+coordinate bounds, modifier changes, queue failure, paste/IME input, focus and
+viewport invalidation. No actionable defect was found in this reviewed slice.
+The seven added cases protect direct copy and candidate retirement while retaining
+the complete prior pointer stream; native execution is still the outstanding gate.
+
+Pending: final-source native verification and the verified universal artifact
+download. Physical-user-Mac and actual Claude dogfood remain separate evidence.
+
+## Accepted direct-copy build
+
+Full Mac workflow [40123955568](https://github.com/ashutoshpw/zmux/actions/runs/40123955568)
+completed successfully for source `cf36588620d6f16431b09664ef74697e8fb4d0d7`.
+Both Swift architectures, both Linux helpers, full Mac Rust/C ABI validation,
+universal build, actual terminal-selection/browser-link suite, packaged native
+app/rendering/scheduler, sidebar and system-status-menu checks passed. Separate
+dispatch-only jobs are skipped; the listed runtime steps executed in development.
+
+All **48 native selection cases** passed. The seven new cases confirm forward,
+reverse, coalesced and rightmost-character drags copy the expected literal through
+Cmd+C without Shift, and typing Ctrl+C, clicking elsewhere and actual Cmd+V retire
+the old candidate. The real raw PTY child captured the exact complete expected
+mouse stream, literal Ctrl+C byte 3 and paste data. Original Shift selection,
+Unicode/wrapped selection and browser-link contracts remain passing. All **16
+packaged scheduler checks** also passed, including inspector retention and receipts.
+
+Download [artifact 12572638113](https://github.com/ashutoshpw/zmux/actions/runs/40123955568/artifacts/12572638113):
+`zmux-dev-universal-cf36588.zip`, 24,417,153 bytes, SHA-256
+`c750d953919b0e028782b5e311e91f3270f685d8b56c2b74584fc4fec9dda8a6`.
+Root downloaded it to `/tmp/zmux-direct-copy-delivery-40123955568/`, extracted to
+`/tmp/zmux-direct-copy-app-40123955568/`, and verified archive/sidecar checksum,
+matching bundled/outer build metadata and Info source/minimum OS, all four universal
+Mach-O binaries, all three helper manifest hashes/modes, scheduler acceptance,
+five Applied receipts and CAS protection. Verification also binds the completed
+selection receipt/native report/raw capture, all seven direct-copy results, exact
+new raw input prefix, and **360 retained source hashes** to the actual Git commit.
+Receipt: `download-verification.json` in the downloaded artifact directory.
+
+Universal Apple Silicon/Intel, macOS 14+, ad-hoc signed and not notarized. Quit the
+older Zmux before opening this build. Normal dragging followed by Cmd+C now copies
+visible text while application mouse input remains active; Shift remains the
+explicit local-selection override. This does not implement OSC 52 or arbitrary
+offscreen application-buffer access. Hosted protocol/native acceptance does not
+claim physical-Mac or actual Claude-session dogfood. Final delivery receipt commit
+changes documentation only; the app artifact remains tied to `cf36588`.
