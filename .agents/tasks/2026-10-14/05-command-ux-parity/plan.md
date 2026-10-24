@@ -63,6 +63,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [N03 macOS menu bar](references/n03-macos-menu-bar.md) — absent status-item owner, full menu behavior, application lifecycle and native OS-menu gates.
 
 - [Terminal pointer reporting](references/t01-pointer-reporting.md) — missing mouse button/motion routing, shared worker design and actual PTY/native acceptance plan.
+- [Interactive application copying](references/t01-interactive-copy-investigation.md) — 2026-10-24 investigation of tmux/Claude mouse selection, copy shortcuts and the missing OSC 52 clipboard-write path; no application changes.
 
 - [A02 provider hooks](references/a02-provider-hooks.md) — approved bounded Claude adapter, durable unknown-exposure suppression and explicit retry; actual-provider gate remains open.
 - [Wrapped word selection](references/t01-wrapped-word-selection.md) — logical word expansion across authoritative visible row wraps and native clipboard evidence.
