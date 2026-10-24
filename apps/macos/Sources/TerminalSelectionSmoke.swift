@@ -423,6 +423,15 @@ enum TerminalSelectionSmoke {
                 try pointerEvent(type, cell: cell, modifiers: [], view: view, window: window, viewport: pointer)
             }
         }
+        try await check("pointer_paste_clears_copy_candidate", expected: "ZMUX_SELECTION_SENTINEL", window: window, result: &result, report: report) {
+            try shortcut("v", code: 9, window: window)
+        }
+        try await check("pointer_right_edge_copy_without_shift", expected: "Z", window: window, result: &result, report: report) {
+            for (type, column) in [(NSEvent.EventType.leftMouseDown, pointer.size.cols - 1),
+                                   (.leftMouseDragged, pointer.size.cols), (.leftMouseUp, pointer.size.cols)] {
+                try pointerEvent(type, cell: (0, column), modifiers: [], view: view, window: window, viewport: pointer)
+            }
+        }
         // These are actual mounted AppKit handlers and the same bounded native
         // queue as keyboard input. Expected bytes below are public SGR literals,
         // independently captured by the raw PTY child, never returned by an encoder.
@@ -466,6 +475,8 @@ enum TerminalSelectionSmoke {
         let expectedPointer = "\u{1b}[<0;1;1M\u{1b}[<32;8;1M\u{1b}[<0;8;1m\u{3}"
             + "\u{1b}[<0;8;1M\u{1b}[<32;1;1M\u{1b}[<0;1;1m"
             + "\u{1b}[<0;2;1M\u{1b}[<0;2;1m\u{1b}[<0;1;1M\u{1b}[<0;8;1m"
+            + "ZMUX_SELECTION_SENTINEL"
+            + "\u{1b}[<0;\(pointer.size.cols);1M\u{1b}[<0;\(pointer.size.cols);1m"
             + "\u{1b}[<0;3;1M\u{1b}[<32;5;2M\u{1b}[<40;5;2M\u{1b}[<36;5;2M\u{1b}[<4;5;2m"
             + "\u{1b}[<2;2;3M\u{1b}[<1;4;3M\u{1b}[<42;3;3M\u{1b}[<49;5;3M\u{1b}[<2;3;3m\u{1b}[<1;5;3m"
             + "\u{1b}[<0;2;4M\u{1b}[<32;1;1M\u{1b}[<32;3;4M\u{1b}[<0;3;4m\u{1b}[<0;5;4M\u{1b}[<0;5;4m"

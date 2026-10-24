@@ -8,10 +8,11 @@
 Investigate the user's intermittent failure to select/copy text while running
 tmux or Claude in Zmux. The user described Ctrl+C on their Mac and believes cmux
 works. Determine current behavior and missing paths before proposing a repair.
-Source checkout is `dbb5ea6eb4509262f135c00ae7102c19529ad5ed`; application source
-matches the accepted `cbc7ac3` build. Preserve unrelated work. No source/test,
-installed-app, remote-account or production-tmux changes are authorized by this
-investigation. Only this durable report and its task-plan link were added.
+The initial source checkout was `dbb5ea6eb4509262f135c00ae7102c19529ad5ed`, with
+application source matching the accepted `cbc7ac3` build. That investigation
+changed only this durable report and its task-plan link. The user subsequently
+authorized the direct-copy repair below. Preserve unrelated work, the installed
+user apps, remote accounts and production tmux configuration.
 
 ## Confirmed findings
 
@@ -107,3 +108,49 @@ Regression-only slice: `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
 check and `git diff --check` passed. No production copy change is included in this
 slice. Native compile and the expected clipboard-sentinel failure require the
 hosted Mac lane; they have not been established by the portable check.
+
+The repair retains a separate native selection and one value snapshot of the
+visible viewport while an admitted application-owned left gesture is forwarded.
+Cmd+C prefers the ordinary native selection, then extracts text from this retained
+snapshot. It does not depend on tmux buffer access or OSC 52, parse terminal escape
+bytes in AppKit, or send any copy shortcut to the program. Row storage is shared
+by Swift value semantics; full text extraction happens only on Copy, not motion.
+An unchanged release retains the last drag snapshot across program redraws;
+mouse-up movement still handles coalesced drag events. Typing, IME, paste, new
+gestures/links, focus loss, scrolling, dimensions/history/alternate-screen changes
+and terminal failure retire the candidate. Candidate data stays private to its
+view and is never serialized into the control API. Native Shift selection remains
+the visible override; arbitrary offscreen application buffer selection is outside
+this visible-text contract.
+
+The final regression also exercises actual Cmd+V followed by Cmd+C, proving that
+paste retires the previous candidate while its literal bytes reach the raw child.
+The expected child stream retains every original pointer report and adds only
+the explicitly requested new drags, Ctrl+C byte 3 and paste content. No native
+execution of the repair has completed yet.
+
+## Verified regression and repair validation
+
+Regression-only source `bca73920f4bd081dccfcf388b9b6c1dde56eb78a` ran in scoped
+Mac workflow [40123041671](https://github.com/ashutoshpw/zmux/actions/runs/40123041671).
+Both Swift source slices, the host app build and metadata contract passed. All
+32 preceding clipboard cases passed. The new `pointer_drag_copy_without_shift`
+case expected `pointer` and observed `ZMUX_SELECTION_SENTINEL`, the intended bug.
+There was no timeout. Root downloaded artifact `12572462292` to
+`/tmp/zmux-direct-copy-red-40123041671/` and verified the source/archive identity,
+the exact failing case and that the production TerminalView still matched the
+pre-regression source. The automatic full push run was cancelled in favor of this
+scoped regression lane; no candidate from it is a delivered build.
+
+The repair's full local `RUST_TEST_THREADS=2 scripts/check` passed with exit 0 at
+`/tmp/zmux-direct-copy-fix-check.log`, including workspace tests, strict Clippy,
+formatting, license inventory and both C ABI executables. The finite real-PTY
+fixture input check and diff check passed again after the native edge extension.
+Review identified that protocol coordinates clamp at the last column while copy
+needs an exclusive endpoint one cell beyond it. Copy positions are now tracked
+independently of suppressed/clamped reports, and a real rightmost `Z` in the child
+screen must copy correctly without changing the expected application stream.
+The fixture now adds seven direct-copy/lifecycle cases to the original 41.
+
+Pending: final-source native verification, personal post-commit review and the
+verified universal artifact download.

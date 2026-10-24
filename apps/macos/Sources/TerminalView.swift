@@ -52,6 +52,11 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     private var marked = NSAttributedString(string: "")
     private var markedSelection = NSRange(location: 0, length: 0)
     private let selection = TerminalSelection()
+    // Applications still receive mouse events. Keep a separate, undisplayed
+    // selection so native Copy can capture a drag even when they own the mouse.
+    private let applicationSelection = TerminalSelection()
+    private var applicationCopyViewport: Viewport?
+    private var applicationCopyPosition: TerminalSelectionPoint?
     private let font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
     private let contentInset: CGFloat = 10
     private lazy var cellWidth: CGFloat = ("M" as NSString).size(withAttributes: [.font: font]).width
@@ -117,11 +122,15 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         if oldState == "running", frameState != "running" {
             pendingTerminalLink = nil
             pointerGestures.removeAll(); lastHover = nil
+            clearApplicationCopy()
         }
         if let snapshot = frame.snapshot {
             let previous = viewport
             let oldTracking = viewport?.pointerTracking
-            if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset { selection.clear() }
+            if viewport?.size.rows != snapshot.viewport.size.rows || viewport?.size.cols != snapshot.viewport.size.cols || viewport?.scrollbackOffset != snapshot.viewport.scrollbackOffset {
+                selection.clear(); clearApplicationCopy()
+            }
+            if previous?.alternateScreen != snapshot.viewport.alternateScreen { clearApplicationCopy() }
             viewport = snapshot.viewport
             if oldTracking != snapshot.viewport.pointerTracking
                 || previous?.alternateScreen != snapshot.viewport.alternateScreen
@@ -216,7 +225,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         return NSColor(calibratedRed: levels[value / 36] / 255, green: levels[(value / 6) % 6] / 255, blue: levels[value % 6] / 255, alpha: 1)
     }
     private func navigateHistory(_ lines: Int) {
-        selection.clear(); needsDisplay = true
+        selection.clear(); clearApplicationCopy(); needsDisplay = true
         onScroll?(lines)
     }
     override func scrollWheel(with event: NSEvent) {
@@ -228,7 +237,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         wheelRemainder -= CGFloat(lines)
         let (row, col) = gridPoint(event)
         let modifiers = (event.modifierFlags.contains(.option) ? 8 : 0) | (event.modifierFlags.contains(.control) ? 16 : 0)
-        selection.clear(); needsDisplay = true
+        selection.clear(); clearApplicationCopy(); needsDisplay = true
         onWheel?(lines, row, col, modifiers, event.modifierFlags.contains(.shift))
     }
 
@@ -297,6 +306,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         let relevantModifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
         guard relevantModifiers == .command, onOpenTerminalLink != nil,
               let viewport, let link = terminalLink(at: gridPoint(event), viewport: viewport) else { return false }
+        clearApplicationCopy()
         window?.makeFirstResponder(self); onFocus?()
         pendingTerminalLink = PendingTerminalLink(downEvent: event, startLocation: event.locationInWindow,
                                                   hit: TerminalLinkHit(viewportGeneration: viewport.viewportGeneration,
@@ -317,6 +327,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     private func beginPointer(_ event: NSEvent, button: TerminalPointerEvent.Button, focus: Bool = true) {
         if focus { window?.makeFirstResponder(self); onFocus?() }
+        clearApplicationCopy()
         guard let viewport else { return }
         // A route is latched at press, including Shift override and refused input.
         // Modifier/mode changes cannot turn the remainder into another gesture.
@@ -335,6 +346,12 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         } else {
             selection.clear()
             route = sendPointer(.press, button: button, sample: sample) ? .application : .refused
+            if route == .application, button == .left {
+                let point = gridPoint(event)
+                applicationSelection.begin(row: point.0, column: point.1, clicks: event.clickCount, viewport: viewport)
+                applicationCopyViewport = viewport
+                applicationCopyPosition = TerminalSelectionPoint(row: point.0, column: point.1)
+            }
         }
         pointerGestures[button] = PointerGesture(route: route, last: sample)
         lastHover = nil
@@ -349,23 +366,49 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
             selection.extend(row: point.0, column: point.1, viewport: viewport)
             needsDisplay = true
         case .application:
+            if button == .left { extendApplicationCopy(event) }
             let sample = pointerSample(event)
             guard sample != gesture.last else { return }
             if sendPointer(.motion, button: button, sample: sample) {
                 gesture.last = sample
                 pointerGestures[button] = gesture
+            } else if button == .left {
+                clearApplicationCopy()
             }
         case .refused: break
         }
     }
     private func endPointer(_ event: NSEvent, button: TerminalPointerEvent.Button) {
         guard let gesture = pointerGestures.removeValue(forKey: button) else { return }
-        if gesture.route == .application { _ = sendPointer(.release, button: button, sample: pointerSample(event)) }
+        if gesture.route == .application {
+            let sample = pointerSample(event)
+            // AppKit may coalesce all intermediate drag events. Do not replace
+            // already captured text on an unchanged release after an app redraw.
+            if button == .left { extendApplicationCopy(event) }
+            if !sendPointer(.release, button: button, sample: sample), button == .left { clearApplicationCopy() }
+        }
         lastHover = nil
+    }
+    private func extendApplicationCopy(_ event: NSEvent) {
+        guard let viewport else { return }
+        let point = gridPoint(event)
+        let position = TerminalSelectionPoint(row: point.0, column: point.1)
+        guard let previous = applicationCopyPosition, position != previous else { return }
+        applicationSelection.extend(row: point.0, column: point.1, viewport: viewport)
+        // Value snapshots share their immutable row storage. Extract text only
+        // on Copy, rather than walking all selected rows on every mouse motion.
+        applicationCopyViewport = viewport
+        applicationCopyPosition = position
+    }
+    private func clearApplicationCopy() {
+        applicationSelection.clear()
+        applicationCopyViewport = nil
+        applicationCopyPosition = nil
     }
     // Focus loss ends native ownership. Releases use the same admission/error
     // path; a full queue remains explicit failure, with no unbounded retry task.
     func cancelPointerGestures() {
+        clearApplicationCopy()
         for button in [TerminalPointerEvent.Button.left, .middle, .right] {
             if let gesture = pointerGestures.removeValue(forKey: button), gesture.route == .application {
                 _ = sendPointer(.release, button: button, sample: gesture.last)
@@ -391,7 +434,10 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         return ((range.lower.row, range.lower.column), (range.upper.row, range.upper.column))
     }
     func copySelection(_ sender: Any?) {
-        guard let viewport, let text = selection.text(viewport: viewport) else { return }
+        guard let viewport else { return }
+        let text = selection.text(viewport: viewport)
+            ?? applicationCopyViewport.flatMap { applicationSelection.text(viewport: $0) }
+        guard let text else { return }
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
     }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -411,6 +457,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
     }
     @discardableResult
     func paste(from pasteboard: NSPasteboard, includeText: Bool = true) -> Bool {
+        clearApplicationCopy()
         do {
             switch try TerminalPasteboardContent.read(pasteboard, includeText: includeText) {
             case .files(let paths):
@@ -432,6 +479,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         }
     }
     func selectViewport(_ sender: Any?) {
+        clearApplicationCopy()
         if let viewport { selection.selectAll(viewport: viewport); needsDisplay = true }
     }
     override func keyDown(with event: NSEvent) {
@@ -443,7 +491,7 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         }
         if event.modifierFlags.contains(.command) { super.keyDown(with: event); return }
         if hasMarkedText() { interpretKeyEvents([event]); return }
-        selection.clear(); needsDisplay = true
+        selection.clear(); clearApplicationCopy(); needsDisplay = true
         if let semantic = TerminalKeyEncoder.event(keyCode: event.keyCode, modifiers: event.modifierFlags,
                                                    action: event.isARepeat ? .repeated : .press,
                                                    charactersIgnoringModifiers: event.charactersIgnoringModifiers) {
@@ -467,14 +515,15 @@ final class TerminalView: NSView, @preconcurrency NSTextInputClient {
         MainActor.preconditionIsolated()
         unmarkText()
         let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
-        if !text.isEmpty { onInput?(text) }
+        if !text.isEmpty { clearApplicationCopy(); onInput?(text) }
     }
     override func doCommand(by selector: Selector) {
         let commands: [String:String] = ["insertNewline:":"\r","deleteBackward:":"\u{7f}","insertTab:":"\t","cancelOperation:":"\u{1b}"]
-        if let command = commands[NSStringFromSelector(selector)] { onInput?(command) }
+        if let command = commands[NSStringFromSelector(selector)] { clearApplicationCopy(); onInput?(command) }
     }
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         MainActor.preconditionIsolated()
+        clearApplicationCopy()
         let text = (string as? NSAttributedString)?.string ?? (string as? String ?? "")
         marked = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.labelColor, .underlineStyle: NSUnderlineStyle.single.rawValue])
         markedSelection = selectedRange; needsDisplay = true
