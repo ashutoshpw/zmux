@@ -71,7 +71,7 @@ for key,marker in [('w','WRAP_READY_'),('v','WIDE_READY_'),('m','MARGIN_READY_')
  if key=='m':payload='X'*(columns-1)+'界Z'
  if key=='u':payload='X'*(columns-1)+'e\\u0301🙂Z'
  if key=='h':payload='HARD_A\\r\\n\\r\\nHARD_B'
- if key in ('t','y'):payload='pointer line\\r\\nsecond pointer line'
+ if key in ('t','y'):payload='pointer line'+' '*(columns-13)+'Z\\r\\nsecond pointer line'
  if key=='l':
   plain_url=os.environ['ZMUX_TERMINAL_LINK_PLAIN_URL']
   osc8_url=os.environ['ZMUX_TERMINAL_LINK_OSC8_URL']
@@ -395,7 +395,8 @@ def main():
             raise RuntimeError('Selection native source, real child, cases or shared shutdown differs')
         required_copy_cases = {'pointer_drag_copy_without_shift', 'pointer_reverse_drag_copy_without_shift',
                                'pointer_coalesced_drag_copy_without_shift',
-                               'pointer_control_c_clears_copy_candidate', 'pointer_click_clears_copy_candidate'}
+                               'pointer_control_c_clears_copy_candidate', 'pointer_click_clears_copy_candidate',
+                               'pointer_paste_clears_copy_candidate', 'pointer_right_edge_copy_without_shift'}
         if not required_copy_cases.issubset({case['name'] for case in result['cases']}):
             raise RuntimeError('Selection report omitted direct-copy or stale-candidate acceptance')
         link_token = nonce.replace('-', '')[:16]
