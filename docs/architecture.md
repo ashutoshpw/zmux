@@ -22,7 +22,7 @@ The evaluated reference is [PhotoCraft at a62ef68](https://github.com/storytold/
 its module separation informs the design discussion; Zmux's native UI/terminal stack is its own decision.
 
 ## Current implementation boundary
-The [foundation task](../../02-foundation-prototype/plan.md) implements the Rust action
+The [foundation task](../.agents/tasks/2026-10-14/02-foundation-prototype/plan.md) implements the Rust action
 model, headless PTY/parser prototype, development CLI and model-only C ABI. The proposed
 native coordinator, Swift wrapper, renderer, storage and remote/cloud clients remain pending.
 The parser is a feasibility candidate rather than the finalized terminal engine.
@@ -121,7 +121,7 @@ Define single-writer or explicit control handoff before supporting multiple clie
 Use explicit connecting, active, reconnecting, closing, closed, and failed states, with a
 generation per connection attempt. Bound retry frequency and cancel superseded attempts.
 A local detached client cannot leak workers; a remote daemon retains sessions only under
-its documented policy. See [session-reliability.md](session-reliability.md) for limits,
+its documented policy. See [session-reliability.md](../.agents/tasks/2026-10-14/01-build-zmux/references/session-reliability.md) for limits,
 fair scheduling, output integrity, diagnostics, and required native stress evidence.
 
 Start with worker isolation in the app and a separate remote daemon. A local session-helper

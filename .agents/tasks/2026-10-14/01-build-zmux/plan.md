@@ -49,7 +49,7 @@ and dependency licensing before expanding features. egui/eframe is deferred.
 ## References
 - [Foundation implementation](../02-foundation-prototype/plan.md) — first Rust core, terminal and bridge slice.
 - [PR #1 parity and commits](references/pr-1-parity.md) — required behaviors and phased commit policy.
-- [Architecture](references/architecture.md) — modules, contracts, state, and trust boundaries.
+- [Architecture](../../../../docs/architecture.md) — modules, contracts, state, and trust boundaries.
 - [Session reliability](references/session-reliability.md) — worker isolation, limits, diagnostics, and stress gates.
 - [Delivery roadmap](references/delivery-roadmap.md) — milestone scope, dependencies, and checks.
 - [Licensing and provenance](references/licensing-provenance.md) — independent implementation rules.
