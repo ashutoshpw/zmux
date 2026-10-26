@@ -25,7 +25,7 @@ Default scope is desktop applications on all three OSes, with CLI bundled alongs
 - [x] Inspect current task evidence, workflows, build scripts and platform constraints.
 - [x] Specify the release pipeline, platform prerequisites and implementation slices.
 - [x] Review the plan against source and record remaining external prerequisites.
-- [ ] Run a manual Windows/Ubuntu release-binary probe on GitHub Actions and retain
+- [x] Run a manual Windows/Ubuntu release-binary probe on GitHub Actions and retain
   successful packages or compiler failure evidence; update platform findings.
 - [ ] Implement shared release metadata/tag validation and reusable packaging entrypoints.
 - [ ] Establish Windows runtime/IPC support and Windows/Linux desktop presentation.

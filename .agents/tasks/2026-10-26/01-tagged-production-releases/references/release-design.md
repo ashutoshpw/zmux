@@ -5,6 +5,10 @@
 Inspected on 2026-10-26 at local `310eae8` on `main`. This is source evidence;
 no hosted runs, repository settings, signing accounts or production services were verified.
 
+The subsequent [hosted platform probe](hosted-platform-probe.md) at `f25ffa8` confirms
+Ubuntu CLI/scheduler builds and records Windows compiler failures. It does not provide
+Windows/Linux desktop presentation or production packaging/signing evidence.
+
 - `.github/workflows/macos-development.yml` builds on main/manual dispatch. It builds
   Linux x86_64/aarch64 scheduler helpers first, embeds same-source helpers in a
   universal macOS app, exercises native checks, and uploads expiring Actions artifacts.
