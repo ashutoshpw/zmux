@@ -3,7 +3,7 @@
 # zmux
 
 zmux is an independently implemented terminal workspace project: a Rust core with a thin
-native Swift/AppKit macOS interface. Original zmux code is MIT licensed.
+native Swift/AppKit macOS interface.
 
 The native development app connects the Rust workspace/session core to Swift/AppKit.
 It provides local shells, workspaces, split panes and a bundled automation CLI. The cloud
@@ -89,5 +89,4 @@ and the [service contract](services/control-plane/README.md).
 
 ## Licensing
 
-See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md). Dependencies retain their own licenses; MIT for zmux's original
-code does not relabel third-party material.
+See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md). Dependencies retain their own licenses.
