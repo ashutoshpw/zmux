@@ -1,0 +1,459 @@
+# F04 terminal engine evaluation and isolated feasibility
+
+Updated: 2026-10-15. F04/T01 remain open. No production dependency or engine changed.
+
+## Decision supported by this evidence
+
+Keep the current production adapter while evaluating a pinned development
+`libghostty-vt` behind Rust ownership. Isolated Linux x86_64 and macOS arm64 C/Rust
+fixtures establish that its C render API can supply owned text snapshots and preserve
+wrapped text across resizing. They do not establish a shipping adapter, native rendering,
+performance, graphics support in Zmux, or a complete license/notice closure.
+
+`alacritty_terminal` is a credible permissive Rust fallback for reflow, terminal
+queries and search. It was source-reviewed, not compiled or executed in this pass.
+Choosing it would still leave image protocols and substantial native input/rendering
+work. Neither language preference nor the small fixture chooses a production engine.
+
+## Pinned upstream sources and licenses
+
+Only public upstream projects were inspected. No cmux GPL/BUSL implementation,
+bindings, tests, assets or build artifacts were imported or translated.
+
+| Candidate | Exact source examined | License and packaging boundary |
+| --- | --- | --- |
+| Current `vt100` | `0.16.2`; crate VCS commit `eb66ffaf7d771c13303ef73b29f6f2a56fdacecf`; crate SHA-256 `054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9` | MIT. Existing `THIRD_PARTY_NOTICES.md` covers this pinned dependency and `vte 0.15.0` (MIT OR Apache-2.0). |
+| Ghostty release | `v1.3.1`, commit `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28` | Upstream MIT. The public C header exposes key encoding, OSC/SGR parsers and paste utilities; it does **not** expose the complete terminal/render C interface used below. This is a C integration distinction, not a claim that the Ghostty application lacks terminal state or reflow. |
+| Ghostty development | `1.3.2-dev`, commit `22fa134a07f5749edd9e92c6bc17d8aaf61843be` | Upstream MIT. `include/ghostty/vt.h` explicitly warns that the incomplete API is unstable and will change. Full terminal, render, input and graphics interfaces exist at this exact pin. |
+| `alacritty_terminal` | `0.26.0`; crate VCS commit `94e7c8874e526b1e67b349d9ba30ddf81669119e`; downloaded crate SHA-256 `bda177466b9524d59f1b12f0dd30b68696788e9992a7e959021c4a0ed96fcf59` | Apache-2.0, not MIT-only. Compatible with an MIT application when the dependency retains its own license/notices and applicable distribution obligations. Requires Rust 1.85.0; local Rust is 1.95.0. |
+
+Pinned primary references:
+
+- [vt100 license](https://github.com/doy/vt100-rust/blob/eb66ffaf7d771c13303ef73b29f6f2a56fdacecf/LICENSE),
+  [resize implementation](https://github.com/doy/vt100-rust/blob/eb66ffaf7d771c13303ef73b29f6f2a56fdacecf/src/grid.rs),
+  [callbacks](https://github.com/doy/vt100-rust/blob/eb66ffaf7d771c13303ef73b29f6f2a56fdacecf/src/callbacks.rs).
+- [Ghostty release C API](https://github.com/ghostty-org/ghostty/blob/332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28/include/ghostty/vt.h),
+  [development license](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/LICENSE),
+  [development C API warning](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/include/ghostty/vt.h).
+- Ghostty development [terminal/effects](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/include/ghostty/vt/terminal.h),
+  [render state and borrowed lifetimes](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/include/ghostty/vt/render.h),
+  [Unicode rules](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/include/ghostty/vt/unicode.h),
+  [graphics](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/include/ghostty/vt/kitty_graphics.h),
+  [feature gates](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/src/terminal/build_options.zig),
+  [toolchain/dependency pins](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/build.zig.zon).
+- Alacritty [crate manifest](https://github.com/alacritty/alacritty/blob/94e7c8874e526b1e67b349d9ba30ddf81669119e/alacritty_terminal/Cargo.toml),
+  [license](https://github.com/alacritty/alacritty/blob/94e7c8874e526b1e67b349d9ba30ddf81669119e/alacritty_terminal/LICENSE-APACHE),
+  [terminal owner](https://github.com/alacritty/alacritty/blob/94e7c8874e526b1e67b349d9ba30ddf81669119e/alacritty_terminal/src/term/mod.rs),
+  [reflow](https://github.com/alacritty/alacritty/blob/94e7c8874e526b1e67b349d9ba30ddf81669119e/alacritty_terminal/src/grid/resize.rs),
+  [host effects](https://github.com/alacritty/alacritty/blob/94e7c8874e526b1e67b349d9ba30ddf81669119e/alacritty_terminal/src/event.rs).
+
+Root licenses establish candidates for evaluation, not approval to ship an arbitrary
+upstream build. The isolated Ghostty build fetched pinned packages including uucode
+(MIT), translate-c (MIT), aro (MIT plus Unicode License V3 data), and zlib source.
+The standalone Zig distribution has an MIT root license and separately licensed
+bundled components. Record the actual linked dependency/Unicode/compiler-runtime
+notice closure before distribution; the full application dependency list is not a
+substitute. No third-party files were added to Zmux by this evaluation.
+
+## Current owner and gaps
+
+The production baseline inspected is Zmux `13504c31558e62bdc85868917b4e5bc3c5a333a3`.
+`crates/terminal-adapter/src/lib.rs` SHA-256 is
+`efb518bb37153b408f2a3a88f87075e4716f2c7a6e332b89a0363a7808356a84`.
+
+`session-runtime` owns parsing, PTY I/O, resize and input ordering on its worker.
+`terminal-adapter` exports immutable runs; `TerminalView` owns AppKit drawing,
+selection and text composition. Preserve that boundary with any replacement.
+
+| Area | Current implementation/evidence | Candidate source support and remaining integration |
+| --- | --- | --- |
+| Basic VT and effects | Fragmented UTF-8/CSI, alternate screen, cursor modes, bounded history, styles, title, cwd and notifications have portable fixtures. The metadata callback handles bell/title/OSC; no query-response pipeline is wired. | Ghostty effects include bounded-copyable PTY replies/title/cwd/notifications; defaults ignore effects until registered. Alacritty emits `Event::PtyWrite`, clipboard, title and query events. Both need explicit host policy and ordered response admission. |
+| Keyboard/mouse | Legacy arrows and T01a function/navigation keys are encoded natively; wheel encoding reads live parser modes on the worker. Extended keyboard, pointer buttons/motion and focus reporting remain incomplete. | Ghostty supplies C encoders configurable from terminal modes, including Kitty keyboard. Alacritty tracks Kitty keyboard modes, but its terminal crate is not the complete application key encoder. Neither candidate replaces Command shortcuts, physical layout handling or IME. |
+| Unicode | Current cells preserve combining characters and wide CJK in small fixtures. They do not provide grapheme-cluster width behavior for the tested mode-2027 emoji sequences. | Ghostty exposes matching codepoint/grapheme utilities and mode-2027 rules. Alacritty cells retain zero-width characters with `unicode-width`; this review establishes no complete ZWJ/VS16 equivalence. AppKit glyph placement, fallback and selection still need native evidence. |
+| Reflow | Current `vt100::Grid::set_size` resizes/truncates rows and clears wrap flags on width changes. The executed probe loses text when narrowed. | Ghostty documents primary-screen reflow and no alternate-screen reflow. Alacritty implements grid reflow with primary/alternate distinction. Only the small Ghostty primary-screen case was executed here. |
+| Styles/links/search | Current native export covers bold/italic/underline/inverse/indexed/RGB; it has no image-placement or hyperlink export. Selection is native and terminal find remains open. | Ghostty exports styles, hyperlinks, selection and search; Alacritty has cell hyperlinks, selection and regex search. Current run/selection contracts need extensions before these features reach users. |
+| Graphics | No terminal image-protocol renderer. The 16-KiB control-string guard explicitly fails long payloads. Clipboard-image upload is a separate feature. | Ghostty development has Kitty image storage/placement APIs, requiring bounded storage, decoding policy and a renderer; those features were disabled in the experiment. No Kitty/Sixel graphics implementation was found in the inspected Alacritty terminal crate. No Sixel or image-rendering acceptance is claimed. |
+| Resource/recovery | Geometry is bounded to 120×240, history to 1,000 lines, control strings to 16 KiB. Oversized control strings fail the session parser; richer recovery remains open. | Ghostty history byte/line limits are estimates at page granularity, **not** exact substitutes for current hard limits. Its VT write API returns void; a separate sticky processing-error flag reports some failures, while configured limits/effect failures need separate handling. Alacritty configured history does not itself bound every allocation or host event queue. |
+
+## Executed Linux comparison
+
+The current adapter was built with `cargo build -p zmux-terminal-adapter --locked`.
+An original scratch Rust driver linked it without modifying workspace manifests.
+The Ghostty driver used an original C shim and a Rust RAII owner:
+
+- Construct and mutate opaque C terminal/render handles on one thread. Rust owner
+  uses `PhantomData<Rc<()>>` rather than asserting `Send`/`Sync`.
+- Read render rows/cells and copy full UTF-8 cell strings into a caller-owned
+  512-KiB snapshot buffer. A cell exceeding 256 UTF-8 bytes fails explicitly.
+  Borrowed C iterators and strings never escape the snapshot call.
+- Capture query replies in a 4-KiB callback buffer; never block or recursively feed
+  the terminal from a callback. Clipboard/network/native effects stay disabled.
+- Preserve 120×240 geometry and 16-KiB feed-chunk caps. Set history line/byte
+  preferences, but rely on the fixture's finite input and an external process cap
+  for this experiment; page-granular preferences are not hard memory guarantees.
+- Run with 512 MiB address-space, three CPU seconds and ten wall seconds as fixture
+  containment limits. These are **not proposed product performance budgets**.
+
+Independent inputs and observed outputs:
+
+| Fixture | Current adapter | Ghostty development C/Rust driver |
+| --- | --- | --- |
+| Feed `abcdefghijKLMNOPQRST` into 4×10, narrow to 4×5 | `abcde`, `KLMNO`, two empty rows | `abcde`, `fghij`, `KLMNO`, `PQRST` |
+| Widen back to 4×10 | Lost halves do not return | Original two complete rows return |
+| Byte-fragmented `e` + U+0301 + `x` | Cursor column 2 | Cursor column 2 |
+| Byte-fragmented `界x` | Cursor column 3 | Cursor column 3 |
+| Request mode 2027, then `👩` + ZWJ + `💻x` | Cursor column 5 | Cursor column 3 |
+| Request mode 2027, then `❤` + VS16 + `x` | Cursor column 2 | Cursor column 3 |
+| `CSI 6 n` on an empty terminal | No production response sink exists; not executed as a PTY query | Copied callback bytes exactly `1b5b313b3152` (`ESC[1;1R`) |
+| Retain Rust snapshot across two resizes; create/free 128 terminals | Not a new lifecycle comparison | Assertions pass; driver exits zero |
+
+These are targeted parser/API observations. Wrapped cursor coordinates differ:
+vt100 exports a pending-wrap column at the width; Ghostty exports the last cell.
+An adapter must normalize that contract rather than compare raw coordinates.
+The scratch Ghostty cell dump includes blank wide-continuation slots; it is not a
+finished native run exporter. Both engines' CJK cursor result is recorded separately
+from that debug-text formatting. No clipboard, image, PTY backpressure, OOM-injection,
+ASan, AppKit rendering or native accessibility test ran in this experiment.
+
+## Build receipt and reproduction boundary
+
+No Zig executable was initially on PATH. The isolated toolchain was downloaded to
+`/tmp/zmux-f04-evaluation-20261015`, without installing or changing a global toolchain.
+The official [Zig download index](https://ziglang.org/download/index.json) supplied
+the checksum for `zig-x86_64-linux-0.16.0.tar.xz`:
+`70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00`.
+Downloaded bytes matched it. Ghostty development requires Zig 0.16.0; the examined
+release requires 0.15.2 and has the narrower C interface described above.
+
+The source archive came from
+`https://codeload.github.com/ghostty-org/ghostty/tar.gz/22fa134a07f5749edd9e92c6bc17d8aaf61843be`;
+its observed SHA-256 is
+`a07afea0e0b01cdfbf5b418c56bfd67366929dac0f9636267de5e5637351df5f`.
+This archive hash is an observed receipt, not a separate publisher signature.
+
+The first build succeeded in 73.68 seconds, under a 600-second deadline and two
+build jobs. This is one Linux build-cost observation, not a runtime or Mac result.
+Stdout/stderr were drained with at most 1 MiB retained; this build emitted no log
+bytes. Scratch-local Zig caches avoided changes to the workspace or shared caches.
+
+```sh
+zig build -Demit-lib-vt=true -Demit-xcframework=false -Dapp-runtime=none \
+  -Doptimize=ReleaseSafe -Dsimd=false \
+  -Dvt-features=-all,+render-state,+grid-introspection,+formatter,+input-encode \
+  -j2 --prefix /tmp/zmux-f04-evaluation-20261015/ghostty-install
+```
+
+The independent C shim compiled with `cc -std=c11 -Werror -DGHOSTTY_STATIC` and
+the upstream include directory. Rust 1.95.0 linked that object and the installed
+`libghostty-vt.a`; the bounded driver exited zero on its first run.
+
+Local evidence is preserved in `/tmp/zmux-f04-evaluation-20261015`:
+
+- `ghostty-probe.c`, SHA-256 `30863ca5ffe286011858aa0e85aa9304438e3513c2a01fa2c363b9e5d41a0fe8`.
+- `ghostty-probe.rs`, SHA-256 `931782db53025c58acfe89126049842afc9922e10351747a157dccbd9bae28f2`.
+- `ghostty-probe-result.json`, `ghostty-build-receipt.json`, download/toolchain
+  receipts, and `current-adapter-probe.rs` / `current-adapter-probe.txt`.
+- `feasibility-evidence.tar.gz` contains only the original drivers and receipts,
+  SHA-256 `53c538e3e6453d17efcec8f6eeb276604a814f1038216e30836df30e617de65d`.
+
+These scratch paths are local evidence. The original drivers are now also preserved
+in [tools/terminal-feasibility](../../../../../tools/terminal-feasibility/README.md),
+with a separate manually dispatched workflow. It downloads exact upstream pins at
+run time rather than vendoring another application's implementation into Zmux.
+
+The first clean-cache run of this reproducible runner verified both archive hashes,
+then failed while Zig fetched pinned theme/zlib packages with `NameServerFailure`.
+A bounded follow-up check resolved DNS but received HTTP 403 for those exact HTTPS
+URLs. No fresh-network retry or URL fallback was used. The failed receipt remains
+at `/tmp/zmux-terminal-feasibility-repro-linux/receipt.json`.
+
+A separate run with the explicit task-owned, Zig-content-hash-verified package cache
+completed at `/tmp/zmux-terminal-feasibility-repro-verified-cache/receipt.json`.
+It rebuilt the library in 61.632 seconds, compiled the original C/Rust drivers and
+passed both fixture executions. Its receipt labels `explicit_existing_cache` and
+records driver SHA-256 values. This validates runner mechanics and the Linux API
+observations; it does not clear the fresh dependency-download gate. CI uses a fresh
+temporary dependency cache and has no fallback.
+
+Portable checks also passed Python syntax, pin JSON, workflow YAML parsing, Rust
+formatting and scoped diff checks. A later lifecycle review found that stdout EOF
+could end deadline enforcement and that a successful leader could leave a child
+running after it closed stdout. The runner now enforces the deadline independently
+of EOF and stops its owned subprocess group on every phase completion. The baseline
+Cargo build also explicitly uses `--jobs 2`, matching the receipt's build-job limit.
+
+The real-process regression command is:
+
+```sh
+python3 -B -m unittest discover -s tools/terminal-feasibility -p test_runner.py -v
+```
+
+Before the repair, four tests ran with two failures: the EOF case took 5.028 seconds
+and reported `timed_out: false`, and a successful leader left its child running.
+The red log is `/tmp/zmux-feasibility-runner-red.log`. After repair all four tests
+passed in 1.259 seconds, recorded at `/tmp/zmux-feasibility-runner-green.log`.
+The cases cover EOF while the leader runs, a successful leader with a closed-stdout
+child, an exited leader with a stdout-holding child, and draining 2 MiB while
+retaining 1 MiB. Both workflow jobs run them before building upstream code.
+The earlier complete Linux receipt predates this repair; the focused regression
+run validates the lifecycle change without another upstream build.
+
+### First hosted run
+
+[Manual workflow 38755466242](https://github.com/ashutoshpw/zmux/actions/runs/38755466242)
+executed `d6a0fc2466d23c0116e9b18da0d9a6d7a1d923cf` on 2026-10-15. Both jobs passed
+the four real-process runner regressions and verified exact upstream archive hashes
+using fresh temporary dependency caches.
+
+- Linux x86_64 completed all library/C/Rust builds, engine assertions and current
+  adapter observations. The Ghostty build took 83.833 seconds. This clears the
+  fresh dependency-download gate for that hosted attempt; local restricted-network
+  availability remains a separate observation.
+- macOS 15.7.9 arm64 compiled the arm64 and x86_64 libraries, C shims and Rust owners.
+  The arm64 fixture passed the same reflow, Unicode, exact query and 128-iteration
+  assertions. x86_64 execution was explicitly `not_run_cross_architecture`.
+  `RLIMIT_CPU` and `RLIMIT_CORE` were configured; `RLIMIT_AS` was unavailable with
+  `ValueError`, so this run establishes no Mac address-space containment.
+- The Mac job failed at `verify-universal-library`: the harness passed the filename
+  after `lipo -verify_arch arm64 x86_64`, whose variable-length architecture list
+  consumed it as another architecture. Library creation had exited zero, but neither
+  universal verification nor the later baseline stages completed. The repair puts
+  the input filename before `-verify_arch`; it does not change pins or assertions.
+  At that point universal-library/executable verification and the Mac current-adapter
+  gate still required a hosted rerun.
+
+Downloaded receipts and bounded phase logs are preserved locally under
+`/tmp/zmux-terminal-feasibility-hosted-38755466242/{linux,macos}`. No native application,
+AppKit acceptance, x86_64 Mac runtime, graphics or performance gate is cleared.
+
+### Repaired hosted run
+
+[Manual workflow 38756429963](https://github.com/ashutoshpw/zmux/actions/runs/38756429963)
+passed both Linux and Mac jobs at `0a5d52e259b412b86399d1e87a79a9c437b33412` on
+2026-10-15, including the `747a8e0` lipo argument-order repair. Both downloaded
+receipts are `complete`, identify fresh temporary dependency caches and verified
+archive hashes, and record no phase timeout or failed exit.
+
+| Hosted target | Compilation and execution evidence |
+| --- | --- |
+| Linux x86_64 | Library/C/Rust builds, host engine assertions and current-adapter observations pass. Ghostty build: 72.246 seconds. |
+| macOS 15.7.9 arm64 | Both arm64 and x86_64 library/C/Rust builds pass. `lipo` creation and arm64/x86_64 verification pass for the universal library **and** fixture executable. Host arm64 engine assertions and current-adapter observations pass. Ghostty builds: arm64 85.047 seconds, x86_64 37.321 seconds. x86_64 execution remains `not_run_cross_architecture`. |
+
+The host assertions reproduce the exact rows, Unicode cursor observations,
+`ESC[1;1R` query response, owned-snapshot survival and 128 create/free iterations
+described above. Four runner process regressions also passed in each job. Linux
+configured all requested fixture limits; Mac again reported `RLIMIT_AS` unavailable
+with `ValueError`, while CPU/core limits were configured. A green Mac receipt does
+not establish a hard address-space bound.
+
+Downloaded receipts and phase logs are under
+`/tmp/zmux-terminal-feasibility-hosted-38756429963/terminal-feasibility-{linux,macos}-0a5d52e259b412b86399d1e87a79a9c437b33412/`.
+Receipt SHA-256 values are
+`37198f211390e0dde131422df8bd86c1b46b15131e68a7ff4e813a437453643a` (Linux) and
+`69d6cb236107d6318761ccc1503b5ff89433ad49da0ed0f2d624b8177a476136` (Mac).
+This clears the isolated hosted feasibility and universal-compilation gates only.
+It changes no production engine and establishes no Mac x86_64 runtime, native app,
+graphics, performance, hard-memory or complete distribution-notice acceptance.
+
+## Next bounded experiment and decision gates
+
+The [candidate adapter design](f04-adapter-candidate-design.md) maps the complete
+F04/T01 contract to the current owners and defines the next isolated exporter,
+resource-policy blockers, static packaging and fidelity/workload acceptance gates.
+In particular, a native custom allocator alone does not account for Ghostty's
+OS-allocated screen pages, and page-granular history is not an exact retention cap.
+
+### Isolated compatibility exporter: first executed subset
+
+The original shim now exports bounded copied cell/style/cursor/history data through
+`tools/terminal-feasibility/frame.h`. A separate Rust executable, `compatibility.rs`,
+constructs the existing public `Viewport`, `Run`, `Style` and `Color` types. It links
+the current adapter library only for those public types; it does not add an engine
+or dependency to the application. `owner.rs` shares the original non-Send/non-Sync
+RAII handle owner between the raw-API and compatibility fixtures.
+
+The independently specified wide/combining fixture first failed with
+`"界 e\u{301}x"` instead of `"界e\u{301}x"`: the initial cell export incorrectly included
+the wide-tail slot. Red evidence is
+`/tmp/zmux-f04-compatibility-red/compatibility.log`. The repaired export emits the
+wide head once with width two, omits its tail, and handles a soft-wrap spacer head
+as a blank grid slot. Owned frame contents remain valid after engine mutation/drop.
+
+The full pinned runner completed locally at
+`/tmp/zmux-f04-compatibility-repro-reviewed-cache/receipt.json`, with base Git
+HEAD `7035ee8fce1f3fbaf8772aae73d867fffe1bb031` and separately recorded SHA-256 hashes
+of all eight harness inputs, including the uncommitted prototype. All current input
+hashes were rechecked against that receipt after completion. Receipt SHA-256:
+`a3abecbf58176a7e1827b4c94e3982c71b8a96029c4db9ead9d0ae599ba11da8`.
+It labels `explicit_existing_cache`, uses a temporary private Cargo target, rebuilds
+Ghostty in 60.581 seconds, and passes all original engine/baseline stages plus the
+new compatibility stage (0.105 seconds). The final rerun includes review hardening
+that widens cell-column arithmetic before checking bounds. The four real-process runner regressions
+also pass. Python/JSON/YAML, Rust formatting, relative links and scoped diff checks
+pass. This is local Linux evidence; the earlier hosted Mac/universal receipt does
+not execute or verify the new compatibility exporter.
+
+Executed compatibility assertions now cover:
+
+- byte-fragmented CJK/combining and mode-2027 ZWJ/VS16 grapheme runs, exact grid
+  origins/widths, soft-wrap spacers and owned snapshot lifetime;
+- default/indexed/RGB colors, bold/italic/underline/inverse, reset and erased-cell
+  backgrounds, with explicit refusal of unrepresentable extra styles, hyperlinks,
+  palette/default overrides and nonempty title/cwd metadata;
+- pending-wrap cursor mapped to the current logical `cursor_col == cols`,
+  application-cursor/bracketed-paste/visibility transitions, primary reflow,
+  history direction/clamping/live-bottom reset and alternate-screen isolation;
+- C/Rust struct-size mismatch, insufficient output buffer and oversized cell
+  refusal without publishing partial frame data.
+
+The first full local attempt reached the final overflow assertion but was incomplete:
+the two-byte combining-mark input did not exceed the export cap because the engine
+limits stored suffixes to 64 codepoints. That failed receipt remains at
+`/tmp/zmux-f04-compatibility-repro-verified-cache/receipt.json`; it is not a passed run
+or an engine failure claim. The final fixture uses a base plus 64 four-byte combining
+marks (257 bytes), which actually reaches the 256-byte export bound. The pinned
+[`page.zig`](https://github.com/ghostty-org/ghostty/blob/22fa134a07f5749edd9e92c6bc17d8aaf61843be/src/terminal/page.zig)
+ignores attached codepoints beyond its retention cap. The basic Unicode cases do
+not establish unlimited grapheme preservation.
+
+Title/cwd/bell/OSC notice export, extended style/link/palette semantics, input
+encoding, cursor shape, selection/find/graphics and exact history/memory policies
+remain unsupported and are listed explicitly in the fixture receipt. Actual
+retained history counts are reported; no 1,000-line hard-retention equivalence is
+claimed. No production PTY callback pipeline, AppKit candidate rendering, Mac
+candidate execution, workload budget or distribution-notice gate is cleared.
+
+Extend the isolated exporter to the remaining metadata/effect contracts and richer
+styles, selection and mode semantics identified by the candidate design.
+Use a real local PTY for one cursor-query round trip while preserving ordered writes
+and bounded overload handling. Explicitly verify unsupported/control-string recovery,
+allocator failure, callback overflow and destructor order before admitting the adapter
+to production. Keep graphics and filesystem/clipboard side effects disabled initially.
+
+Named-Mac workload measurements remain separate: idle/output/hidden tabs/browser/SSH
+stall phases, CPU/RSS and send-once marker latency, followed by explicit numeric budgets.
+The external sampler's mixed packaged journey is not those isolated measurements.
+Complete the actual notice closure, Mac packaging, native selection/IME/rendering and
+resource gates before selecting an engine or increasing current capacity limits.
+
+
+### Hosted compatibility exporter at the exact delivered SHA (pre-patch)
+
+Workflow [38761104404](https://github.com/ashutoshpw/zmux/actions/runs/38761104404)
+completed Linux and Mac jobs at `3ac6fa410b693c1978dd61d9649295b6bc93326f`.
+Downloaded receipts under `/tmp/zmux-f04-export-hosted-38761104404/` confirm fresh
+Zig dependency caches and successful original/baseline/compatibility fixtures on
+Linux x86_64 and macOS 15.7.9 arm64. Mac arm64/x86_64 raw-library/executable universal
+compilation and verification pass; Mac x86_64 is not executed and compatibility is
+host-only. Mac reports `RLIMIT_AS` unavailable (`ValueError`), CPU/core configured.
+Receipt SHA-256: Linux
+`e0d119a8e562a68bcc24b02a8212efae232a07eb64ef4321813f18da71ef1864`, Mac
+`7949fa4259be2251eaf2e70147a71aa7e5f16e192db4727bb713b9def6fcfbc7`.
+
+This clears the hosted compatibility-exporter subset only. It predates the
+resource patch, so it establishes no allocator/exact-retention or Mac resource
+acceptance. The previously listed unsupported effects and production gates remain.
+
+
+### Original MIT allocator and exact-history experiment
+
+The opt-in `--resource-experiment` remains confined to
+`tools/terminal-feasibility/`: no application engine/dependency, upstream pin,
+120×240 geometry, eight-terminal capacity, 1,000-row retention or 16-KiB production
+control-string policy changed. The frozen
+[resource contract](../../../../../tools/terminal-feasibility/RESOURCE_CONTRACT.md)
+records creation/clone/reflow/primary/alternate ownership, guarantees and exclusions.
+The original patch SHA-256 is
+`0ed579ca59f7e5d5f1ca695c8bc481bbfd3b1cad9832e215c9475178e6328f02` against
+Ghostty `22fa134a07f5749edd9e92c6bc17d8aaf61843be`. Before application the runner
+checks the patch cleanly against a fresh verified extraction and compares the
+retained upstream MIT license byte-for-byte with that extraction.
+
+Both the supplied general allocator and dedicated page allocator use zeroed,
+page-aligned, page-rounded mappings under one checked quota. Free/preheated pools
+and retained shrink mappings remain charged, as do simultaneous old/new clone or
+reflow allocations. No live allocator swapping, process-wide allocation interpose
+or private opaque-handle layout cast is used. Default constructors remain unchanged.
+Exact physical-history pruning uses `Screen.eraseHistory` after Screen-owned growth
+and resize transitions, rather than trimming exported rows or once per feed.
+
+The unchanged original constructor succeeds despite a zero page quota and thus
+fails the construction assertion; it retains two rows with a one-row limit in the
+second control. Both exit 101 for the named assertions and are marked `expected_failure`
+in the runner, not counted as repaired-green phases. The experimental constructor
+passes the same contracts. Independent real-engine fixtures additionally exercise:
+
+- exact zero/one/1,000 history limits, byte-fragmented input, exact oldest-prefix
+  removal at the next two rows and independently specified newest-row contents;
+- real Screen clone storage and allocation peaks, successful three-column reflow
+  with exact wrapped newest rows, widening/height changes and continued output;
+- lazy alternate construction, alternate resizing, primary return and reset;
+- all 15 observed constructor allocation denial positions; ordinary history-growth,
+  lazy-alternate, clone and reflow page-quota failure; general and aggregate failure;
+- quota refusal on subsequent input and zero reserved/general/page/live mappings,
+  with no invalid ownership operations, after every successful or failed teardown.
+
+Observed mapping peak in the lifecycle fixture is 3,313,664 bytes under an
+**experimental 16-MiB engine mapping limit**. Fixed C owner/ledger storage has a
+139,464-byte upper bound on this Linux host, and copied fixture snapshots are
+separately capped at 512 KiB each. None of these values is total process/app memory,
+measured physical footprint, a production budget or Mac resource proof.
+
+Quota denial becomes sticky at the return from an atomic call; upstream can still
+process the rest of that at-most-4,096-byte feed. The fixture supplies no
+instruction-level interrupt, consumed-byte receipt, replay-safe recovery or
+last-good-frame publisher. Alternate replacement after failed in-place resize and
+partial-top-region scroll rotation are source-reviewed but not separately forced
+by these fixtures. Compression strict-decommit/restore, bounded snapshot import,
+optional formatter/search/selection and effect semantics remain unexecuted resource
+gates. Ordinary pool zero-decommit/recommit is indirectly exercised; no separate
+syscall-success or physical-reclaim measurement is claimed.
+
+The independent resource review found no remaining blocking source or evidence
+issue after adding ordinary history-growth denial, forcing successful wrap reflow
+and narrowing the alternate/compression/sticky-failure claims. Nine real-process
+runner checks pass; the browser runner test file is unchanged by this slice.
+
+
+The final reviewed local Linux receipt is
+`/tmp/zmux-f04-resource-repro-final-reviewed-20261015/receipt.json`, SHA-256
+`4c88318afa08e9afaf59e3363be3c20457897584f75672d7400ad4188a526b46`.
+It records Git base `f4f99d384fd1db206af443d10c0d6e80489bbec3` and 14 separately
+hashed harness inputs from the working tree; all input hashes were rechecked after
+completion. The explicit existing Zig dependency cache is labeled accordingly; both
+source/toolchain archives were downloaded and checksum-verified again. Ghostty
+build took 67.835 seconds, raw fixture 0.254 seconds, compatibility 0.097 seconds
+and resource fixture 0.076 seconds. Original adapter builds use a private temporary
+Cargo target. Every normal phase passes; the two original-constructor controls are
+the intentional assertion failures described above. Linux configures CPU/core/AS
+containment separately from the allocator quota. Earlier local receipt directories
+are predecessor attempts, not the final current-hash evidence.
+
+Reproduce with a fresh output directory:
+
+```sh
+python3 -B tools/terminal-feasibility/run.py --resource-experiment \
+  --dependency-cache /tmp/zmux-f04-evaluation-20261015/zig-global-cache \
+  --output /tmp/zmux-f04-resource-results-new
+```
+
+Omit `--dependency-cache` for fresh dependency availability testing. No hosted or Mac
+resource-patch run is included in this local receipt; the earlier green hosted
+exporter workflow must not be substituted for that gate.
+
+
+### Hosted allocator/exact-history receipt at the resource commit
+
+Workflow [38766300795](https://github.com/ashutoshpw/zmux/actions/runs/38766300795)
+passes Linux x86_64 and macOS arm64 at resource commit `f468782`. Parent verified
+both downloaded receipt source SHAs and all 14 harness input hashes against that
+commit. Receipt SHA-256: Linux
+`a4f5010044a44d6ae347c69e52a67405ce2c3f7cd1003b606a2053b15c76eaac`, Mac
+`6e7a66d6682d2cfde251e979519769601a4dcedb573311d909b695b13f7be06b`.
+Both hosts pass the 15 observed constructor denial positions, all six operation
+failure paths and exact-history/reflow/lifecycle assertions. Mac arm64 records
+3,686,400 peak reserved engine mapping bytes and a 139,464-byte fixed host owner
+upper bound. Mac Intel is compiled only for the original raw library/fixture;
+there is no Intel resource execution claim. These are reserved-mapping quota
+receipts, not total RSS, physical footprint, runtime latency or production migration
+acceptance. The later callback-effects experiment has its own inputs and gates.

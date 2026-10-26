@@ -117,9 +117,9 @@ jobs:
       - name: Verify native persistence directory paths
         run: scripts/check-native-storage-paths
       - name: Verify native cloud credentials, device registration and encrypted terminal relay
-        run: scripts/check-native-cloud-client --baseline-ref c25c4c631bb4917ee496f9caed39b42e843bb78d
+        run: scripts/check-native-cloud-client --baseline-ref 5e761408da03358ac5c8440ad6b7a002c4af8a03
       - name: Verify native authentication callbacks from foreign queues
-        run: scripts/check-native-cloud-auth-callback --baseline-ref 380c6f7f218ae83b1c64e33954caa99554f94ca8
+        run: scripts/check-native-cloud-auth-callback --baseline-ref 21e5e61718f760a183b80ec405e486feee314c4a
       - name: Check Swift fixture cleanup boundary
         run: scripts/check-swift-fixture-cleanup
       - name: Verify native browser download file ownership

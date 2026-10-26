@@ -1,0 +1,121 @@
+{
+  "area": "cross-cutting-review-additions",
+  "baseline_cmux_sha": "3ba653b9e5afb11d0bc578031142950d6136697e",
+  "baseline_zmux_sha": "69342a8f036037736c6eb9a500e479ac41e32d93",
+  "features": [
+    {
+      "id": "CROSS-001",
+      "feature": "Authenticated Computer Use helper, agent injection, tools, permission onboarding and lifecycle",
+      "status": "missing",
+      "cmux_sources": [
+        "docs/computer-use.md:1",
+        "Sources/AppDelegate.swift:1008",
+        "Sources/App/ComputerUseUXCoordinator.swift:8",
+        "Packages/macOS/CmuxComputerUse/Sources/CmuxComputerUse/ComputerUseRuntimeService.swift:1"
+      ],
+      "zmux_sources": [
+        "apps/macos/Sources/App.swift:1",
+        "apps/cli/src/main.rs:176"
+      ],
+      "gaps": [
+        "No helper target, authenticated MCP injection, client approval profile or native TCC readiness owner"
+      ],
+      "acceptance": [
+        "Verify signed helper/client identity and stale credential denial",
+        "Exercise supported client tools, snapshot targeting and approval contracts",
+        "Prove permission denial/revocation, one-time onboarding, helper replacement and session cleanup"
+      ],
+      "dependencies": [
+        "agent launch identity",
+        "signed macOS distribution",
+        "managed policy"
+      ],
+      "phase": "P6/P8",
+      "priority": "P0"
+    },
+    {
+      "id": "CROSS-002",
+      "feature": "Managed-device policy and live cross-entrypoint enforcement",
+      "status": "missing",
+      "cmux_sources": [
+        "docs/managed-device-policies.md:27",
+        "Packages/macOS/CmuxSettings/Sources/CmuxSettings/Policies/ManagedDevicePolicy.swift:24",
+        "Sources/AppDelegate+ManagedPolicy.swift:12",
+        "Sources/ManagedPolicyEnforcementObserver.swift:1"
+      ],
+      "zmux_sources": [
+        "crates/desktop-runtime/src/control.rs:355",
+        "apps/macos/Sources/CloudSettings.swift:1"
+      ],
+      "gaps": [
+        "No forced preference resolver, policy generation, UI locking or live revocation owner"
+      ],
+      "acceptance": [
+        "Forced values dominate config/env across UI/CLI/restore/remote entrypoints",
+        "Invalid restrictive policy fails closed; ordinary defaults cannot impersonate MDM",
+        "Live profile changes revoke affected clients, helpers, retries and transfers; removal restores user choice"
+      ],
+      "dependencies": [
+        "settings and capability owners",
+        "dedicated Mac profile test environment"
+      ],
+      "phase": "P0/P4/P8",
+      "priority": "P0"
+    },
+    {
+      "id": "CROSS-003",
+      "feature": "Project pane creation, parsing, inspection and routing",
+      "status": "missing",
+      "cmux_sources": [
+        "CLI/cmux.swift:10031",
+        "Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Coordinator/Project/ControlCommandCoordinator+Project.swift:45",
+        "Sources/Panels/ProjectPanel.swift:50"
+      ],
+      "zmux_sources": [
+        "crates/workspace-core/src/surfaces.rs:1",
+        "apps/cli/src/main.rs:176"
+      ],
+      "gaps": [
+        "No project surface, project model/parser, open namespace or debug state contract"
+      ],
+      "acceptance": [
+        "CLI shorthand/explicit open resolve cwd/workspace/window/focus and return exact IDs",
+        "Malformed/missing projects and close-during-load fail safely",
+        "Files/targets/build-settings/schemes state and build-specific debug exposure agree"
+      ],
+      "dependencies": [
+        "typed targets",
+        "content surfaces",
+        "original project parser"
+      ],
+      "phase": "P5",
+      "priority": "P1"
+    },
+    {
+      "id": "CROSS-004",
+      "feature": "Quit, confirmation, deferred cleanup and relaunch lifecycle",
+      "status": "partial",
+      "cmux_sources": [
+        "Sources/AppDelegate.swift:2461"
+      ],
+      "zmux_sources": [
+        "apps/macos/Sources/App.swift:1170"
+      ],
+      "gaps": [
+        "Asynchronous shutdown exists; missing dirty-workspace confirmation, session snapshot and update/remote cleanup contract"
+      ],
+      "acceptance": [
+        "Cmd-Q/menu/system/update requests share one cancellation and teardown owner",
+        "Repeated quit does not duplicate dialogs or cleanup",
+        "Bounded owned cleanup and fresh recoverable state preserve unrelated processes"
+      ],
+      "dependencies": [
+        "persistence",
+        "remote/agent lifecycle",
+        "update owner"
+      ],
+      "phase": "P1/P4/P8",
+      "priority": "P0"
+    }
+  ]
+}

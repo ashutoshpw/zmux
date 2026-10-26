@@ -1,0 +1,1663 @@
+{
+  "schema_version": 1,
+  "audit": {
+    "title": "Cloud, platform, and advanced command parity audit",
+    "date": "2026-10-15",
+    "scope": "Source-only comparison of cloud, VM, account, VPN, mobile, Simulator/iOS, diagnostics, resource, capture, privilege, tmux compatibility, distribution, localization, and reliability contracts.",
+    "cmux_sha": "3ba653b9e5afb11d0bc578031142950d6136697e",
+    "zmux_sha": "69342a8f036037736c6eb9a500e479ac41e32d93",
+    "zmux_branch": "main",
+    "required_origin": "https://zmux.w3dev.app",
+    "deployment_policy": "GitHub Actions only",
+    "evidence_boundary": "Source, source tests, docs, and workflow definitions only. No build, native run, deployed authentication, production database, provider, VM, relay, VPN, Simulator, capture, sudo, update, or resource-soak journey was executed.",
+    "provenance": "Behavioral comparison only; no upstream implementation or assets are imported or translated."
+  },
+  "status_definitions": {
+    "source-verified-subset": "A narrow zmux behavior exists and has focused source tests at the pinned SHA; native, packaged, hosted, authenticated, provider, and production evidence remain open.",
+    "partial": "Some foundation exists, but the full user journey or required invariants are incomplete.",
+    "missing": "No zmux behavioral owner for the audited contract was found.",
+    "fully-verified": "All applicable contract, shared-owner, public CLI, packaged native, remote or cloud, and measured stability layers passed on the exact SHA. No audited family has this status."
+  },
+  "summary": {
+    "feature_count": 23,
+    "by_status": {
+      "source-verified-subset": 2,
+      "partial": 3,
+      "missing": 18,
+      "fully-verified": 0
+    },
+    "by_priority": {
+      "P0": 9,
+      "P1": 12,
+      "P2": 2
+    },
+    "conclusion": "Zmux has an identity and owner-scoped device foundation, not a cloud terminal product. Its readiness route reports vm, relay, and email unavailable, its native UI reports remote transport unavailable, and its CLI exposes no audited cloud or platform namespace."
+  },
+  "global_contracts": {
+    "cloud_alias": "cmux cloud aliases the complete vm dispatcher; every nested leaf, alias, option, default, effect, target rule, output, and failure remains independently required.",
+    "completion_rule": "A help line, parser branch, mock result, local same-name primitive, or explicit unavailable response does not establish behavioral parity.",
+    "remote_failure_rule": "A failed, timed-out, or unavailable remote request must never execute locally.",
+    "relay_policy": "Remote socket methods must deny by default, scope selectors to session-owned objects, reject command-bearing parameters unless explicitly reviewed, and withhold spawn or respawn until two-host execution identity is proven.",
+    "deployment_dependency": "Provider and database selection blocks deployed VM journeys but does not remove them from scope or change their status to implemented.",
+    "distribution_boundary": "An undeployed control-plane image receipt and an ad hoc-signed development app are separate artifacts and do not prove a production release or live sign-in."
+  },
+  "feature_families": [
+    {
+      "id": "CLOUD-001",
+      "name": "Deployment configuration and owned origin",
+      "priority": "P0",
+      "phase": "P7",
+      "status": "partial",
+      "canonical_scope": [
+        "validated deployment configuration",
+        "owned service authority",
+        "generated native/web/release inputs",
+        "protected database migration",
+        "Actions-only deployment"
+      ],
+      "cmux_contract": "Runtime destinations and generated platform inputs derive from validated configuration; unavailable owned services fail explicitly without an upstream fallback.",
+      "cmux_sources": [
+        "CLI/cmux.swift:21223",
+        "web/app/api/vm",
+        "web/services/vms"
+      ],
+      "zmux_evidence": [
+        "config/deployment.json:1",
+        "apps/macos/Sources/CloudClient.swift:26",
+        "docs/cloud-deployment.md:1",
+        ".github/workflows/cloud-package.yml:13"
+      ],
+      "target_resolution": "One configured Zmux authority at https://zmux.w3dev.app; localhost HTTP is development-only.",
+      "preconditions": [
+        "host, provider, database, secrets, and protected environment selected",
+        "deployment triggered through GitHub Actions"
+      ],
+      "effects": "Current workflow packages an image and receipt but does not deploy it.",
+      "focus_policy": "not applicable",
+      "output_exit": "Configuration validation must reject inconsistent origins; readiness must distinguish unavailable dependencies.",
+      "dependencies": [
+        "hosting decision",
+        "PostgreSQL",
+        "provider selection",
+        "GitHub environments and secrets"
+      ],
+      "acceptance": [
+        "invalid and inconsistent origins fail",
+        "native, web, callback, and release values agree",
+        "protected migration rehearsal succeeds on a disposable database",
+        "actual deployed destination is inspected",
+        "missing service has no operational upstream fallback"
+      ],
+      "evidence_limit": "No deployment or migration was run."
+    },
+    {
+      "id": "CLOUD-002",
+      "name": "Native authentication and session binding",
+      "priority": "P0",
+      "phase": "P7",
+      "status": "source-verified-subset",
+      "canonical_scope": [
+        "S256 PKCE",
+        "exact callback and state",
+        "single-use authorization code",
+        "session-bound bearer token",
+        "Keychain storage",
+        "sign-out and revocation"
+      ],
+      "cmux_contract": "Native authorization binds client, redirect, state, verifier, user, and live web session; tokens are never handed off in URLs or logs.",
+      "cmux_sources": [
+        "CLI/cmux.swift:7033"
+      ],
+      "zmux_evidence": [
+        "apps/macos/Sources/CloudClient.swift:44",
+        "apps/macos/Sources/CloudClient.swift:71",
+        "apps/macos/Sources/CloudClient.swift:105",
+        "services/control-plane/src/app.ts:116",
+        "services/control-plane/src/app.ts:136",
+        "services/control-plane/src/app.ts:194",
+        "services/control-plane/test/control-plane.test.ts:110"
+      ],
+      "target_resolution": "Current macOS development client and exact zmux-dev callback only.",
+      "preconditions": [
+        "configured cloud endpoint",
+        "Better Auth web session",
+        "migrated PostgreSQL schema"
+      ],
+      "effects": "Creates and consumes a bounded authorization code, stores a hashed session-bound token, and stores the native token in Keychain.",
+      "focus_policy": "Browser authorization may activate the login flow; callback must attach only to the initiating attempt.",
+      "output_exit": "Invalid state, verifier, callback, replay, expired session, redirect, or token fails without disclosing credentials.",
+      "dependencies": [
+        "Better Auth dependency review",
+        "packaged callback registration",
+        "production signing",
+        "PostgreSQL"
+      ],
+      "acceptance": [
+        "packaged callback",
+        "concurrent and cancelled login isolation",
+        "expiry and revocation",
+        "separate macOS and iOS client identities and keychains",
+        "live deployed sign-in",
+        "no token in URL or log"
+      ],
+      "evidence_limit": "Focused source tests exist; no packaged or deployed sign-in was run."
+    },
+    {
+      "id": "CLOUD-003",
+      "name": "Organizations, CLI teams, MFA, mail, and admin invariants",
+      "priority": "P0",
+      "phase": "P7",
+      "status": "partial",
+      "canonical_scope": [
+        "team list",
+        "team use",
+        "team create",
+        "members",
+        "invite",
+        "invite link",
+        "revoke invite",
+        "invitations",
+        "accept",
+        "decline",
+        "remove",
+        "MFA",
+        "localized mail",
+        "last-admin invariant"
+      ],
+      "aliases_defaults": [
+        "team invitations is the current-user pending list",
+        "account and auth routes share the current session authority"
+      ],
+      "cmux_contract": "CLI, native, and service membership share one authority; current session and current membership are checked for every protected action.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+AuthTeam.swift:6",
+        "CLI/cmux.swift:7033"
+      ],
+      "zmux_evidence": [
+        "services/control-plane/src/app.ts:320",
+        "services/control-plane/test/control-plane.test.ts:244"
+      ],
+      "target_resolution": "Current authenticated user and selected organization or explicit team.",
+      "preconditions": [
+        "live session",
+        "current membership",
+        "role and plan capacity where applicable"
+      ],
+      "effects": "Zmux currently returns organization membership only; it has no CLI team surface or complete invitation/admin workflow.",
+      "focus_policy": "not applicable",
+      "output_exit": "Unauthorized, removed-member, stale invitation, capacity, last-admin, and concurrent update cases must be distinct and failure-visible.",
+      "dependencies": [
+        "mail provider",
+        "MFA",
+        "transactional membership DAL",
+        "localization",
+        "plan model"
+      ],
+      "acceptance": [
+        "removed member loses access",
+        "invite lifecycle",
+        "role and capacity enforcement",
+        "last-admin and concurrent deletion safety",
+        "MFA",
+        "localized invite and recovery mail",
+        "bounded transaction pool"
+      ],
+      "evidence_limit": "Organization readback is tested; the broader matrix is not implemented."
+    },
+    {
+      "id": "CLOUD-004",
+      "name": "Billing and entitlement enforcement",
+      "priority": "P0",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "billing checkout --plan [--no-open]",
+        "web upgrade and billing portal",
+        "webhook reconciliation",
+        "VM plan and shared-pool admission"
+      ],
+      "cmux_contract": "Billing state authorizes resource creation and growth; client preflight and server enforcement agree, and durable entitlements are reconciled idempotently.",
+      "cmux_sources": [
+        "CLI/cmux.swift:7033",
+        "web/app/api/billing/checkout/route.ts:145",
+        "web/app/api/billing/portal/route.ts:60",
+        "CLI/CMUXCLI+VMHelp.swift:219"
+      ],
+      "zmux_evidence": [
+        "No billing, Stripe, entitlement, or VM plan owner found."
+      ],
+      "target_resolution": "Authenticated personal or team billing owner.",
+      "preconditions": [
+        "billing account",
+        "plan catalog",
+        "webhook authority"
+      ],
+      "effects": "missing",
+      "focus_policy": "Browser checkout and portal activation must be explicit.",
+      "output_exit": "Payment, cancellation, stale webhook, ownership, and capacity failures remain visible and idempotent.",
+      "dependencies": [
+        "billing provider",
+        "organization authority",
+        "VM provider"
+      ],
+      "acceptance": [
+        "hosted checkout and portal",
+        "signed webhook",
+        "idempotent reconciliation",
+        "team ownership",
+        "resource admission",
+        "pause and delete billing effects",
+        "failure recovery"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "CLOUD-005",
+      "name": "Device registry and presence foundation",
+      "priority": "P0",
+      "phase": "P7",
+      "status": "source-verified-subset",
+      "canonical_scope": [
+        "register",
+        "list",
+        "heartbeat",
+        "revoke",
+        "owner isolation",
+        "retention cleanup",
+        "session interaction",
+        "relay presence"
+      ],
+      "cmux_contract": "Only the owner can observe or mutate a device; presence is bounded and connected to session and relay identity.",
+      "cmux_sources": [
+        "CLI/cmux.swift:21223"
+      ],
+      "zmux_evidence": [
+        "apps/macos/Sources/CloudSettings.swift:120",
+        "apps/macos/Sources/CloudSettings.swift:184",
+        "apps/macos/Sources/CloudSettings.swift:200",
+        "services/control-plane/src/app.ts:333",
+        "services/control-plane/src/app.ts:351",
+        "services/control-plane/src/app.ts:369",
+        "services/control-plane/src/app.ts:383"
+      ],
+      "target_resolution": "Authenticated user owns the device UUID.",
+      "preconditions": [
+        "valid native token",
+        "non-revoked device for heartbeat"
+      ],
+      "effects": "Register/list/heartbeat/revoke exist and are source-tested; no relay transport or cleanup job exists.",
+      "focus_policy": "not applicable",
+      "output_exit": "Cross-owner and revoked-device mutation fail without disclosing existence beyond the defined error contract.",
+      "dependencies": [
+        "retention policy",
+        "background native heartbeat",
+        "relay identity and ticket authority"
+      ],
+      "acceptance": [
+        "packaged background heartbeat",
+        "multi-device owner isolation",
+        "session and device revocation",
+        "stale cleanup",
+        "relay presence",
+        "bounded database growth"
+      ],
+      "evidence_limit": "Source tests cover the narrow registry; no packaged presence or relay journey was run."
+    },
+    {
+      "id": "CLOUD-006",
+      "name": "VM control plane, provider lifecycle, and readiness",
+      "priority": "P0",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "base open/reset",
+        "new/create",
+        "list",
+        "status",
+        "stats",
+        "resize",
+        "agent updates",
+        "rename",
+        "pause",
+        "resume",
+        "restart",
+        "remove",
+        "provider snapshots",
+        "image/relay/artifact readiness"
+      ],
+      "aliases_defaults": [
+        "cloud aliases vm",
+        "create aliases new",
+        "list aliases ls"
+      ],
+      "cmux_contract": "Authenticated owner-scoped lifecycle with durable state, plan and pool checks, provider-confirmed resources, and explicit capability readiness.",
+      "cmux_sources": [
+        "CLI/cmux.swift:7161",
+        "CLI/cmux.swift:21223",
+        "CLI/CMUXCLI+VMHelp.swift:219",
+        "CLI/CMUXCLI+VMHelp.swift:352",
+        "CLI/CMUXCLI+VMTui.swift:989",
+        "Sources/Cloud/VMClientSocketCommands.swift:8",
+        "web/app/api/vm",
+        "web/services/vms"
+      ],
+      "zmux_evidence": [
+        "services/control-plane/src/app.ts:268 reports vm and relay unavailable",
+        "services/control-plane/src/app.ts:293 reports capabilities vm false"
+      ],
+      "target_resolution": "Authenticated owner or authorized team and canonical machine ID or slug.",
+      "preconditions": [
+        "provider",
+        "owned image",
+        "relay",
+        "artifact readiness",
+        "billing entitlement",
+        "plan capacity"
+      ],
+      "effects": "missing",
+      "focus_policy": "Open-like verbs accept focus or no-focus; detach creates without opening.",
+      "output_exit": "Provider, plan, capacity, image, ownership, unavailable, timeout, and uncertain mutation states must be distinct.",
+      "dependencies": [
+        "CLOUD-001",
+        "CLOUD-002",
+        "CLOUD-003",
+        "CLOUD-004",
+        "provider",
+        "image pipeline",
+        "relay",
+        "ticket authority"
+      ],
+      "acceptance": [
+        "authenticated provider lifecycle",
+        "plan and owner isolation",
+        "idempotent uncertain mutations",
+        "provider-confirmed resize",
+        "pause and resume persistence",
+        "restart loss contract",
+        "readiness stays disabled until owned artifacts pass"
+      ],
+      "evidence_limit": "No zmux VM service or provider owner found."
+    },
+    {
+      "id": "CLOUD-007",
+      "name": "VM remote workspace and terminal operations",
+      "priority": "P1",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "workspace new/open/rename/close/rm",
+        "terminal send/read/wait/wait-exit/output/close/rename",
+        "tab rename"
+      ],
+      "aliases_defaults": [
+        "terminal write aliases send",
+        "terminal screen aliases read"
+      ],
+      "cmux_contract": "Remote daemon identities distinguish workspace, terminal process, retained output, and tab placement; close detaches while rm kills; commands operate headlessly without unintended focus.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+VMTui.swift:898",
+        "CLI/CMUXCLI+VMTui.swift:927",
+        "CLI/CMUXCLI+VMTui.swift:955",
+        "CLI/CMUXCLI+VMTui.swift:1065",
+        "CLI/CMUXCLI+VMTui.swift:1236",
+        "CLI/CMUXCLI+VMTui.swift:1396"
+      ],
+      "zmux_evidence": [
+        "apps/cli/src/main.rs:23",
+        "apps/cli/src/main.rs:148"
+      ],
+      "target_resolution": "Machine plus remote workspace, terminal, or tab ID; open additionally resolves local placement and focus.",
+      "preconditions": [
+        "live or reconnectable machine daemon",
+        "authorized relay session"
+      ],
+      "effects": "missing; local send-text and read-screen do not target a remote daemon.",
+      "focus_policy": "Headless send/read/wait never focus; workspace open/new honor focus/no-focus and explicit local placement.",
+      "output_exit": "Regex timeout, pending process, exit code, signal, retained-output offsets, stale IDs, and transport loss are distinct.",
+      "dependencies": [
+        "CLOUD-006",
+        "session-bound relay",
+        "remote daemon",
+        "local topology target model"
+      ],
+      "acceptance": [
+        "two-host process identity",
+        "detach versus kill",
+        "exact input and named keys",
+        "screen and cursor",
+        "exit versus prompt wait",
+        "monotonic output offsets",
+        "reconnect and stale IDs",
+        "no focus for headless operations"
+      ],
+      "evidence_limit": "No remote workspace or terminal owner found."
+    },
+    {
+      "id": "CLOUD-008",
+      "name": "VM layout and secret environment",
+      "priority": "P1",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "layout export/get/show",
+        "layout apply/set",
+        "env set/add",
+        "env ls/list",
+        "env rm/remove/unset",
+        "env path"
+      ],
+      "cmux_contract": "Portable layouts validate before mutation and preserve geometry; environment values use an end-to-end machine link rather than control-plane plaintext exec and are hidden by default.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+VMLayoutEnv.swift:22",
+        "CLI/CMUXCLI+VMLayoutEnv.swift:50",
+        "CLI/CMUXCLI+VMLayoutEnv.swift:80",
+        "CLI/CMUXCLI+VMLayoutEnv.swift:298"
+      ],
+      "zmux_evidence": [
+        "No remote layout document or environment delivery owner found."
+      ],
+      "target_resolution": "Machine and focused, named, or explicit remote workspace; environment is machine-wide.",
+      "preconditions": [
+        "CLOUD-007",
+        "layout schema",
+        "end-to-end encrypted machine link"
+      ],
+      "effects": "missing",
+      "focus_policy": "Layout apply opens only with --open; environment operations never focus.",
+      "output_exit": "Invalid document exits separately before mutation; environment output names only unless --show is explicit.",
+      "dependencies": [
+        "CLOUD-006",
+        "CLOUD-007",
+        "portable layout schema",
+        "secret delivery channel"
+      ],
+      "acceptance": [
+        "file/stdin/saved layout",
+        "invalid path diagnostics",
+        "atomic empty-workspace apply",
+        "geometry",
+        "secret redaction",
+        "0600 persistence",
+        "snapshot inheritance warning",
+        "control plane cannot read values"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "CLOUD-009",
+      "name": "VM networking, domains, snapshots, and templates",
+      "priority": "P1",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "network show/set/add-domain/remove-domain/add-range/remove-range/preset",
+        "domains list/zones/verify/publish/access/grant/ungrant/grants/rm",
+        "snapshot create/list/delete",
+        "fork",
+        "restore",
+        "promote-template"
+      ],
+      "aliases_defaults": [
+        "checkpoint aliases snapshot create",
+        "domain ls aliases list",
+        "domain custom aliases zones",
+        "domain remove/delete alias rm",
+        "preset and presets"
+      ],
+      "cmux_contract": "Live egress policy, verified publication ownership and access grants, and provider-backed durable snapshots preserve owner/team boundaries.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+VMNetwork.swift:6",
+        "CLI/CMUXCLI+VMNetwork.swift:51",
+        "CLI/CMUXCLI+CloudDomains.swift:13",
+        "CLI/CMUXCLI+CloudDomains.swift:35",
+        "CLI/CMUXCLI+VMSnapshots.swift:8",
+        "CLI/cmux.swift:7695"
+      ],
+      "zmux_evidence": [
+        "No network, publication, snapshot, fork, restore, or template owner found."
+      ],
+      "target_resolution": "Owned machine, verified domain or generated hostname, port publication, team or personal access, and provider snapshot ID.",
+      "preconditions": [
+        "CLOUD-006",
+        "network policy enforcement",
+        "DNS/publication authority",
+        "provider snapshot API"
+      ],
+      "effects": "missing",
+      "focus_policy": "Fork and restore honor focus/no-focus/detach; other operations are headless.",
+      "output_exit": "Public exposure requires explicit confirmation; policy, DNS, grant, provider, and ownership failures remain distinct.",
+      "dependencies": [
+        "provider",
+        "relay/network fabric",
+        "DNS and certificate authority",
+        "organization authority"
+      ],
+      "acceptance": [
+        "live allowlist/none/full",
+        "DNS channel policy",
+        "custom-domain verification",
+        "personal/team/public isolation",
+        "grant expiry",
+        "snapshot integrity",
+        "fork/restore ownership",
+        "template secret review"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "CLOUD-010",
+      "name": "VM execution, routing, agent, development, and transfer",
+      "priority": "P1",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "exec",
+        "run",
+        "route",
+        "agent",
+        "dev",
+        "push/upload",
+        "pull/download",
+        "wait",
+        "secret push",
+        "watch sync"
+      ],
+      "cmux_contract": "Commands and bytes execute or transfer on the selected remote host with durable identity, exact argv/path handling, exit propagation, progress/cancel behavior, and no local fallback.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+VMTui.swift:976",
+        "CLI/CMUXCLI+VMTransfer.swift:30",
+        "CLI/CMUXCLI+VMTransfer.swift:62",
+        "CLI/CMUXCLI+VMTransfer.swift:76",
+        "CLI/CMUXCLI+VMTransfer.swift:995",
+        "CLI/CMUXCLI+VMTransfer.swift:1677",
+        "CLI/CMUXCLI+VMTransfer.swift:1701",
+        "CLI/CMUXCLI+VMDev.swift:17"
+      ],
+      "zmux_evidence": [
+        "No remote exec, route, agent, development composition, or file transfer owner found."
+      ],
+      "target_resolution": "Explicit machine or route by cwd; agent additionally owns remote workspace and terminal identity; transfer owns local and remote paths.",
+      "preconditions": [
+        "CLOUD-006",
+        "CLOUD-007",
+        "authorized remote execution",
+        "file transport"
+      ],
+      "effects": "missing",
+      "focus_policy": "Headless exec/run/route/transfer do not focus; agent/dev honor open and focus flags.",
+      "output_exit": "Remote exit codes pass through; timeouts and uncertain mutation state are explicit; route dry-run does not execute; transfer progress and cancellation are observable.",
+      "dependencies": [
+        "provider router",
+        "remote daemon",
+        "relay",
+        "transfer protocol",
+        "agent adapters"
+      ],
+      "acceptance": [
+        "two-host execution identity",
+        "argv safety",
+        "exit and timeout",
+        "route explanation",
+        "detached agent reattach",
+        "integrity and recursive transfer",
+        "exclude and watch",
+        "secret path bypasses readable control plane",
+        "cancel/retry",
+        "no local fallback"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "CLOUD-011",
+      "name": "VM access, desktop, TUI, ports, and handoff",
+      "priority": "P1",
+      "phase": "P7",
+      "status": "missing",
+      "canonical_scope": [
+        "shell/attach",
+        "tui",
+        "desktop/vnc",
+        "open/port",
+        "ssh",
+        "ssh-info",
+        "tree",
+        "self",
+        "ports",
+        "tools",
+        "handoff"
+      ],
+      "cmux_contract": "Addressable remote sessions and services reuse existing ownership, support explicit local placement/focus, and expose private URLs and connection details without making ports public.",
+      "cmux_sources": [
+        "CLI/cmux.swift:21223",
+        "CLI/CMUXCLI+VMTui.swift:63",
+        "CLI/CMUXCLI+VMTui.swift:807",
+        "CLI/CMUXCLI+VMTui.swift:864",
+        "CLI/CMUXCLI+VMSelf.swift:9",
+        "CLI/CMUXCLI+VMHelp.swift:376"
+      ],
+      "zmux_evidence": [
+        "apps/macos/Sources/CloudSettings.swift:234 says remote terminal transport is unavailable"
+      ],
+      "target_resolution": "Tree address or machine plus remote workspace/terminal/desktop/port and local window/workspace placement.",
+      "preconditions": [
+        "CLOUD-006",
+        "CLOUD-007",
+        "private tunnel",
+        "desktop or TUI capability"
+      ],
+      "effects": "missing",
+      "focus_policy": "Open-like commands accept focus/no-focus; --print returns a URL without opening.",
+      "output_exit": "Stale addresses, missing capability, ownership, enrollment, and transport failures are explicit.",
+      "dependencies": [
+        "relay",
+        "private network",
+        "TUI daemon",
+        "desktop stream",
+        "managed SSH"
+      ],
+      "acceptance": [
+        "address reuse",
+        "explicit placement",
+        "private port URL",
+        "desktop input/output",
+        "TUI enrollment",
+        "SSH details",
+        "headless print",
+        "owner isolation"
+      ],
+      "evidence_limit": "No remote transport implementation found."
+    },
+    {
+      "id": "PLATFORM-001",
+      "name": "System VPN Network Extension",
+      "priority": "P1",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "vpn up/on",
+        "vpn down/off",
+        "vpn status",
+        "vpn revoke"
+      ],
+      "cmux_contract": "A signed Network Extension provides other apps a system route while cmux terminals use a separate user-space WireGuard path; user approval is required and sudo is not a fallback.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+VPN.swift:9",
+        "CLI/CMUXCLI+VPNAppManaged.swift:19"
+      ],
+      "zmux_evidence": [
+        "No Network Extension target, entitlement, tunnel API, approval UI, or vpn CLI found."
+      ],
+      "target_resolution": "Current signed app installation and registered device.",
+      "preconditions": [
+        "production signing",
+        "Network Extension entitlement",
+        "cloud network enrollment"
+      ],
+      "effects": "missing",
+      "focus_policy": "Approval UI may activate; status/down/revoke are headless.",
+      "output_exit": "Unavailable extension, denied approval, route failure, revoked device, and already-up/down states are distinct.",
+      "dependencies": [
+        "CLOUD-005",
+        "CLOUD-006",
+        "private network",
+        "Apple entitlement"
+      ],
+      "acceptance": [
+        "signed install and approval",
+        "denial",
+        "up/down/status",
+        "sleep/wake reconnect",
+        "DNS and route policy",
+        "other-app reachability",
+        "revoke",
+        "terminals remain independent"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "PLATFORM-002",
+      "name": "Mobile settings and iOS client",
+      "priority": "P0",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "mobile set-font",
+        "compatible-tags list/set/add/remove/clear",
+        "iOS app",
+        "distinct identity and callback",
+        "remote terminal client"
+      ],
+      "cmux_contract": "Mobile compatibility settings use shared targeting and persistence; iOS has a distinct bundle/keychain/callback and reliable authenticated remote sessions.",
+      "cmux_sources": [
+        "CLI/cmux.swift:8136",
+        "Packages/iOS",
+        "ios/cmux"
+      ],
+      "zmux_evidence": [
+        "No iOS app target, mobile identity, callback, remote client, or distribution lane found."
+      ],
+      "target_resolution": "Surface/workspace for font; current compatible-tag set; selected mobile account/device/session.",
+      "preconditions": [
+        "mobile application",
+        "separate identity",
+        "CLOUD-002",
+        "remote transport"
+      ],
+      "effects": "missing",
+      "focus_policy": "Settings are headless; mobile UI owns foreground selection.",
+      "output_exit": "Invalid ranges/tags, wrong callback, revoked session/device, and incompatible server versions fail explicitly.",
+      "dependencies": [
+        "production signing",
+        "iOS distribution",
+        "CLOUD-002",
+        "CLOUD-005",
+        "relay"
+      ],
+      "acceptance": [
+        "settings persistence and target validation",
+        "distinct macOS/iOS identity",
+        "concurrent callback isolation",
+        "physical or simulator install",
+        "auth and enrollment",
+        "background reconnect",
+        "input/output/resize",
+        "revoke and upgrade compatibility"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "PLATFORM-003",
+      "name": "Simulator and iOS command namespaces",
+      "priority": "P1",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "simulator type/tap/gesture/multitouch/swipe/button/rotate/ca/memory-warning/event-log/tools/camera/permissions/ui/accessibility/foreground/targets/attach/send/highlight/release",
+        "ios list/context/select/screenshot",
+        "all simulator leaves under ios"
+      ],
+      "cmux_contract": "Commands target a Simulator surface, wait for correlated worker or inspector results, preserve ordered input, and bind selected device and inspector sessions exactly.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+Simulator.swift:32",
+        "CLI/CMUXCLI+Simulator.swift:74",
+        "CLI/CMUXCLI+SimulatorAgent.swift:13",
+        "CLI/CMUXCLI+SimulatorSettings.swift:13"
+      ],
+      "zmux_evidence": [
+        "No Simulator worker, iOS namespace, inspector bridge, or screenshot owner found."
+      ],
+      "target_resolution": "Explicit or caller Simulator surface; iOS list may scope workspace; context/select bind device UDID; screenshot supports one or all up to eight.",
+      "preconditions": [
+        "macOS Simulator availability",
+        "selected simulator-backed surface",
+        "worker and inspector session"
+      ],
+      "effects": "missing",
+      "focus_policy": "Automation targets exact surfaces without unrelated app activation unless the command explicitly selects UI.",
+      "output_exit": "Correlation timeout, stale target, invalid touch sequence, missing permission/app/device, and inspector detach are distinct.",
+      "dependencies": [
+        "native macOS app",
+        "Simulator integration",
+        "Web Inspector bridge",
+        "iOS device mapping"
+      ],
+      "acceptance": [
+        "ordered type and touch",
+        "hardware and rotation",
+        "camera and UI settings",
+        "permission lifecycle",
+        "bounded accessibility",
+        "target churn",
+        "raw inspector correlation",
+        "device select/context",
+        "multi-target screenshots",
+        "cleanup"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "ADVANCED-001",
+      "name": "Diagnostics, capabilities, and raw RPC security",
+      "priority": "P1",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "ping",
+        "iroh-diag",
+        "version",
+        "capabilities",
+        "rpc",
+        "socket-status",
+        "debug-terminals",
+        "trigger-flash",
+        "set-app-focus",
+        "simulate-app-active",
+        "simulate-sidebar-drag"
+      ],
+      "cmux_contract": "Diagnostics are typed, bounded, honest about transport, and authorization-aware; generic RPC does not bypass method or object policy.",
+      "cmux_sources": [
+        "CLI/cmux.swift:21080",
+        "CLI/cmux.swift:21446",
+        "CLI/cmux.swift:22664",
+        "CLI/cmux.swift:23311",
+        "Sources/TerminalController+Capabilities.swift:112"
+      ],
+      "zmux_evidence": [
+        "apps/cli/src/main.rs:681 implements only a local socket/protocol doctor"
+      ],
+      "target_resolution": "Local app socket and explicit authorized method/object selectors.",
+      "preconditions": [
+        "running app for live diagnostics",
+        "method authorization for RPC",
+        "test-build or explicit gate for simulation"
+      ],
+      "effects": "missing beyond narrow doctor output.",
+      "focus_policy": "Diagnostics do not focus; explicit simulation commands may change modeled focus only under test gating.",
+      "output_exit": "Connection, protocol, unsupported capability, authorization, timeout, and transport diagnostics remain distinct.",
+      "dependencies": [
+        "capability registry",
+        "socket method policy",
+        "transport diagnostics"
+      ],
+      "acceptance": [
+        "offline and live boundaries",
+        "structured capabilities",
+        "bounded output",
+        "transport-specific naming",
+        "raw RPC deny policy",
+        "debug method gating",
+        "exact exit codes"
+      ],
+      "evidence_limit": "Doctor is not parity with the broader family."
+    },
+    {
+      "id": "ADVANCED-002",
+      "name": "Resource and process inspection",
+      "priority": "P1",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "top",
+        "memory"
+      ],
+      "aliases_defaults": [
+        "top defaults to current window",
+        "memory defaults to 12 child command groups"
+      ],
+      "cmux_contract": "CPU, physical footprint, process count, child RSS, and WebKit content processes are attributed without double-counting to windows, workspaces, panes, surfaces, tags, and browser views.",
+      "cmux_sources": [
+        "CLI/cmux.swift:22414",
+        "CLI/cmux.swift:22445"
+      ],
+      "zmux_evidence": [
+        "Local status reports counts and session state only; no process attribution or budget owner found."
+      ],
+      "target_resolution": "Current or all windows and optional workspace; process ownership follows live surface and WebKit identities.",
+      "preconditions": [
+        "running packaged app",
+        "macOS process accounting"
+      ],
+      "effects": "missing",
+      "focus_policy": "headless",
+      "output_exit": "Racing and exited PIDs are handled without misattribution; TSV and JSON schemas remain stable.",
+      "dependencies": [
+        "stable topology IDs",
+        "process ownership registry",
+        "WebKit process observation"
+      ],
+      "acceptance": [
+        "PID de-duplication",
+        "tree and flat formats",
+        "sort",
+        "WebKit attribution",
+        "direct app versus child RSS",
+        "named-machine numeric budgets",
+        "racing process cleanup"
+      ],
+      "evidence_limit": "No implementation or native measurement found."
+    },
+    {
+      "id": "ADVANCED-003",
+      "name": "Window capture and recording",
+      "priority": "P1",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "shot/screenshot",
+        "record start",
+        "record stop",
+        "record status",
+        "record note",
+        "record list"
+      ],
+      "cmux_contract": "Only owned app windows are captured without Screen Recording permission; format, scale, dimensions, region, output, caption, duration, and single-recording ownership are validated.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+Screenshot.swift:4",
+        "CLI/CMUXCLI+Record.swift:4",
+        "Sources/TerminalController+WindowScreenshotMethod.swift:7",
+        "Sources/TerminalController+WindowRecording.swift:7"
+      ],
+      "zmux_evidence": [
+        "Workflow screenshots exist only as test harness artifacts; no public capture or recording command owner found."
+      ],
+      "target_resolution": "Explicit window or frontmost owned window; record ID for stop/status/note.",
+      "preconditions": [
+        "live owned window",
+        "writable output destination",
+        "one recording maximum"
+      ],
+      "effects": "missing",
+      "focus_policy": "Capture must not activate a different window as a side effect.",
+      "output_exit": "Invalid region/format/range/path, no window, conflicting recording, close, encode failure, and auto-stop are distinct.",
+      "dependencies": [
+        "native window owner",
+        "image/video encoding",
+        "output file policy"
+      ],
+      "acceptance": [
+        "PNG/JPEG bytes and dimensions",
+        "MP4/GIF playback",
+        "Retina and region geometry",
+        "caption and note timing",
+        "duration auto-stop",
+        "close/cancel",
+        "output collision",
+        "permission behavior"
+      ],
+      "evidence_limit": "No public product implementation found."
+    },
+    {
+      "id": "ADVANCED-004",
+      "name": "Privileged execution and Touch ID",
+      "priority": "P0",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "sudo run",
+        "sudo pending",
+        "sudo setup-touch-id"
+      ],
+      "cmux_contract": "A signed helper and broker authenticate the requester, bound command/script/stdin, reason, timeout, approval, and Touch ID flow without shell interpolation or silent privilege fallback.",
+      "cmux_sources": [
+        "CLI/CMUXCLI+TaskHelp.swift:424",
+        "CLI/CMUXCLI+Sudo.swift:6",
+        "Packages/macOS/CmuxSudoBroker/Sources/CmuxSudoBroker/SudoCLICommand.swift:90"
+      ],
+      "zmux_evidence": [
+        "No helper, broker, requester identity, sudo namespace, or Touch ID setup found."
+      ],
+      "target_resolution": "Current signed installation and authenticated local requester.",
+      "preconditions": [
+        "production code signing",
+        "helper installation",
+        "explicit user approval"
+      ],
+      "effects": "missing",
+      "focus_policy": "Approval UI may activate; pending/status paths are headless.",
+      "output_exit": "Identity mismatch, denial, timeout, cancellation, malformed input, helper mismatch, and command exit remain distinct.",
+      "dependencies": [
+        "production signing",
+        "privileged helper installation",
+        "LocalAuthentication"
+      ],
+      "acceptance": [
+        "install/update/remove helper",
+        "code-sign and caller validation",
+        "reason and timeout",
+        "command/script/stdin bounds",
+        "cancel",
+        "Touch ID setup and denial",
+        "redacted audit",
+        "no interpolation"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "ADVANCED-005",
+      "name": "Tmux compatibility commands",
+      "priority": "P2",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "capture-pane",
+        "resize-pane",
+        "pipe-pane",
+        "wait-for",
+        "swap-pane",
+        "break-pane",
+        "join-pane",
+        "next-window",
+        "previous-window",
+        "last-window",
+        "last-pane",
+        "find-window",
+        "clear-history",
+        "set-hook",
+        "set-buffer",
+        "list-buffers",
+        "paste-buffer",
+        "respawn-pane",
+        "display-message",
+        "popup",
+        "bind-key",
+        "unbind-key",
+        "copy-mode"
+      ],
+      "cmux_contract": "Implemented commands share topology, focus, terminal text, buffer, and hook owners with native behavior; unsupported placeholders fail honestly.",
+      "cmux_sources": [
+        "CLI/cmux.swift:22764",
+        "CLI/cmux.swift:22905",
+        "CLI/cmux.swift:30637"
+      ],
+      "zmux_evidence": [
+        "No tmux compatibility dispatcher found."
+      ],
+      "target_resolution": "Typed window/workspace/pane/surface refs and caller defaults; buffer name or synchronization token where applicable.",
+      "preconditions": [
+        "shared topology and terminal text owners",
+        "bounded buffer and hook stores"
+      ],
+      "effects": "missing",
+      "focus_policy": "Swap/break/join explicitly control focus; navigation selects; capture/buffer/wait paths do not focus.",
+      "output_exit": "Exact bytes, bracketed paste, synchronization timeout, hook failure, command execution, and unsupported placeholder errors remain distinct.",
+      "dependencies": [
+        "local topology parity",
+        "terminal text and scrollback",
+        "command execution policy",
+        "event hooks"
+      ],
+      "acceptance": [
+        "target and caller defaults",
+        "resize and topology invariants",
+        "exact capture/paste bytes",
+        "buffer bounds",
+        "wait signal semantics",
+        "hook lifecycle",
+        "respawn policy",
+        "honest unsupported failure for popup/bind-key/unbind-key/copy-mode"
+      ],
+      "evidence_limit": "No implementation found."
+    },
+    {
+      "id": "RELEASE-000",
+      "name": "Feedback, welcome, onboarding, and update UX",
+      "priority": "P1",
+      "phase": "P4/P8",
+      "status": "missing",
+      "canonical_scope": [
+        "feedback open",
+        "feedback submit",
+        "repeatable image attachments",
+        "first-launch welcome",
+        "permission onboarding",
+        "check for updates",
+        "release notes and version transition"
+      ],
+      "aliases_defaults": [
+        "feedback with no args opens the shared modal",
+        "welcome auto-runs once on first launch",
+        "sendFeedback is the shared UI action"
+      ],
+      "cmux_contract": "CLI and UI feedback use one pipeline; draft opening is separate from external submission; first-run and permission onboarding are durable and re-enterable; update actions share a signed release authority.",
+      "cmux_sources": [
+        "CLI/cmux.swift:6499",
+        "CLI/cmux.swift:10410",
+        "CLI/cmux.swift:21463",
+        "CLI/cmux.swift:21548",
+        "Sources/TabManager.swift:1467",
+        "Sources/ContentView.swift:26",
+        "Sources/ContentView.swift:7958",
+        "Sources/ContentView.swift:15979",
+        "Sources/AppDelegate+ComputerUseOnboarding.swift:18"
+      ],
+      "zmux_evidence": [
+        "No feedback submission pipeline, first-launch welcome/onboarding coordinator, updater, check-for-updates action, or release-note owner found."
+      ],
+      "target_resolution": "Feedback modal prefers the caller workspace without activating another context; updater and onboarding target the current installation and permission state.",
+      "preconditions": [
+        "running app for feedback and UI flows",
+        "explicit user authorization before external submission",
+        "owned feedback service",
+        "signed update metadata"
+      ],
+      "effects": "missing",
+      "focus_policy": "Opening feedback or onboarding may activate its intended window; caller-workspace feedback can open without activating another workspace. Background update checks do not steal focus.",
+      "output_exit": "Unknown feedback flags, missing email/body, invalid or sensitive attachments, network/retry ambiguity, denied permissions, stale update metadata, signature mismatch, and no-update states remain distinct.",
+      "dependencies": [
+        "feedback service",
+        "localization",
+        "permission runtime",
+        "RELEASE-001"
+      ],
+      "acceptance": [
+        "shared CLI/UI feedback owner",
+        "draft/open versus external-submit separation",
+        "explicit user approval and secret review before send",
+        "attachment validation and redaction",
+        "retry and idempotency",
+        "one-shot welcome persistence and manual reopen",
+        "permission deny/re-entry",
+        "shared update action",
+        "signed release metadata",
+        "release-note and upgrade/downgrade transitions"
+      ],
+      "evidence_limit": "No equivalent zmux owner found; no external submission or update check was run."
+    },
+    {
+      "id": "RELEASE-001",
+      "name": "Distribution, update, and CLI installation",
+      "priority": "P0",
+      "phase": "P8",
+      "status": "partial",
+      "canonical_scope": [
+        "universal native build",
+        "production signing",
+        "notarization",
+        "channel manifest",
+        "secure updater",
+        "rollback",
+        "CLI install/upgrade/uninstall",
+        "iOS distribution"
+      ],
+      "cmux_contract": "Published artifacts have the intended bundle, callback, channel, signature, architecture, update provenance, and safe CLI installation behavior.",
+      "cmux_sources": [
+        "release and update infrastructure",
+        "CLI installation UI"
+      ],
+      "zmux_evidence": [
+        "scripts/build-macos-dev:38",
+        "scripts/build-macos-dev:79",
+        "scripts/build-macos-dev:91",
+        ".github/workflows/macos-development.yml:27",
+        "apps/macos/Sources/CloudSettings.swift:258"
+      ],
+      "target_resolution": "Named release channel and signed application installation; user-selected writable PATH directory for the CLI.",
+      "preconditions": [
+        "Apple signing and notarization",
+        "release channel authority",
+        "Actions artifact provenance"
+      ],
+      "effects": "Current source builds a universal ad hoc-signed development app; CLI install creates a symlink and refuses overwrite.",
+      "focus_policy": "Install/update UI requires explicit user action.",
+      "output_exit": "Existing path, moved app, signature/notarization/update mismatch, interrupted update, rollback, and incompatible architecture fail visibly.",
+      "dependencies": [
+        "production signing",
+        "notarization",
+        "owned distribution endpoint",
+        "release metadata"
+      ],
+      "acceptance": [
+        "signed and notarized macOS artifact",
+        "correct callback and channel",
+        "update signature/provenance",
+        "rollback",
+        "Intel and Apple Silicon runtime",
+        "safe CLI install/upgrade/uninstall and moved-app handling",
+        "iOS lane"
+      ],
+      "evidence_limit": "Only development packaging and a symlink installer exist; no updater or production release was exercised."
+    },
+    {
+      "id": "RELEASE-002",
+      "name": "Localization",
+      "priority": "P2",
+      "phase": "P8",
+      "status": "missing",
+      "canonical_scope": [
+        "native strings",
+        "CLI help and errors",
+        "service web pages",
+        "MFA/invite/recovery mail",
+        "bundle and extension metadata",
+        "plural and placeholder validation"
+      ],
+      "cmux_contract": "Catalog-backed user-visible strings pass structure, default, lint, plural, placeholder, and omission checks across product surfaces.",
+      "cmux_sources": [
+        "Resources/Localizable.xcstrings",
+        ".github/workflows/localization-catalog.yml:1",
+        ".github/workflows/ci-guards.yml:302",
+        "scripts/localization_catalog.py:90"
+      ],
+      "zmux_evidence": [
+        "User-facing Swift, CLI, and web strings are English literals; no string catalog or localization workflow found."
+      ],
+      "target_resolution": "Current locale with documented fallback across native, CLI, web, email, and extension contexts.",
+      "preconditions": [
+        "catalog ownership",
+        "locale set",
+        "translation review workflow"
+      ],
+      "effects": "missing",
+      "focus_policy": "not applicable",
+      "output_exit": "Missing keys, placeholders, plurals, or unsupported locale fall back safely and fail CI where required.",
+      "dependencies": [
+        "mail templates",
+        "native UI",
+        "CLI registry",
+        "web UI"
+      ],
+      "acceptance": [
+        "catalog extraction and lint",
+        "plural and placeholder parity",
+        "fallback",
+        "layout expansion or pseudolocale",
+        "localized errors/help",
+        "localized MFA/invite/recovery mail"
+      ],
+      "evidence_limit": "No localization system found."
+    },
+    {
+      "id": "RELIABILITY-001",
+      "name": "Reliability and numeric resource gates",
+      "priority": "P1",
+      "phase": "P0/P7/P8",
+      "status": "missing",
+      "canonical_scope": [
+        "idle and 1/8-session CPU/RSS",
+        "p95 keystroke and main-loop latency",
+        "output fairness",
+        "worker cleanup",
+        "WebKit process lifecycle",
+        "remote backpressure and reconnect",
+        "provider lifecycle soak",
+        "VPN sleep/wake",
+        "mobile reconnect",
+        "deployed control-plane soak"
+      ],
+      "cmux_contract": "Every budget names hardware, OS, build, workload, measurement method, threshold, exact SHA, and cleanup result; a different stack alone is not stability evidence.",
+      "cmux_sources": [
+        "skills/cmux-testing/references/local-vs-ci-validation.md",
+        "parity verification contract"
+      ],
+      "zmux_evidence": [
+        "Focused model and control-plane source tests exist.",
+        "crates/session-runtime/tests/lifecycle.rs:60 proves an output flood does not prevent cancellation and leader reaping.",
+        "crates/session-runtime/tests/lifecycle.rs:114 proves saturated input returns backpressure without blocking cancellation.",
+        "No approved numeric Mac budget, measured multi-session fairness result, or remote/provider/mobile soak was found."
+      ],
+      "target_resolution": "Exact packaged build and exact local, browser, remote, provider, VPN, or mobile workload.",
+      "preconditions": [
+        "implemented feature owner",
+        "named native hardware",
+        "repeatable fixtures",
+        "deployed dependency where applicable"
+      ],
+      "effects": "missing as a parity gate.",
+      "focus_policy": "Measurements include foreground and background behavior without synthetic focus hiding stalls.",
+      "output_exit": "Budget failure, leak, starvation, reconnect loss, and unavailable measurement are recorded rather than converted to a pass.",
+      "dependencies": [
+        "all runtime families under measurement",
+        "packaged native artifact",
+        "remote hosts",
+        "provider and deployed service"
+      ],
+      "acceptance": [
+        "approved numeric budgets",
+        "named-machine receipt",
+        "idle and 1/8-session workloads",
+        "measured multi-session output flood fairness",
+        "close/reopen cleanup",
+        "WebKit lifecycle",
+        "remote reconnect and daemon restart",
+        "multi-hour authenticated soak",
+        "VPN and mobile lifecycle"
+      ],
+      "evidence_limit": "No native measurement or remote soak was run in this audit."
+    }
+  ],
+  "command_families": [
+    {
+      "namespace": "product lifecycle and feedback",
+      "status": "missing",
+      "leaves": [
+        "feedback",
+        "welcome",
+        "check for updates UI",
+        "release notes",
+        "permission onboarding"
+      ],
+      "options": [
+        "feedback: --email, --body, repeatable --image",
+        "welcome: no arguments and one-shot first-launch automatic presentation"
+      ],
+      "sources": [
+        "CLI/cmux.swift:10410",
+        "CLI/cmux.swift:21463",
+        "CLI/cmux.swift:21548",
+        "Sources/ContentView.swift:7958",
+        "Sources/AppDelegate+ComputerUseOnboarding.swift:18"
+      ]
+    },
+    {
+      "namespace": "vm|cloud",
+      "status": "missing",
+      "leaves": [
+        "guide|--skill",
+        "base open",
+        "base reset",
+        "new|create",
+        "ls|list",
+        "domains",
+        "tree",
+        "self",
+        "status",
+        "stats",
+        "resize",
+        "network",
+        "agent-updates",
+        "rename",
+        "pause",
+        "resume",
+        "restart",
+        "snapshot|checkpoint",
+        "fork",
+        "restore",
+        "rm",
+        "run",
+        "route",
+        "agent",
+        "dev",
+        "prompt|skill",
+        "exec",
+        "push|upload",
+        "pull|download",
+        "wait",
+        "shell|attach",
+        "tui",
+        "desktop|vnc",
+        "open|port",
+        "workspace",
+        "terminal",
+        "tab",
+        "layout",
+        "env",
+        "ports",
+        "tools",
+        "handoff",
+        "promote-template",
+        "ssh",
+        "ssh-info"
+      ],
+      "options": [
+        "global --json",
+        "window/workspace/pane/surface typed refs where documented",
+        "--focus|--no-focus for open-like operations",
+        "--detach|-d for create-like operations",
+        "provider, size, image, network, plan and timeout options by leaf"
+      ],
+      "sources": [
+        "CLI/cmux.swift:21223",
+        "CLI/CMUXCLI+VMHelp.swift:11"
+      ]
+    },
+    {
+      "namespace": "vm workspace",
+      "status": "missing",
+      "leaves": [
+        "new",
+        "open",
+        "rename",
+        "close",
+        "rm"
+      ],
+      "options": [
+        "new: --name, --reuse, --no-open, --focus|--no-focus",
+        "open: --here, --tabs, --workspace, --pane, --left|--right|--up|--down, --focus|--no-focus"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+VMTui.swift:898",
+        "CLI/CMUXCLI+VMTui.swift:1065"
+      ]
+    },
+    {
+      "namespace": "vm terminal and tab",
+      "status": "missing",
+      "leaves": [
+        "terminal send|write",
+        "terminal read|screen",
+        "terminal wait",
+        "terminal wait-exit",
+        "terminal output",
+        "terminal close",
+        "terminal rename",
+        "tab rename"
+      ],
+      "options": [
+        "send: optional text, --keys",
+        "wait: --pattern, --timeout 0.001..3600",
+        "wait-exit: --timeout up to 3600",
+        "output: --after, --max-bytes, --json offsets"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+VMTui.swift:927",
+        "CLI/CMUXCLI+VMTui.swift:1236",
+        "CLI/CMUXCLI+VMTui.swift:1396"
+      ]
+    },
+    {
+      "namespace": "vm layout, env, network, domains, snapshot",
+      "status": "missing",
+      "leaves": [
+        "layout export|get|show",
+        "layout apply|set",
+        "env set|add",
+        "env ls|list",
+        "env rm|remove|unset",
+        "env path",
+        "network show",
+        "network set",
+        "network add-domain",
+        "network remove-domain",
+        "network add-range",
+        "network remove-range",
+        "network preset|presets",
+        "domains list|ls",
+        "domains zones|custom",
+        "domains verify",
+        "domains publish",
+        "domains access",
+        "domains grant",
+        "domains ungrant",
+        "domains grants",
+        "domains rm|remove|delete",
+        "snapshot create",
+        "snapshot ls|list",
+        "snapshot rm|delete"
+      ],
+      "options": [
+        "layout: --raw, --from-saved, --workspace, --name, --cwd, --open",
+        "env: KEY=VALUE, --from-file, stdin, --show",
+        "network: --mode, --dns, --policy, --port, --protocol, --note",
+        "domains: --domain, --access, --team, --org-slug, --yes, --expires",
+        "snapshot: --name"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+VMLayoutEnv.swift:22",
+        "CLI/CMUXCLI+VMNetwork.swift:6",
+        "CLI/CMUXCLI+CloudDomains.swift:13",
+        "CLI/CMUXCLI+VMSnapshots.swift:8"
+      ]
+    },
+    {
+      "namespace": "vpn and mobile",
+      "status": "missing",
+      "leaves": [
+        "vpn up|on",
+        "vpn down|off",
+        "vpn status",
+        "vpn revoke",
+        "mobile set-font",
+        "mobile compatible-tags list",
+        "mobile compatible-tags set",
+        "mobile compatible-tags add",
+        "mobile compatible-tags remove",
+        "mobile compatible-tags clear"
+      ],
+      "options": [
+        "set-font: --surface, --workspace"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+VPN.swift:9",
+        "CLI/cmux.swift:8136"
+      ]
+    },
+    {
+      "namespace": "simulator|ios",
+      "status": "missing",
+      "leaves": [
+        "type",
+        "tap",
+        "gesture",
+        "multitouch",
+        "swipe",
+        "button",
+        "rotate",
+        "ca",
+        "memory-warning",
+        "event-log",
+        "tools",
+        "camera",
+        "permissions",
+        "ui",
+        "accessibility|ax",
+        "foreground",
+        "targets",
+        "attach",
+        "send",
+        "highlight",
+        "release",
+        "ios list",
+        "ios context",
+        "ios select",
+        "ios screenshot"
+      ],
+      "options": [
+        "common --surface",
+        "input --stdin|--file",
+        "ios list --workspace",
+        "ios context --udid",
+        "ios screenshot --out|--all"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+Simulator.swift:32",
+        "CLI/CMUXCLI+Simulator.swift:74",
+        "CLI/CMUXCLI+SimulatorSettings.swift:13",
+        "CLI/CMUXCLI+SimulatorAgent.swift:13"
+      ]
+    },
+    {
+      "namespace": "capture",
+      "status": "missing",
+      "leaves": [
+        "shot|screenshot",
+        "record start",
+        "record stop",
+        "record status",
+        "record note",
+        "record list"
+      ],
+      "options": [
+        "shot: --format png|jpg, --jpg, --scale, --max-width, --quality, --region, --out, --label, --caption, --window",
+        "record start: --format mp4|gif, --gif, --fps, --max-seconds, --scale, --max-width, --region, --out, --label, --no-captions, --window",
+        "record stop/status/note: --id"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+Screenshot.swift:4",
+        "CLI/CMUXCLI+Record.swift:4"
+      ]
+    },
+    {
+      "namespace": "diagnostics and resource",
+      "status": "missing",
+      "leaves": [
+        "ping",
+        "iroh-diag",
+        "version",
+        "capabilities",
+        "rpc",
+        "socket-status",
+        "debug-terminals",
+        "trigger-flash",
+        "set-app-focus",
+        "simulate-app-active",
+        "simulate-sidebar-drag",
+        "top",
+        "memory"
+      ],
+      "options": [
+        "top: --all, --workspace, --window, --processes, --sort cpu|mem|proc, --flat, --format tree|tsv, --json",
+        "memory: --all, --workspace, --groups, --json"
+      ],
+      "sources": [
+        "CLI/cmux.swift:21080",
+        "CLI/cmux.swift:22414",
+        "CLI/cmux.swift:22445"
+      ]
+    },
+    {
+      "namespace": "sudo",
+      "status": "missing",
+      "leaves": [
+        "sudo run",
+        "sudo pending",
+        "sudo setup-touch-id"
+      ],
+      "options": [
+        "run: -r reason, -t timeout, -c command|script|-"
+      ],
+      "sources": [
+        "CLI/CMUXCLI+TaskHelp.swift:424",
+        "CLI/CMUXCLI+Sudo.swift:6"
+      ]
+    },
+    {
+      "namespace": "tmux compatibility",
+      "status": "missing",
+      "leaves": [
+        "capture-pane",
+        "resize-pane",
+        "pipe-pane",
+        "wait-for",
+        "swap-pane",
+        "break-pane",
+        "join-pane",
+        "next-window",
+        "previous-window",
+        "last-window",
+        "last-pane",
+        "find-window",
+        "clear-history",
+        "set-hook",
+        "set-buffer",
+        "list-buffers",
+        "paste-buffer",
+        "respawn-pane",
+        "display-message",
+        "popup",
+        "bind-key",
+        "unbind-key",
+        "copy-mode"
+      ],
+      "options": [
+        "typed target refs and caller defaults",
+        "focus controls for topology mutation",
+        "--scrollback and --lines",
+        "resize direction and amount",
+        "wait --signal and --timeout",
+        "buffer --name and --bracketed",
+        "respawn --command"
+      ],
+      "unsupported_in_cmux": [
+        "popup",
+        "bind-key",
+        "unbind-key",
+        "copy-mode"
+      ],
+      "sources": [
+        "CLI/cmux.swift:22764",
+        "CLI/cmux.swift:22905",
+        "CLI/cmux.swift:30637"
+      ]
+    }
+  ]
+}

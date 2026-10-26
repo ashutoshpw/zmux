@@ -1,0 +1,3249 @@
+{
+  "schema_version": 1,
+  "scope": "Execution plan based on audit commit 554fd12. Original source audit statuses remain immutable history. Delivery statuses require independent evidence; known subsets are retained, not rewritten by default.",
+  "baseline_cmux_sha": "3ba653b9e5afb11d0bc578031142950d6136697e",
+  "audit_commit": "554fd12",
+  "packages": [
+    {
+      "id": "F01",
+      "title": "Executable compatibility contracts and command registry",
+      "status": "implementing",
+      "owner": "CLI/control: apps/cli, desktop-runtime/control",
+      "depends_on": [
+        "F02"
+      ],
+      "commit_slices": [
+        "Define original registry entries, argument/alias/output/error/focus schemas and availability states; migrate existing CLI without regressions",
+        "Generate grouped/leaf help, guide, capabilities and docs from executable definitions; add drift validation against frozen catalogs"
+      ],
+      "exit_gate": "Offline help works without app; every discovered public leaf has a contract or explicitly tracked unresolved contract; no help-only successful stubs; existing CLI retains intentional migration compatibility.",
+      "implemented_slices": [
+        "F01a original implemented-command registry, grouped offline help, guide, catalog and capabilities"
+      ],
+      "verification_receipts": [
+        "f01-command-registry.md"
+      ],
+      "remaining_gates": [
+        "All frozen per-leaf/alias/option schemas and behavior",
+        "Drift enforcement and full CLI grammar/output/focus contracts",
+        "Native packaged CLI verification",
+        "V01 full parity signoff"
+      ]
+    },
+    {
+      "id": "F02",
+      "title": "Stable identities and shared action routing",
+      "status": "implementing",
+      "owner": "workspace-core, desktop-runtime, native-bridge",
+      "depends_on": [],
+      "commit_slices": [
+        "Add stable object identities, typed refs/index resolution and caller-context precedence with model/ABI migration",
+        "Centralize target ownership, focus/no-focus, result/errors and lifecycle generations; migrate existing entrypoints"
+      ],
+      "exit_gate": "Wrong-kind, stale and cross-owner targets fail atomically; UUID/ref/index/legacy numeric forms resolve deterministically; UI and CLI share effects; remote routing cannot fall back locally.",
+      "implemented_slices": [
+        "F02a live-model UUID/ref/index resolution, ownership, caller context and executor routing"
+      ],
+      "verification_receipts": [
+        "f02-target-routing.md"
+      ],
+      "remaining_gates": [
+        "Native hosted build/runtime",
+        "Window model and focus/no-focus semantics",
+        "Durable identity persistence in S01",
+        "ID presentation and full flag grammar/caller socket/auth contracts"
+      ]
+    },
+    {
+      "id": "F03",
+      "title": "Effective capabilities and managed policy",
+      "status": "implementing",
+      "owner": "settings/policy core, control auth, AppKit policy adapter",
+      "depends_on": [
+        "F02"
+      ],
+      "commit_slices": [
+        "Define capability and policy interfaces, credentials precedence and deny-by-default relay rules",
+        "Implement forced-preference resolution, settings locks and live client/resource revocation; wire each new owner as it lands"
+      ],
+      "exit_gate": "Config/env cannot bypass managed restrictions; ordinary defaults cannot impersonate MDM; malformed restrictive modes fail closed; policies cancel/revoke live access and preserve user settings on removal.",
+      "implemented_slices": [
+        "F03a local socket authorization, private credentials, queued admission revocation and deny-default remote origin"
+      ],
+      "verification_receipts": [
+        "f03-socket-authorization.md"
+      ],
+      "remaining_gates": [
+        "Native packaged validation and native settings/Keychain",
+        "Managed forced preferences and native cross-entrypoint policy",
+        "Live running-resource revocation",
+        "Object-scoped remote relay authorization"
+      ]
+    },
+    {
+      "id": "F04",
+      "title": "Terminal engine decision and performance baseline",
+      "status": "implementing",
+      "owner": "terminal-adapter, session-runtime, native harness",
+      "depends_on": [],
+      "commit_slices": [
+        "Measure current native idle/output/hidden-tab/browser workloads and reproduce reported hangs under controlled remote stalls",
+        "Evaluate current parser and permissively licensed alternatives against protocol/render/input fixtures; record architecture, license and numeric-budget decision"
+      ],
+      "exit_gate": "No engine choice from language preference alone; pinned license/provenance review and named Mac results; explicit gaps for graphics/keyboard/Unicode/reflow; bounded memory and latency budgets recorded before expanding limits.",
+      "implemented_slices": [
+        "Bounded native resource sampler executed at5f5005e; controlled budgets/engine decision remain open",
+        "Isolated pinned Ghostty C/Rust feasibility and Viewport exporter committed3ac6fa4; Linux x86_64 and Mac arm64 exporter execution passes in38761104404; production engine unchanged",
+        "7f125f2 explicit opt-in native engine configuration and worker-owned semantic key/paste encoding; default vt100 retained",
+        "9594b98 observed Darwin pending-to-reaped cleanup and actual optional ARM native semantic input/shared shutdown pass in38823543450; full workflow schema gate pending",
+        "525f6b9 complete optional Darwin workflow38824380757 accepted with357 exact source entries, actual ARM native semantic input and observed pending-to-reaped cleanup; default remains vt100"
+      ],
+      "verification_receipts": [
+        "f04-native-resource-sampler.md",
+        "f04-engine-evaluation.md",
+        "f04-production-linkage.md",
+        "f04-native-opt-in.md",
+        "f04-native-shutdown-diagnostics.md"
+      ],
+      "remaining_gates": [
+        "Exact history and enforceable memory policy",
+        "Named controlled Mac workload budgets",
+        "Production engine decision and complete terminal fidelity",
+        "Physical keyboard/full IME, remaining protocol/render fidelity and default native acceptance"
+      ]
+    },
+    {
+      "id": "T01",
+      "title": "Terminal input, rendering and everyday interactions",
+      "status": "implementing",
+      "owner": "terminal-adapter, session-runtime, TerminalView",
+      "depends_on": [
+        "F02",
+        "F04"
+      ],
+      "commit_slices": [
+        "Implement selected engine adapter and ordered PTY/resize/backpressure contract while preserving current working subsets",
+        "Complete selection/copy/paste, IME/key/mouse/scroll/find/clear/link behavior",
+        "Complete graphics/styles/font behavior and accessible terminal text with overload/error recovery"
+      ],
+      "exit_gate": "Production-owner protocol fixtures plus packaged Mac input/selection/scroll/IME/VoiceOver journeys pass; output floods and exited sessions remain inspectable without starving UI.",
+      "implemented_slices": [
+        "T01a function/navigation-key encoding with real native PTY byte acceptance at5f5005e",
+        "Displayed word/row/cell selection and authoritative soft-wrap copying; double-click and word drag span wrapped visible words",
+        "Semantic pointer reports use bounded desktop/session queue and authoritative vt100 worker modes; native routing integrated after35 packaged AppKit cases in38858961638; main native validation, physical mouse, optional engine and sustained saturation remain open"
+      ],
+      "verification_receipts": [
+        "t01-terminal-input.md",
+        "t01-native-selection.md",
+        "t01-wrapped-selection.md",
+        "t01-wrapped-word-selection.md",
+        "t01-pointer-reporting.md"
+      ]
+    },
+    {
+      "id": "T02",
+      "title": "Tabs, panes, focus and reversible close",
+      "status": "implementing",
+      "owner": "workspace-core, native-bridge, WorkspaceViews",
+      "depends_on": [
+        "F02"
+      ],
+      "commit_slices": [
+        "Finish surface placement/reorder/split/focus actions and preserve live ownership across all entrypoints",
+        "Complete grouped close/reopen descriptors, original pane anchors, failure rollback and focus history"
+      ],
+      "exit_gate": "Cmd-T/W/Shift-Cmd-T, menu/context/CLI agree; no sibling restart or replayed input; close/reopen preserves supported layout and failures remain retryable.",
+      "implemented_slices": [
+        "Working T02a directional split/navigation and bounded focus history; original split close/reopen placement with rollback"
+      ],
+      "verification_receipts": [
+        "t02-navigation.md",
+        "p1-terminal-tabs.md"
+      ],
+      "remaining_gates": [
+        "Fresh review and hosted native acceptance of working changes",
+        "Native divider ratio geometry",
+        "Remaining surface actions and grouped-close contracts",
+        "Persistence and multiwindow integration",
+        "Physical keyboard/accessibility/resource evidence",
+        "V01 full parity signoff"
+      ]
+    },
+    {
+      "id": "T03",
+      "title": "Multiple windows, groups and canvas layouts",
+      "status": "implementing",
+      "owner": "workspace-core topology and native window host",
+      "depends_on": [
+        "T02"
+      ],
+      "commit_slices": [
+        "Introduce window ownership, cross-window moves, focus history and no-focus routing",
+        "Add workspace groups/metadata/status/reorder, pane equalize/zoom/auto-layout",
+        "Add canvas geometry/overview/tidy/align/distribute and shared persisted layout state"
+      ],
+      "exit_gate": "Native multiwindow operations preserve identities, sessions, unread ownership and focus; geometry/state is shared rather than view-cache-only; stale moves and capacity failures are atomic."
+    },
+    {
+      "id": "R01",
+      "title": "Managed SSH with file/image drop and paste",
+      "status": "implementing",
+      "owner": "new Rust remote/transfer owners, AppKit pasteboard adapter",
+      "depends_on": [
+        "F02",
+        "F03"
+      ],
+      "commit_slices": [
+        "Implement typed SSH destination/config/port/identity/proxy/forwarding/command descriptor and managed workspace creation",
+        "Implement bounded authenticated upload worker plus file/image/clipboard classification, progress/cancel and quoted remote-path insertion",
+        "Wire native drop/paste and CLI paste to the originating surface generation and connection; integrate local-file path behavior"
+      ],
+      "exit_gate": "Real two-host SSH and file/image drop/paste work together; verify host-key/auth failures, spaces/Unicode, jump hosts, disconnect and tab-switch/close during upload; no local fallback or wrong-terminal insertion. Does not wait for cloud deployment or full engine replacement.",
+      "implemented_slices": [
+        "R01a typed SSH descriptor/endpoint renderer foundation only",
+        "R01b real SSH workspace/PTY launch, no-focus IDs and endpoint-preserving fresh tabs/splits/reopen; fresh review passed",
+        "R01c private terminal channel, bounded regular-file uploads and native file drop/paste; final fresh review passed",
+        "R01d bounded raw clipboard image preparation/paste/drop, exact-session native transfer receipts and worker-finish source cleanup; fresh review passed; ee8952f universal compile and native packaged image/cache/pasteboard smoke passed"
+      ],
+      "verification_receipts": [
+        "r01-ssh-descriptor.md",
+        "r01-ssh-workspaces.md",
+        "r01-file-transfers.md",
+        "r01-clipboard-images.md"
+      ],
+      "remaining_gates": [
+        "Physical Finder/raw-image provider drag/paste and progress/cancel visual acceptance",
+        "Remote image paste through native coordinator, directory/symlink/custom upload contracts and cache/resource stress",
+        "Remaining SSH option/config compatibility, password/host-key/jump-host acceptance and remote cwd restore",
+        "Real two-host/physical native transfer and disconnect/stress acceptance"
+      ]
+    },
+    {
+      "id": "R02",
+      "title": "Durable remote sessions, relays and multiplexers",
+      "status": "implementing",
+      "owner": "Rust remote/session owners and versioned remote daemon",
+      "depends_on": [
+        "R01",
+        "S01"
+      ],
+      "commit_slices": [
+        "Add daemon negotiation, authenticated scoped relay, retained output/replay, resize ownership and reconnect/cleanup",
+        "Add SSH-tmux and local tmux/zellij lifecycle; add mosh with explicit fallback semantics",
+        "Add remote-device routes and agent-session move after A03 supports transcript/checkpoint ownership"
+      ],
+      "exit_gate": "Reconnect and daemon restart preserve exact session identity without duplicate commands; remote spawn executes remotely; detach versus kill verified; missing tools/unsupported versions fail clearly; A03 is an additional gate for session move.",
+      "implemented_slices": [
+        "Durable headless local tmux lifecycle committed57c9df4; app-bound attachment and descriptor restore in progress"
+      ],
+      "verification_receipts": [
+        "r02-local-tmux.md"
+      ],
+      "remaining_gates": [
+        "Native app attachment/reopen/restore",
+        "SSH-tmux, zellij, mosh and scoped daemon/relay/reconnect",
+        "Remote session move and full R02 acceptance"
+      ]
+    },
+    {
+      "id": "N01",
+      "title": "Attention, notifications and sidebar UX",
+      "status": "implementing",
+      "owner": "desktop-runtime attention, AppKit notifications/sidebar",
+      "depends_on": [
+        "F02"
+      ],
+      "commit_slices": [
+        "Finish scoped unread/read/open/dismiss/clear/jump and focused/background policy with bounded deduplication",
+        "Add OS notification permission/delivery/reply/actions and exact window/surface routing",
+        "Finish collapsed-sidebar access, resizable sidebar, keyboard/AX behavior and notification visual states"
+      ],
+      "exit_gate": "Hidden-terminal attention remains visible; normal output does not flood inbox; stale acknowledgements cannot clear new arrivals; denied OS permission preserves in-app operation; hook-produced attention verified again with A02.",
+      "implemented_slices": [
+        "N01a session-bound native delivery, ordered permission observations and confirmed actions; hosted packaged validation passed at c9db69c",
+        "N01b notification metadata and atomic scoped read/dismiss/clear receipts; hosted packaged validation passed at c9db69c",
+        "N01c exact workspace destinations and N01d immutable UUID handles/shared unread navigation; hosted packaged validation passed at c9db69c",
+        "N01e once-only exact-session replies with bounded PTY receipts; 180 Rust tests and full local checks pass at 920a2ab; hosted reply acceptance pending"
+      ],
+      "verification_receipts": [
+        "n01-desktop-notifications.md"
+      ],
+      "remaining_gates": [
+        "Actual OS banner/text-reply interaction and denied/regrant behavior on a named Mac",
+        "Resizable sidebar and keyboard/accessibility acceptance",
+        "Hook-produced attention with A02",
+        "Multiwindow routing with T03",
+        "V01 full parity signoff"
+      ]
+    },
+    {
+      "id": "S01",
+      "title": "Session persistence, launch and quit recovery",
+      "status": "in_progress",
+      "evidence": [
+        "s01-session-persistence.md",
+        "cu14-file-panel.md"
+      ],
+      "owner": "new Rust persistence owner, native startup/termination",
+      "depends_on": [
+        "F02",
+        "T02"
+      ],
+      "commit_slices": [
+        "Version and atomically persist topology/restore descriptors; implement session save/open/export/import and corrupt-state recovery",
+        "Implement path/open startup, cwd/layout/command routing and crash/previous-launch restore",
+        "Unify quit confirmation, deferred cleanup, cancellation and recoverable snapshot; extend schema with each later surface/window kind"
+      ],
+      "exit_gate": "Restart/crash/corrupt files and failed restore retain recoverable data; exports omit secrets; restored local shells differ explicitly from preserved remote jobs; multiwindow/browser additions round-trip when T03/B01 land.",
+      "implemented_slices": [
+        "CU-14 slice: file surface kind with session format version 10 persistence and restore, and zmux open / zmux markdown open routing (opening itself delivered; preferred editor, file:// and file:LINE are not)"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "All earlier S01 commit-slice gates stay open",
+        "Native verification of file tab restore on macOS (UNAVAILABLE here)",
+        "Rollback consequence: every session saved by this build is session format 10 (not only those with file tabs), so a build that predates version 10 refuses all of them and cannot restore them"
+      ]
+    },
+    {
+      "id": "S02",
+      "title": "Settings, shortcuts, palette and custom UI",
+      "status": "planned",
+      "owner": "settings schema/store, AppKit settings/palette/sidebar",
+      "depends_on": [
+        "F01",
+        "F03",
+        "S01"
+      ],
+      "commit_slices": [
+        "Add versioned config/schema/backup/validate/reload with last-good state and owned paths",
+        "Add shortcuts/chords/conditions, configurable menus/palette and focus-safe action dispatch",
+        "Add themes/import, sidebar templates/tools/configured buttons and content/browser settings as those owners arrive"
+      ],
+      "exit_gate": "Invalid config cannot partially apply; settings/env/policy precedence is consistent; every configurable action has an owner and disabled reason; browser/content settings are not complete until their runtime effects pass."
+    },
+    {
+      "id": "B01",
+      "title": "Browser lifecycle, profiles and user workflows",
+      "status": "implementing",
+      "owner": "BrowserView/WebKit bridge and Rust browser descriptors",
+      "depends_on": [
+        "F02",
+        "F03",
+        "S01"
+      ],
+      "commit_slices": [
+        "Complete routing/chrome/popups/history/zoom and persistent profile/private data ownership",
+        "Implement downloads, file chooser, dialogs, permission/auth/certificate UX and cancellation",
+        "Implement process-crash recovery, hidden-tab budgets, profile import/state and restoration"
+      ],
+      "exit_gate": "Real local HTTPS fixtures, denied permissions, downloads, profile isolation, closed-tab recovery and WebContent termination pass; no browser page obtains native socket authority.",
+      "implemented_slices": [
+        "Explicit persistent profile add/list/open bindings, durable catalog and session migration committed94725f1; portable tests and independent review passed"
+      ],
+      "verification_receipts": [
+        "b01-browser-profiles.md"
+      ],
+      "remaining_gates": [
+        "Packaged native profile isolation/reopen and actual app relaunch",
+        "Profile defaults, rename, clear/delete/import and remaining browser lifecycle",
+        "Dialogs/downloads/permissions/auth/certificates/WebContent recovery"
+      ]
+    },
+    {
+      "id": "B02",
+      "title": "Full browser automation and developer workflows",
+      "status": "implementing",
+      "evidence": [
+        "b02-browser-automation.md"
+      ],
+      "owner": "versioned browser action bridge, CLI registry, WebKit execution",
+      "depends_on": [
+        "F01",
+        "B01"
+      ],
+      "commit_slices": [
+        "Implement generation-scoped DOM/accessibility snapshots/locators/get/eval/waits and semantic keyboard/pointer/form actions",
+        "Add frames/dialogs/files/screenshots/cookies/storage/state/scripts/console and REPL ownership",
+        "Add developer/focus/design/React Grab workflows and exact supported/unsupported capability outcomes"
+      ],
+      "exit_gate": "All audited browser leaves/aliases/options route to shared owners; close/navigation cancel pending work; cross-origin and public API limitations are explicit. Match deliberate unsupported outcomes at pinned cmux baseline; new unsupported gaps stay open.",
+      "implemented_slices": [
+        "B02b main-document find/is/wait controls committed6af571f; native acceptance pending"
+      ],
+      "verification_receipts": [
+        "b02-browser-automation.md"
+      ]
+    },
+    {
+      "id": "C01",
+      "title": "Content, project panes, file explorer and search",
+      "status": "implementing",
+      "owner": "new content models/providers and native content hosts",
+      "depends_on": [
+        "F02",
+        "S01",
+        "S02"
+      ],
+      "commit_slices": [
+        "Add markdown/file preview/editor surfaces, atomic save/conflict handling and live reload",
+        "Add diff/review/comments/viewed-state and trusted sidecar lifecycle",
+        "Add local/remote file explorer and bounded cross-surface search; remote provider integrates R02",
+        "Add original project parser/pane for files/targets/schemes/build settings and project open routing"
+      ],
+      "exit_gate": "Each non-PTY surface has load/error/close/restore/focus/AX behavior; safe file routing and root ownership; no command injection; remote explorer remains incomplete until real remote acceptance.",
+      "implemented_slices": [
+        "C01a native file panel: bounded Rust file service, atomic save with conflict detection, polling live reload, trusted native file channel and Swift/AppKit text, Markdown, image and PDF tabs (implemented, not verified on macOS)"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "Slices 2 to 4 (diff/review/comments, file explorer and search, project parser) are untouched",
+        "CV-02, CV-07 and the deferred parts of CV-01, CV-05 and CV-06 remain open",
+        "macOS and hosted CI verification of the native file panel (UNAVAILABLE here)",
+        "No exit-gate claim: non-PTY surface focus/AX behavior and remote explorer remain unverified"
+      ]
+    },
+    {
+      "id": "A01",
+      "title": "Events, metadata, inspection and tmux compatibility",
+      "status": "implementing",
+      "owner": "desktop-runtime events/control and shared action owners",
+      "depends_on": [
+        "F01",
+        "T02"
+      ],
+      "commit_slices": [
+        "Add bounded ordered event stream/cursors/replay/reconnect and status/progress/log/PR/todo owners",
+        "Add offline/live shared rule matcher, rule logs and hook/signal/buffer/pipe/capture/respawn semantics",
+        "Complete current/tree/top/memory/health/diagnostics/RPC with process ownership and authorization"
+      ],
+      "exit_gate": "Slow consumers cannot stall UI; event gaps are explicit; metadata is target-scoped; exact-byte/exit/focus contracts verified; source-baseline unsupported tmux placeholders return honest failures, not fake success.",
+      "implemented_slices": [
+        "A01a bounded workspace status/progress/log CLI and native activity inspector; native subset accepted at 5f5005e in macOS 38753451286",
+        "A01b bounded published current inspection with exact identities, local child lifecycle, metadata/attention counts and explicit unknown task activity; portable owner/CLI verification only"
+      ],
+      "verification_receipts": [
+        "a01-workspace-metadata.md",
+        "a01-current-inspection.md"
+      ],
+      "remaining_gates": [
+        "Native packaged current CLI acceptance; metadata presentation subset already accepted",
+        "Events/cursors/replay, PR/todo metadata and rule/hook contracts",
+        "tmux compatibility, inspection and process diagnostics",
+        "Full baseline option and output compatibility"
+      ]
+    },
+    {
+      "id": "A02",
+      "title": "Agent messages, hooks and attention integration",
+      "status": "implementing",
+      "owner": "new agent adapters/message store plus attention/events",
+      "depends_on": [
+        "A01",
+        "N01",
+        "S01"
+      ],
+      "commit_slices": [
+        "Implement durable message/reply/inbox claim/lease/ack and wake policies",
+        "Implement idempotent provider hook install/remove/feed translation and completion/input-needed attention",
+        "Implement hibernation and feed/history UI with bounded retention"
+      ],
+      "exit_gate": "Agent messages are distinct from human notifications; duplicate hooks, lease expiry, concurrent delivery and stale targets behave deterministically; real supported provider events reach the exact surface.",
+      "implemented_slices": [
+        "Durable local message/reply/inbox, exact consumer leases and bounded worker-owned journal",
+        "Durable unknown provider exposure, exact consumer retirement and explicit duplicate-risk retry; no automatic unknown replay",
+        "Opt-in local Claude context adapter with bounded original deadlines and exact retirement recovery; synthetic provider evidence only"
+      ],
+      "verification_receipts": [
+        "a02-agent-messages-implementation.md",
+        "a02-provider-hooks.md"
+      ],
+      "remaining_gates": [
+        "Actual native inbox entrypoints and reply lifecycle",
+        "Installed supported-provider event delivery and acceptance evidence",
+        "Wake/hibernation/feed and all remaining audit criteria",
+        "Full V01 cross-entrypoint acceptance"
+      ]
+    },
+    {
+      "id": "A03",
+      "title": "Agent launchers, recovery, accounts and integrations",
+      "status": "planned",
+      "owner": "agent launch/checkpoint/vault/provider adapters",
+      "depends_on": [
+        "A02",
+        "S02"
+      ],
+      "commit_slices": [
+        "Add typed launch/resume/composer/attachment ownership and provider version detection",
+        "Implement checkpoints/vault/recovery and team/external launcher wrappers",
+        "Implement CodeRouter/account integration and Glaeda exchange; integrate remote session move with R02"
+      ],
+      "exit_gate": "Actual supported external versions and absent-tool cases pass; arguments/credentials are safe; recovery evidence identifies the exact provider/session; failed remote move preserves source and destination integrity."
+    },
+    {
+      "id": "H01",
+      "title": "Independent cloud identity and PR #1 requirements",
+      "status": "implementing",
+      "owner": "services/control-plane, auth client, cloud settings",
+      "depends_on": [
+        "F01",
+        "F03"
+      ],
+      "commit_slices": [
+        "Complete native/web/CLI auth/team, session/member/client enforcement, MFA and localized mail",
+        "Complete org/admin/invite concurrency invariants, device presence/retention/revocation and session-bound ticket authority",
+        "Rehearse protected DB migration and deployment configuration; add GitHub Actions deployment after host/database decision"
+      ],
+      "exit_gate": "Every retained PR #1 matrix row has independent zmux evidence; real DB transactions and deployed callback/auth flows pass; origin remains zmux.w3dev.app; no raw-token handoff or operational upstream fallback.",
+      "implemented_slices": [
+        "Local Docker identity/device/organization service plus bounded expired native credential cleanup d22b6a4; real PostgreSQL checks pass locally and hosted",
+        "Isolated backup restore rehearsal fb999a7 and PostgreSQL transaction ownership 54a0e52; private local Docker runtime health verified",
+        "Native credential generation/cancellation ownership 352ba3b; actual macOS baseline red/current green and Keychain cleanup in run38818645717",
+        "Authenticator/recovery API and web UI; 17 real PostgreSQL tests, 15 real Chrome checks and independent review pass; 0eb2198 hosted service checks, local runtime promotion and 12-table restore rehearsal pass"
+      ],
+      "verification_receipts": [
+        "local-cloud.md",
+        "h01-native-cloud-credentials.md",
+        "h01-mfa.md"
+      ],
+      "remaining_gates": [
+        "Public tunnel and authenticated native callback verification",
+        "Broader MFA/session policy, localized mail, member/admin/invite invariants and complete PR1 requirements",
+        "Broader migration/recovery and cloud lifecycle; focused local backup restore rehearsal accepted"
+      ]
+    },
+    {
+      "id": "H02",
+      "title": "Cloud provider, VM lifecycle and entitlement control",
+      "status": "planned",
+      "owner": "control-plane provider adapters and infrastructure workflows",
+      "depends_on": [
+        "H01"
+      ],
+      "commit_slices": [
+        "Implement provider/image/artifact readiness, actor/team ownership and relay binding",
+        "Implement create/list/resources/resize/lifecycle with billing/entitlement admission and idempotency",
+        "Implement network/domain/publication access, snapshots/forks/restore/templates"
+      ],
+      "exit_gate": "Disposable provider environments prove lifecycle, ownership, quotas, webhook retries and cleanup; unavailable images/relays remain disabled. Provider/budget/host/DB/secrets are external decision gates; deploy only via Actions."
+    },
+    {
+      "id": "H03",
+      "title": "Cloud terminal, development and transfer workflows",
+      "status": "planned",
+      "owner": "remote session client and cloud convenience orchestration",
+      "depends_on": [
+        "H02",
+        "R02",
+        "B01"
+      ],
+      "commit_slices": [
+        "Implement VM workspace/terminal/tab/layout/env plus encrypted secret delivery",
+        "Implement exec/run/route/agent/dev/push/pull/wait composition with bounded output and remote exit propagation",
+        "Implement desktop/TUI/ports/tools/handoff/access and remote browser integration"
+      ],
+      "exit_gate": "Each nested vm leaf and cloud alias has authenticated end-to-end evidence; no local execution fallback; secret handling, transfer cancellation and multi-client identity survive reconnect."
+    },
+    {
+      "id": "X01",
+      "title": "Computer Use helper and approval lifecycle",
+      "status": "planned",
+      "owner": "independent signed helper/runtime, MCP adapters, native onboarding",
+      "depends_on": [
+        "A03",
+        "F03"
+      ],
+      "commit_slices": [
+        "License-review helper approach and implement signed helper identity, isolated credentials and readiness",
+        "Implement supported agent tool profiles/approval/snapshot targeting with per-launch injection",
+        "Implement TCC onboarding, settings/menu-bar/session projection and disable/replacement/revocation cleanup"
+      ],
+      "exit_gate": "Dedicated Mac verifies Accessibility/Screen Recording and client approval separately; passive refresh never prompts; stale clients/snapshots cannot act; release signing from D01 gates packaged acceptance."
+    },
+    {
+      "id": "X02",
+      "title": "Mobile client, device access and VPN",
+      "status": "planned",
+      "owner": "iOS client, native extension and remote device transport",
+      "depends_on": [
+        "H01",
+        "R02",
+        "F03"
+      ],
+      "commit_slices": [
+        "Implement separate iOS app identity/callback/keychain and device session client",
+        "Add mobile terminal/browser controls, reconnect/background lifecycle and compatibility settings",
+        "Add separately approved signed VPN Network Extension with route/DNS/revoke/sleep-wake behavior"
+      ],
+      "exit_gate": "Real paired devices and signed extension pass ownership/revocation/permission tests; ordinary SSH remains independent of VPN; cloud-mobile scenarios additionally require H03; production signing gates closure."
+    },
+    {
+      "id": "X03",
+      "title": "Simulator, capture, privilege and OS integrations",
+      "status": "planned",
+      "owner": "native platform adapters with shared registry",
+      "depends_on": [
+        "F01",
+        "F03",
+        "T03"
+      ],
+      "commit_slices": [
+        "Implement owned-window screenshot/recording artifacts and bounded capture lifecycle",
+        "Implement Simulator/iOS namespace workers, correlated inspector/actions and device selection",
+        "Implement signed privileged helper/Touch ID/requester checks and cancellation"
+      ],
+      "exit_gate": "Real devices/Simulator/capture bytes and signed-helper denial/approval cases pass; no success-shaped mocks; permissions are exercised only where the operation actually requires them."
+    },
+    {
+      "id": "D01",
+      "title": "Polish, localization and trusted distribution",
+      "status": "planned",
+      "owner": "native design/AX, localization, release workflows",
+      "depends_on": [
+        "F01"
+      ],
+      "commit_slices": [
+        "Establish native visual/interaction baseline and reusable icon/control/empty/loading/error states; fix polish within every feature slice",
+        "Add catalogs and locale/AX review across native/CLI/service mail; finish welcome/feedback/update UX",
+        "Add signing/notarization/channel/update provenance and safe CLI install/upgrade/uninstall; retain Actions development artifacts"
+      ],
+      "exit_gate": "Final release gate depends on all user-facing packages; each intermediate artifact records SHA/tests/screenshots/checksum; Intel and Apple Silicon runtime, physical input/AX, signed update and moved-app CLI installation verified."
+    },
+    {
+      "id": "V01",
+      "title": "Full compatibility and stability signoff",
+      "status": "planned",
+      "owner": "integration/acceptance owner",
+      "depends_on": [
+        "F01",
+        "F02",
+        "F03",
+        "F04",
+        "T01",
+        "T02",
+        "T03",
+        "R01",
+        "R02",
+        "N01",
+        "S01",
+        "S02",
+        "B01",
+        "B02",
+        "C01",
+        "A01",
+        "A02",
+        "A03",
+        "H01",
+        "H02",
+        "H03",
+        "X01",
+        "X02",
+        "X03",
+        "D01"
+      ],
+      "commit_slices": [
+        "Reconcile every frozen command/alias/option, UI action and public RPC/feature flag against executed evidence; resolve internal/unsupported classifications",
+        "Run combined native/remote/cloud/performance/recovery matrix, fix gaps and publish final Actions artifact and receipts"
+      ],
+      "exit_gate": "No unassigned, unverified or dependency-blocked required feature remains; only explicit user-approved scope changes may exclude behavior. Audit review is not runtime signoff."
+    }
+  ],
+  "features": [
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-001",
+      "feature": "Terminal emulation and protocol breadth",
+      "primary_package": "T01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-002",
+      "feature": "Terminal rendering, styles, cursor and color",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-003",
+      "feature": "PTY lifecycle, byte ordering and cleanup",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-003",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-004",
+      "feature": "Terminal resize and kernel PTY geometry",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-004",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-005",
+      "feature": "Basic keyboard input and terminal key encoding",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-005",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-006",
+      "feature": "IME, marked text and dictation input",
+      "primary_package": "T01",
+      "audit_status": "implemented-unverified",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-006",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-007",
+      "feature": "Mouse reporting, pointer focus and alternate-screen wheel routing",
+      "primary_package": "T01",
+      "audit_status": "partial",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-terminal-ux.json#TERM-007",
+      "implementation_commits": [
+        "f231186"
+      ],
+      "verification_receipts": [
+        "t01-pointer-reporting.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Native event wiring/gesture lifecycle, optional engine and packaged physical interaction acceptance"
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-008",
+      "feature": "Scrollback retention and history navigation",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-008",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-009",
+      "feature": "Pointer selection and clipboard copy",
+      "primary_package": "T01",
+      "audit_status": "partial",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-terminal-ux.json#TERM-009",
+      "implementation_commits": [
+        "a14d94d"
+      ],
+      "verification_receipts": [
+        "t01-native-selection.md",
+        "t01-wrapped-selection.md",
+        "t01-wrapped-word-selection.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Persistent scrollback anchors, drag autoscroll, rectangular selection, optional engine metadata and physical input/accessibility acceptance"
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-010",
+      "feature": "Keyboard copy mode",
+      "primary_package": "T01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-010",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-011",
+      "feature": "Text paste and bracketed-paste semantics",
+      "primary_package": "T01",
+      "audit_status": "implemented-unverified",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-011",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-012",
+      "feature": "File, image and screenshot paste/upload",
+      "primary_package": "R01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-012",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-013",
+      "feature": "Terminal drag and drop",
+      "primary_package": "R01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-013",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-014",
+      "feature": "Inline terminal images and graphics protocols",
+      "primary_package": "T01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-014",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-015",
+      "feature": "Terminal find, next/previous, hide and use-selection-for-find",
+      "primary_package": "T01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-015",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-016",
+      "feature": "Clear screen while retaining scrollback",
+      "primary_package": "T01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-016",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-017",
+      "feature": "Terminal links and selection context actions",
+      "primary_package": "T01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-017",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-018",
+      "feature": "Shell title and working-directory integration",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-018",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-019",
+      "feature": "Terminal font zoom, theme and appearance customization",
+      "primary_package": "T01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-019",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-020",
+      "feature": "Terminal accessibility text interface",
+      "primary_package": "T01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-020",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-021",
+      "feature": "Terminal failures, overload and recovery presentation",
+      "primary_package": "T01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-021",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-022",
+      "feature": "Exited terminal remains inspectable",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-022",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-023",
+      "feature": "Terminal input ownership and ordering during asynchronous work",
+      "primary_package": "T01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-023",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-024",
+      "feature": "Alternate-screen isolation",
+      "primary_package": "T01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-024",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TERM-025",
+      "feature": "Tmux-compatible terminal capture, history, buffers, piping and respawn",
+      "primary_package": "A01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TERM-025",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-001",
+      "feature": "Independent terminal tabs in a pane",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-002",
+      "feature": "Tab selection, cycling and numbered selection",
+      "primary_package": "T02",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-003",
+      "feature": "Tab rename and title precedence",
+      "primary_package": "T02",
+      "audit_status": "implemented-unverified",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-003",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-004",
+      "feature": "Tab reorder and live-session preserving move",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-004",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-005",
+      "feature": "Close one tab and preserve siblings",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-005",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-006",
+      "feature": "Close other tabs as one confirmed batch",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-006",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-007",
+      "feature": "Recently closed history and selected-item reopen",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-007",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-008",
+      "feature": "Retryable close-history restoration",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-008",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-009",
+      "feature": "Closed pane/workspace grouped layout restore",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-009",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-010",
+      "feature": "Fresh-shell semantics for reopened local terminals",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-010",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-011",
+      "feature": "Workspace create, select and rename",
+      "primary_package": "T02",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-011",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-012",
+      "feature": "Workspace reorder, pinning, metadata and status",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-012",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-013",
+      "feature": "Workspace groups",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-013",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-014",
+      "feature": "Pane split creation and collapse",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-014",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-015",
+      "feature": "Directional, previous/next and numbered pane focus",
+      "primary_package": "T02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-015",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-016",
+      "feature": "Pane divider resize and retained ratios",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-016",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-017",
+      "feature": "Equalize splits, pane zoom and automatic layout",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-017",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-018",
+      "feature": "Focus history back, forward, last and recently focused",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-018",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-019",
+      "feature": "Multiwindow lifecycle and action routing",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-019",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-020",
+      "feature": "Move workspaces/tabs between windows and split off",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-020",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-021",
+      "feature": "Full screen, hide/show all windows and window hints",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-021",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-022",
+      "feature": "Canvas layout, overview, zoom, tidy, align and distribute",
+      "primary_package": "T03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-022",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-023",
+      "feature": "Saved/custom layout templates",
+      "primary_package": "S01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-023",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-024",
+      "feature": "Session save, open and previous-launch restore",
+      "primary_package": "S01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-024",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-025",
+      "feature": "Topology capacities, atomic rejection and stable identifiers",
+      "primary_package": "T02",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-025",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-026",
+      "feature": "Tmux-compatible synchronization, pane movement, navigation and hooks",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-026",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "TOPO-027",
+      "feature": "Current work, topology, resource and surface-health inspection",
+      "primary_package": "A01",
+      "audit_status": "partial",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-terminal-ux.json#TOPO-027",
+      "implementation_commits": [],
+      "verification_receipts": [
+        "a01-current-inspection.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "A01b is a published local current subset only; native packaged execution, Cloud/tasks/resources and tree/top/memory/health plus full frozen compatibility remain open"
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-001",
+      "feature": "Main menu command coverage",
+      "primary_package": "D01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-002",
+      "feature": "Terminal tab and workspace context menus",
+      "primary_package": "D01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-003",
+      "feature": "Configurable shortcuts, chords and when clauses",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-003",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-004",
+      "feature": "Command palette for terminal and topology actions",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-004",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-005",
+      "feature": "Menu validation and failure feedback",
+      "primary_package": "D01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-005",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-006",
+      "feature": "Workspace row accessibility and keyboard navigation",
+      "primary_package": "D01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-006",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-007",
+      "feature": "Tab bar accessibility and keyboard operation",
+      "primary_package": "D01",
+      "audit_status": "implemented-unverified",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-007",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-008",
+      "feature": "Accessible splitters",
+      "primary_package": "D01",
+      "audit_status": "implemented-unverified",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-008",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-009",
+      "feature": "Drag UX across tab strips, panes, workspaces and windows",
+      "primary_package": "D01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-009",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-terminal-ux.json",
+      "feature_id": "NATIVE-010",
+      "feature": "Localization of terminal and topology UI",
+      "primary_package": "D01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-terminal-ux.json#NATIVE-010",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-01",
+      "feature": "Embedded browser creation, routing, URL policy, and CLI open aliases",
+      "primary_package": "B01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-01",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-02",
+      "feature": "Browser chrome navigation, reload, hard reload, stop, and address focus",
+      "primary_package": "B01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-02",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-03",
+      "feature": "Omnibar URL/search resolution, suggestions, link routing, and external-open policy",
+      "primary_package": "B01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-03",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-04",
+      "feature": "Browser tabs, popups, moves, close/reopen, and placement",
+      "primary_package": "B01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-04",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-05",
+      "feature": "Browser lifecycle, hidden-memory budget, process termination, and page restoration",
+      "primary_package": "B01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-05",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-06",
+      "feature": "Persistent browser profiles and data isolation",
+      "primary_package": "B01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-06",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-07",
+      "feature": "Browser data import workflow",
+      "primary_package": "B01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-07",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-08",
+      "feature": "Downloads UI, save policy, history, list, and wait",
+      "primary_package": "B01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-08",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-09",
+      "feature": "Dialogs, web permissions, HTTP auth, client certificates, SSL trust, and insecure HTTP",
+      "primary_package": "B01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-09",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-10",
+      "feature": "Cookies, local/session storage, and browser state save/load",
+      "primary_package": "B01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-10",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-01",
+      "feature": "Automation snapshot, eval, get, and predicate operations",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-01",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-02",
+      "feature": "Semantic locator families",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-02",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-03",
+      "feature": "Pointer, form, selection, highlight, and scroll automation",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-03",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-04",
+      "feature": "Keyboard automation and wait conditions",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-04",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-05",
+      "feature": "File input selection and browser pane file drop",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-05",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-06",
+      "feature": "Browser screenshots",
+      "primary_package": "B02",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-06",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-07",
+      "feature": "Frame selection and JavaScript dialog automation",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-07",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-08",
+      "feature": "Developer tools, JavaScript console, console entries, and page errors",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-08",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-09",
+      "feature": "Focus mode, design mode, and React Grab",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-09",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-10",
+      "feature": "Page zoom and exact viewport emulation",
+      "primary_package": "B02",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-10",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-11",
+      "feature": "Browser REPL, MCP bridge, init scripts, scripts, styles, and stateful sessions",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-11",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BA-12",
+      "feature": "Automation leaves constrained by public WKWebView APIs",
+      "primary_package": "B02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BA-12",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "BC-11",
+      "feature": "Remote and mobile browser surfaces",
+      "primary_package": "H03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#BC-11",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-01",
+      "feature": "Markdown open, render, file links, live reload, and unavailable-file state",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-browser-content.json#CV-01",
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Relative file links and images, tables, task lists, raw HTML and GitHub-flavoured extensions in rendered Markdown are not delivered; the in-panel unavailable-file recovery is Retry only",
+        "Markdown rendering fidelity (AttributedString) and live reload in the app are unobserved; reload is bounded polling and can miss a same-size same-timestamp rewrite",
+        "Real file watching (FSEvents/inotify) is not delivered, and the persisted viewport and Markdown view mode (rendered or source) are not restored across a relaunch",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-02",
+      "feature": "Markdown text editing, find, typography, zoom, copy, and persistence",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CV-02",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-03",
+      "feature": "Diff viewer inputs, git sources, layouts, navigation, and trusted sidecar",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CV-03",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-04",
+      "feature": "Diff review comments, viewed files, preferences, and submission handoff",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CV-04",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-05",
+      "feature": "File preview modes and live reload",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-browser-content.json#CV-05",
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Quick Look and media sessions, PDF thumbnails/outline/zoom/rotation/share/viewport restore, image zoom/anchor, native drag, remote preview refresh and preserved scroll position across reload are not delivered",
+        "Real file watching (FSEvents/inotify) is not delivered, so a same-size same-timestamp rewrite can be missed by polling; the persisted viewport of an image or PDF is not restored across a relaunch",
+        "Image and PDF corrupt-body decode failure is reported by the native view only; there is no Rust decoder",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-06",
+      "feature": "Text file editor and viewer settings",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-browser-content.json#CV-06",
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Delivered in S4: a word-wrap toggle (File > Toggle Word Wrap, Opt-Cmd-L, and a header button) stored as one global user default, filePanel.wordWrap; it is not per file, not in the session document, and has no command-palette action. Not delivered: syntax highlighting, line numbers, indent guides, current-line highlight, tab width, encoding selection/conversion (non-UTF-8 is rejected), editor zoom and shared save/wrap/find/zoom command-palette actions",
+        "Save As, three-way merge/diff of a conflict, backup of overwritten content, autosave and crash recovery of unsaved text are not delivered (closing is blocked instead); ownership/ACL/xattr preservation, hard-linked saves and network-volume semantics are not provided",
+        "In-place fallback writes are not delivered (a file the atomic same-directory replace cannot handle is refused rather than written in place); the persisted editor viewport is not restored across a relaunch",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-07",
+      "feature": "File explorer local/remote tree, search, mutations, open routing, drag, and path insertion",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CV-07",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CV-08",
+      "feature": "Global search across browser, markdown, terminal, agent sessions, titles, and locations",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CV-08",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-01",
+      "feature": "cmux.json JSONC settings, schema validation, legacy fallback, live reload, and error reporting",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-01",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-02",
+      "feature": "Settings window, searchable sections, and CLI target routing",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-02",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-03",
+      "feature": "Browser settings surface",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-03",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-04",
+      "feature": "Viewer and file-routing settings",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-04",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-05",
+      "feature": "Configurable keyboard action registry for browser, viewers, search, settings, palette, and sidebars",
+      "primary_package": "S02",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-05",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-06",
+      "feature": "Keyboard shortcut settings UI, presets, recording, conflicts, and reset",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-06",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-07",
+      "feature": "Theme discovery, preview, light/dark selection, and clear",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-07",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-08",
+      "feature": "Terminal settings import",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-08",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-09",
+      "feature": "Config-defined actions, workspace commands/layouts, tab-bar buttons, plus menu, and palette entries",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-09",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-10",
+      "feature": "Custom sidebar discovery, templates, validation, selection, open, and hot reload",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-10",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-11",
+      "feature": "Right sidebar visibility, modes, focus, tool panes, and aliases",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-11",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-12",
+      "feature": "Command palette discovery, execution, settings toggles, focus restore, and contextual disabled states",
+      "primary_package": "S02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-12",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-13",
+      "feature": "Left sidebar appearance and workspace-search customization",
+      "primary_package": "N01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-browser-content.json#CU-13",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-browser-content.json",
+      "feature_id": "CU-14",
+      "feature": "Open command file/content routing and preferred external editor",
+      "primary_package": "S01",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-browser-content.json#CU-14",
+      "implementation_commits": [
+        "e66b167",
+        "465907e",
+        "af761de",
+        "1e48a25",
+        "db4d840",
+        "4eddc9c",
+        "2e1b9d7",
+        "b135b75",
+        "bfa8e66",
+        "9b9a848",
+        "6e3c021",
+        "a06accb",
+        "06dcf64",
+        "58abc37",
+        "9bb1f04",
+        "cdacaa6",
+        "08155d2",
+        "9e00550",
+        "4ef1c4f",
+        "413237a",
+        "4ebf8c0",
+        "68c5cf2",
+        "9dfd10d",
+        "3f0262f",
+        "5cf538a"
+      ],
+      "verification_receipts": [
+        "cu14-file-panel.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Preferred external editor, system opener fallback, directory-to-workspace creation, file:// operands, file:LINE anchors, --profile for URL items and shell-quoted editor launch are not delivered",
+        "Case-variant alias dedupe on case-insensitive volumes is not delivered: two spellings of one path that differ only by case may open as two tabs; the persisted viewport and Markdown view mode are not restored, and real file watching (FSEvents/inotify) is not delivered",
+        "Frozen-coverage CMD-006 (open) and CMD-114 (markdown open) are local_counterpart_compatibility_unverified: option and output compatibility with the reference is not verified, behavioral_parity_verified stays false",
+        "Remote (SSH) workspace files (R02) and non-UTF-8 paths are not supported",
+        "Run on macOS and hosted CI, none of which ran: scripts/check-macos-sources, scripts/check-file-editor-model, scripts/check-file-close-resolution, scripts/check-file-load-gate, scripts/build-macos-dev, scripts/check-macos-app, the file_panel in-app smoke stage and every hosted macOS workflow",
+        "Native keyboard, first-responder, IME, VoiceOver, NSTextView large-file, ImageIO/PDFKit decode, NSOpenPanel, quit-with-dirty prompt and AttributedString(markdown:) behavior are unobserved"
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.managed-ssh",
+      "feature": "Managed SSH workspace and terminal lifecycle",
+      "primary_package": "R01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.managed-ssh",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.mosh",
+      "feature": "Mosh terminal and mosh-tmux transport",
+      "primary_package": "R02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.mosh",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.tmux",
+      "feature": "Remote tmux list, attach, mirror and window topology",
+      "primary_package": "R02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.tmux",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.local-multiplexers",
+      "feature": "Managed local tmux and zellij lifecycle",
+      "primary_package": "R02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.local-multiplexers",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.reconnect",
+      "feature": "Persistent remote PTY reconnect, replay and cleanup",
+      "primary_package": "R02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.reconnect",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.cli-relay",
+      "feature": "Authorized remote CLI relay",
+      "primary_package": "R02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.cli-relay",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.device-registry",
+      "feature": "Remote Mac device registry and attach routes",
+      "primary_package": "R02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.device-registry",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.file-image-upload",
+      "feature": "Remote file and image drop/upload",
+      "primary_package": "R01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.file-image-upload",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.paste",
+      "feature": "Target-bound terminal paste across local and remote sessions",
+      "primary_package": "R01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.paste",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "remote.agent-session-move",
+      "feature": "Agent session move between local and SSH endpoints",
+      "primary_package": "R02",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#remote.agent-session-move",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "session.file-save-open",
+      "feature": "Portable session file save and open",
+      "primary_package": "S01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#session.file-save-open",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.launch-resume",
+      "feature": "Typed agent launch, resume, composer and input ownership",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.launch-resume",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.team-launchers",
+      "feature": "Claude Teams and Codex Teams managed launchers",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.team-launchers",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.integration-launchers",
+      "feature": "OMO, OMX and OMC managed integration launchers",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.integration-launchers",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.messages",
+      "feature": "Durable agent-to-agent messages and replies",
+      "primary_package": "A02",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-agents-remote.json#agent.messages",
+      "implementation_commits": [
+        "8c54b39",
+        "97965e3"
+      ],
+      "verification_receipts": [
+        "a02-agent-messages-implementation.md",
+        "a02-provider-hooks.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Native inbox and actual supported-provider integration; no wake or provider-acceptance claim from durable unknown submissions"
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.inbox-wakeup",
+      "feature": "Agent inbox claim, lease, acknowledgement and wake-up",
+      "primary_package": "A02",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-agents-remote.json#agent.inbox-wakeup",
+      "implementation_commits": [
+        "8c54b39",
+        "97965e3"
+      ],
+      "verification_receipts": [
+        "a02-agent-messages-implementation.md",
+        "a02-provider-hooks.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Native inbox and actual supported-provider integration; no wake or provider-acceptance claim from durable unknown submissions"
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.hooks",
+      "feature": "Agent lifecycle and provider hook processing",
+      "primary_package": "A02",
+      "audit_status": "missing",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-agents-remote.json#agent.hooks",
+      "implementation_commits": [
+        "036e478"
+      ],
+      "verification_receipts": [
+        "a02-provider-hooks.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Actual installed-provider delivery, other supported providers, attention/feed translation and native acceptance remain open"
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.hibernation",
+      "feature": "Agent hibernation policy and per-surface hibernate/wake",
+      "primary_package": "A02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.hibernation",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.ai-accounts",
+      "feature": "AI account discovery and selection",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.ai-accounts",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.coderouter-control",
+      "feature": "cmux-owned CodeRouter status, machine usage, accounts and agent control",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.coderouter-control",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.coderouter-passthrough",
+      "feature": "CodeRouter CLI passthrough and interactive bootstrap",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.coderouter-passthrough",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.external-launchers",
+      "feature": "Registered external agent launcher matching and routing",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.external-launchers",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.checkpoints",
+      "feature": "Agent/session checkpoint and restore evidence",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.checkpoints",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.vault",
+      "feature": "Agent session vault, provider indexes and recovery",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.vault",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "agent.feed-console",
+      "feature": "Feed workstream TUI and persisted-history clearing",
+      "primary_package": "A02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#agent.feed-console",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "notification.lifecycle",
+      "feature": "Bounded in-app notification lifecycle",
+      "primary_package": "N01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#notification.lifecycle",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "notification.attention-focus",
+      "feature": "Attention signals, unread badges and exact-target focus acknowledgement",
+      "primary_package": "N01",
+      "audit_status": "verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#notification.attention-focus",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "notification.os-delivery-actions",
+      "feature": "macOS notification delivery, permission, actions and replies",
+      "primary_package": "N01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#notification.os-delivery-actions",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "notification.actions",
+      "feature": "Native notification click, reply and custom action routing",
+      "primary_package": "N01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#notification.actions",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "sidebar.status",
+      "feature": "Surface/workspace status metadata",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#sidebar.status",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "sidebar.pull-request",
+      "feature": "Explicit workspace pull-request metadata handoff",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#sidebar.pull-request",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "sidebar.progress",
+      "feature": "Surface/workspace progress metadata",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#sidebar.progress",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "sidebar.log",
+      "feature": "Bounded surface/workspace log metadata",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#sidebar.log",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "events.stream",
+      "feature": "Authenticated replayable event stream",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#events.stream",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "execution.glaeda-exchange",
+      "feature": "Caller-neutral Glaeda execution request and observation exchange",
+      "primary_package": "A03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#execution.glaeda-exchange",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "automation.rules",
+      "feature": "Persisted event automation rules and action logs",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#automation.rules",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "workspace.todo",
+      "feature": "Workspace todo and status workflow",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#workspace.todo",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-agents-remote.json",
+      "feature_id": "integration.hooks",
+      "feature": "Generic integration hook setup and event translation",
+      "primary_package": "A02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-agents-remote.json#integration.hooks",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-001",
+      "feature": "Deployment configuration and owned origin",
+      "primary_package": "H01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-002",
+      "feature": "Native authentication and session binding",
+      "primary_package": "H01",
+      "audit_status": "source-verified-subset",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-002",
+      "implementation_commits": [
+        "352ba3b"
+      ],
+      "verification_receipts": [
+        "h01-native-cloud-credentials.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Real configured public origin and native callback journey; focused Keychain fixture is accepted but is not full authentication parity"
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-003",
+      "feature": "Organizations, CLI teams, MFA, mail, and admin invariants",
+      "primary_package": "H01",
+      "audit_status": "partial",
+      "delivery_status": "implementing",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-003",
+      "implementation_commits": [
+        "0eb2198"
+      ],
+      "verification_receipts": [
+        "h01-mfa.md"
+      ],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement.",
+        "Focused TOTP/recovery API and web UI are accepted locally; remaining organization/CLI/mail/admin criteria and public/native callback are open"
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-004",
+      "feature": "Billing and entitlement enforcement",
+      "primary_package": "H02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-004",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-005",
+      "feature": "Device registry and presence foundation",
+      "primary_package": "H01",
+      "audit_status": "source-verified-subset",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-005",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-006",
+      "feature": "VM control plane, provider lifecycle, and readiness",
+      "primary_package": "H02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-006",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-007",
+      "feature": "VM remote workspace and terminal operations",
+      "primary_package": "H03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-007",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-008",
+      "feature": "VM layout and secret environment",
+      "primary_package": "H03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-008",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-009",
+      "feature": "VM networking, domains, snapshots, and templates",
+      "primary_package": "H02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-009",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-010",
+      "feature": "VM execution, routing, agent, development, and transfer",
+      "primary_package": "H03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-010",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "CLOUD-011",
+      "feature": "VM access, desktop, TUI, ports, and handoff",
+      "primary_package": "H03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#CLOUD-011",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "PLATFORM-001",
+      "feature": "System VPN Network Extension",
+      "primary_package": "X02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#PLATFORM-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "PLATFORM-002",
+      "feature": "Mobile settings and iOS client",
+      "primary_package": "X02",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#PLATFORM-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "PLATFORM-003",
+      "feature": "Simulator and iOS command namespaces",
+      "primary_package": "X03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#PLATFORM-003",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "ADVANCED-001",
+      "feature": "Diagnostics, capabilities, and raw RPC security",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#ADVANCED-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "ADVANCED-002",
+      "feature": "Resource and process inspection",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#ADVANCED-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "ADVANCED-003",
+      "feature": "Window capture and recording",
+      "primary_package": "X03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#ADVANCED-003",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "ADVANCED-004",
+      "feature": "Privileged execution and Touch ID",
+      "primary_package": "X03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#ADVANCED-004",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "ADVANCED-005",
+      "feature": "Tmux compatibility commands",
+      "primary_package": "A01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#ADVANCED-005",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "RELEASE-000",
+      "feature": "Feedback, welcome, onboarding, and update UX",
+      "primary_package": "D01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#RELEASE-000",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "RELEASE-001",
+      "feature": "Distribution, update, and CLI installation",
+      "primary_package": "D01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#RELEASE-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "RELEASE-002",
+      "feature": "Localization",
+      "primary_package": "D01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#RELEASE-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cloud-platform.json",
+      "feature_id": "RELIABILITY-001",
+      "feature": "Reliability and numeric resource gates",
+      "primary_package": "V01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cloud-platform.json#RELIABILITY-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cross-cutting.json",
+      "feature_id": "CROSS-001",
+      "feature": "Authenticated Computer Use helper, agent injection, tools, permission onboarding and lifecycle",
+      "primary_package": "X01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cross-cutting.json#CROSS-001",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cross-cutting.json",
+      "feature_id": "CROSS-002",
+      "feature": "Managed-device policy and live cross-entrypoint enforcement",
+      "primary_package": "F03",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cross-cutting.json#CROSS-002",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cross-cutting.json",
+      "feature_id": "CROSS-003",
+      "feature": "Project pane creation, parsing, inspection and routing",
+      "primary_package": "C01",
+      "audit_status": "missing",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cross-cutting.json#CROSS-003",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    },
+    {
+      "audit_file": "audit-cross-cutting.json",
+      "feature_id": "CROSS-004",
+      "feature": "Quit, confirmation, deferred cleanup and relaunch lifecycle",
+      "primary_package": "S01",
+      "audit_status": "partial",
+      "delivery_status": "planned",
+      "acceptance_source": "audit-cross-cutting.json#CROSS-004",
+      "implementation_commits": [],
+      "verification_receipts": [],
+      "remaining_gates": [
+        "Retain all audit-row acceptance criteria; package gate is additional, not a replacement."
+      ]
+    }
+  ],
+  "artifact_delivery_contract": {
+    "requested_by_user": "2026-10-15: next shared artifact must have full feature parity with cmux",
+    "share_only_after": "V01 verified with all applicable audited contracts and native/remote/cloud/resource gates passed",
+    "intermediate_ci_archives": "diagnostic evidence only; do not share as the requested build",
+    "currently_eligible": false
+  }
+}
