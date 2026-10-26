@@ -1,9 +1,13 @@
 # Status
 
-- **State:** planned
+- **State:** in-progress
 - **Updated:** 2026-10-26
 
 ## Notes
+- Follow-up: run no local builds. User authorized checking Windows and Ubuntu with
+  GitHub Actions; add/dispatch a manual binary build/package probe and record results.
+  Local `scripts/check` is superseded for this slice by the user's hosted-only constraint;
+  Ubuntu runs that check in Actions. Existing source support is not changed by the probe.
 - Planning validation: relative Markdown links, whitespace and source anchors checked;
   `RUST_TEST_THREADS=2 scripts/check` passed (workspace tests, Clippy, license inventory,
   foreign C ABI and native profile-lease C ABI). No native desktop execution, signing,

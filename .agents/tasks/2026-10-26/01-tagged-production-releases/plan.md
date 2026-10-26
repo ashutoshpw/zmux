@@ -11,7 +11,8 @@ publishing verified macOS, Windows and Linux downloads to the matching GitHub Re
 - macOS has universal development packaging; Windows cannot currently compile and
   neither Windows nor Linux has a desktop UI/package. All three desktop releases
   therefore require platform development as well as release automation.
-- This task authorizes planning only; preserve unrelated changes and do not publish.
+- Follow-up authorizes a hosted Windows/Ubuntu build probe and the source push needed
+  to run it. Run no local builds/checks; release/tag publication remains outside scope.
 
 ## Approach
 Add a separate `Production release` workflow: validate the tag and source, run checks,
@@ -24,6 +25,8 @@ Default scope is desktop applications on all three OSes, with CLI bundled alongs
 - [x] Inspect current task evidence, workflows, build scripts and platform constraints.
 - [x] Specify the release pipeline, platform prerequisites and implementation slices.
 - [x] Review the plan against source and record remaining external prerequisites.
+- [ ] Run a manual Windows/Ubuntu release-binary probe on GitHub Actions and retain
+  successful packages or compiler failure evidence; update platform findings.
 - [ ] Implement shared release metadata/tag validation and reusable packaging entrypoints.
 - [ ] Establish Windows runtime/IPC support and Windows/Linux desktop presentation.
 - [ ] Add signed macOS/Windows packages and a supported Linux package; native smoke each.
@@ -40,3 +43,4 @@ Default scope is desktop applications on all three OSes, with CLI bundled alongs
 
 ## References
 - [references/release-design.md](references/release-design.md) — source findings and proposed release contract.
+- [references/hosted-platform-probe.md](references/hosted-platform-probe.md) — hosted probe scope and results.

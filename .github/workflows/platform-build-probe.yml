@@ -1,0 +1,113 @@
+name: Windows and Ubuntu build probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-build-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} release binaries
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - platform: windows-x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.95.0
+      BUILD_TARGET: ${{ matrix.target }}
+      BUILD_PLATFORM: ${{ matrix.platform }}
+      RUST_TEST_THREADS: 2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Install pinned Rust toolchain and native target
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy --target ${{ matrix.target }}
+      - name: Install isolated Ubuntu check dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes openssh-server tmux
+      - name: Run required repository checks on Ubuntu
+        if: runner.os == 'Linux'
+        run: scripts/check
+      - name: Build existing CLI and scheduler for the native platform
+        run: cargo build --locked --release --target ${{ matrix.target }} -p zmux -p zmux-remote-runtime
+      - name: Smoke packaged binary inputs
+        shell: python {0}
+        run: |
+          import os
+          from pathlib import Path
+          import subprocess
+
+          suffix = '.exe' if os.name == 'nt' else ''
+          binary_dir = Path('target') / os.environ['BUILD_TARGET'] / 'release'
+          cli = binary_dir / f'zmux{suffix}'
+          scheduler = binary_dir / f'zmux-scheduler{suffix}'
+          for command in ([str(cli), '--version'], [str(cli), '--help'],
+                          [str(scheduler), 'protocol-version'], [str(scheduler), '--help']):
+              subprocess.run(command, check=True, timeout=30)
+          if os.name != 'nt':
+              subprocess.run([str(cli), 'prototype', '--', '/bin/sh', '-c',
+                              'printf "hosted Ubuntu PTY probe\\n"'], check=True, timeout=30)
+      - name: Package binaries, notices and exact-source metadata
+        shell: python {0}
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+
+          sha = os.environ['GITHUB_SHA']
+          platform = os.environ['BUILD_PLATFORM']
+          name = f'zmux-binaries-{platform}-{sha}'
+          stage = Path('dist') / name
+          stage.mkdir(parents=True)
+          suffix = '.exe' if os.name == 'nt' else ''
+          for binary in ('zmux', 'zmux-scheduler'):
+              source = Path('target') / os.environ['BUILD_TARGET'] / 'release' / (binary + suffix)
+              shutil.copy2(source, stage / source.name)
+          for notice in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+              shutil.copy2(notice, stage / notice)
+          metadata = {
+              'source_sha': sha, 'target': os.environ['BUILD_TARGET'],
+              'runner_os': os.environ['RUNNER_OS'], 'runner_arch': os.environ['RUNNER_ARCH'],
+              'run_url': f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              'contents': 'CLI and scheduler binaries; no desktop UI or installer',
+              'signing': 'unsigned', 'production_release': False,
+          }
+          (stage / 'build-info.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          archive = Path(shutil.make_archive(str(stage), 'zip' if os.name == 'nt' else 'gztar',
+                                             root_dir=stage.parent, base_dir=stage.name))
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          Path(str(archive) + '.sha256').write_text(f'{digest}  {archive.name}\n')
+          summary = Path(os.environ['GITHUB_STEP_SUMMARY'])
+          with summary.open('a') as output:
+              output.write(f'Built {platform} CLI/scheduler at `{sha}`.\n\n')
+              output.write(f'`{archive.name}`\n\nSHA-256: `{digest}`\n\n')
+              output.write('Unsigned binary probe; desktop UI and production packaging remain separate.\n')
+      - name: Retain successful binary package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zmux-binaries-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14
