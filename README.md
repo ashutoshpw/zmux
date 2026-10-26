@@ -90,4 +90,4 @@ and the [service contract](services/control-plane/README.md).
 ## Licensing
 
 See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md). Dependencies retain their own licenses; MIT for zmux's original
-code does not relabel third-party material. No cmux implementation or assets are bundled.
+code does not relabel third-party material.
