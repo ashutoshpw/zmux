@@ -134,7 +134,7 @@ struct Frame: Decodable, Sendable {
         failure = try c.decodeIfPresent(String.self, forKey: .failure)
     }
 }
-struct RemoteEndpoint: Decodable, Sendable { let destination: String }
+struct RemoteEndpoint: Decodable, Sendable { let destination: String; let command: [String]? }
 struct UploadProgress: Decodable, Sendable {
     let id: UInt64; let surfaceId: UInt64; let sessionId: UInt64
     let sourceReleased: Bool

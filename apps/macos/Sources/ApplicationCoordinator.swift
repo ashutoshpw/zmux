@@ -817,8 +817,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
 
     /// A terminal process ending closes only the surface that owns that session. Sending the
     /// ordinary close action keeps Recently Closed, session retirement and view cleanup on the
-    /// same path as a person closing the tab. SSH status 255 is OpenSSH's transport-failure
-    /// result too, so keep that surface available for its explicit reconnect control.
+    /// same path as a person closing the tab. Keep explicit SSH commands available for inspection
+    /// and reconnect, and keep status 255 because OpenSSH also uses it for transport failures.
     private func reconcileExitedTerminalClosures(_ snapshot: DesktopSnapshot) {
         let terminalSurfaces = snapshot.model.workspaces
             .flatMap { $0.root.panes }
@@ -837,7 +837,8 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             guard let session = surface.sessionId,
                   let frame = framesBySession[session],
                   frame.snapshot?.state == "exited" else { continue }
-            if surface.remote != nil && frame.snapshot?.exitCode == 255 { continue }
+            if surface.remote != nil &&
+                (frame.snapshot?.exitCode == 255 || surface.remote?.command != nil) { continue }
 
             let request = ExitedTerminalCloseRequest(namespace: snapshot.model.identityNamespace,
                 surface: surface.id, session: session)

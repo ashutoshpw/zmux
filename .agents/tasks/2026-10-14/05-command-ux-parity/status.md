@@ -1388,3 +1388,9 @@ Full-window screencapture status1 remains explicit. No subset artifact was hande
   regression case was added for the AppKit behavior. Native compile, packaged local/SSH
   behavior, Recently Closed reopen and reconnect acceptance remain pending; see
   [the implementation note](references/t01-exit-close.md).
+- The first packaged macOS run (`40946115263`) caught an interaction with the existing
+  reconnect smoke: its explicit `ssh --command "...; exit 0"` tab was being auto-closed
+  before the reconnect control could be checked. `RemoteEndpoint` now decodes the
+  serialized SSH `command` and keeps one-shot remote-command tabs open, while retaining
+  auto-close for interactive login shells and exit-255 recovery. Rerun packaged smoke is
+  pending; see [the implementation note](references/t01-exit-close.md).
