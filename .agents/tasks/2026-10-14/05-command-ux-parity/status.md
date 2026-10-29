@@ -1392,5 +1392,17 @@ Full-window screencapture status1 remains explicit. No subset artifact was hande
   reconnect smoke: its explicit `ssh --command "...; exit 0"` tab was being auto-closed
   before the reconnect control could be checked. `RemoteEndpoint` now decodes the
   serialized SSH `command` and keeps one-shot remote-command tabs open, while retaining
-  auto-close for interactive login shells and exit-255 recovery. Rerun packaged smoke is
-  pending; see [the implementation note](references/t01-exit-close.md).
+  auto-close for interactive login shells and exit-255 recovery.
+- Local `RUST_TEST_THREADS=2 scripts/check` passed. Hosted workflow `40951840905` passed
+  both Linux helper builds, Swift type-check, Rust/foreign-ABI validation, universal app
+  build, terminal-selection/browser smoke, packaged app/native rendering smoke (including
+  the SSH reconnect case), and sidebar/status-menu smoke.
+- Downloaded universal artifact `12932937768` (`c975f6b46e7d38854f024b63a27e662c0f2e3c58`)
+  was verified: inner ZIP SHA-256
+  `afe1d88c78dc1edc86f8bd6dd90c8d0f8a2d8c4c7eb9cb0364bd42cca3b1293d`, matching source SHA
+  and architecture metadata (`arm64`, `x86_64`; minimum macOS 14.0). Mach-O headers confirm
+  both slices in the app executable and native bridge. Ad-hoc signed, not notarized.
+- Inspected `zmux-ssh-reconnect.png`: the exited explicit-command SSH tab remains present
+  with its reconnect icon. Direct interactive `exit` in local/SSH shells and Recently
+  Closed reopening still need user dogfood; see
+  [the implementation note](references/t01-exit-close.md).

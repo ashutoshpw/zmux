@@ -30,7 +30,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] P0: turn audited gaps into executable per-leaf/option contracts, shared registry and measured resource budgets.
 - [ ] Priority journey: managed SSH plus remote file/image drop and paste; independent of cloud hosting.
 - [ ] P1: topology, ⌘T tabs, ⇧⌘T/recently-closed recovery, focus history and navigation.
-- [ ] P1: close the owning local or managed-SSH terminal tab when its shell exits; retain the reconnect path for SSH transport failures ([terminal exit lifecycle](references/t01-exit-close.md)).
+- [x] P1: close the owning local or managed-SSH terminal tab when its shell exits; retain the reconnect path for SSH transport failures ([terminal exit lifecycle](references/t01-exit-close.md)).
 - [ ] P2: collapsible sidebar, attention inbox/badges and notification automation.
 - [ ] Close every workspace context action and conditional state in the N02 menu correction, with shared behavior and packaged native acceptance.
 - [ ] Implement the macOS status item and every N03 status-menu action through shared owners, with actual OS-menu acceptance.

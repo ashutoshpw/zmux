@@ -25,10 +25,16 @@ commands and SSH exit status 255 remain available to the existing reconnect affo
 
 ## Verification state
 
-`RUST_TEST_THREADS=2 scripts/check` passed on commit `45c13a3`, before the packaged
-smoke exposed that a one-shot SSH command exiting successfully was auto-closed before
-reconnect could be checked. The follow-up predicate now distinguishes explicit SSH
-commands from login shells. The hosted packaged reconnect smoke must pass on the updated
-source before this parity item is marked complete; the smoke covers the explicit-command
-tab/reconnect path, while interactive local/SSH exit and Recently Closed reopening still
-need direct native acceptance.
+`RUST_TEST_THREADS=2 scripts/check` passed on `c975f6b`. Hosted workflow
+[`40951840905`](https://github.com/ashutoshpw/zmux/actions/runs/40951840905) passed Swift
+type-check, both Linux scheduler helper builds, Rust and ABI checks, universal app build,
+terminal-selection/browser checks, packaged app/native-rendering smoke, and sidebar/status
+smoke. Its packaged SSH reconnect smoke passed after the fix: the explicit `--command`
+that exits successfully remains visible with its reconnect control. The downloaded
+artifact's build metadata and Mach-O slices were inspected; its checksum is recorded in
+the task status.
+
+The packaged SSH fixture exercises an explicit remote command, not typing `exit` into an
+interactive local or SSH login shell. The coordinator handles those normal exits through
+the same owner-bound close path, but direct local/SSH exit and Recently Closed reopening
+still need user dogfood.
