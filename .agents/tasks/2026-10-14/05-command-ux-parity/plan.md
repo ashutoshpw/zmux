@@ -30,6 +30,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [ ] P0: turn audited gaps into executable per-leaf/option contracts, shared registry and measured resource budgets.
 - [ ] Priority journey: managed SSH plus remote file/image drop and paste; independent of cloud hosting.
 - [ ] P1: topology, ⌘T tabs, ⇧⌘T/recently-closed recovery, focus history and navigation.
+- [ ] P1: close the owning local or managed-SSH terminal tab when its shell exits; retain the reconnect path for SSH transport failures ([terminal exit lifecycle](references/t01-exit-close.md)).
 - [ ] P2: collapsible sidebar, attention inbox/badges and notification automation.
 - [ ] Close every workspace context action and conditional state in the N02 menu correction, with shared behavior and packaged native acceptance.
 - [ ] Implement the macOS status item and every N03 status-menu action through shared owners, with actual OS-menu acceptance.
@@ -124,6 +125,7 @@ Ship cohesive validated phases on main with GitHub Actions macOS artifacts.
 - [F04 production linkage](references/f04-production-linkage.md) — explicit retained-library bridge, staged Viewport publication and native linkage gates.
 - [F04 resource telemetry](references/f04-native-resource-sampler.md) — bounded external Mac measurements and remaining workload/budget gates.
 - [T01 terminal input](references/t01-terminal-input.md) — legacy special-key encoding and real PTY acceptance.
+- [Terminal exit lifecycle](references/t01-exit-close.md) — close exact local/SSH terminal surfaces through the standard undo-close path while preserving SSH reconnect on transport failure.
 - [N01 sidebar resizing](references/n01-sidebar-resizing.md) — persistent width, native drag/keyboard/accessibility controls and acceptance.
 - [N01a desktop notifications](references/n01-desktop-notifications.md) — native delivery ownership, exact actions and permission acceptance gates.
 - [B02a browser automation](references/b02-browser-automation.md) — asynchronous shared WebKit bridge, lifecycle fencing, owner assignments and acceptance.

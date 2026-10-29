@@ -1375,3 +1375,16 @@ Full-window screencapture status1 remains explicit. No subset artifact was hande
   strict Clippy, notices and both C ABI checks); log `/tmp/zmux-pr1-check.log`.
   Final source/test review found no further blockers in scope. Fresh hosted Linux/
   macOS checks and merge remain pending; local native macOS execution unavailable.
+
+## Terminal process exit lifecycle (2026-10-29)
+
+- Added coordinator handling for exited local and managed-SSH terminal frames. It
+  closes only the owning surface using the regular `close_surface` action, preserving
+  Recently Closed behavior, and deduplicates pending requests by namespace/surface/session.
+- Managed SSH exit code 255 remains open for the existing reconnect affordance because
+  OpenSSH also uses it for transport failures. A remote shell that explicitly exits 255
+  remains ambiguous.
+- `RUST_TEST_THREADS=2 scripts/check` passed on the modified source tree. No focused
+  regression case was added for the AppKit behavior. Native compile, packaged local/SSH
+  behavior, Recently Closed reopen and reconnect acceptance remain pending; see
+  [the implementation note](references/t01-exit-close.md).

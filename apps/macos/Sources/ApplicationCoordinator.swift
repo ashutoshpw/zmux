@@ -37,6 +37,12 @@ enum UICommand: Sendable {
     indirect case tracked(UICommand, CommandOutcome)
 }
 
+private struct ExitedTerminalCloseRequest: Hashable, Sendable {
+    let namespace: UUID
+    let surface: UInt64
+    let session: UInt64
+}
+
 /// File-service work that can wait on a slow volume (a probe and an executor wait can hold one
 /// request for about three seconds). It has its own bounded queue and task so it can never stall
 /// terminal input, resize or wheel events queued behind it in the `UICommand` loop.
@@ -140,6 +146,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
     private var browserEventsNeedRecovery = false
     private var browserEventTask: Task<Void, Never>?
     private var browserEpoch: UUID?
+    /// Prevents repeated frame polls from submitting the same automatic close.
+    /// Failed close commands are released after a short retry delay.
+    private var exitedTerminalCloseRequests: Set<ExitedTerminalCloseRequest> = []
     private(set) var terminals: [UInt64: TerminalView] = [:]
     private(set) var completedHistories: [UInt64: CompletedTerminalHistoryView] = [:]
     private var completedHistoryNamespace: UUID?
@@ -692,6 +701,7 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
             windowEpoch = snapshot.windowEpoch
         }
         self.snapshot = snapshot
+        reconcileExitedTerminalClosures(snapshot)
         let liveWindows = Set(snapshot.model.windows.map { MainWindowIdentity(namespace: snapshot.model.identityNamespace, windowId: $0.id) })
         minimizedWindowHistory.removeAll { !liveWindows.contains($0) }
         statusMenu?.update(snapshot)
@@ -801,6 +811,43 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
                         try await self.bridge.windowEvent(NativeWindowEvent(event: "failed", operationId: request.operationId, epoch: request.epoch, message: failure.message))
                     } catch { self.reportError("Native window failure acknowledgement uncertain: " + error.localizedDescription) }
                 } catch { self.reportError("Native window acknowledgement retained without replay: " + error.localizedDescription) }
+            }
+        }
+    }
+
+    /// A terminal process ending closes only the surface that owns that session. Sending the
+    /// ordinary close action keeps Recently Closed, session retirement and view cleanup on the
+    /// same path as a person closing the tab. SSH status 255 is OpenSSH's transport-failure
+    /// result too, so keep that surface available for its explicit reconnect control.
+    private func reconcileExitedTerminalClosures(_ snapshot: DesktopSnapshot) {
+        let terminalSurfaces = snapshot.model.workspaces
+            .flatMap { $0.root.panes }
+            .flatMap { $0.surfaces }
+            .filter { $0.kind == "terminal" }
+        let liveRequests = Set(terminalSurfaces.compactMap { surface -> ExitedTerminalCloseRequest? in
+            guard let session = surface.sessionId else { return nil }
+            return ExitedTerminalCloseRequest(namespace: snapshot.model.identityNamespace,
+                surface: surface.id, session: session)
+        })
+        exitedTerminalCloseRequests.formIntersection(liveRequests)
+
+        let framesBySession = Dictionary(snapshot.frames.map { ($0.sessionId, $0) },
+            uniquingKeysWith: { _, latest in latest })
+        for surface in terminalSurfaces {
+            guard let session = surface.sessionId,
+                  let frame = framesBySession[session],
+                  frame.snapshot?.state == "exited" else { continue }
+            if surface.remote != nil && frame.snapshot?.exitCode == 255 { continue }
+
+            let request = ExitedTerminalCloseRequest(namespace: snapshot.model.identityNamespace,
+                surface: surface.id, session: session)
+            guard exitedTerminalCloseRequests.insert(request).inserted else { continue }
+            let outcome = enqueueTracked(.surface("close_surface", surface.id, nil, nil, nil))
+            Task { @MainActor [weak self] in
+                guard !(await outcome.wait()), let self else { return }
+                try? await Task.sleep(for: .milliseconds(300))
+                guard self.snapshot?.model.identityNamespace == request.namespace else { return }
+                self.exitedTerminalCloseRequests.remove(request)
             }
         }
     }
