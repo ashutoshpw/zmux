@@ -25,12 +25,21 @@ The approximate hex values are rounded display equivalents; the source `NSColor`
 ## Review and verification
 
 - Independent review confirmed that explicit ANSI black is retained by design; this palette update changes native surfaces and selection styling, not explicit terminal ANSI colors.
-- `scripts/check` passed on Linux.
-- Packaged native verification remains pending. Linux checks do not establish packaged macOS appearance or acceptance.
+- `scripts/check` passed on Linux; hosted smoke checks passed.
+- Packaged-app screenshots were inspected. The screenshot compositor was unavailable, accessibility save was skipped, and no physical Mac verification was performed.
+
+## Dark slice artifact
+
+- Source commit: `b38e7f09341b15567550b7b3fd5a4ac1d92f4813`.
+- Workflow run: [41283271682](https://github.com/ashutoshpw/zmux/actions/runs/41283271682).
+- Download: [workflow artifact 13075045356](https://github.com/ashutoshpw/zmux/actions/runs/41283271682/artifacts/13075045356).
+- Inner ZIP SHA-256: `191f5f43c326f96e736de4441f07465e3920c3bdfe6ac2e6d810a0bb73cf539c`.
+- Target: universal macOS 14, arm64 and x86_64.
+- Signing: ad hoc. Notarization: none.
 
 ## Pending
 
-- Build and inspect the required universal macOS artifact; record its checksum, source SHA, architectures, minimum OS, and signing/notarization evidence, including packaged UI evidence.
+- The dark appearance slice has an artifact and hosted verification record, but compositor capture, accessibility save, and physical-Mac proof are unavailable as noted above.
 - Implement and verify the provider lifecycle contract and ingestion, truthful local/SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
 
-Agent lifecycle, SSH integration, and alerts/sound behavior remain open.
+The larger live-agent feature remains in progress; agent lifecycle, SSH integration, and alerts/sound behavior remain open.
