@@ -26,7 +26,7 @@ The approximate hex values are rounded display equivalents; the source `NSColor`
 
 - Independent review confirmed that explicit ANSI black is retained by design; this palette update changes native surfaces and selection styling, not explicit terminal ANSI colors.
 - Independent local lifecycle review found no blockers; the P3 safe visibility limitation below remains documented.
-- Hosted smoke checks passed. The full `scripts/check` retry passed on Linux after the clippy fix.
+- Dark-slice hosted smoke checks passed. The full `scripts/check` retry passed on Linux after the lifecycle fixture change; log: `/tmp/zmux-lifecycle-check-r3.log`.
 - Packaged-app screenshots were inspected. The screenshot compositor was unavailable, accessibility save was skipped, and no physical Mac verification was performed.
 
 ## Dark slice artifact
@@ -52,13 +52,30 @@ The opt-in Claude adapter reports prompt submission, ambiguous attention candida
 - `cargo test -p zmux-desktop-runtime agent_lifecycle` passed the typed hook normalization and controlled-clock freshness/recovery/disconnect test.
 - `cargo test -p zmux-desktop-runtime --test agent_lifecycle` passed the control-socket test for exact owner checks, generation/sequence fencing, terminal registration rejection, and evidence-loss replacement.
 - `cargo test -p zmux --test provider_hooks` passed all 6 tests, including plugin lifecycle and nonblocking hook ingress.
-- These are local Linux source checks. The full `scripts/check` retry passed after the clippy fix. The dark-slice artifact above does not verify the lifecycle changes: no native build or real Claude provider execution has been verified. The native sidebar, SSH lifecycle, alerts/sounds, and physical-Mac evidence are also pending.
+- These are local Linux source checks. The full `scripts/check` retry passed after the latest fixture change; output is recorded at `/tmp/zmux-lifecycle-check-r3.log`. The dark-slice artifact above does not verify the lifecycle changes: no successful hosted lifecycle build, native build, or real Claude provider execution has been verified. The native sidebar, SSH lifecycle, alerts/sounds, and physical-Mac evidence are also pending.
 
 Independent lifecycle review recorded a **P3 safe visibility limitation**: when Claude self-starts a turn without a `prompt_id`, the lifecycle remains Unknown. Later tool events do not carry enough identity to establish which run they belong to, so they cannot safely create or promote that run. This can under-report activity, but avoids asserting a lifecycle state without run evidence.
+
+## Latest lifecycle hosted attempt
+
+- Workflow [41285971536](https://github.com/ashutoshpw/zmux/actions/runs/41285971536) failed on macOS because a new control-socket test placed its Unix-domain socket under the long macOS `TMPDIR`, triggering the socket path / `SUN_LEN` limitation.
+- The test fixture was moved to a short path under `/tmp`; the focused test passed after that change.
+- The full local `scripts/check` retry passed; output is recorded at `/tmp/zmux-lifecycle-check-r3.log`. A fresh hosted lifecycle workflow is still needed, and no successful hosted lifecycle build is recorded yet.
+
+## Next implementation hazards — open
+
+These are constraints for the remaining work; they are not implemented or verified by the slices above.
+
+- Serialize an explicit empty lifecycle collection in snapshots. Omitting the field when there are no records can leave consumers unable to distinguish an empty current state from a missing update.
+- Filter lifecycle records and updates by the exact window and namespace so an agent cannot appear in another window or namespace.
+- Deliver agent lifecycle updates independently of workspace `modelRevision`; an agent state change must not wait for an unrelated workspace model change.
+- The current selection command accepts a numeric surface identifier. Add an owner-side action fenced by the full window/namespace/workspace/pane/surface/session identity, and revalidate it at execution so stale identities fail without selecting a replacement surface.
+- Keep the Agents list independently scrollable and preserve existing workspace drag-and-drop behavior and hit testing when the sidebar sections coexist.
+- Keep the empty-agent state visually neutral; an empty list must not imply an alert, connection failure, or provider activity.
 
 ## Pending
 
 - The dark appearance slice has an artifact and hosted verification record, but compositor capture, accessibility save, and physical-Mac proof are unavailable as noted above.
-- Verify the local lifecycle against a real Claude provider and a native build; implement and verify the native sidebar, truthful SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
+- Run a fresh hosted lifecycle workflow and verify the lifecycle against a real Claude provider and a native build; implement and verify the native sidebar, truthful SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
 
 The larger live-agent feature remains in progress; agent lifecycle, SSH integration, and alerts/sound behavior remain open.

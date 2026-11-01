@@ -20,10 +20,13 @@ struct Directory(PathBuf);
 
 impl Directory {
     fn new() -> Self {
-        let path = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("zmux-agent-lifecycle-{}", Uuid::new_v4()));
+        // Keep the Unix socket fixture short on macOS, where TMPDIR commonly
+        // includes a long /var/folders prefix and sockaddr_un.sun_path is small.
+        let path = PathBuf::from("/tmp").join(format!(
+            "zagent-{}-{}",
+            std::process::id(),
+            Uuid::new_v4().simple()
+        ));
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
