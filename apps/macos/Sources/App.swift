@@ -2988,13 +2988,37 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             throw BridgeFailure(message: "CLI metadata did not reach the bounded native status/progress preview or changed input focus")
         }
         button.performClick(nil)
-        guard metadataPopover?.isShown == true, let inspector = metadataInspector, inspector.workspaceID == workspaceID,
-              let scroll = inspector.view.subviews.compactMap({ $0 as? NSScrollView }).first,
-              let details = scroll.documentView as? NSTextView,
-              details.string.contains(literal), details.string.contains("notes · priority 1"),
-              details.string.contains("WARNING · native-smoke"), details.string.contains("<script>literal log</script>"),
-              details.string.contains("0 older entries omitted"), !details.isEditable, !details.isRichText,
-              scroll.hasVerticalScroller else { throw BridgeFailure(message: "Workspace activity details lost status/log fields or treated metadata as rich text") }
+        let inspector = metadataInspector
+        let scroll = inspector?.view.subviews.compactMap({ $0 as? NSScrollView }).first
+        let details = scroll?.documentView as? NSTextView
+        let detailsText = details?.string ?? ""
+        let detailChecks: [(String, Bool)] = [
+            ("popover_shown", metadataPopover?.isShown == true),
+            ("inspector_target", inspector?.workspaceID == workspaceID),
+            ("scroll_view", scroll != nil),
+            ("text_view", details != nil),
+            ("build_status", detailsText.contains(literal)),
+            ("notes_status", detailsText.contains("notes · priority 1")),
+            ("log_source", detailsText.contains("WARNING · native-smoke")),
+            ("literal_log", detailsText.contains("<script>literal log</script>")),
+            ("log_drop_count", detailsText.contains("0 older entries omitted")),
+            ("not_editable", details?.isEditable == false),
+            ("plain_text", details?.isRichText == false),
+            ("vertical_scroller", scroll?.hasVerticalScroller == true)
+        ]
+        let failedDetailChecks = detailChecks.filter { !$0.1 }.map(\.0)
+        let metadata = snapshot?.workspaceMetadata?.first(where: { $0.workspaceId == workspaceID })
+        let statusSummary = metadata?.statuses.map { "\($0.key)=\($0.value)@\($0.priority)" }.joined(separator: ",") ?? "missing"
+        let logSummary = metadata?.logs.map { "\($0.sequence):\($0.level.rawValue):\($0.source ?? "nil"):bytes=\($0.message.utf8.count)" }.joined(separator: ",") ?? "missing"
+        let selectedTargets = snapshot?.workspace?.root.panes.map { "\($0.id):\($0.selectedSurface)" }.joined(separator: ",") ?? "missing"
+        let responderDescription = window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"
+        guard failedDetailChecks.isEmpty else {
+            let observedText = String(detailsText.prefix(1200)).debugDescription
+            throw BridgeFailure(message: "Workspace activity details failed checks \(failedDetailChecks.joined(separator: ",")); statuses=[\(statusSummary)]; logs=[\(logSummary)]; focus=workspace:\(snapshot?.model.focusedWorkspace.map(String.init) ?? "nil"),pane:\(snapshot?.workspace?.focusedPane.map(String.init) ?? "nil"),tabs:[\(selectedTargets)],responder:\(responderDescription); text=\(observedText)")
+        }
+        guard let inspector, inspector.workspaceID == workspaceID, let scroll, let details else {
+            throw BridgeFailure(message: "Workspace activity details passed optional checks but the inspector hierarchy disappeared")
+        }
         let metadataResponder = window.firstResponder
         let ownerData = try await nativeCLI(["list-status"] + target, externalCaller: true)
         guard let owner = try JSONSerialization.jsonObject(with: ownerData) as? [String: Any],
