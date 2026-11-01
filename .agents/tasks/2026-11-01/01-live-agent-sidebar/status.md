@@ -341,7 +341,7 @@ Focused Linux verification:
 
 ## Monotonic stalled-pressure confirmation follow-up — 2026-11-01
 
-Review identified that counting four Heartbeat samples alone did not prove four elapsed intervals: buffered frames can be drained back-to-back. The test tracker now records a monotonic `no_progress_since` timestamp and confirms sustained pressure only after at least 400 ms of unchanged accepted receipts and increasing rejections, observed across valid Heartbeats with the existing strict sequence and binding checks. This waits on protocol frames and uses no test sleep. The 30-second absolute deadline and 2.45-second pressure-relative loss bound remain unchanged; production code and timeout values are unchanged.
+Review identified that counting four Heartbeat samples alone did not prove four elapsed intervals: buffered frames can be drained back-to-back. This revision first added a 400 ms monotonic no-admission interval while observing valid, strictly sequenced Heartbeats; the subsequent Foundation Ubuntu failure showed that starting that clock at the first Heartbeat sample could lag the pump's first rejection. The following section records moving the timestamp to the receipt pump. No test sleep was added. The 30-second absolute deadline and 2.45-second pressure-relative loss bound remain unchanged; production code and timeout values are unchanged.
 
 Focused Linux verification after the elapsed-time change:
 
@@ -358,3 +358,31 @@ Focused Linux verification after the elapsed-time change:
 - The test now bounds `Lost` relative to sustained-pressure confirmation by the existing two-second client write deadline plus 250 ms child-reap and 200 ms scheduling allowances, while retaining the absolute 30-second deadline from receipt-pump start. Sustained pressure also requires 400 ms of monotonic no-admission progress and increasing rejection counts across valid, sequenced Heartbeats; buffered Heartbeats alone cannot meet the interval. Production timeout values are unchanged.
 - Focused and concurrent Linux lifecycle tests passed after these changes. Independent read-only review found no blockers: admission progress or non-increasing rejection counts reset the pressure interval, and the absolute and pressure-relative deadlines remain anchored correctly. Detailed commands and timing evidence are recorded above.
 - A hosted macOS rerun is pending. Workflow 41329593839 did not establish packaged app, sidebar smoke, or downloadable-artifact acceptance.
+
+## Foundation Ubuntu pressure-start observation follow-up — 2026-11-01
+
+Foundation workflow [41331773961](https://github.com/ashutoshpw/zmux/actions/runs/41331773961), SHA `52937424102f06bdca974ea51457b2d6c35e6cbc`, passed 114 library tests and failed the stalled-stdin case when `Lost` arrived before the 400 ms pressure marker. At loss it reported 10,716 admitted receipts, 3,531,044 rejected attempts, and Heartbeat sequence 24. The hosted output did not record when the first receipt rejection occurred, so it cannot establish the exact duration of the no-admission run or prove a production timeout failure.
+
+The prior observer started its monotonic clock at the first Heartbeat sample that saw no admissions, which can lag the receipt pump's first rejected send. The pump now timestamps the beginning of each consecutive rejection run and clears that timestamp on the next accepted receipt. On each valid Heartbeat, the observer still requires unchanged accepted count and rising rejections, plus at least 400 ms elapsed from the producer-side rejection timestamp. Buffered Heartbeats cannot manufacture elapsed time, and the test reports the rejection duration at `Lost` if confirmation is missing. The fixed 30-second overall deadline and 2.45-second pressure-relative loss bound are unchanged; production timeout code is unchanged.
+
+Reproduction and focused Linux verification:
+
+- Before moving the timestamp to the receipt pump, `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime --lib` passed all 115 tests; the exact hosted Ubuntu ordering was not reproduced locally.
+- After the timestamp change, `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::real_managed_ssh_stalled_stdin_has_bounded_loss_and_cancellation -- --nocapture` passed. The latest run confirmed pressure 741 ms after production began; `Lost` followed 1.567 seconds later, within the 2.45-second bound.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed all 5 lifecycle tests. Pressure was confirmed after 831 ms; `Lost` followed 1.429 seconds later, and cancellation disconnected the sender 110 ms after stream drop.
+- `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. No `scripts/check` or new hosted workflow was run; the parent had stopped the full check.
+
+## Stable rejection-epoch snapshot and full local check — 2026-11-01
+
+The stalled-stdin regression now stops and joins its receipt pump when `Lost` arrives, then validates an immutable snapshot against the rejection epoch confirmed by valid Heartbeats. It fails if any receipt was admitted after the observed pressure or if the producer's rejection-run timestamp changed, so a stale sustained-pressure marker cannot pass. Cancellation performs the same joined snapshot check. Production timeout behavior and values remain unchanged.
+
+- The focused loopback SSH test passed after this change: sustained pressure was confirmed 941 ms after receipt production began, and `Lost` followed 1.348 seconds later, within the existing 2.45-second pressure-relative bound.
+- `RUST_TEST_THREADS=2 scripts/check` passed on Linux with exit status 0 after the stable-snapshot change. Full output: `/tmp/zmux-foundation-stalled-stdin-r29.log`.
+- `git diff --check` passed. These are local Linux checks; no new hosted workflow, macOS build, or downloadable artifact was run for this test-only follow-up.
+
+## Latest verification update — 2026-11-01
+
+- The full `RUST_TEST_THREADS=2 scripts/check` retry r30 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r30.log`.
+- macOS workflow [41331773945](https://github.com/ashutoshpw/zmux/actions/runs/41331773945), source SHA `52937424102f06bdca974ea51457b2d6c35e6cbc`, built and retained a candidate universal archive but failed its isolated terminal-selection metadata compile: `Models.swift:481` could not resolve `NativeAgentAlertEvent`. The selection probe's standalone source list omitted the real declarations in `AgentAlertDelivery.swift` and its `AgentAlertKind` dependency in `AgentAlertPreferences.swift`; both sources are now included in the shared metadata input closure used by completed-history as well. The retained candidate at `/tmp/zmux-41331773945/candidate/zmux-dev-universal-5293742.zip` passed checksum and ZIP integrity checks and reports arm64/x86_64 with macOS 14 minimum, ad-hoc signing, and no notarization. It is not an accepted build: metadata compile failed before packaged runtime/sidebar smoke and screenshot evidence.
+- Foundation workflow [41331773961](https://github.com/ashutoshpw/zmux/actions/runs/41331773961) failed the stalled-stdin regression when `Lost` arrived before the 400 ms pressure marker; the preceding section records the run and its diagnostics. The receipt producer now timestamps each rejection run at the first actual rejected send and clears it on successful admission. The test stops and joins the producer on loss and validates an immutable accepted-count/rejection-epoch snapshot against the Heartbeat-confirmed pressure epoch, preventing a stale marker from passing. Independent review covered this producer-side evidence and the bounded deadlines; focused Linux lifecycle tests and the full r30 workspace check passed.
+- A hosted rerun remains pending for both the metadata source-list correction and the stabilized pressure evidence. Neither hosted run establishes packaged app/sidebar acceptance or a delivered artifact.

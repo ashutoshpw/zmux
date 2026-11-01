@@ -21,10 +21,12 @@ import zipfile
 REPO = Path(__file__).resolve().parents[2]
 OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos-development.yml',
               'tools/native-terminal-selection/CopyMetadataContract.swift')
-# Compile the complete real model dependency closure, including the bridge owner
-# used by NotificationDelivery; never substitute test definitions for app types.
+# Compile the complete real model dependency closure, including the native alert
+# event model used by Models and the bridge owner used by NotificationDelivery;
+# never substitute test definitions for app types.
 METADATA_INPUTS = tuple('apps/macos/Sources/' + name + '.swift' for name in (
-    'Models', 'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
+    'Models', 'AgentAlertPreferences', 'AgentAlertDelivery',
+    'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
     'NotificationDelivery', 'FileLoadGate', 'FileHostClient', 'NativeBridge',
     'NativeStoragePath', 'TerminalKeyEncoder', 'BrowserProfileLeases', 'BrowserProfileOperations')) + (
     'crates/native-bridge/include/zmux.h', 'tools/native-terminal-selection/CopyMetadataContract.swift')

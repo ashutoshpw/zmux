@@ -1567,7 +1567,15 @@ except BrokenPipeError:
         stop: Arc<AtomicBool>,
         accepted: Arc<AtomicUsize>,
         rejected: Arc<AtomicUsize>,
+        no_progress_since: Arc<Mutex<Option<Instant>>>,
         worker: Option<thread::JoinHandle<()>>,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct ReceiptPumpSnapshot {
+        accepted: usize,
+        rejected: usize,
+        no_progress_since: Option<Instant>,
     }
 
     impl ReceiptPump {
@@ -1575,11 +1583,14 @@ except BrokenPipeError:
             let stop = Arc::new(AtomicBool::new(false));
             let accepted = Arc::new(AtomicUsize::new(0));
             let rejected = Arc::new(AtomicUsize::new(0));
+            let no_progress_since = Arc::new(Mutex::new(None));
             let worker_stop = Arc::clone(&stop);
             let worker_accepted = Arc::clone(&accepted);
             let worker_rejected = Arc::clone(&rejected);
+            let worker_no_progress_since = Arc::clone(&no_progress_since);
             let worker = thread::spawn(move || {
                 let mut event_id = 1_u128;
+                let mut rejection_run_started = None;
                 while !worker_stop.load(Ordering::Acquire) {
                     if stream.send_receipt(
                         binding,
@@ -1587,9 +1598,21 @@ except BrokenPipeError:
                         HookDisposition::NotHandled,
                     ) {
                         worker_accepted.fetch_add(1, Ordering::Relaxed);
+                        if rejection_run_started.take().is_some() {
+                            *worker_no_progress_since
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner()) = None;
+                        }
                         event_id = event_id.wrapping_add(1).max(1);
                     } else {
                         worker_rejected.fetch_add(1, Ordering::Relaxed);
+                        if rejection_run_started.is_none() {
+                            let started = Instant::now();
+                            rejection_run_started = Some(started);
+                            *worker_no_progress_since
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner()) = Some(started);
+                        }
                         thread::yield_now();
                     }
                 }
@@ -1598,6 +1621,7 @@ except BrokenPipeError:
                 stop,
                 accepted,
                 rejected,
+                no_progress_since,
                 worker: Some(worker),
             }
         }
@@ -1607,6 +1631,25 @@ except BrokenPipeError:
                 self.accepted.load(Ordering::Acquire),
                 self.rejected.load(Ordering::Acquire),
             )
+        }
+
+        fn no_progress_since(&self) -> Option<Instant> {
+            *self
+                .no_progress_since
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+        }
+
+        fn snapshot_after_stop(&self) -> ReceiptPumpSnapshot {
+            assert!(
+                self.worker.is_none(),
+                "snapshot managed lifecycle receipt pump only after joining it"
+            );
+            ReceiptPumpSnapshot {
+                accepted: self.accepted.load(Ordering::Acquire),
+                rejected: self.rejected.load(Ordering::Acquire),
+                no_progress_since: self.no_progress_since(),
+            }
         }
 
         fn stop(&mut self) {
@@ -1631,8 +1674,8 @@ except BrokenPipeError:
         last_sequence: u64,
         last_accepted: usize,
         last_rejected: usize,
-        no_progress_since: Option<Instant>,
         sustained_since: Option<Instant>,
+        sustained_rejection_since: Option<Instant>,
     }
 
     impl HeartbeatBackpressure {
@@ -1642,8 +1685,8 @@ except BrokenPipeError:
                 last_sequence: 0,
                 last_accepted,
                 last_rejected,
-                no_progress_since: None,
                 sustained_since: None,
+                sustained_rejection_since: None,
             }
         }
 
@@ -1657,20 +1700,32 @@ except BrokenPipeError:
 
             let (accepted, rejected) = pump.stats();
             let observed_at = Instant::now();
-            if accepted == self.last_accepted && rejected > self.last_rejected {
-                let no_progress_since = *self.no_progress_since.get_or_insert(observed_at);
-                if observed_at.saturating_duration_since(no_progress_since)
-                    >= MIN_SUSTAINED_BACKPRESSURE
-                {
-                    self.sustained_since.get_or_insert(observed_at);
-                }
+            let no_progress_since = pump.no_progress_since();
+            if accepted == self.last_accepted
+                && rejected > self.last_rejected
+                && no_progress_since.is_some_and(|started| {
+                    observed_at.saturating_duration_since(started) >= MIN_SUSTAINED_BACKPRESSURE
+                })
+            {
+                self.sustained_since.get_or_insert(observed_at);
+                self.sustained_rejection_since = no_progress_since;
             } else {
-                self.no_progress_since = None;
                 self.sustained_since = None;
+                self.sustained_rejection_since = None;
             }
             self.last_accepted = accepted;
             self.last_rejected = rejected;
             (accepted, rejected)
+        }
+
+        fn confirms_snapshot(&self, snapshot: ReceiptPumpSnapshot, observed_at: Instant) -> bool {
+            self.sustained_since.is_some()
+                && snapshot.accepted == self.last_accepted
+                && snapshot.rejected >= self.last_rejected
+                && snapshot.no_progress_since == self.sustained_rejection_since
+                && snapshot.no_progress_since.is_some_and(|started| {
+                    observed_at.saturating_duration_since(started) >= MIN_SUSTAINED_BACKPRESSURE
+                })
         }
     }
 
@@ -1772,7 +1827,7 @@ except BrokenPipeError:
         let stalled_started = Instant::now();
         let loss_deadline = stalled_started + HANDSHAKE_TIMEOUT;
         let mut pressure = HeartbeatBackpressure::new(&pump);
-        let (lost, lost_at) = loop {
+        let (lost, lost_at, loss_snapshot) = loop {
             let remaining = loss_deadline.saturating_duration_since(Instant::now());
             assert!(
                 !remaining.is_zero(),
@@ -1804,14 +1859,17 @@ except BrokenPipeError:
                 } => {
                     let lost_at = Instant::now();
                     assert_eq!(lost_binding, binding);
+                    pump.stop();
+                    let snapshot = pump.snapshot_after_stop();
                     assert!(
-                        pressure.sustained_since.is_some(),
-                        "managed SSH reported loss before sustained receipt backpressure; accepted={}, rejected={}, last heartbeat={}",
-                        pump.stats().0,
-                        pump.stats().1,
+                        pressure.confirms_snapshot(snapshot, lost_at),
+                        "managed SSH reported loss before sustained receipt backpressure in the same rejection epoch; snapshot={snapshot:?}, observed accepted={}, rejected={}, pressure_epoch={:?}, required={MIN_SUSTAINED_BACKPRESSURE:?}, last heartbeat={}",
+                        pressure.last_accepted,
+                        pressure.last_rejected,
+                        pressure.sustained_rejection_since,
                         pressure.last_sequence
                     );
-                    break (lost_binding, lost_at);
+                    break (lost_binding, lost_at, snapshot);
                 }
                 Message::Connected { .. } => {
                     panic!("unexpected reconnect after stalled stdin")
@@ -1822,7 +1880,9 @@ except BrokenPipeError:
             }
         };
         pump.stop();
-        let (accepted, rejected) = pump.stats();
+        let ReceiptPumpSnapshot {
+            accepted, rejected, ..
+        } = loss_snapshot;
         let sustained_pressure_at = pressure
             .sustained_since
             .expect("loss followed sustained receipt backpressure");
@@ -1922,17 +1982,29 @@ except BrokenPipeError:
                 }
             }
         }
-        let (accepted, rejected) = pump.stats();
-        assert!(
-            accepted > MAX_PENDING_RECEIPTS,
-            "only {accepted} receipts were admitted before cancellation"
-        );
-        assert!(
-            rejected > 0,
-            "cancellation phase reached a no-progress marker without a rejected receipt"
-        );
         pump.stop();
-        let (accepted, rejected) = pump.stats();
+        let cancellation_snapshot = pump.snapshot_after_stop();
+        assert!(
+            cancellation_snapshot.accepted > MAX_PENDING_RECEIPTS,
+            "only {} receipts were admitted before cancellation",
+            cancellation_snapshot.accepted
+        );
+        assert!(
+            cancellation_snapshot.accepted == pressure.last_accepted
+                && cancellation_snapshot.no_progress_since == pressure.sustained_rejection_since
+                && cancellation_snapshot
+                    .no_progress_since
+                    .is_some_and(|started| {
+                        Instant::now().saturating_duration_since(started)
+                            >= MIN_SUSTAINED_BACKPRESSURE
+                    }),
+            "cancellation producer left the sustained rejection epoch: snapshot={cancellation_snapshot:?}, observed accepted={}, pressure epoch={:?}",
+            pressure.last_accepted,
+            pressure.sustained_rejection_since
+        );
+        let ReceiptPumpSnapshot {
+            accepted, rejected, ..
+        } = cancellation_snapshot;
         let mut last_sequence = pressure.last_sequence;
         drop(pump);
         let drop_started = Instant::now();
