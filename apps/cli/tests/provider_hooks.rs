@@ -131,12 +131,15 @@ impl Directory {
         let guard = PROCESS_FIXTURE.lock().unwrap();
         // Keep the real Desktop control socket short on macOS, where TMPDIR
         // commonly has a long /var/folders prefix and sockaddr_un.sun_path is
-        // small. The provider hook itself still uses the production route.
-        let p = PathBuf::from("/tmp").join(format!(
-            "zhooks-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4().simple()
-        ));
+        // small. macOS also exposes /tmp as a symlink to /private/tmp, while
+        // the production plugin opener intentionally rejects symlinked path
+        // components. Resolve that alias and keep the unique basename short
+        // enough for the default control-socket path. The provider hook still
+        // uses the production route.
+        let temp_root = PathBuf::from("/tmp")
+            .canonicalize()
+            .expect("canonicalize the short Unix temporary root");
+        let p = temp_root.join(format!("zhooks-{}", uuid::Uuid::new_v4().simple()));
         fs::create_dir(&p).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o700)).unwrap();
         Self {

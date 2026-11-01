@@ -245,3 +245,9 @@ Focused verification on Linux:
 - The full `scripts/check` retry r19 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r19.log`. This run includes the concurrent PTY drain, bounded child/EOF waits, reaped-process cleanup guard, and absolute heartbeat-frame deadlines.
 - Hosted workflow [41316003003](https://github.com/ashutoshpw/zmux/actions/runs/41316003003) was canceled after more than 20 minutes in `Validate Rust core and foreign ABI`. Logs show `automatic_compatibility...` exceeding 60 seconds, but the exact blocked call is unproven; a specific hang cause is not established. A hosted rerun is still needed.
 - The canceled workflow skipped the universal app build, packaged sidebar smoke, downloadable artifact, and build receipt. No hosted acceptance or delivered build is claimed.
+
+## Latest verification update — 2026-11-01
+
+- The full `scripts/check` retry r20 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r20.log`.
+- Hosted workflow [41320417182](https://github.com/ashutoshpw/zmux/actions/runs/41320417182) failed in `provider_hooks` with `Not a directory (os error 20)` in the symlinked-plugin fixture. Source diagnosis traced this to the Darwin `/tmp` symlink; the fixture now canonicalizes the trusted temporary root and enforces a 98-byte socket-path budget. Independent review found no blocker.
+- A macOS hosted rerun is still needed. The failed workflow skipped app packaging and the sidebar smoke, so no hosted acceptance or delivered build is claimed.
