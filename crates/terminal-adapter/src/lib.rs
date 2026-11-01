@@ -279,6 +279,11 @@ impl vt100::Callbacks for Metadata {
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, params: &[&[u8]]) {
         match params {
             [b"9", message] => self.notice("osc9", b"Terminal notification", message),
+            // Still generic OSC presentation. The title sentinel only selects
+            // in-app delivery; it never carries lifecycle identity or state.
+            [b"777", b"notify", b"ZMUX_INBOX", title, body] => {
+                self.notice("osc777-inbox", title, body)
+            }
             [b"777", b"notify", title, body] => self.notice("osc777", title, body),
             [b"777", b"zmux-open", b"v1", nonce, encoded_url] => {
                 self.open_request(nonce, encoded_url)

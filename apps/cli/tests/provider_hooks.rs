@@ -1,13 +1,13 @@
 //! Owned plugin publication and nonblocking hook ingress through the shipped CLI.
 //! Synthetic provider --version only; no Claude invocation or user configuration.
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{Read, Write},
     os::unix::{
-        fs::{PermissionsExt, symlink},
-        net::UnixStream,
+        fs::{FileTypeExt, PermissionsExt, symlink},
+        net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
@@ -15,16 +15,11 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use uuid::Uuid;
 use zmux_desktop_runtime::{
-    Command as DesktopCommand, Desktop, Request, Shell,
-    agent_lifecycle::{
-        Action as LifecycleAction, Event as LifecycleEvent, Provider, Request as LifecycleRequest,
-        Target as LifecycleTarget, TurnStopState,
-    },
-    control::{CONTROL_VERSION, ControlCommand, ControlRequest, ControlResponse, ControlServer},
+    Command as DesktopCommand, Desktop, Request, Shell, agent_lifecycle::Provider,
+    attention::DesktopDeliveryState, control::ControlServer,
 };
-use zmux_workspace_core::targets::TargetKind;
+const ROUTE_ENV: &str = "ZMUX_CLAUDE_EVENT_SOCKET";
 // A fork in another test thread can transiently inherit a writable executable
 // copy before exec closes CLOEXEC descriptors. Keep executable publication and
 // child lifetimes sequential within this test process rather than retrying exec.
@@ -110,10 +105,14 @@ impl Drop for RunningDesktop {
 impl Directory {
     fn new() -> Self {
         let guard = PROCESS_FIXTURE.lock().unwrap();
-        let p = std::env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join(format!("zmux-hooks-{}", uuid::Uuid::new_v4()));
+        // Keep the real Desktop control socket short on macOS, where TMPDIR
+        // commonly has a long /var/folders prefix and sockaddr_un.sun_path is
+        // small. The provider hook itself still uses the production route.
+        let p = PathBuf::from("/tmp").join(format!(
+            "zhooks-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
         fs::create_dir(&p).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o700)).unwrap();
         Self {
@@ -193,31 +192,22 @@ fn decoded(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-fn lifecycle_action(socket: &PathBuf, control_request_id: u64, action: LifecycleAction) -> Value {
-    let request = ControlRequest {
-        version: CONTROL_VERSION,
-        request_id: control_request_id,
-        password: None,
-        command: ControlCommand::AgentLifecycle {
-            request: LifecycleRequest {
-                request_id: Uuid::new_v4(),
-                action,
-            },
-        },
-    };
-    let bytes = serde_json::to_vec(&request).unwrap();
-    let mut stream = UnixStream::connect(socket).unwrap();
+fn read_event_frame(stream: &mut UnixStream) -> Value {
+    let mut length = [0; 4];
+    stream.read_exact(&mut length).unwrap();
+    let length = u32::from_be_bytes(length) as usize;
+    assert!(length <= 65536, "local hook frame exceeds its bound");
+    let mut frame = vec![0; length];
+    stream.read_exact(&mut frame).unwrap();
+    serde_json::from_slice(&frame).unwrap()
+}
+
+fn write_event_frame(stream: &mut UnixStream, frame: &Value) {
+    let bytes = serde_json::to_vec(frame).unwrap();
     stream
         .write_all(&(bytes.len() as u32).to_be_bytes())
         .unwrap();
     stream.write_all(&bytes).unwrap();
-    let mut length = [0; 4];
-    stream.read_exact(&mut length).unwrap();
-    let mut response = vec![0; u32::from_be_bytes(length) as usize];
-    stream.read_exact(&mut response).unwrap();
-    let response: ControlResponse = serde_json::from_slice(&response).unwrap();
-    assert!(response.ok, "{:?}", response.error);
-    response.result.unwrap()
 }
 
 fn run_terminal_command(command: CommandBuilder) -> (portable_pty::ExitStatus, String) {
@@ -241,6 +231,103 @@ fn run_terminal_command(command: CommandBuilder) -> (portable_pty::ExitStatus, S
         Err(error) => panic!("read automatic Claude PTY output: {error}"),
     }
     (status, String::from_utf8_lossy(&output).into_owned())
+}
+
+#[test]
+fn local_hook_ipc_sends_only_minimal_lifecycle_fields() {
+    let dir = Directory::new();
+    let socket_path = dir.path.join("hook-route.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        for (expected_event, expected_tool) in
+            [("UserPromptSubmit", None), ("PreToolUse", Some("Other"))]
+        {
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(stream) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "local hook did not connect");
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(error) => panic!("accept local hook: {error}"),
+                }
+            };
+            let request = read_event_frame(&mut stream);
+            assert_eq!(request["event"], expected_event);
+            assert!(request["hook_id"].as_str().is_some());
+            let input = &request["input"];
+            assert_eq!(input["hook_event_name"], expected_event);
+            assert_eq!(input["session_id"], "provider-session");
+            assert!(input.get("prompt").is_none());
+            assert!(input.get("tool_input").is_none());
+            assert!(input.get("tool_use_id").is_none());
+            assert!(input.get("private_unknown").is_none());
+            assert_eq!(input["agent_id"], "redacted");
+            if expected_event == "UserPromptSubmit" {
+                assert_eq!(input["prompt_id"], "123e4567-e89b-42d3-a456-426614174000");
+                assert_eq!(input["permission_mode"], "default");
+            }
+            if let Some(expected_tool) = expected_tool {
+                assert_eq!(input["tool_name"], expected_tool);
+            }
+            write_event_frame(
+                &mut stream,
+                &json!({"hook_disposition":"not_handled","output":{}}),
+            );
+        }
+    });
+
+    let cases = [
+        (
+            "UserPromptSubmit",
+            json!({
+                "hook_event_name":"UserPromptSubmit",
+                "session_id":"provider-session",
+                "prompt_id":"123e4567-e89b-42d3-a456-426614174000",
+                "permission_mode":"default",
+                "prompt":"private user prompt content",
+                "tool_input":{"command":"private shell input"},
+                "agent_id":"private-agent-id",
+                "private_unknown":"must not cross local IPC"
+            }),
+        ),
+        (
+            "PreToolUse",
+            json!({
+                "hook_event_name":"PreToolUse",
+                "session_id":"provider-session",
+                "tool_name":"Bash",
+                "tool_use_id":"private-tool-use-id",
+                "tool_input":{"command":"private shell input"},
+                "agent_type":"private-agent-type",
+                "private_unknown":"must not cross local IPC"
+            }),
+        ),
+    ];
+    for (event, payload) in cases {
+        let mut child = dir.command(&["hooks", "claude", "event", event]);
+        child
+            .env(ROUTE_ENV, &socket_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = child.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(&payload).unwrap())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{event} hook client failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    server.join().unwrap();
 }
 
 #[test]
@@ -426,6 +513,8 @@ fn automatic_install_to_runtime_lease_is_atomic_against_real_cleanup_cli() {
     let args_report = dir.path.join("auto-arguments");
     let provider_called = dir.path.join("auto-called");
     let provider_release = dir.path.join("auto-release");
+    let no_prompt_hooks_done = dir.path.join("auto-no-prompt-hooks-done");
+    let tracked_hooks_release = dir.path.join("auto-tracked-hooks-release");
     let hooks_done = dir.path.join("auto-hooks-done");
     let provider_env = dir.path.join("auto-provider-env");
     let mut paths = vec![
@@ -461,6 +550,8 @@ fn automatic_install_to_runtime_lease_is_atomic_against_real_cleanup_cli() {
     child.env("FIXTURE_AUTO_CALLED", &provider_called);
     child.env("FIXTURE_AUTO_RELEASE", &provider_release);
     child.env("FIXTURE_AUTO_EMIT_HOOKS", "1");
+    child.env("FIXTURE_AUTO_NO_PROMPT_DONE", &no_prompt_hooks_done);
+    child.env("FIXTURE_AUTO_TRACKED_RELEASE", &tracked_hooks_release);
     child.env("FIXTURE_AUTO_HOOKS_DONE", &hooks_done);
     child.env("FIXTURE_AUTO_ENV_REPORT", &provider_env);
     child.env_remove("XDG_RUNTIME_DIR");
@@ -493,6 +584,10 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
     let args_report = PathBuf::from(std::env::var_os("FIXTURE_AUTO_ARGS").unwrap());
     let provider_called = PathBuf::from(std::env::var_os("FIXTURE_AUTO_CALLED").unwrap());
     let provider_release = PathBuf::from(std::env::var_os("FIXTURE_AUTO_RELEASE").unwrap());
+    let no_prompt_hooks_done =
+        PathBuf::from(std::env::var_os("FIXTURE_AUTO_NO_PROMPT_DONE").unwrap());
+    let tracked_hooks_release =
+        PathBuf::from(std::env::var_os("FIXTURE_AUTO_TRACKED_RELEASE").unwrap());
     let hooks_done = PathBuf::from(std::env::var_os("FIXTURE_AUTO_HOOKS_DONE").unwrap());
     let provider_env = PathBuf::from(std::env::var_os("FIXTURE_AUTO_ENV_REPORT").unwrap());
     let shell_rc = root.join("bashrc");
@@ -710,26 +805,13 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
     assert_eq!(arguments[8], "<literal $HOME ; prompt>");
 
     let hooks_deadline = Instant::now() + Duration::from_secs(8);
-    while !hooks_done.exists() {
+    while !no_prompt_hooks_done.exists() {
         assert!(
             Instant::now() < hooks_deadline,
-            "real provider did not execute the configured lifecycle and OSC hooks"
+            "real provider did not execute the no-prompt lifecycle and OSC hooks"
         );
         thread::sleep(Duration::from_millis(2));
     }
-    let provider_env = fs::read_to_string(provider_env).unwrap();
-    assert!(
-        provider_env
-            .lines()
-            .any(|line| line == format!("root={}", shell_root.display())),
-        "provider did not inherit its exact session root: {provider_env}"
-    );
-    assert!(
-        provider_env
-            .lines()
-            .any(|line| line == "lifecycle_alerts=1"),
-        "provider did not inherit the lifecycle alert marker: {provider_env}"
-    );
 
     let no_prompt_deadline = Instant::now() + Duration::from_secs(5);
     let no_prompt_snapshot = loop {
@@ -770,6 +852,42 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         );
         thread::sleep(Duration::from_millis(5));
     };
+    let fallback_bodies = ["Claude needs attention", "Claude finished its turn"];
+    for body in fallback_bodies {
+        let notice = no_prompt_snapshot
+            .notifications
+            .iter()
+            .find(|notification| notification.title == "Claude" && notification.body == body)
+            .unwrap_or_else(|| panic!("expected the {body:?} fallback notice"));
+        assert_eq!(
+            notice.source, "osc777-inbox",
+            "fallback source for {body:?}"
+        );
+        assert_eq!(
+            notice.desktop,
+            Some(false),
+            "fallback desktop policy for {body:?}"
+        );
+        assert_eq!(
+            notice.delivery.state,
+            DesktopDeliveryState::Suppressed,
+            "fallback delivery must be suppressed for {body:?}"
+        );
+        assert_eq!(
+            notice.delivery.reason.as_deref(),
+            Some("disabled"),
+            "fallback suppression reason for {body:?}"
+        );
+    }
+    assert!(
+        no_prompt_snapshot
+            .native_notifications
+            .desired
+            .iter()
+            .all(|request| !fallback_bodies.contains(&request.body.as_str())),
+        "silent fallback notices must not create native notification desires: {:?}",
+        no_prompt_snapshot.native_notifications.desired
+    );
     let unknown_agent = no_prompt_snapshot
         .agent_lifecycle
         .iter()
@@ -811,58 +929,139 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         zmux_desktop_runtime::agent_lifecycle::Activity::Unknown
     );
 
-    let initial = running.desktop.snapshot().unwrap();
-    let model = &initial.model;
-    let workspace = model.workspaces.first().unwrap();
-    let pane = workspace.root.panes()[0];
-    let surface = pane.selected();
-    let target = LifecycleTarget {
-        identity_namespace: model.identity_namespace,
-        surface_id: surface.id,
-        surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
-        session_id: surface.session_id.unwrap(),
-    };
-    let runtime_id = Uuid::new_v4();
-    let generation = Uuid::new_v4();
-    let registration = lifecycle_action(
-        &control_socket,
-        42,
-        LifecycleAction::Register {
-            target,
-            provider: Provider::ClaudeLocal,
-            runtime_id,
-            generation,
-            provider_session_id: Uuid::new_v4(),
-        },
+    let provider_env = fs::read_to_string(&provider_env).unwrap();
+    assert!(
+        provider_env
+            .lines()
+            .any(|line| line == format!("root={}", shell_root.display())),
+        "provider did not inherit its exact session root: {provider_env}"
     );
-    let capability = registration["capability"]
-        .as_str()
-        .expect("lifecycle registration capability")
-        .parse::<Uuid>()
+    assert!(
+        provider_env
+            .lines()
+            .any(|line| line == "lifecycle_alerts=1"),
+        "provider did not inherit the lifecycle alert marker: {provider_env}"
+    );
+    let provider_cli = provider_env
+        .lines()
+        .find_map(|line| line.strip_prefix("cli="))
+        .map(PathBuf::from)
+        .expect("provider's exact bundled hook CLI");
+    let event_route = provider_env
+        .lines()
+        .find_map(|line| line.strip_prefix("route="))
+        .map(PathBuf::from)
+        .expect("provider's local hook socket");
+    let provider_session = provider_env
+        .lines()
+        .find_map(|line| line.strip_prefix("provider_session="))
+        .expect("provider session ID");
+    let provider_pid = provider_env
+        .lines()
+        .find_map(|line| line.strip_prefix("provider_pid="))
+        .expect("provider process ID")
+        .parse::<u32>()
         .unwrap();
-    let prompt_id = Uuid::new_v4();
-    for (request_id, sequence, event) in [
-        (43, 1, LifecycleEvent::PromptSubmitted { prompt_id }),
-        (44, 2, LifecycleEvent::NeedsUser),
-        (
-            45,
-            3,
-            LifecycleEvent::TurnStopped {
-                state: TurnStopState::Idle,
-            },
-        ),
-    ] {
-        lifecycle_action(
-            &control_socket,
-            request_id,
-            LifecycleAction::Event {
-                capability,
-                runtime_id,
-                generation,
-                sequence,
-                event,
-            },
+    let provider_identity = zmux_session_runtime::child::process_identity(provider_pid).unwrap();
+    let route_metadata = fs::symlink_metadata(&event_route).unwrap();
+    assert!(route_metadata.file_type().is_socket());
+    let mut unrelated_shell = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "\"$ZMUX_CLI_PATH\" hooks claude event UserPromptSubmit; result=$?; exit $result",
+        ])
+        .env("ZMUX_CLI_PATH", provider_cli)
+        .env(ROUTE_ENV, event_route)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let shell_identity =
+        zmux_session_runtime::child::process_identity(unrelated_shell.id()).unwrap();
+    let test_identity = zmux_session_runtime::child::process_identity(std::process::id()).unwrap();
+    assert_eq!(shell_identity.parent_pid, test_identity.pid);
+    assert_ne!(shell_identity.parent_pid, provider_identity.pid);
+    assert_eq!(shell_identity.uid, test_identity.uid);
+    assert!(matches!(
+        shell_identity
+            .executable
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("sh" | "dash" | "bash" | "zsh")
+    ));
+    assert!(matches!(
+        shell_identity.executable.parent(),
+        Some(parent) if parent == Path::new("/bin") || parent == Path::new("/usr/bin")
+    ));
+    unrelated_shell
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            &json!({
+                "hook_event_name":"UserPromptSubmit",
+                "session_id":provider_session,
+                "prompt_id":"987e6543-e21b-4da3-b456-426614174001",
+                "permission_mode":"default",
+                "prompt":"untrusted same-UID shell"
+            })
+            .to_string()
+            .into_bytes(),
+        )
+        .unwrap();
+    let unrelated_output = unrelated_shell.wait_with_output().unwrap();
+    assert!(
+        unrelated_output.status.success(),
+        "unrelated shell hook command should fail closed without provider acknowledgement: {}",
+        String::from_utf8_lossy(&unrelated_output.stderr)
+    );
+    assert_eq!(
+        provider_identity,
+        zmux_session_runtime::child::process_identity(provider_pid).unwrap(),
+        "the exact provider process must remain live across the unrelated shell attempt"
+    );
+    let rejected_deadline = Instant::now() + Duration::from_secs(2);
+    let after_unrelated_shell = loop {
+        let snapshot = running.desktop.snapshot().unwrap();
+        let rejected = snapshot.frames.iter().any(|frame| {
+            frame.snapshot.as_ref().is_some_and(|terminal| {
+                terminal
+                    .viewport
+                    .contents
+                    .contains("local hook unavailable; no acknowledgement inferred")
+            })
+        });
+        if rejected {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < rejected_deadline,
+            "the live hook socket did not record rejection of the unrelated same-UID shell"
         );
+        thread::sleep(Duration::from_millis(5));
+    };
+    let still_unknown = after_unrelated_shell
+        .agent_lifecycle
+        .iter()
+        .find(|agent| agent.provider == Provider::ClaudeLocal)
+        .expect("registered local agent after unrelated shell attempt");
+    assert_eq!(still_unknown.prompt_id, None);
+    assert_eq!(
+        still_unknown.activity,
+        zmux_desktop_runtime::agent_lifecycle::Activity::Unknown
+    );
+    assert!(after_unrelated_shell.agent_alert_events.is_empty());
+
+    let fallback_cursor = no_prompt_snapshot.notification_cursor;
+    fs::write(&tracked_hooks_release, b"continue").unwrap();
+    let tracked_hooks_deadline = Instant::now() + Duration::from_secs(8);
+    while !hooks_done.exists() {
+        assert!(
+            Instant::now() < tracked_hooks_deadline,
+            "real provider did not execute the tracked prompt/notification hooks"
+        );
+        thread::sleep(Duration::from_millis(2));
     }
 
     let alerts_deadline = Instant::now() + Duration::from_secs(5);
@@ -885,31 +1084,12 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         let failure_notice = snapshot.notifications.iter().any(|notification| {
             notification.title == "Claude" && notification.body == "Claude stopped with an error"
         });
-        let attention_notices = snapshot
-            .notifications
-            .iter()
-            .filter(|notification| {
-                notification.title == "Claude" && notification.body == "Claude needs attention"
-            })
-            .count();
-        let completion_notices = snapshot
-            .notifications
-            .iter()
-            .filter(|notification| {
-                notification.title == "Claude" && notification.body == "Claude finished its turn"
-            })
-            .count();
-        if needs_user == 1
-            && completed == 1
-            && failure_notice
-            && attention_notices >= 1
-            && completion_notices >= 1
-        {
+        if needs_user == 1 && completed == 1 && failure_notice {
             break snapshot;
         }
         assert!(
             Instant::now() < alerts_deadline,
-            "lifecycle events and preserved terminal notices were not all delivered: events={:?}, notifications={:?}, agents={:?}",
+            "lifecycle events and preserved terminal notices were not all delivered: events={:?}, notifications={:?}, agents={:?}, last_error={:?}, terminal_output={:?}",
             snapshot
                 .agent_alert_events
                 .iter()
@@ -928,6 +1108,18 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
                 .agent_lifecycle
                 .iter()
                 .map(|agent| (agent.activity, agent.connection, agent.prompt_id))
+                .collect::<Vec<_>>(),
+            snapshot.last_error,
+            snapshot
+                .frames
+                .iter()
+                .map(|frame| (
+                    frame.session_id,
+                    frame
+                        .snapshot
+                        .as_ref()
+                        .map(|terminal| terminal.viewport.contents.clone())
+                ))
                 .collect::<Vec<_>>()
         );
         thread::sleep(Duration::from_millis(5));
@@ -951,6 +1143,52 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         "completion lifecycle alert was duplicated"
     );
     assert_eq!(
+        notice_snapshot.agent_lifecycle[0].activity,
+        zmux_desktop_runtime::agent_lifecycle::Activity::Working,
+        "explicit Stop continuation after idle_prompt must restore Working"
+    );
+    let new_silent_fallbacks: Vec<_> = notice_snapshot
+        .notifications
+        .iter()
+        .filter(|notification| {
+            notification.id > fallback_cursor && notification.source == "osc777-inbox"
+        })
+        .collect();
+    assert_eq!(
+        new_silent_fallbacks.len(),
+        1,
+        "only the typed-invalid known permission Notification needs a silent fallback; unreadable, auth-success, and receipt-covered hooks must not add one: {:?}",
+        new_silent_fallbacks
+            .iter()
+            .map(|notification| (&notification.body, notification.id))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        notice_snapshot
+            .notification_cursor
+            .saturating_sub(fallback_cursor),
+        3,
+        "tracked permission/completion create tagged lifecycle items, while late explicit continuation adds no fallback"
+    );
+    assert_eq!(new_silent_fallbacks[0].body, "Claude needs attention");
+    assert_eq!(new_silent_fallbacks[0].desktop, Some(false));
+    assert_eq!(
+        new_silent_fallbacks[0].delivery.state,
+        DesktopDeliveryState::Suppressed
+    );
+    assert_eq!(
+        new_silent_fallbacks[0].delivery.reason.as_deref(),
+        Some("disabled")
+    );
+    assert!(
+        notice_snapshot
+            .native_notifications
+            .desired
+            .iter()
+            .all(|request| !fallback_bodies.contains(&request.body.as_str())),
+        "silent inbox fallback must not create native notification desire"
+    );
+    assert_eq!(
         notice_snapshot
             .notifications
             .iter()
@@ -962,29 +1200,6 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         1,
         "StopFailure OSC notice should remain available"
     );
-    assert!(
-        notice_snapshot
-            .notifications
-            .iter()
-            .filter(|notification| {
-                notification.title == "Claude" && notification.body == "Claude needs attention"
-            })
-            .count()
-            >= 1,
-        "main-session and subagent permission hooks should leave a visible notice (identical notices may coalesce)"
-    );
-    assert!(
-        notice_snapshot
-            .notifications
-            .iter()
-            .filter(|notification| {
-                notification.title == "Claude" && notification.body == "Claude finished its turn"
-            })
-            .count()
-            >= 1,
-        "main-session and subagent completion hooks should leave a visible notice (identical notices may coalesce)"
-    );
-
     fs::write(&provider_release, b"release").unwrap();
     let cleanup_deadline = Instant::now() + Duration::from_secs(8);
     while auto_directory.exists() {

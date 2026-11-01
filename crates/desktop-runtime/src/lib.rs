@@ -2022,6 +2022,7 @@ impl Worker {
                         &NotificationContent {
                             title: notice.title.clone(),
                             body: notice.body.clone(),
+                            desktop: (notice.source == "osc777-inbox").then_some(false),
                             ..Default::default()
                         },
                         read,
@@ -2109,26 +2110,42 @@ impl Worker {
                             );
                         }
                         Frame::Hook {
-                            sequence, event, ..
+                            sequence,
+                            event_id,
+                            receipt_requested,
+                            event,
+                            ..
                         } => {
                             let previous_cursor = self.agent_lifecycle.alert_cursor();
                             match self.agent_lifecycle.apply_remote_hook(
                                 binding.target,
                                 binding.runtime_id,
                                 binding.generation,
-                                sequence,
-                                event,
+                                agent_lifecycle::RemoteHookInvocation {
+                                    sequence,
+                                    hook_id: event_id,
+                                },
+                                *event,
                                 Instant::now(),
                             ) {
-                                Ok(true) => {
+                                Ok(disposition) => {
                                     dirty = true;
-                                    if let Err(error) =
-                                        self.admit_agent_alerts_since(previous_cursor)
-                                    {
-                                        self.last_error = Some(error.to_string());
+                                    let admitted =
+                                        match self.admit_agent_alerts_since(previous_cursor) {
+                                            Ok(()) => true,
+                                            Err(error) => {
+                                                self.last_error = Some(error.to_string());
+                                                false
+                                            }
+                                        };
+                                    if receipt_requested && admitted {
+                                        self.send_remote_hook_receipt(
+                                            binding,
+                                            event_id,
+                                            disposition,
+                                        );
                                     }
                                 }
-                                Ok(false) => {}
                                 Err(error) => {
                                     eprintln!("zmux remote agent lifecycle event ignored: {error}");
                                 }
@@ -2173,6 +2190,29 @@ impl Worker {
                 .get(&binding.target.session_id)
                 .and_then(|slot| slot.remote_lifecycle.as_ref())
                 .is_some_and(|stream| stream.binding().is_current_generation(binding))
+    }
+
+    fn send_remote_hook_receipt(
+        &self,
+        binding: remote_agent_lifecycle::Binding,
+        event_id: uuid::Uuid,
+        disposition: agent_lifecycle::HookDisposition,
+    ) {
+        if !self.remote_stream_current(binding) {
+            return;
+        }
+        let Some(stream) = self
+            .slots
+            .get(&binding.target.session_id)
+            .and_then(|slot| slot.remote_lifecycle.as_ref())
+        else {
+            return;
+        };
+        if !stream.send_receipt(binding, event_id, disposition) {
+            eprintln!(
+                "zmux remote agent hook receipt was not queued; visual fallback remains enabled"
+            );
+        }
     }
 
     /// Verify the stream owner without requiring its generation to remain

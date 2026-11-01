@@ -393,6 +393,7 @@ fn ghostty_viewport(
                 1 => "bell",
                 9 => "osc9",
                 777 => "osc777",
+                778 => "osc777-inbox",
                 _ => return Err(EngineError::Invalid),
             })?,
             title: owned(title)?,

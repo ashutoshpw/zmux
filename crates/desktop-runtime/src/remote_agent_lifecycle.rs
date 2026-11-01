@@ -17,14 +17,17 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{SyncSender, TrySendError},
+        mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel},
     },
     thread,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
 use zmux_remote_runtime::{
-    agent_lifecycle::{AGENT_LIFECYCLE_PROTOCOL_VERSION, Frame, MAX_AGENT_LIFECYCLE_FRAME_BYTES},
+    agent_lifecycle::{
+        AGENT_LIFECYCLE_PROTOCOL_VERSION, ClientFrame, Frame, HookDisposition,
+        MAX_AGENT_LIFECYCLE_FRAME_BYTES, MAX_PENDING_HOOK_RECEIPTS,
+    },
     connection::ManagedConnection,
 };
 use zmux_session_runtime::shell_integration::OpenRequestNonce;
@@ -35,6 +38,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RECONNECT_ATTEMPTS: usize = 5;
 const MAX_RECONNECT_GENERATIONS: usize = 8;
+const MAX_PENDING_RECEIPTS: usize = MAX_PENDING_HOOK_RECEIPTS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Binding {
@@ -76,11 +80,19 @@ pub enum Message {
     },
 }
 
+#[derive(Clone, Copy)]
+struct ReceiptCommand {
+    binding: Binding,
+    event_id: Uuid,
+    disposition: HookDisposition,
+}
+
 /// Lifecycle side-channel ownership attached to one exact terminal launch.
 /// Dropping the owner cancels its reader without waiting on the desktop worker.
 pub struct Stream {
     binding: Arc<Mutex<Binding>>,
     cancellation: Arc<AtomicBool>,
+    receipt_sender: SyncSender<ReceiptCommand>,
 }
 
 impl Stream {
@@ -101,6 +113,7 @@ impl Stream {
         };
         let cancellation = Arc::new(AtomicBool::new(false));
         let binding_state = Arc::new(Mutex::new(binding));
+        let (receipt_sender, receipt_receiver) = sync_channel(MAX_PENDING_RECEIPTS);
         let thread_cancellation = Arc::clone(&cancellation);
         let thread_binding_state = Arc::clone(&binding_state);
         thread::Builder::new()
@@ -112,6 +125,7 @@ impl Stream {
                     binding,
                     thread_binding_state,
                     sender.clone(),
+                    receipt_receiver,
                     &thread_cancellation,
                 ) && !thread_cancellation.load(Ordering::Acquire)
                 {
@@ -121,6 +135,7 @@ impl Stream {
         Ok(Self {
             binding: binding_state,
             cancellation,
+            receipt_sender,
         })
     }
 
@@ -129,6 +144,27 @@ impl Stream {
             .binding
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Queue an event-bound reply without blocking the desktop executor. A full
+    /// or stale queue deliberately leaves the remote hook to emit its silent
+    /// visual fallback when its bounded receipt deadline expires.
+    pub fn send_receipt(
+        &self,
+        binding: Binding,
+        event_id: Uuid,
+        disposition: HookDisposition,
+    ) -> bool {
+        if event_id.is_nil() || self.binding() != binding {
+            return false;
+        }
+        self.receipt_sender
+            .try_send(ReceiptCommand {
+                binding,
+                event_id,
+                disposition,
+            })
+            .is_ok()
     }
 }
 
@@ -159,6 +195,7 @@ fn supervise(
     mut binding: Binding,
     shared_binding: Arc<Mutex<Binding>>,
     sender: SyncSender<Message>,
+    receipt_receiver: Receiver<ReceiptCommand>,
     cancellation: &AtomicBool,
 ) -> Result<(), String> {
     let mut connected = false;
@@ -171,18 +208,21 @@ fn supervise(
         }
         let previous_generation = binding.generation;
         let mut handshake_generation = None;
+        let mut reconnect_previous_generation = None;
         let attempt_handshake_deadline = (!connected).then_some(first_handshake_deadline);
         let mut attempt_state = AttemptState {
             binding: &mut binding,
             shared_binding: &shared_binding,
             connected: &mut connected,
             handshake_generation: &mut handshake_generation,
+            reconnect_previous_generation: &mut reconnect_previous_generation,
         };
         let result = run_attempt(
             Arc::clone(&connection),
             nonce,
             &mut attempt_state,
             sender.clone(),
+            &receipt_receiver,
             cancellation,
             attempt_handshake_deadline,
         );
@@ -284,6 +324,7 @@ struct AttemptState<'a> {
     shared_binding: &'a Mutex<Binding>,
     connected: &'a mut bool,
     handshake_generation: &'a mut Option<Uuid>,
+    reconnect_previous_generation: &'a mut Option<Uuid>,
 }
 
 fn run_attempt(
@@ -291,6 +332,7 @@ fn run_attempt(
     nonce: OpenRequestNonce,
     state: &mut AttemptState<'_>,
     sender: SyncSender<Message>,
+    receipt_receiver: &Receiver<ReceiptCommand>,
     cancellation: &AtomicBool,
     first_handshake_deadline: Option<Instant>,
 ) -> Result<(), String> {
@@ -338,6 +380,9 @@ fn run_attempt(
     loop {
         if cancellation.load(Ordering::Acquire) {
             return Ok(());
+        }
+        if active_seen {
+            flush_receipts(&mut input, receipt_receiver, *state.binding)?;
         }
         let now = Instant::now();
         if (!active_seen && now >= handshake_deadline)
@@ -394,45 +439,46 @@ fn run_attempt(
                         {
                             return Err("managed SSH lifecycle handshake identity mismatch".into());
                         }
+                        if frame
+                            .generation()
+                            .is_some_and(|generation| generation != state.binding.generation)
+                        {
+                            return Err("managed SSH lifecycle generation mismatch".into());
+                        }
                         last_frame_at = Instant::now();
                         match &frame {
                             Frame::Hello { .. } if !hello_seen && last_sequence == 0 => {
                                 hello_seen = true;
-                                writeln!(
-                                    input,
-                                    "{{\"kind\":\"activate\",\"version\":{},\"nonce\":\"{}\"}}",
-                                    AGENT_LIFECYCLE_PROTOCOL_VERSION,
-                                    state.binding.nonce.simple()
-                                )
-                                .map_err(|error| {
-                                    format!("activate managed SSH lifecycle stream: {error}")
-                                })?;
-                                input.flush().map_err(|error| {
-                                    format!("flush managed SSH lifecycle activation: {error}")
-                                })?;
+                                if *state.connected {
+                                    *state.reconnect_previous_generation =
+                                        Some(state.binding.generation);
+                                    state.binding.generation = Uuid::new_v4();
+                                    *state
+                                        .shared_binding
+                                        .lock()
+                                        .unwrap_or_else(|poison| poison.into_inner()) =
+                                        *state.binding;
+                                }
+                                write_client_frame(
+                                    &mut input,
+                                    &ClientFrame::Activate {
+                                        version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                                        nonce: state.binding.nonce,
+                                        generation: state.binding.generation,
+                                    },
+                                )?;
                             }
                             Frame::Active { .. }
                                 if hello_seen && !active_seen && last_sequence == 0 =>
                             {
                                 active_seen = true;
-                                let previous_generation = if *state.connected {
-                                    let previous = state.binding.generation;
-                                    state.binding.generation = Uuid::new_v4();
-                                    Some(previous)
-                                } else {
-                                    None
-                                };
                                 *state.connected = true;
                                 *state.handshake_generation = Some(state.binding.generation);
-                                *state
-                                    .shared_binding
-                                    .lock()
-                                    .unwrap_or_else(|poison| poison.into_inner()) = *state.binding;
                                 send_cancellable(
                                     &sender,
                                     Message::Connected {
                                         binding: *state.binding,
-                                        previous_generation,
+                                        previous_generation: *state.reconnect_previous_generation,
                                     },
                                     cancellation,
                                 )?;
@@ -498,6 +544,47 @@ fn run_attempt(
 
 fn _protocol_type_anchor(_: Frame) {}
 
+fn write_client_frame(input: &mut impl Write, frame: &ClientFrame) -> Result<(), String> {
+    let mut bytes = serde_json::to_vec(frame)
+        .map_err(|error| format!("encode managed SSH lifecycle client frame: {error}"))?;
+    if bytes.len() + 1 > MAX_AGENT_LIFECYCLE_FRAME_BYTES {
+        return Err("managed SSH lifecycle client frame exceeded its byte bound".into());
+    }
+    bytes.push(b'\n');
+    input
+        .write_all(&bytes)
+        .map_err(|error| format!("write managed SSH lifecycle client frame: {error}"))?;
+    input
+        .flush()
+        .map_err(|error| format!("flush managed SSH lifecycle client frame: {error}"))
+}
+
+fn flush_receipts(
+    input: &mut impl Write,
+    receiver: &Receiver<ReceiptCommand>,
+    binding: Binding,
+) -> Result<(), String> {
+    loop {
+        let command = match receiver.try_recv() {
+            Ok(command) => command,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
+        };
+        if command.binding != binding || command.event_id.is_nil() {
+            continue;
+        }
+        write_client_frame(
+            input,
+            &ClientFrame::Receipt {
+                version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                nonce: binding.nonce,
+                generation: binding.generation,
+                event_id: command.event_id,
+                disposition: command.disposition,
+            },
+        )?;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,7 +600,9 @@ mod tests {
         Launch, Session, ShutdownPolicy,
         shell_integration::{OpenRequestNonce, OpenRequestRegistration, OpenRequestSource},
     };
-    use zmux_workspace_core::{SessionId, SurfaceId};
+    use zmux_workspace_core::{
+        Action as WorkspaceAction, SessionId, SurfaceId, WorkspaceStore, targets::TargetKind,
+    };
 
     const FIXTURE_DRIVER: &str = r#"
 import importlib.util
@@ -686,18 +775,16 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
     fn push_remote_hook(
         connection: &ManagedConnection,
         nonce: OpenRequestNonce,
-        provider_session: Uuid,
-        name: &str,
-        notification_type: Option<&str>,
+        input: serde_json::Value,
         receiver: &std::sync::mpsc::Receiver<Message>,
-    ) -> (u64, zmux_remote_runtime::agent_lifecycle::ClaudeHook) {
-        let mut input = serde_json::json!({
-            "hook_event_name": name,
-            "session_id": provider_session,
-        });
-        if let Some(notification_type) = notification_type {
-            input["notification_type"] = notification_type.into();
-        }
+    ) -> (
+        Child,
+        Binding,
+        u64,
+        Uuid,
+        bool,
+        zmux_remote_runtime::agent_lifecycle::ClaudeHook,
+    ) {
         let root = nonce.remote_integration_directory();
         let command = format!(
             "printf '%s\\n' {} | ZMUX_AGENT_LIFECYCLE_NONCE={} ZMUX_SHELL_INTEGRATION_DIRECTORY={} python3 {root}/claude-lifecycle-hook.py",
@@ -708,15 +795,13 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
         let spec = connection
             .operation_spec(&command)
             .expect("build the exact-session remote hook command");
-        let output = Command::new(&spec.program)
+        let child = Command::new(&spec.program)
             .args(&spec.args)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
             .expect("run the remote lifecycle hook command");
-        assert!(
-            output.status.success(),
-            "remote hook command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
         loop {
             match receiver
                 .recv_timeout(Duration::from_secs(5))
@@ -725,10 +810,23 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 Message::Frame {
                     frame:
                         zmux_remote_runtime::agent_lifecycle::Frame::Hook {
-                            sequence, event, ..
+                            sequence,
+                            event_id,
+                            receipt_requested,
+                            event,
+                            ..
                         },
-                    ..
-                } => return (sequence, event),
+                    binding,
+                } => {
+                    return (
+                        child,
+                        binding,
+                        sequence,
+                        event_id,
+                        receipt_requested,
+                        *event,
+                    );
+                }
                 Message::Frame {
                     frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { .. },
                     ..
@@ -744,37 +842,263 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
         }
     }
 
-    fn capture_remote_notice(
-        connection: &ManagedConnection,
-        nonce: OpenRequestNonce,
-        provider_session: Uuid,
-        notice: &str,
-        hook_name: &str,
-    ) -> String {
-        let root = nonce.remote_integration_directory();
-        let script = r#"import json,os,subprocess,sys; root,nonce,notice,name,session=sys.argv[1:]; fifo=os.path.join(root,"attention"); os.path.exists(fifo) and os.unlink(fifo); os.mkfifo(fifo,0o600); os.chmod(fifo,0o600); reader=os.open(fifo,os.O_RDONLY|os.O_NONBLOCK); environment=os.environ.copy(); environment["ZMUX_AGENT_LIFECYCLE_NONCE"]=nonce; environment["ZMUX_SHELL_INTEGRATION_DIRECTORY"]=root; payload=json.dumps({"hook_event_name":name,"session_id":session,"notification_type":"permission_prompt"}); result=subprocess.run(["python3",os.path.join(root,"claude-lifecycle-notice.py"),notice],input=payload.encode(),env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE); result.returncode and sys.stderr.write(result.stderr.decode()); result.returncode and sys.exit(2); sys.stdout.write(os.read(reader,128).decode())"#;
-        let command = format!(
-            "python3 -c {} {} {} {} {} {}",
-            shell_quote(script),
-            shell_quote(&root),
-            nonce.remote_lifecycle_token(),
-            notice,
-            hook_name,
-            provider_session
+    fn wait_remote_hook(mut child: Child) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.try_wait().expect("poll remote hook process") {
+                assert!(status.success(), "remote hook process failed: {status}");
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "remote hook did not finish within its provider hook deadline"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn current_notices(session: &Session) -> Vec<zmux_terminal_adapter::TerminalNotice> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match session.snapshot() {
+                Ok(snapshot) => return snapshot.viewport.notices.clone(),
+                Err(zmux_session_runtime::SessionError::Busy) => {}
+                Err(error) => panic!("inspect SSH terminal notices: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "SSH terminal notice snapshot stayed busy"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn remote_owner_keeps_completed_idle_after_late_stop() {
+        use crate::agent_lifecycle::{Activity, HookDisposition, Runtime};
+
+        let namespace = Uuid::new_v4();
+        let mut store = WorkspaceStore::with_identity_namespace(namespace);
+        store
+            .apply(WorkspaceAction::CreateSshWorkspace {
+                name: "remote lifecycle".into(),
+                connection: zmux_remote_runtime::SshConnectionConfig {
+                    destination: "fixture@example.test".into(),
+                    config_file: None,
+                    port: None,
+                    identity: None,
+                    forward_agent: None,
+                    ssh_options: Vec::new(),
+                    jump_hosts: Vec::new(),
+                    command: None,
+                },
+                focus: true,
+            })
+            .expect("create an exact workspace owner for the remote lifecycle");
+        let model = store.snapshot();
+        let surface = model.workspaces[0].root.panes()[0].selected();
+        let target = Target {
+            identity_namespace: namespace,
+            surface_id: surface.id,
+            surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+            session_id: surface.session_id.expect("workspace surface session"),
+        };
+        let runtime_id = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let provider_session = Uuid::new_v4();
+        let prompt_id = Uuid::new_v4();
+        let now = Instant::now();
+        let mut lifecycle = Runtime::default();
+        let apply_hook = |lifecycle: &mut Runtime, sequence, value| {
+            lifecycle
+                .apply_remote_hook(
+                    target,
+                    runtime_id,
+                    generation,
+                    crate::agent_lifecycle::RemoteHookInvocation {
+                        sequence,
+                        hook_id: Uuid::new_v4(),
+                    },
+                    serde_json::from_value(value).expect("valid sanitized Claude hook"),
+                    now,
+                )
+                .expect("admit a current remote lifecycle hook")
+        };
+
+        assert_eq!(
+            apply_hook(
+                &mut lifecycle,
+                1,
+                serde_json::json!({
+                    "name":"SessionStart",
+                    "session_id":provider_session,
+                    "main_session":true
+                }),
+            ),
+            HookDisposition::NotHandled
         );
-        let spec = connection
-            .operation_spec(&command)
-            .expect("build the exact-session remote notice command");
-        let output = Command::new(&spec.program)
-            .args(&spec.args)
-            .output()
-            .expect("run the remote notice hook command");
-        assert!(
-            output.status.success(),
-            "remote generic notice command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+        assert_eq!(
+            apply_hook(
+                &mut lifecycle,
+                2,
+                serde_json::json!({
+                    "name":"UserPromptSubmit",
+                    "session_id":provider_session,
+                    "main_session":true,
+                    "prompt_id":prompt_id
+                }),
+            ),
+            HookDisposition::NotHandled
         );
-        String::from_utf8(output.stdout).expect("remote notice event is UTF-8")
+        assert_eq!(lifecycle.snapshot(&model)[0].activity, Activity::Working);
+        assert_eq!(lifecycle.alert_cursor(), 0);
+
+        // A stream Gap is surfaced as Message::Lost. The owner fences the old
+        // Working claim as Unknown without admitting an event or alert.
+        assert!(lifecycle.remote_transport_lost(target, runtime_id, generation));
+        let snapshot = lifecycle.snapshot(&model);
+        let lost = &snapshot[0];
+        assert_eq!(lost.activity, Activity::Unknown);
+        assert_eq!(lost.connection, crate::agent_lifecycle::Connection::Unknown);
+        assert_eq!(lifecycle.alert_cursor(), 0);
+        assert!(lifecycle.alert_events(&model).is_empty());
+
+        let reconnected_generation = Uuid::new_v4();
+        assert!(lifecycle.remote_transport_reconnected(
+            target,
+            runtime_id,
+            generation,
+            reconnected_generation,
+            now + Duration::from_millis(1),
+        ));
+        let apply_reconnected_hook = |lifecycle: &mut Runtime, sequence, value| {
+            lifecycle
+                .apply_remote_hook(
+                    target,
+                    runtime_id,
+                    reconnected_generation,
+                    crate::agent_lifecycle::RemoteHookInvocation {
+                        sequence,
+                        hook_id: Uuid::new_v4(),
+                    },
+                    serde_json::from_value(value).expect("valid sanitized Claude hook"),
+                    now + Duration::from_millis(1),
+                )
+                .expect("admit a current hook after the new stream handshake")
+        };
+        let reconnected_prompt = Uuid::new_v4();
+        assert_eq!(
+            apply_reconnected_hook(
+                &mut lifecycle,
+                1,
+                serde_json::json!({
+                    "name":"UserPromptSubmit",
+                    "session_id":provider_session,
+                    "main_session":true,
+                    "prompt_id":reconnected_prompt
+                }),
+            ),
+            HookDisposition::NotHandled
+        );
+        assert_eq!(
+            apply_reconnected_hook(
+                &mut lifecycle,
+                2,
+                serde_json::json!({
+                    "name":"Stop",
+                    "session_id":provider_session,
+                    "main_session":true
+                }),
+            ),
+            HookDisposition::HandledNoAlert
+        );
+        assert_eq!(
+            apply_reconnected_hook(
+                &mut lifecycle,
+                3,
+                serde_json::json!({
+                    "name":"Notification",
+                    "session_id":provider_session,
+                    "main_session":true,
+                    "notification_type":"idle_prompt"
+                }),
+            ),
+            HookDisposition::AlertCovered
+        );
+        assert_eq!(lifecycle.snapshot(&model)[0].activity, Activity::Idle);
+        assert_eq!(lifecycle.alert_cursor(), 1);
+
+        // A late Stop with only Unknown evidence cannot undo completion and
+        // is acknowledged without another visual fallback. Explicit resumed
+        // or background-task evidence remains admitted as Working.
+        assert_eq!(
+            apply_reconnected_hook(
+                &mut lifecycle,
+                4,
+                serde_json::json!({
+                    "name":"Stop",
+                    "session_id":provider_session,
+                    "main_session":true
+                }),
+            ),
+            HookDisposition::HandledNoAlert
+        );
+        assert_eq!(lifecycle.snapshot(&model)[0].activity, Activity::Idle);
+        assert_eq!(lifecycle.alert_cursor(), 1);
+        assert_eq!(
+            apply_reconnected_hook(
+                &mut lifecycle,
+                5,
+                serde_json::json!({
+                    "name":"Stop",
+                    "session_id":provider_session,
+                    "main_session":true,
+                    "stop_hook_active":true
+                }),
+            ),
+            HookDisposition::HandledNoAlert
+        );
+        assert_eq!(lifecycle.snapshot(&model)[0].activity, Activity::Working);
+        assert_eq!(lifecycle.alert_cursor(), 1);
+        assert_eq!(
+            apply_reconnected_hook(
+                &mut lifecycle,
+                6,
+                serde_json::json!({
+                    "name":"Stop",
+                    "session_id":provider_session,
+                    "main_session":true,
+                    "has_background_tasks":true
+                }),
+            ),
+            HookDisposition::HandledNoAlert
+        );
+        assert_eq!(lifecycle.snapshot(&model)[0].activity, Activity::Working);
+        assert_eq!(lifecycle.alert_cursor(), 1);
+        let alerts = lifecycle.alert_events(&model);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].kind, crate::agent_lifecycle::AlertKind::Completed);
+    }
+
+    fn wait_for_remote_notice(
+        session: &Session,
+        source: &str,
+        body: &str,
+    ) -> zmux_terminal_adapter::TerminalNotice {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(notice) = current_notices(session)
+                .into_iter()
+                .find(|notice| notice.source == source && notice.body == body)
+            {
+                return notice;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected remote terminal notice was not relayed"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -888,92 +1212,369 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
             nonce.remote_lifecycle_token().parse::<Uuid>().unwrap()
         );
 
-        // Match the remote hook command order: the generic terminal notice runs
-        // before lifecycle admission. A live transport lock cannot prove the
-        // owner will accept a permission/Stop event without a current prompt.
+        // A Zmux-generated hook ID correlates this exact invocation; no-prompt
+        // attention is rejected and gets a silent generic terminal fallback.
         let provider_session = Uuid::new_v4();
+        let prompt_id = Uuid::new_v4();
         let mut lifecycle = crate::agent_lifecycle::Runtime::default();
-        let (sequence, start) = push_remote_hook(
-            &connection,
-            nonce,
-            provider_session,
-            "SessionStart",
-            None,
-            &receiver,
-        );
+        let (child, hook_binding, sequence, hook_id, receipt_requested, no_prompt) =
+            push_remote_hook(
+                &connection,
+                nonce,
+                serde_json::json!({
+                    "hook_event_name":"Notification",
+                    "session_id":provider_session,
+                    "notification_type":"permission_prompt"
+                }),
+                &receiver,
+            );
         assert_eq!(sequence, 1);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
         assert!(
             lifecycle
                 .apply_remote_hook(
                     target,
                     binding.runtime_id,
                     binding.generation,
-                    sequence,
-                    start,
+                    crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                    no_prompt,
                     Instant::now(),
                 )
-                .unwrap()
+                .is_err()
         );
+        assert!(stream.send_receipt(
+            binding,
+            hook_id,
+            crate::agent_lifecycle::HookDisposition::NotHandled,
+        ));
+        wait_remote_hook(child);
+        let attention = wait_for_remote_notice(&session, "osc777-inbox", "Claude needs attention");
+        assert_eq!(attention.title, "Claude");
 
-        assert_eq!(
-            capture_remote_notice(
+        let (child, hook_binding, sequence, hook_id, receipt_requested, untracked_stop) =
+            push_remote_hook(
                 &connection,
                 nonce,
-                provider_session,
-                "attention",
-                "Notification"
-            ),
-            "attention\n"
-        );
-        let (sequence, permission) = push_remote_hook(
-            &connection,
-            nonce,
-            provider_session,
-            "Notification",
-            Some("permission_prompt"),
-            &receiver,
-        );
+                serde_json::json!({
+                    "hook_event_name":"Stop",
+                    "session_id":provider_session
+                }),
+                &receiver,
+            );
         assert_eq!(sequence, 2);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
         assert!(
-            !lifecycle
+            lifecycle
                 .apply_remote_hook(
                     target,
                     binding.runtime_id,
                     binding.generation,
-                    sequence,
-                    permission,
+                    crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                    untracked_stop,
                     Instant::now(),
                 )
-                .unwrap()
+                .is_err()
         );
-        assert_eq!(lifecycle.alert_cursor(), 0);
+        assert!(stream.send_receipt(
+            binding,
+            hook_id,
+            crate::agent_lifecycle::HookDisposition::NotHandled,
+        ));
+        wait_remote_hook(child);
+        let stopped = wait_for_remote_notice(&session, "osc777-inbox", "Claude finished its turn");
+        assert_eq!(stopped.title, "Claude");
+        let fallback_count = current_notices(&session).len();
 
-        assert_eq!(
-            capture_remote_notice(&connection, nonce, provider_session, "stop", "Stop"),
-            "stop\n"
-        );
-        let (sequence, stop) = push_remote_hook(
+        let (child, hook_binding, sequence, hook_id, receipt_requested, start) = push_remote_hook(
             &connection,
             nonce,
-            provider_session,
-            "Stop",
-            None,
+            serde_json::json!({
+                "hook_event_name":"SessionStart",
+                "session_id":provider_session,
+                "source":"startup"
+            }),
             &receiver,
         );
         assert_eq!(sequence, 3);
-        assert!(
-            !lifecycle
+        assert_eq!(hook_binding, binding);
+        assert!(!receipt_requested);
+        assert_eq!(
+            lifecycle
                 .apply_remote_hook(
                     target,
                     binding.runtime_id,
                     binding.generation,
-                    sequence,
-                    stop,
+                    crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                    start,
                     Instant::now(),
                 )
-                .unwrap()
+                .unwrap(),
+            crate::agent_lifecycle::HookDisposition::NotHandled
         );
-        assert_eq!(lifecycle.alert_cursor(), 0);
+        wait_remote_hook(child);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, prompt) = push_remote_hook(
+            &connection,
+            nonce,
+            serde_json::json!({
+                "hook_event_name":"UserPromptSubmit",
+                "session_id":provider_session,
+                "prompt_id":prompt_id,
+                "permission_mode":"default"
+            }),
+            &receiver,
+        );
+        assert_eq!(sequence, 4);
+        assert_eq!(hook_binding, binding);
+        assert!(!receipt_requested);
+        assert_eq!(
+            lifecycle
+                .apply_remote_hook(
+                    target,
+                    binding.runtime_id,
+                    binding.generation,
+                    crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                    prompt,
+                    Instant::now(),
+                )
+                .unwrap(),
+            crate::agent_lifecycle::HookDisposition::NotHandled
+        );
+        wait_remote_hook(child);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, permission) =
+            push_remote_hook(
+                &connection,
+                nonce,
+                serde_json::json!({
+                    "hook_event_name":"Notification",
+                    "session_id":provider_session,
+                    "notification_type":"permission_prompt"
+                }),
+                &receiver,
+            );
+        assert_eq!(sequence, 5);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
+        let disposition = lifecycle
+            .apply_remote_hook(
+                target,
+                binding.runtime_id,
+                binding.generation,
+                crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                permission,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(
+            disposition,
+            crate::agent_lifecycle::HookDisposition::AlertCovered
+        );
+        assert_eq!(lifecycle.alert_cursor(), 1);
+        let mut stale_binding = binding;
+        stale_binding.generation = Uuid::new_v4();
+        assert!(!stream.send_receipt(
+            stale_binding,
+            hook_id,
+            crate::agent_lifecycle::HookDisposition::AlertCovered,
+        ));
+        // Simulate a lost exact receipt after the owner already admitted the
+        // alert. The hook's bounded wait expires and preserves an at-least-once
+        // visual fallback; a later receipt cannot retract it.
+        wait_remote_hook(child);
+        let lost_receipt_deadline = Instant::now() + Duration::from_secs(3);
+        let lost_receipt_notice_count = loop {
+            let notices = current_notices(&session);
+            if notices.len() > fallback_count {
+                break notices.len();
+            }
+            assert!(
+                Instant::now() < lost_receipt_deadline,
+                "lost receipt fallback did not reach the terminal: {notices:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(lost_receipt_notice_count, fallback_count + 1);
+        assert!(stream.send_receipt(binding, hook_id, disposition));
+        assert_eq!(current_notices(&session).len(), lost_receipt_notice_count);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, repeated) =
+            push_remote_hook(
+                &connection,
+                nonce,
+                serde_json::json!({
+                    "hook_event_name":"Notification",
+                    "session_id":provider_session,
+                    "notification_type":"permission_prompt"
+                }),
+                &receiver,
+            );
+        assert_eq!(sequence, 6);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
+        let disposition = lifecycle
+            .apply_remote_hook(
+                target,
+                binding.runtime_id,
+                binding.generation,
+                crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                repeated,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(
+            disposition,
+            crate::agent_lifecycle::HookDisposition::AlertCovered
+        );
+        assert_eq!(lifecycle.alert_cursor(), 1);
+        assert!(stream.send_receipt(binding, hook_id, disposition));
+        wait_remote_hook(child);
+        assert_eq!(current_notices(&session).len(), lost_receipt_notice_count);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, stop) = push_remote_hook(
+            &connection,
+            nonce,
+            serde_json::json!({
+                "hook_event_name":"Stop",
+                "session_id":provider_session
+            }),
+            &receiver,
+        );
+        assert_eq!(sequence, 7);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
+        let disposition = lifecycle
+            .apply_remote_hook(
+                target,
+                binding.runtime_id,
+                binding.generation,
+                crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                stop,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(
+            disposition,
+            crate::agent_lifecycle::HookDisposition::HandledNoAlert
+        );
+        // The lost Stop receipt can produce a silent visual fallback. The later
+        // idle_prompt still admits the one owner completion alert, so the two
+        // visual paths may both render at-least-once without an extra Stop sound.
+        assert_eq!(lifecycle.alert_cursor(), 1);
+        wait_remote_hook(child);
+        let stop_fallback_deadline = Instant::now() + Duration::from_secs(5);
+        let stop_fallback_notice_count = loop {
+            let notices = current_notices(&session);
+            if notices.len() > lost_receipt_notice_count {
+                assert!(notices.iter().any(|notice| {
+                    notice.source == "osc777-inbox" && notice.body == "Claude finished its turn"
+                }));
+                break notices.len();
+            }
+            assert!(
+                Instant::now() < stop_fallback_deadline,
+                "lost Stop receipt did not produce its silent visual fallback: {notices:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(stop_fallback_notice_count, lost_receipt_notice_count + 1);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, idle) = push_remote_hook(
+            &connection,
+            nonce,
+            serde_json::json!({
+                "hook_event_name":"Notification",
+                "session_id":provider_session,
+                "notification_type":"idle_prompt"
+            }),
+            &receiver,
+        );
+        assert_eq!(sequence, 8);
+        assert_eq!(hook_binding, binding);
+        assert!(!receipt_requested);
+        assert_eq!(
+            lifecycle
+                .apply_remote_hook(
+                    target,
+                    binding.runtime_id,
+                    binding.generation,
+                    crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                    idle,
+                    Instant::now(),
+                )
+                .unwrap(),
+            crate::agent_lifecycle::HookDisposition::AlertCovered
+        );
+        wait_remote_hook(child);
+        assert_eq!(lifecycle.alert_cursor(), 2);
+        assert_eq!(current_notices(&session).len(), stop_fallback_notice_count);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, late_stop) =
+            push_remote_hook(
+                &connection,
+                nonce,
+                serde_json::json!({
+                    "hook_event_name":"Stop",
+                    "session_id":provider_session
+                }),
+                &receiver,
+            );
+        assert_eq!(sequence, 9);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
+        let disposition = lifecycle
+            .apply_remote_hook(
+                target,
+                binding.runtime_id,
+                binding.generation,
+                crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                late_stop,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(
+            disposition,
+            crate::agent_lifecycle::HookDisposition::HandledNoAlert
+        );
+        assert!(stream.send_receipt(binding, hook_id, disposition));
+        wait_remote_hook(child);
+        assert_eq!(lifecycle.alert_cursor(), 2);
+        assert_eq!(current_notices(&session).len(), stop_fallback_notice_count);
+
+        let (child, hook_binding, sequence, hook_id, receipt_requested, continued_stop) =
+            push_remote_hook(
+                &connection,
+                nonce,
+                serde_json::json!({
+                    "hook_event_name":"Stop",
+                    "session_id":provider_session,
+                    "stop_hook_active":true
+                }),
+                &receiver,
+            );
+        assert_eq!(sequence, 10);
+        assert_eq!(hook_binding, binding);
+        assert!(receipt_requested);
+        let disposition = lifecycle
+            .apply_remote_hook(
+                target,
+                binding.runtime_id,
+                binding.generation,
+                crate::agent_lifecycle::RemoteHookInvocation { sequence, hook_id },
+                continued_stop,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(
+            disposition,
+            crate::agent_lifecycle::HookDisposition::HandledNoAlert
+        );
+        assert!(stream.send_receipt(binding, hook_id, disposition));
+        wait_remote_hook(child);
+        assert_eq!(lifecycle.alert_cursor(), 2);
+        assert_eq!(current_notices(&session).len(), stop_fallback_notice_count);
 
         session
             .shutdown(Duration::from_secs(5))

@@ -121,6 +121,8 @@ exec 7>/dev/tty || exit 70
             stop) printf '\033]777;notify;Claude;Claude finished its turn\007' >&7 ;;
             failure) printf '\033]777;notify;Claude;Claude stopped with an error\007' >&7 ;;
             attention) printf '\033]777;notify;Claude;Claude needs attention\007' >&7 ;;
+            stop_silent) printf '\033]777;notify;ZMUX_INBOX;Claude;Claude finished its turn\007' >&7 ;;
+            attention_silent) printf '\033]777;notify;ZMUX_INBOX;Claude;Claude needs attention\007' >&7 ;;
         esac
     done <"$zmux_private_root/attention"
 ) &

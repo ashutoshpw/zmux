@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 use zmux_remote_runtime::agent_lifecycle::ClaudeHook;
+pub use zmux_remote_runtime::agent_lifecycle::HookDisposition;
 use zmux_session_runtime::State as SessionState;
 use zmux_workspace_core::{
     PaneId, SessionId, Snapshot as Model, SurfaceId, WindowId, WorkspaceId, targets::TargetKind,
@@ -16,6 +17,7 @@ use zmux_workspace_core::{
 
 pub const MAX_RECORDS: usize = 64;
 pub const MAX_ALERT_EVENTS: usize = 128;
+const MAX_HOOK_RECEIPTS: usize = 256;
 /// Hook events have no provider replay cursor or heartbeat. After this interval,
 /// the published state becomes Unknown instead of assuming it is still current.
 pub const EVIDENCE_FRESHNESS: Duration = Duration::from_secs(30);
@@ -60,6 +62,13 @@ pub struct Target {
     pub surface_id: SurfaceId,
     pub surface_uuid: Uuid,
     pub session_id: SessionId,
+}
+
+/// Adapter-local sequence and Zmux-generated ID for one admitted remote hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RemoteHookInvocation {
+    pub sequence: u64,
+    pub hook_id: Uuid,
 }
 
 /// Full lifecycle-row identity required by acknowledged native selection.
@@ -138,6 +147,10 @@ pub enum Action {
         generation: Uuid,
         /// Locally assigned adapter order. This is not a provider replay cursor.
         sequence: u64,
+        /// Zmux-generated correlation ID for this hook invocation. It is not a
+        /// provider event ID and does not imply provider replay guarantees.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hook_id: Option<Uuid>,
         event: Event,
     },
 }
@@ -149,6 +162,7 @@ pub enum Event {
     WaitingUnconfirmed,
     NeedsUser,
     Resumed,
+    StopContinued,
     TurnStopped { state: TurnStopState },
     SessionEnded,
     EvidenceLost,
@@ -267,6 +281,7 @@ pub enum ClaudeHookEvent {
     #[serde(rename = "StopFailure")]
     StopFailure {
         session_id: String,
+        #[serde(default)]
         error: String,
         #[serde(default)]
         agent_id: Option<String>,
@@ -431,7 +446,7 @@ impl ClaudeHookEvent {
             Self::Stop {
                 stop_hook_active: Some(true),
                 ..
-            } => Some(Event::Resumed),
+            } => Some(Event::StopContinued),
             Self::Stop {
                 background_tasks: Some(tasks),
                 ..
@@ -465,6 +480,7 @@ impl ClaudeHookEvent {
 pub struct Receipt {
     pub request_id: Uuid,
     pub accepted: bool,
+    pub hook_disposition: HookDisposition,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capability: Option<Uuid>,
 }
@@ -519,6 +535,8 @@ pub struct Runtime {
     alert_cursor: u64,
     alert_dropped_through_cursor: u64,
     alert_events: std::collections::VecDeque<StoredAlertEvent>,
+    alert_coverage: std::collections::VecDeque<AlertCoverage>,
+    hook_receipts: std::collections::VecDeque<StoredHookReceipt>,
 }
 
 struct StoredAlertEvent {
@@ -533,6 +551,28 @@ struct StoredAlertEvent {
     kind: AlertKind,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AlertCoverage {
+    target: Target,
+    provider: Provider,
+    runtime_id: Uuid,
+    generation: Uuid,
+    provider_session_id: Uuid,
+    prompt_id: Uuid,
+    kind: AlertKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StoredHookReceipt {
+    hook_id: Uuid,
+    capability: Uuid,
+    runtime_id: Uuid,
+    generation: Uuid,
+    sequence: u64,
+    event: Event,
+    disposition: HookDisposition,
+}
+
 impl Default for Runtime {
     fn default() -> Self {
         Self {
@@ -541,6 +581,8 @@ impl Default for Runtime {
             alert_cursor: 0,
             alert_dropped_through_cursor: 0,
             alert_events: std::collections::VecDeque::new(),
+            alert_coverage: std::collections::VecDeque::new(),
+            hook_receipts: std::collections::VecDeque::new(),
         }
     }
 }
@@ -722,12 +764,13 @@ impl Runtime {
         target: Target,
         runtime_id: Uuid,
         generation: Uuid,
-        sequence: u64,
+        invocation: RemoteHookInvocation,
         hook: ClaudeHook,
         now: Instant,
-    ) -> Result<bool, String> {
+    ) -> Result<HookDisposition, String> {
+        let RemoteHookInvocation { sequence, hook_id } = invocation;
         if !hook.main_session {
-            return Ok(false);
+            return Err("remote lifecycle hook is not for the main provider session".into());
         }
         if target.identity_namespace.is_nil()
             || target.surface_uuid.is_nil()
@@ -736,6 +779,7 @@ impl Runtime {
             || runtime_id.is_nil()
             || generation.is_nil()
             || sequence == 0
+            || hook_id.is_nil()
             || hook.session_id.is_nil()
         {
             return Err("remote lifecycle event identity is incomplete".into());
@@ -743,7 +787,7 @@ impl Runtime {
 
         let event = remote_hook_lifecycle_event(&hook);
         if hook.name != "SessionStart" && event.is_none() {
-            return Ok(false);
+            return Err("remote lifecycle hook has no supported event".into());
         }
         let provider_session_id = hook.session_id;
         let request_id = Uuid::new_v4();
@@ -754,8 +798,48 @@ impl Runtime {
                 && record.generation == generation
                 && record.provider_session_id == provider_session_id
         });
+        let prior_hook_receipt = self
+            .hook_receipts
+            .iter()
+            .any(|receipt| receipt.hook_id == hook_id);
+        let tracked_stop = hook.name == "Stop"
+            && existing.is_some_and(|record| {
+                record.prompt_id.is_some_and(|prompt_id| {
+                    record.working_prompt_id == Some(prompt_id)
+                        && record.completed_prompt_id != Some(prompt_id)
+                        && hook
+                            .prompt_id
+                            .is_none_or(|hook_prompt_id| hook_prompt_id == prompt_id)
+                })
+            });
+        let completed_stop = hook.name == "Stop"
+            && existing.is_some_and(|record| {
+                record.prompt_id.is_some_and(|prompt_id| {
+                    record.completed_prompt_id == Some(prompt_id)
+                        && hook
+                            .prompt_id
+                            .is_none_or(|hook_prompt_id| hook_prompt_id == prompt_id)
+                })
+            });
+        let late_completed_stop = completed_stop
+            && matches!(
+                event.as_ref(),
+                Some(Event::TurnStopped {
+                    state: TurnStopState::Unknown
+                })
+            );
+        let completed_stop_with_activity = completed_stop
+            && matches!(
+                event.as_ref(),
+                Some(
+                    Event::StopContinued
+                        | Event::TurnStopped {
+                            state: TurnStopState::Working
+                        }
+                )
+            );
         if existing.is_some_and(|record| record.terminal) {
-            return Ok(false);
+            return Err("remote lifecycle record is terminal".into());
         }
         if matches!(
             event.as_ref(),
@@ -763,13 +847,14 @@ impl Runtime {
                 Event::WaitingUnconfirmed
                     | Event::NeedsUser
                     | Event::Resumed
+                    | Event::StopContinued
                     | Event::TurnStopped { .. }
             )
         ) && existing.is_none_or(|record| record.prompt_id.is_none())
         {
             // A session notification without the current prompt/run identity
             // remains Unknown and cannot produce an alert.
-            return Ok(false);
+            return Err("remote lifecycle event has no current provider run".into());
         }
         let capability = match existing.map(|record| record.capability) {
             Some(capability) => {
@@ -804,9 +889,35 @@ impl Runtime {
             record.transport_epoch.get_or_insert(generation);
         }
         let Some(event) = event else {
-            return Ok(true);
+            return Ok(HookDisposition::NotHandled);
         };
-        self.apply(
+        if late_completed_stop && !prior_hook_receipt {
+            // A delayed Stop for the just-completed provider run cannot move
+            // it back to Working/Unknown. The invocation is accepted without
+            // an alert; if its receipt is lost, the provider hook's visual
+            // fallback remains at-least-once and silent.
+            let record = self
+                .records
+                .iter_mut()
+                .find(|record| record.capability == capability)
+                .ok_or_else(|| "completed remote Stop owner disappeared".to_owned())?;
+            if sequence <= record.last_sequence {
+                return Err("remote lifecycle event sequence is stale".into());
+            }
+            record.last_sequence = sequence;
+            record.last_event = Some(event.clone());
+            self.remember_hook_receipt(StoredHookReceipt {
+                hook_id,
+                capability,
+                runtime_id,
+                generation,
+                sequence,
+                event,
+                disposition: HookDisposition::HandledNoAlert,
+            });
+            return Ok(HookDisposition::HandledNoAlert);
+        }
+        let receipt = self.apply(
             Request {
                 request_id: Uuid::new_v4(),
                 action: Action::Event {
@@ -814,12 +925,48 @@ impl Runtime {
                     runtime_id,
                     generation,
                     sequence,
+                    hook_id: Some(hook_id),
                     event,
                 },
             },
             now,
         )?;
-        Ok(true)
+        let disposition = if hook.name == "Stop" && !prior_hook_receipt {
+            let disposition = if tracked_stop {
+                if receipt.hook_disposition == HookDisposition::AlertCovered {
+                    HookDisposition::AlertCovered
+                } else {
+                    // Stop is not proof of completion. A current tracked run
+                    // has accepted this exact Stop event, so defer completion
+                    // notification to a later idle_prompt without emitting a
+                    // duplicate fallback.
+                    HookDisposition::HandledNoAlert
+                }
+            } else {
+                if completed_stop_with_activity {
+                    // Preserve explicit resumed/background-work evidence while
+                    // suppressing the generic "finished" fallback for a run
+                    // whose completion alert was already admitted.
+                    HookDisposition::HandledNoAlert
+                } else {
+                    // An untracked run cannot claim that a later idle_prompt
+                    // will cover this Stop invocation.
+                    HookDisposition::NotHandled
+                }
+            };
+            if disposition != receipt.hook_disposition {
+                let stored = self
+                    .hook_receipts
+                    .iter_mut()
+                    .find(|receipt| receipt.hook_id == hook_id)
+                    .ok_or_else(|| "accepted Stop hook receipt was not retained".to_owned())?;
+                stored.disposition = disposition;
+            }
+            disposition
+        } else {
+            receipt.hook_disposition
+        };
+        Ok(disposition)
     }
 
     pub fn apply(&mut self, request: Request, now: Instant) -> Result<Receipt, String> {
@@ -877,6 +1024,7 @@ impl Runtime {
                     return Ok(Receipt {
                         request_id: request.request_id,
                         accepted: true,
+                        hook_disposition: HookDisposition::NotHandled,
                         capability: Some(existing.capability),
                     });
                 }
@@ -911,6 +1059,7 @@ impl Runtime {
                 Ok(Receipt {
                     request_id: request.request_id,
                     accepted: true,
+                    hook_disposition: HookDisposition::NotHandled,
                     capability: Some(capability),
                 })
             }
@@ -919,12 +1068,14 @@ impl Runtime {
                 runtime_id,
                 generation,
                 sequence,
+                hook_id,
                 event,
             } => {
                 if capability.is_nil()
                     || runtime_id.is_nil()
                     || generation.is_nil()
                     || sequence == 0
+                    || hook_id.is_some_and(|hook_id| hook_id.is_nil())
                 {
                     return Err("lifecycle event identity is incomplete".into());
                 }
@@ -935,25 +1086,130 @@ impl Runtime {
                 else {
                     return Err("lifecycle capability is stale or unknown".into());
                 };
-                let alert = {
-                    let record = &mut self.records[record_index];
-                    if record.runtime_id != runtime_id || record.generation != generation {
-                        return Err("lifecycle generation is stale".into());
-                    }
-                    if sequence == record.last_sequence
-                        && record.last_event.as_ref() == Some(&event)
+                let record = &self.records[record_index];
+                if record.runtime_id != runtime_id || record.generation != generation {
+                    return Err("lifecycle generation is stale".into());
+                }
+                if record.terminal || record.connection == Connection::Disconnected {
+                    return Err("lifecycle capability is terminal or disconnected".into());
+                }
+                if let Some(hook_id) = hook_id
+                    && let Some(receipt) = self
+                        .hook_receipts
+                        .iter()
+                        .find(|receipt| receipt.hook_id == hook_id)
+                {
+                    if receipt.capability != capability
+                        || receipt.runtime_id != runtime_id
+                        || receipt.generation != generation
+                        || receipt.sequence != sequence
+                        || receipt.event != event
                     {
-                        return Ok(Receipt {
-                            request_id: request.request_id,
-                            accepted: true,
-                            capability: Some(capability),
+                        return Err("lifecycle hook ID was reused for a different event".into());
+                    }
+                    return Ok(Receipt {
+                        request_id: request.request_id,
+                        accepted: true,
+                        hook_disposition: receipt.disposition,
+                        capability: Some(capability),
+                    });
+                }
+                let covered_before = alert_coverage_for(record, &event)
+                    .is_some_and(|coverage| self.alert_coverage.contains(&coverage));
+                // Stop can be delivered after idle_prompt even though it
+                // belongs to the same completed provider turn. The hook ID
+                // marks this as provider evidence; preserve the completed
+                // state and acknowledge it without another visual fallback.
+                let late_completed_stop = hook_id.is_some()
+                    && record
+                        .prompt_id
+                        .is_some_and(|prompt_id| record.completed_prompt_id == Some(prompt_id))
+                    && matches!(
+                        &event,
+                        Event::TurnStopped {
+                            state: TurnStopState::Unknown
+                        }
+                    );
+                let late_completed_activity = hook_id.is_some()
+                    && record
+                        .prompt_id
+                        .is_some_and(|prompt_id| record.completed_prompt_id == Some(prompt_id))
+                    && matches!(
+                        &event,
+                        Event::StopContinued
+                            | Event::TurnStopped {
+                                state: TurnStopState::Working
+                            }
+                    );
+                let duplicate_sequence =
+                    sequence == record.last_sequence && record.last_event.as_ref() == Some(&event);
+                if duplicate_sequence {
+                    let tracked_run = record.prompt_id.is_some_and(|prompt_id| {
+                        record.working_prompt_id == Some(prompt_id)
+                            && record.completed_prompt_id != Some(prompt_id)
+                    });
+                    let handled_no_alert = late_completed_stop
+                        || late_completed_activity
+                        || (hook_id.is_some() && tracked_run && defers_completion_alert(&event));
+                    let hook_disposition = if covered_before {
+                        HookDisposition::AlertCovered
+                    } else if handled_no_alert {
+                        HookDisposition::HandledNoAlert
+                    } else {
+                        HookDisposition::NotHandled
+                    };
+                    if let Some(hook_id) = hook_id {
+                        self.remember_hook_receipt(StoredHookReceipt {
+                            hook_id,
+                            capability,
+                            runtime_id,
+                            generation,
+                            sequence,
+                            event: event.clone(),
+                            disposition: hook_disposition,
                         });
                     }
+                    return Ok(Receipt {
+                        request_id: request.request_id,
+                        accepted: true,
+                        hook_disposition,
+                        capability: Some(capability),
+                    });
+                }
+                if late_completed_stop {
                     if sequence <= record.last_sequence {
                         return Err("lifecycle event sequence is stale".into());
                     }
-                    if record.terminal || record.connection == Connection::Disconnected {
-                        return Err("lifecycle capability is terminal or disconnected".into());
+                    {
+                        let record = &mut self.records[record_index];
+                        record.connection = Connection::Connected;
+                        record.connection_observed_at = now;
+                        record.last_sequence = sequence;
+                        record.last_event = Some(event.clone());
+                    }
+                    let disposition = HookDisposition::HandledNoAlert;
+                    if let Some(hook_id) = hook_id {
+                        self.remember_hook_receipt(StoredHookReceipt {
+                            hook_id,
+                            capability,
+                            runtime_id,
+                            generation,
+                            sequence,
+                            event,
+                            disposition,
+                        });
+                    }
+                    return Ok(Receipt {
+                        request_id: request.request_id,
+                        accepted: true,
+                        hook_disposition: disposition,
+                        capability: Some(capability),
+                    });
+                }
+                let alert = {
+                    let record = &mut self.records[record_index];
+                    if sequence <= record.last_sequence {
+                        return Err("lifecycle event sequence is stale".into());
                     }
 
                     let previous_activity = record.activity;
@@ -983,6 +1239,15 @@ impl Runtime {
                             if record.prompt_id.is_none() {
                                 return Err(
                                     "resumption evidence has no current provider run".into()
+                                );
+                            }
+                            record.working_prompt_id = record.prompt_id;
+                            record.activity = Activity::Working;
+                        }
+                        Event::StopContinued => {
+                            if record.prompt_id.is_none() {
+                                return Err(
+                                    "stop continuation evidence has no current provider run".into(),
                                 );
                             }
                             record.working_prompt_id = record.prompt_id;
@@ -1050,15 +1315,74 @@ impl Runtime {
                         kind,
                     })
                 };
+                let record = &self.records[record_index];
+                let tracked_run = record.prompt_id.is_some_and(|prompt_id| {
+                    record.working_prompt_id == Some(prompt_id)
+                        && record.completed_prompt_id != Some(prompt_id)
+                });
+                let handled_no_alert = late_completed_activity
+                    || (hook_id.is_some() && tracked_run && defers_completion_alert(&event));
+                let hook_disposition = if alert.is_some() || covered_before {
+                    HookDisposition::AlertCovered
+                } else if handled_no_alert {
+                    HookDisposition::HandledNoAlert
+                } else {
+                    HookDisposition::NotHandled
+                };
                 if let Some(alert) = alert {
+                    self.remember_alert_coverage(AlertCoverage {
+                        target: alert.target,
+                        provider: alert.provider,
+                        runtime_id: alert.runtime_id,
+                        generation: alert.generation,
+                        provider_session_id: alert.provider_session_id,
+                        prompt_id: alert.prompt_id,
+                        kind: alert.kind,
+                    });
                     self.append_alert(alert);
+                }
+                if let Some(hook_id) = hook_id {
+                    self.remember_hook_receipt(StoredHookReceipt {
+                        hook_id,
+                        capability,
+                        runtime_id,
+                        generation,
+                        sequence,
+                        event,
+                        disposition: hook_disposition,
+                    });
                 }
                 Ok(Receipt {
                     request_id: request.request_id,
                     accepted: true,
+                    hook_disposition,
                     capability: Some(capability),
                 })
             }
+        }
+    }
+
+    fn remember_alert_coverage(&mut self, coverage: AlertCoverage) {
+        if self.alert_coverage.contains(&coverage) {
+            return;
+        }
+        self.alert_coverage.push_back(coverage);
+        while self.alert_coverage.len() > MAX_ALERT_EVENTS {
+            self.alert_coverage.pop_front();
+        }
+    }
+
+    fn remember_hook_receipt(&mut self, receipt: StoredHookReceipt) {
+        if self
+            .hook_receipts
+            .iter()
+            .any(|existing| existing.hook_id == receipt.hook_id)
+        {
+            return;
+        }
+        self.hook_receipts.push_back(receipt);
+        while self.hook_receipts.len() > MAX_HOOK_RECEIPTS {
+            self.hook_receipts.pop_front();
         }
     }
 
@@ -1171,6 +1495,40 @@ impl Runtime {
     }
 }
 
+fn alert_coverage_for(record: &Record, event: &Event) -> Option<AlertCoverage> {
+    let (prompt_id, kind) = match event {
+        Event::NeedsUser => (record.prompt_id?, AlertKind::NeedsUser),
+        Event::TurnStopped {
+            state: TurnStopState::Idle,
+        } => {
+            let prompt_id = record.prompt_id?;
+            (record.working_prompt_id == Some(prompt_id))
+                .then_some((prompt_id, AlertKind::Completed))?
+        }
+        _ => return None,
+    };
+    Some(AlertCoverage {
+        target: record.target,
+        provider: record.provider,
+        runtime_id: record.runtime_id,
+        generation: record.generation,
+        provider_session_id: record.provider_session_id,
+        prompt_id,
+        kind,
+    })
+}
+
+fn defers_completion_alert(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Resumed
+            | Event::StopContinued
+            | Event::TurnStopped {
+                state: TurnStopState::Unknown | TurnStopState::Working,
+            }
+    )
+}
+
 fn remote_hook_lifecycle_event(hook: &ClaudeHook) -> Option<Event> {
     match hook.name.as_str() {
         "UserPromptSubmit" => hook
@@ -1195,7 +1553,7 @@ fn remote_hook_lifecycle_event(hook: &ClaudeHook) -> Option<Event> {
             Some(Event::NeedsUser)
         }
         "PreToolUse" => Some(Event::Resumed),
-        "Stop" if hook.stop_hook_active == Some(true) => Some(Event::Resumed),
+        "Stop" if hook.stop_hook_active == Some(true) => Some(Event::StopContinued),
         "Stop" if hook.has_background_tasks => Some(Event::TurnStopped {
             state: TurnStopState::Working,
         }),
@@ -1349,7 +1707,7 @@ mod tests {
             (
                 json!({"hook_event_name":"Stop","session_id":"session","stop_hook_active":true,"background_tasks":[],"session_crons":[]}),
                 "Stop",
-                Some(Event::Resumed),
+                Some(Event::StopContinued),
             ),
             (
                 json!({"hook_event_name":"Stop","session_id":"session","stop_hook_active":false,"background_tasks":[],"session_crons":[]}),
@@ -1463,6 +1821,7 @@ mod tests {
                         runtime_id,
                         generation,
                         sequence: 1,
+                        hook_id: None,
                         event: Event::PromptSubmitted {
                             prompt_id: Uuid::new_v4(),
                         },
@@ -1488,6 +1847,7 @@ mod tests {
                         runtime_id,
                         generation,
                         sequence: 2,
+                        hook_id: None,
                         event: Event::Resumed,
                     },
                 },
@@ -1507,6 +1867,7 @@ mod tests {
                         runtime_id,
                         generation,
                         sequence: 3,
+                        hook_id: None,
                         event: Event::SessionEnded,
                     },
                 },
@@ -1621,6 +1982,7 @@ mod tests {
                             runtime_id,
                             generation,
                             sequence: submission.sequence,
+                            hook_id: None,
                             event: Event::PromptSubmitted {
                                 prompt_id: submission.prompt_id,
                             },
@@ -1660,6 +2022,7 @@ mod tests {
                             runtime_id,
                             generation,
                             sequence,
+                            hook_id: None,
                             event: Event::TurnStopped {
                                 state: TurnStopState::Idle,
                             },
@@ -1684,6 +2047,7 @@ mod tests {
                             runtime_id,
                             generation,
                             sequence: 1,
+                            hook_id: None,
                             event: Event::TurnStopped {
                                 state: TurnStopState::Idle,
                             },
@@ -1745,6 +2109,7 @@ mod tests {
                         runtime_id,
                         generation,
                         sequence: 2,
+                        hook_id: None,
                         event: Event::TurnStopped {
                             state: TurnStopState::Unknown,
                         },
@@ -1853,6 +2218,7 @@ mod tests {
                         runtime_id,
                         generation: old_generation,
                         sequence: 1,
+                        hook_id: None,
                         event: Event::PromptSubmitted { prompt_id },
                     },
                 },
@@ -1883,6 +2249,7 @@ mod tests {
             frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat {
                 version: zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
                 nonce,
+                generation: binding.generation,
                 sequence,
             },
         };
@@ -1981,6 +2348,7 @@ mod tests {
                     runtime_id,
                     generation: new_generation,
                     sequence: 1,
+                    hook_id: None,
                     event: Event::TurnStopped {
                         state: TurnStopState::Idle,
                     },
@@ -2001,6 +2369,7 @@ mod tests {
                         runtime_id,
                         generation: third_generation,
                         sequence: 1,
+                        hook_id: None,
                         event: Event::PromptSubmitted {
                             prompt_id: fresh_prompt_id,
                         },
@@ -2018,6 +2387,7 @@ mod tests {
                         runtime_id,
                         generation: third_generation,
                         sequence: 2,
+                        hook_id: None,
                         event: Event::TurnStopped {
                             state: TurnStopState::Idle,
                         },

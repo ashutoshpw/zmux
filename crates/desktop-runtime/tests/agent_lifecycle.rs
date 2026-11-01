@@ -112,6 +112,25 @@ fn event(
         runtime_id,
         generation,
         sequence,
+        hook_id: None,
+        event,
+    }
+}
+
+fn hook_event(
+    capability: Uuid,
+    runtime_id: Uuid,
+    generation: Uuid,
+    sequence: u64,
+    hook_id: Uuid,
+    event: Event,
+) -> Action {
+    Action::Event {
+        capability,
+        runtime_id,
+        generation,
+        sequence,
+        hook_id: Some(hook_id),
         event,
     }
 }
@@ -420,6 +439,213 @@ fn local_lifecycle_requires_the_exact_running_owner_and_fences_old_generations()
     let replaced = live_snapshot(&desktop).agent_lifecycle.clone();
     assert_eq!(replaced.len(), 1);
     assert_eq!(replaced[0].provider_session_id, next_provider_session);
+
+    server.shutdown(Duration::from_secs(2)).unwrap();
+    desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn exact_hook_receipts_cover_new_and_same_run_alerts_and_reject_reuse() {
+    let directory = Directory::new();
+    let socket = directory.0.join("control.sock");
+    let desktop = Arc::new(desktop());
+    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+    let initial = live_snapshot(&desktop);
+    let model = &initial.model;
+    let surface = model.workspaces[0].root.panes()[0].selected();
+    let target = Target {
+        identity_namespace: model.identity_namespace,
+        surface_id: surface.id,
+        surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+        session_id: surface.session_id.unwrap(),
+    };
+    let runtime_id = Uuid::new_v4();
+    let generation = Uuid::new_v4();
+    let provider_session_id = Uuid::new_v4();
+    let registered = result(send_action(
+        &socket,
+        1,
+        register(target, runtime_id, generation, provider_session_id),
+    ));
+    let capability: Uuid = registered["capability"].as_str().unwrap().parse().unwrap();
+
+    let prompt_id = Uuid::new_v4();
+    let prompt = result(send_action(
+        &socket,
+        2,
+        hook_event(
+            capability,
+            runtime_id,
+            generation,
+            1,
+            Uuid::new_v4(),
+            Event::PromptSubmitted { prompt_id },
+        ),
+    ));
+    assert_eq!(prompt["hook_disposition"], "not_handled");
+    assert!(live_snapshot(&desktop).agent_alert_events.is_empty());
+
+    let hook_id = Uuid::new_v4();
+    let needs_user = hook_event(
+        capability,
+        runtime_id,
+        generation,
+        2,
+        hook_id,
+        Event::NeedsUser,
+    );
+    let first = result(send_action(&socket, 3, needs_user.clone()));
+    assert_eq!(first["hook_disposition"], "alert_covered");
+
+    // Replaying the exact request after its response was lost returns the
+    // stored disposition and cannot append a second lifecycle alert.
+    let replay = result(send_action(&socket, 4, needs_user));
+    assert_eq!(replay["hook_disposition"], "alert_covered");
+
+    // A new hook invocation can still be covered by the same run's admitted
+    // alert even though the provider state is already Waiting.
+    let same_run = result(send_action(
+        &socket,
+        5,
+        hook_event(
+            capability,
+            runtime_id,
+            generation,
+            3,
+            Uuid::new_v4(),
+            Event::NeedsUser,
+        ),
+    ));
+    assert_eq!(same_run["hook_disposition"], "alert_covered");
+
+    let stop = hook_event(
+        capability,
+        runtime_id,
+        generation,
+        4,
+        Uuid::new_v4(),
+        Event::TurnStopped {
+            state: zmux_desktop_runtime::agent_lifecycle::TurnStopState::Unknown,
+        },
+    );
+    let stop_receipt = result(send_action(&socket, 6, stop.clone()));
+    assert_eq!(stop_receipt["hook_disposition"], "handled_no_alert");
+    let stop_replay = result(send_action(&socket, 7, stop));
+    assert_eq!(stop_replay["hook_disposition"], "handled_no_alert");
+
+    let idle = result(send_action(
+        &socket,
+        8,
+        hook_event(
+            capability,
+            runtime_id,
+            generation,
+            5,
+            Uuid::new_v4(),
+            Event::TurnStopped {
+                state: zmux_desktop_runtime::agent_lifecycle::TurnStopState::Idle,
+            },
+        ),
+    ));
+    assert_eq!(idle["hook_disposition"], "alert_covered");
+
+    // Claude may invoke Stop after idle_prompt for the same provider turn.
+    // The completed run owns that late hook: acknowledge it without regressing
+    // activity to Unknown or adding another notification fallback.
+    let late_stop = hook_event(
+        capability,
+        runtime_id,
+        generation,
+        6,
+        Uuid::new_v4(),
+        Event::TurnStopped {
+            state: zmux_desktop_runtime::agent_lifecycle::TurnStopState::Unknown,
+        },
+    );
+    let late_stop_receipt = result(send_action(&socket, 9, late_stop.clone()));
+    assert_eq!(late_stop_receipt["hook_disposition"], "handled_no_alert");
+    let late_stop_replay = result(send_action(&socket, 10, late_stop));
+    assert_eq!(late_stop_replay["hook_disposition"], "handled_no_alert");
+    let after_late_stop = live_snapshot(&desktop);
+    assert_eq!(after_late_stop.agent_lifecycle[0].activity, Activity::Idle);
+    assert_eq!(after_late_stop.agent_alert_events.len(), 2);
+
+    // Explicit Stop continuation evidence is stronger: accept the current
+    // completed prompt's working state while still suppressing a false
+    // completion fallback. Local normalization distinguishes this from other
+    // generic Resumed hooks.
+    let continued_stop = hook_event(
+        capability,
+        runtime_id,
+        generation,
+        7,
+        Uuid::new_v4(),
+        Event::StopContinued,
+    );
+    let continued_receipt = result(send_action(&socket, 11, continued_stop.clone()));
+    assert_eq!(continued_receipt["hook_disposition"], "handled_no_alert");
+    let continued_replay = result(send_action(&socket, 12, continued_stop));
+    assert_eq!(continued_replay["hook_disposition"], "handled_no_alert");
+
+    let background_stop = hook_event(
+        capability,
+        runtime_id,
+        generation,
+        8,
+        Uuid::new_v4(),
+        Event::TurnStopped {
+            state: zmux_desktop_runtime::agent_lifecycle::TurnStopState::Working,
+        },
+    );
+    let background_receipt = result(send_action(&socket, 13, background_stop));
+    assert_eq!(background_receipt["hook_disposition"], "handled_no_alert");
+    let after_continued_stop = live_snapshot(&desktop);
+    assert_eq!(
+        after_continued_stop.agent_lifecycle[0].activity,
+        Activity::Working
+    );
+    assert_eq!(after_continued_stop.agent_alert_events.len(), 2);
+
+    let reused_id = send_action(
+        &socket,
+        14,
+        hook_event(
+            capability,
+            runtime_id,
+            generation,
+            9,
+            hook_id,
+            Event::Resumed,
+        ),
+    );
+    assert!(!reused_id.ok);
+    assert!(
+        reused_id
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("hook ID was reused for a different event")
+    );
+
+    let accepted = live_snapshot(&desktop);
+    assert_eq!(accepted.agent_alert_events.len(), 2);
+    assert_eq!(
+        accepted
+            .notifications
+            .iter()
+            .filter(|notification| notification.agent_alert_kind.as_deref() == Some("needs_user"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        accepted
+            .notifications
+            .iter()
+            .filter(|notification| notification.agent_alert_kind.as_deref() == Some("completed"))
+            .count(),
+        1
+    );
 
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();

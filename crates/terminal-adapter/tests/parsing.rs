@@ -94,7 +94,7 @@ fn attention_signals_are_bounded_sequenced_and_distinct_from_plain_output() {
     let mut terminal = Terminal::new(Size { rows: 4, cols: 40 }).unwrap();
     terminal.process(b"ordinary background output").unwrap();
     assert!(terminal.viewport().notices.is_empty());
-    for byte in b"\x07\x1b]9;Job ready\x07\x1b]777;notify;Agent;Needs input\x1b\\" {
+    for byte in b"\x07\x1b]9;Job ready\x07\x1b]777;notify;Agent;Needs input\x1b\\\x1b]777;notify;ZMUX_INBOX;Claude;Silent fallback\x07" {
         terminal.process(&[*byte]).unwrap();
     }
     let notices = terminal.viewport().notices;
@@ -103,18 +103,20 @@ fn attention_signals_are_bounded_sequenced_and_distinct_from_plain_output() {
             .iter()
             .map(|n| n.source.as_str())
             .collect::<Vec<_>>(),
-        vec!["bell", "osc9", "osc777"]
+        vec!["bell", "osc9", "osc777", "osc777-inbox"]
     );
     assert_eq!(notices[1].body, "Job ready");
     assert_eq!(notices[2].title, "Agent");
     assert_eq!(notices[2].body, "Needs input");
+    assert_eq!(notices[3].title, "Claude");
+    assert_eq!(notices[3].body, "Silent fallback");
     for _ in 0..64 {
         terminal.process(b"\x07").unwrap();
     }
     let notices = terminal.viewport().notices;
     assert_eq!(notices.len(), 32);
-    assert_eq!(notices.first().unwrap().sequence, 36);
-    assert_eq!(notices.last().unwrap().sequence, 67);
+    assert_eq!(notices.first().unwrap().sequence, 37);
+    assert_eq!(notices.last().unwrap().sequence, 68);
     assert!(!terminal.viewport().contents.contains("Needs input"));
 }
 

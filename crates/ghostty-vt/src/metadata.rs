@@ -212,7 +212,15 @@ impl MetaState {
             777 => {
                 let value = bytes.strip_prefix(b"notify;").ok_or(())?;
                 let split = value.iter().position(|b| *b == b';').ok_or(())?;
-                self.notice(777, &value[..split], &value[split + 1..])?;
+                let title = &value[..split];
+                let body = &value[split + 1..];
+                if title == b"ZMUX_INBOX"
+                    && let Some(separator) = body.iter().position(|b| *b == b';')
+                {
+                    self.notice(778, &body[..separator], &body[separator + 1..])?;
+                } else {
+                    self.notice(777, title, body)?;
+                }
             }
             1337 if record.subcommand == 9 => {} // compatibility cwd policy
             _ => return Err(()),

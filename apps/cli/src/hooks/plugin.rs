@@ -386,10 +386,15 @@ fn artifacts(i: &Installation) -> (Value, Value) {
         "PreToolUse",
         "PostToolUse",
         "PostToolUseFailure",
-        "Stop",
         "StopFailure",
         "SessionEnd",
     ] {
+        // Notification and Stop share one callback with the session notice
+        // plugin so the owner receipt can decide whether a silent fallback is
+        // needed. Registering them here as well would race two hook invocations.
+        if event == "Notification" || event == "Stop" {
+            continue;
+        }
         let mut hook = json!({"type":"command","command":i.adapter.path,
             "args":["hooks","claude","event",event],"timeout":3});
         // stdout from lifecycle events must never be exposed as additional context.

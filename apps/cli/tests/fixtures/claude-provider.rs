@@ -148,7 +148,6 @@ fn main() {
             "Notification",
             &main_attention,
         );
-        run_lifecycle_hook(&lifecycle_config, "Notification", &main_attention);
         run_notice_hook(
             &notice_config,
             "Notification",
@@ -158,11 +157,6 @@ fn main() {
         );
         run_notice_hook(
             &notice_config,
-            "Stop",
-            &format!("{{\"hook_event_name\":\"Stop\",\"session_id\":\"{session_id}\"}}"),
-        );
-        run_lifecycle_hook(
-            &lifecycle_config,
             "Stop",
             &format!("{{\"hook_event_name\":\"Stop\",\"session_id\":\"{session_id}\"}}"),
         );
@@ -184,11 +178,79 @@ fn main() {
             .expect("private shell root restored to provider");
         let lifecycle_alerts = env::var("ZMUX_CLAUDE_LIFECYCLE_ALERTS_ACTIVE")
             .expect("lifecycle alert marker restored to provider");
+        let cli = env::var("ZMUX_CLI_PATH").expect("bundled CLI route");
+        let route = env::var("ZMUX_CLAUDE_EVENT_SOCKET").expect("local event route");
         fs::write(
             env_report,
-            format!("root={root}\nlifecycle_alerts={lifecycle_alerts}\n"),
+            format!(
+                "root={root}\nlifecycle_alerts={lifecycle_alerts}\ncli={cli}\nroute={route}\nprovider_session={session_id}\nprovider_pid={}\n",
+                std::process::id()
+            ),
         )
         .unwrap();
+        fs::write(
+            env::var_os("FIXTURE_AUTO_NO_PROMPT_DONE").expect("no-prompt hook completion marker"),
+            b"done",
+        )
+        .unwrap();
+        let tracked_release =
+            env::var_os("FIXTURE_AUTO_TRACKED_RELEASE").expect("tracked-hook release marker");
+        while !Path::new(&tracked_release).exists() {
+            thread::sleep(Duration::from_millis(2));
+        }
+        // Unreadable input has no validated Notification subtype, and
+        // auth_success is a valid but non-attention subtype; neither should
+        // fabricate an attention fallback.
+        run_notice_hook(&notice_config, "Notification", "{\"hook_event_name\":\"Notification\"");
+        run_notice_hook(
+            &notice_config,
+            "Notification",
+            &format!(
+                "{{\"hook_event_name\":\"Notification\",\"session_id\":\"{session_id}\",\"notification_type\":\"auth_success\"}}"
+            ),
+        );
+        // The subtype is known even though typed lifecycle admission fails,
+        // so keep one visual-only fallback for this permission matcher.
+        run_notice_hook(
+            &notice_config,
+            "Notification",
+            "{\"hook_event_name\":\"Notification\",\"notification_type\":\"permission_prompt\"}",
+        );
+        run_lifecycle_hook(
+            &lifecycle_config,
+            "UserPromptSubmit",
+            &format!(
+                "{{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"{session_id}\",\"prompt_id\":\"123e4567-e89b-42d3-a456-426614174000\",\"permission_mode\":\"default\",\"prompt\":\"private prompt text\",\"tool_input\":{{\"command\":\"private tool data\"}}}}"
+            ),
+        );
+        run_notice_hook(
+            &notice_config,
+            "Notification",
+            &format!(
+                "{{\"hook_event_name\":\"Notification\",\"session_id\":\"{session_id}\",\"notification_type\":\"permission_prompt\"}}"
+            ),
+        );
+        run_notice_hook(
+            &notice_config,
+            "Stop",
+            &format!("{{\"hook_event_name\":\"Stop\",\"session_id\":\"{session_id}\"}}"),
+        );
+        run_notice_hook(
+            &notice_config,
+            "Notification",
+            &format!(
+                "{{\"hook_event_name\":\"Notification\",\"session_id\":\"{session_id}\",\"notification_type\":\"idle_prompt\"}}"
+            ),
+        );
+        // A delayed Stop can explicitly report that the same turn continued
+        // after idle_prompt. Keep it Working without a false finished fallback.
+        run_notice_hook(
+            &notice_config,
+            "Stop",
+            &format!(
+                "{{\"hook_event_name\":\"Stop\",\"session_id\":\"{session_id}\",\"stop_hook_active\":true}}"
+            ),
+        );
         fs::write(
             env::var_os("FIXTURE_AUTO_HOOKS_DONE").expect("hook completion marker"),
             b"done",

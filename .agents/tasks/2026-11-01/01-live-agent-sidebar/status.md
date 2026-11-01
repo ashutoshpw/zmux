@@ -154,4 +154,63 @@ Verification:
 
 - macOS development workflow [41304763573](https://github.com/ashutoshpw/zmux/actions/runs/41304763573) failed in `swift-typecheck` because the result of `remember(...)` was unused. The `_ =` fix has been applied. The dependent sidebar and development jobs were skipped, so this run provides no packaged sidebar or screenshot acceptance.
 - The full `scripts/check` retry r10 passed on Linux after the unused-result fix; log: `/tmp/zmux-agent-sidebar-check-r10.log`. This source-check pass does not establish native macOS acceptance.
-- Exact-event receipts for lifecycle sound mute and deduplication remain outstanding. The existing synthetic state smoke does not close this receipt gap.
+- Exact local hook receipts for lifecycle admission and silent fallback are now implemented and verified below. Packaged/native acceptance for lifecycle sound mute, audible playback, and banner delivery remains pending; this receipt proof does not establish those behaviors on macOS.
+
+## Exact local hook receipts and silent fallback — 2026-11-01
+
+Local lifecycle hook invocations now carry a Zmux-generated UUID correlation ID. This ID is not a provider event ID and does not supply provider replay guarantees. The bounded Desktop receipt cache returns `AlertCovered` when that invocation newly admits an alert or the same run's alert was already covered; lifecycle events that are accepted without producing an alert return `NotHandled`. Reuse of a hook UUID for a different event is rejected. Notification and Stop use one receipt-aware callback; missing, uncertain, rejected, or `NotHandled` outcomes enqueue a visual-only inbox fallback. An `AlertCovered` receipt avoids that fallback.
+
+The generic notice path maps `osc777-inbox` notices to `desktop: false`. The in-app notification row remains present with delivery marked `Suppressed` (`disabled`), and the native notification snapshot contains no matching desired request. The real CLI/Desktop/control-socket integration test covers no-prompt Notification/Stop fallback and checks those owner-visible properties. Notification fallback classification uses only validated matchers: permission/elicitation prompts map to attention, `idle_prompt` maps to completion, and unrelated or unreadable Notification input creates no fallback. A typed-invalid payload with a known attention subtype keeps its visual fallback. A valid `idle_prompt` with `NotHandled` is suppressed to avoid duplicating the preceding Stop fallback. `StopFailure` remains a separate `osc777` notice and retains its existing visibility assertion; it is not a receipt fallback.
+
+Local verification:
+
+- `cargo fmt --all` passed.
+- `cargo test -p zmux-desktop-runtime --test agent_lifecycle` passed: 2 passed, including `exact_hook_receipts_cover_new_and_same_run_alerts_and_reject_reuse` through the real Desktop/ControlServer boundary.
+- `cargo test -p zmux --test provider_hooks` passed: 9 passed, 1 ignored helper. The parent test executes the helper in a private child process and confirms the Notification/Stop fallback policy through the real provider hook route.
+- `cargo test -p zmux --test provider_hooks automatic_install_to_runtime_lease_is_atomic_against_real_cleanup_cli -- --nocapture` passed separately: 1 passed.
+- `cargo test -p zmux-desktop-runtime remote_reconnect_changes_transport_epoch_and_requires_a_fresh_prompt -- --nocapture` passed: 1 passed after the heartbeat fixture carried its binding generation.
+- `/root/remote` reports `cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss -- --nocapture` passed: 1 passed. Its loopback SSH path covers no-prompt silent fallback, newly admitted and already-covered receipts, `NotHandled` Stop fallback, stale-generation receipt rejection, and no fallback after covered receipts.
+
+## Late Stop ordering and matcher-specific fallback — 2026-11-01
+
+A hook-correlated `TurnStopped::Unknown` arriving after `idle_prompt` for the same completed local prompt now consumes its sequence and returns `HandledNoAlert` without changing `Idle` or adding another fallback. Replaying the exact hook returns the retained receipt. Explicit Stop continuation evidence is kept distinct from generic `Resumed`: local `stop_hook_active: true` normalizes to `StopContinued`, while Stop background work remains `TurnStopped::Working`. For the exact current completed prompt, either explicit continuation event updates activity to `Working` and returns `HandledNoAlert`, preventing a false finished fallback. Local Notification error fallback is restricted to `permission_prompt`, `elicitation_dialog`, and `elicitation_url_dialog`; `idle_prompt` remains `stop_silent`. Syntactically unreadable Notification input has no validated subtype, and unrelated types such as `auth_success` do not create fallback alerts. A parseable but typed-invalid permission prompt still gets the visual fallback.
+
+Focused local verification:
+
+- `cargo fmt --all -- --check` passed.
+- `git diff --check` passed.
+- `cargo test -p zmux-desktop-runtime --test agent_lifecycle exact_hook_receipts_cover_new_and_same_run_alerts_and_reject_reuse -- --nocapture` passed: 1 test through the real Desktop/ControlServer owner boundary, covering late unknown Stop, explicit Stop continuation/background-work receipts, replay, retained Working/Idle state, and no extra alerts.
+- `cargo test -p zmux-desktop-runtime claude_hook_payloads_normalize_only_explicit_lifecycle_events -- --nocapture` passed: 1 unit test confirms Stop with `stop_hook_active: true` maps to `StopContinued`, separately from generic `Resumed`.
+- `cargo test -p zmux --test provider_hooks automatic_install_to_runtime_lease_is_atomic_against_real_cleanup_cli -- --nocapture` passed: 1 real-provider route integration test covering unreadable input, `auth_success`, typed-invalid permission, receipt-covered permission/completion, and a late explicit continuation Stop that retains Working without another fallback.
+- The full `scripts/check` was not run for this focused follow-up; it remains a parent-owned gate. These tests are local Linux source checks and do not establish macOS notification delivery or real Claude-provider behavior.
+
+These are local Linux source checks using synthetic provider and loopback SSH fixtures. They do not authenticate the Claude process, establish provider replay guarantees, or verify macOS banner delivery or audible playback. The broader app build and artifact acceptance remain pending as recorded above.
+
+## Remote receipt fencing and Stop ordering — 2026-11-01
+
+When a receipt-required remote hook cannot be retained because its endpoint is unavailable, its deadline has expired, or the pending receipt queue is full, the stream now emits a terminal generation-bound `Gap` and exits. The owner therefore fences the old transport state as `Unknown`; the dropped hook does not enter activity or alert admission. A late remote `Stop` for a prompt already completed by `idle_prompt` returns `HandledNoAlert` without regressing `Idle` only when its admitted event is `TurnStopped::Unknown`. Explicit `stop_hook_active: true` (`StopContinued`) and background-task (`TurnStopped::Working`) evidence remains admitted as Working, with `HandledNoAlert` preventing the generic "finished" fallback. This matches the local owner's Unknown-only completion guard while preserving explicit continuation evidence.
+
+Remote hook commands carry fixed event-name arguments. Matcher-specific Notification commands carry only the trusted attention matchers (`permission_prompt`, `elicitation_dialog`, and `elicitation_url_dialog`) and act as fallback-only for unreadable or oversized input. Parseable Notification payloads stay on the generic lifecycle command; unrelated values such as `auth_success` do not receive an attention fallback. The helper writes the silent `osc777-inbox` fallback before reporting loss to the stream.
+
+The remote hook receipt remains at-least-once. If a `Stop` receipt is lost before the later `idle_prompt`, its static `osc777-inbox` visual fallback may appear alongside the single owner completion alert. The Stop itself adds no lifecycle alert event, so it does not request a second Zmux lifecycle sound. This is source/loopback evidence; it does not establish actual macOS sound or banner behavior.
+
+Focused remote verification:
+
+- `cargo test -p zmux-remote-runtime --test connection required_remote_receipt_failures_emit_a_generation_gap -- --nocapture` passed. The production stream helper emitted a Gap without a hook frame for missing and expired endpoints and the 65th pending receipt; the expired endpoint received no negative receipt.
+- `cargo test -p zmux-remote-runtime --test connection managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd -- --nocapture` passed. The live loopback SSH fixture retains and forwards the 64 queued exact receipts, then continues to the existing FIFO-loss Gap check.
+- `cargo test -p zmux-remote-runtime --test connection configured_remote_hooks_fallback_for_unreadable_payloads_and_ignore_other_notifications -- --nocapture` passed. It extracts and executes the production remote hook commands: malformed Stop and oversized matched Notification input write their silent fallback before Gap; `auth_success` produces one generic lifecycle frame with no attention fallback, and a valid permission Notification is not ingested again by its matcher command.
+- `cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::remote_owner_keeps_completed_idle_after_late_stop -- --nocapture` passed. It verifies a Working run becomes Unknown with no alert on transport loss, then checks late Unknown Stop preserves completed Idle while active/background-task Stops remain admitted as Working with `HandledNoAlert` and no extra alert.
+- `cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss -- --nocapture` passed. Its loopback SSH fixture covers a lost Stop receipt, the silent visual fallback, the later single completion alert, and late Unknown/continued Stop receipts with no further fallback or alert.
+- `cargo clippy -p zmux-remote-runtime --all-targets -- -D warnings` passed after boxing `Frame::Hook.event` so every `Frame` value does not embed the large hook payload inline.
+- `cargo test -p zmux-remote-runtime --test connection -- --nocapture` passed: 9 tests. `cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 3 tests, including the loopback SSH receipt interleaving.
+- `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings` passed after `RemoteHookInvocation` grouped the remote sequence and hook ID and both duplicate no-alert branches were combined. No lint allowances were added.
+- `cargo test -p zmux-desktop-runtime --test agent_lifecycle` passed: 2 tests. `cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 3 tests, including the loopback SSH receipt interleaving. The Stop-specific local hook normalization test also passed.
+- `cargo fmt --all -- --check` and `git diff --check` passed. The full `scripts/check` was not run for this follow-up and remains a parent-owned gate. These are local Linux source/loopback checks, not real Claude-provider or native macOS sound/banner acceptance.
+
+## Latest verification update — 2026-11-01
+
+- The full `RUST_TEST_THREADS=2 scripts/check` retry r16 passed on Linux. Log: `/tmp/zmux-agent-sidebar-check-r16.log`. This source-check pass does not establish hosted macOS or live-provider acceptance.
+- macOS development workflow [41305431449](https://github.com/ashutoshpw/zmux/actions/runs/41305431449) passed Swift typecheck but failed in the real `provider_hooks` regression when its control socket exceeded macOS `SUN_LEN` under the long `TMPDIR` path. The test fixture was corrected to use a short `/tmp` path; the failed workflow itself produced no packaged build or sidebar acceptance.
+- Local lifecycle receipts now scope fallback behavior: `AlertCovered` avoids a duplicate visual fallback, muted lifecycle events remain silent, and synthetic/loopback checks cover receipt and no-extra-alert paths. This does not prove audible output or native banner behavior.
+- Remote receipts remain at-least-once. If a Stop receipt is lost before the later `idle_prompt`, a silent visual fallback can appear alongside the single completion alert; the Stop adds no second lifecycle sound.
+- Codex lifecycle remains unsupported. Real Claude-provider execution and hosted macOS build/package acceptance remain pending; synthetic providers, control-socket fixtures, and loopback SSH do not authenticate the Claude process or prove live provider behavior.

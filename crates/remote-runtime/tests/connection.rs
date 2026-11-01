@@ -3,9 +3,9 @@ use std::{
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
     ops::Deref,
-    os::unix::fs::PermissionsExt,
+    os::unix::{fs::PermissionsExt, net::UnixDatagram},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -307,7 +307,7 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
-    let (stream_tx, stream_rx) = mpsc::sync_channel(16);
+    let (stream_tx, stream_rx) = mpsc::sync_channel(128);
     let stream_stdout = stream_child.stdout.take().unwrap();
     thread::spawn(move || {
         for line in BufReader::new(stream_stdout).lines() {
@@ -322,13 +322,15 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .expect("managed lifecycle stream handshake");
     let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
     assert_eq!(hello["kind"], "hello");
-    assert_eq!(hello["version"], 2);
+    assert_eq!(hello["version"], 3);
     assert_eq!(hello["nonce"], nonce.remote_lifecycle_token());
+    let generation = uuid::Uuid::new_v4();
     let mut stream_stdin = stream_child.stdin.take().unwrap();
     writeln!(
         stream_stdin,
-        "{{\"kind\":\"activate\",\"version\":2,\"nonce\":\"{}\"}}",
-        nonce.remote_lifecycle_token()
+        "{{\"kind\":\"activate\",\"version\":3,\"nonce\":\"{}\",\"generation\":\"{}\"}}",
+        nonce.remote_lifecycle_token(),
+        generation
     )
     .unwrap();
     let active = stream_rx
@@ -336,8 +338,9 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .expect("managed lifecycle stream activation");
     let active: serde_json::Value = serde_json::from_str(&active).unwrap();
     assert_eq!(active["kind"], "active");
-    assert_eq!(active["version"], 2);
+    assert_eq!(active["version"], 3);
     assert_eq!(active["nonce"], nonce.remote_lifecycle_token());
+    assert_eq!(active["generation"], generation.to_string());
     let remote_notice = || {
         let root = nonce.remote_integration_directory();
         let script = r#"import json,os,subprocess,sys; root,nonce=sys.argv[1:]; fifo=os.path.join(root,"attention"); os.path.exists(fifo) and os.unlink(fifo); os.mkfifo(fifo,0o600); os.chmod(fifo,0o600); reader=os.open(fifo,os.O_RDONLY|os.O_NONBLOCK); environment=os.environ.copy(); environment["ZMUX_AGENT_LIFECYCLE_NONCE"]=nonce; environment["ZMUX_SHELL_INTEGRATION_DIRECTORY"]=root; payload=json.dumps({"hook_event_name":"Notification","session_id":"00000000-0000-4000-8000-000000000002","notification_type":"permission_prompt"}); result=subprocess.run(["python3",os.path.join(root,"claude-lifecycle-notice.py"),"attention"],input=payload.encode(),env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE); result.returncode and sys.stderr.write(result.stderr.decode()); result.returncode and sys.exit(2); data=os.read(reader,128); data!=b"attention\n" and sys.exit(4); sys.stdout.write(data.decode())"#;
@@ -367,40 +370,355 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
 
     let provider_session = uuid::Uuid::new_v4();
     let prompt_id = uuid::Uuid::new_v4();
-    let push_remote_hook = |event: serde_json::Value| {
-        let record = serde_json::json!({
-            "nonce": nonce.remote_lifecycle_token(),
-            "event": event,
-        });
-        let record = serde_json::to_string(&record).unwrap();
-        let command = format!(
-            "printf '%s\\n' '{}' > '{}/agent-events'\n",
-            record,
-            nonce.remote_integration_directory()
-        );
-        session.send_input(command.as_bytes()).unwrap();
-        let line = stream_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("remote provider hook frame");
-        serde_json::from_str::<serde_json::Value>(&line).unwrap()
+    let mut last_stream_sequence = 0_u64;
+    let (started, prompted) = {
+        let mut push_remote_hook = |event: serde_json::Value| {
+            let record = serde_json::json!({
+                "nonce": nonce.remote_lifecycle_token(),
+                "event_id": uuid::Uuid::new_v4(),
+                "receipt_required": false,
+                "receipt_requested": false,
+                "event": event,
+            });
+            let record = serde_json::to_string(&record).unwrap();
+            let command = format!(
+                "printf '%s\\n' '{}' > '{}/agent-events'\n",
+                record,
+                nonce.remote_integration_directory()
+            );
+            session.send_input(command.as_bytes()).unwrap();
+            loop {
+                let line = stream_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("remote provider hook frame");
+                let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if frame["kind"] == "heartbeat" {
+                    last_stream_sequence = frame["sequence"].as_u64().unwrap();
+                    continue;
+                }
+                assert_eq!(frame["kind"], "hook");
+                let sequence = frame["sequence"].as_u64().unwrap();
+                assert!(sequence > last_stream_sequence);
+                last_stream_sequence = sequence;
+                break frame;
+            }
+        };
+        let started = push_remote_hook(serde_json::json!({
+            "name":"SessionStart",
+            "session_id":provider_session,
+            "main_session":true,
+            "source":"startup"
+        }));
+        let prompted = push_remote_hook(serde_json::json!({
+            "name":"UserPromptSubmit",
+            "session_id":provider_session,
+            "main_session":true,
+            "prompt_id":prompt_id,
+            "permission_mode":"default"
+        }));
+        (started, prompted)
     };
-    let started = push_remote_hook(serde_json::json!({
-        "name":"SessionStart",
-        "session_id":provider_session,
-        "main_session":true,
-        "source":"startup"
-    }));
     assert_eq!(started["kind"], "hook");
-    assert_eq!(started["sequence"], 1);
-    let prompted = push_remote_hook(serde_json::json!({
-        "name":"UserPromptSubmit",
+    assert!(started["sequence"].as_u64().unwrap() > 0);
+    assert!(prompted["sequence"].as_u64().unwrap() > started["sequence"].as_u64().unwrap());
+    assert_eq!(prompted["event"]["prompt_id"], prompt_id.to_string());
+
+    let hook_id = uuid::Uuid::new_v4();
+    let root = nonce.remote_integration_directory();
+    let receipt_path = Path::new(&root).join(format!("r-{}", hook_id.simple()));
+    let receipt_endpoint = UnixDatagram::bind(&receipt_path).expect("bind per-hook receipt socket");
+    fs::set_permissions(&receipt_path, fs::Permissions::from_mode(0o600))
+        .expect("secure per-hook receipt socket");
+    receipt_endpoint
+        .set_read_timeout(Some(Duration::from_millis(250)))
+        .expect("bound stale-receipt wait");
+    let event = serde_json::json!({
+        "name":"Notification",
         "session_id":provider_session,
         "main_session":true,
-        "prompt_id":prompt_id,
-        "permission_mode":"default"
-    }));
-    assert_eq!(prompted["sequence"], 2);
-    assert_eq!(prompted["event"]["prompt_id"], prompt_id.to_string());
+        "notification_type":"permission_prompt"
+    });
+    let record = serde_json::json!({
+        "nonce":nonce.remote_lifecycle_token(),
+        "event_id":hook_id,
+        "receipt_required":true,
+        "receipt_requested":true,
+        "event":event.clone()
+    });
+    let writer_script = r#"import json,os,sys,time; root,record=sys.argv[1:]; frame=json.loads(record); frame["receipt_deadline"]=time.monotonic()+1.5; data=json.dumps(frame,separators=(",",":" )).encode()+b"\n"; fd=os.open(os.path.join(root,"agent-events"),os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC); os.write(fd,data); os.close(fd)"#;
+    let write_command = format!(
+        "python3 -c {} {} {}",
+        shell_quote(writer_script),
+        shell_quote(&root),
+        shell_quote(&record.to_string())
+    );
+    let writer = connection.operation_spec(&write_command).unwrap();
+    let output = Command::new(&writer.program)
+        .args(&writer.args)
+        .output()
+        .expect("write receipt-requested event to remote lifecycle FIFO");
+    assert!(
+        output.status.success(),
+        "remote event writer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let hook_frame: serde_json::Value = loop {
+        let hook_line = stream_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("receipt-requested remote provider hook frame");
+        let frame: serde_json::Value = serde_json::from_str(&hook_line).unwrap();
+        if frame["kind"] == "heartbeat" {
+            last_stream_sequence = frame["sequence"].as_u64().unwrap();
+            continue;
+        }
+        break frame;
+    };
+    assert_eq!(hook_frame["kind"], "hook");
+    let hook_sequence = hook_frame["sequence"].as_u64().unwrap();
+    assert!(hook_sequence > last_stream_sequence);
+    last_stream_sequence = hook_sequence;
+    assert_eq!(hook_frame["event_id"], hook_id.to_string());
+    assert_eq!(hook_frame["receipt_requested"], true);
+    assert_eq!(hook_frame["generation"], generation.to_string());
+
+    let stale_receipt = zmux_remote_runtime::agent_lifecycle::ClientFrame::Receipt {
+        version: zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
+        nonce: nonce.remote_lifecycle_token().parse().unwrap(),
+        generation: uuid::Uuid::new_v4(),
+        event_id: hook_id,
+        disposition: zmux_remote_runtime::agent_lifecycle::HookDisposition::AlertCovered,
+    };
+    writeln!(
+        stream_stdin,
+        "{}",
+        serde_json::to_string(&stale_receipt).unwrap()
+    )
+    .unwrap();
+    let mut datagram = [0; 512];
+    assert!(matches!(
+        receipt_endpoint.recv(&mut datagram),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            )
+    ));
+
+    let valid_receipt = zmux_remote_runtime::agent_lifecycle::ClientFrame::Receipt {
+        version: zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
+        nonce: nonce.remote_lifecycle_token().parse().unwrap(),
+        generation,
+        event_id: hook_id,
+        disposition: zmux_remote_runtime::agent_lifecycle::HookDisposition::HandledNoAlert,
+    };
+    writeln!(
+        stream_stdin,
+        "{}",
+        serde_json::to_string(&valid_receipt).unwrap()
+    )
+    .unwrap();
+    let length = receipt_endpoint
+        .recv(&mut datagram)
+        .expect("valid exact event receipt reaches its per-hook socket");
+    let receipt: serde_json::Value = serde_json::from_slice(&datagram[..length]).unwrap();
+    assert_eq!(receipt["kind"], "receipt");
+    assert_eq!(receipt["event_id"], hook_id.to_string());
+    assert_eq!(receipt["generation"], generation.to_string());
+    assert_eq!(receipt["disposition"], "handled_no_alert");
+    assert_eq!(
+        uuid::Uuid::parse_str(receipt["nonce"].as_str().unwrap()).unwrap(),
+        nonce
+            .remote_lifecycle_token()
+            .parse::<uuid::Uuid>()
+            .unwrap()
+    );
+    drop(receipt_endpoint);
+    fs::remove_file(&receipt_path).expect("remove per-hook receipt socket");
+
+    let endpoint_collision_id = uuid::Uuid::new_v4();
+    let endpoint_collision_script = r#"import importlib.util,os,socket,sys; root,event_id=sys.argv[1:]; path=os.path.join(root,"r-"+event_id.replace("-","")); owner=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); owner.bind(path); os.chmod(path,0o600); before=os.stat(path,follow_symlinks=False); spec=importlib.util.spec_from_file_location("lifecycle_hook",os.path.join(root,"claude-lifecycle-hook.py")); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); failed=[False]; exec("try: module.receipt_endpoint(root,event_id)\nexcept OSError: failed[0]=True"); after=os.stat(path,follow_symlinks=False); (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino) and sys.exit(4); (not failed[0]) and sys.exit(3); owner.close(); os.unlink(path)"#;
+    let collision_command = format!(
+        "python3 -c {} {} {}",
+        shell_quote(endpoint_collision_script),
+        shell_quote(&root),
+        shell_quote(&endpoint_collision_id.to_string())
+    );
+    let collision = connection.operation_spec(&collision_command).unwrap();
+    let output = Command::new(&collision.program)
+        .args(&collision.args)
+        .output()
+        .expect("run receipt endpoint collision and admission-fence regression");
+    assert!(
+        output.status.success(),
+        "receipt endpoint collision damaged an existing socket: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let queued_event_ids: Vec<_> = (0
+        ..zmux_remote_runtime::agent_lifecycle::MAX_PENDING_HOOK_RECEIPTS)
+        .map(|_| uuid::Uuid::new_v4())
+        .collect();
+    let mut queued_receipts = Vec::with_capacity(queued_event_ids.len());
+    for event_id in &queued_event_ids {
+        let path = Path::new(&root).join(format!("r-{}", event_id.simple()));
+        let endpoint = UnixDatagram::bind(&path).expect("bind bounded queue receipt socket");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("secure bounded queue receipt socket");
+        endpoint
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("bound queue receipt wait");
+        queued_receipts.push((*event_id, endpoint, path));
+    }
+    let queue_writer_script = r#"import json,os,select,sys,time
+root,nonce,ids=sys.argv[1:]
+deadline=time.monotonic()+5.0
+fd=os.open(os.path.join(root,"agent-events"),os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+event={"name":"Notification","session_id":"00000000-0000-4000-8000-000000000002","main_session":True,"notification_type":"permission_prompt"}
+try:
+    for event_id in json.loads(ids):
+        record={"nonce":nonce,"event_id":event_id,"receipt_required":True,"receipt_requested":True,"receipt_deadline":time.monotonic()+2.9,"event":event}
+        data=(json.dumps(record,separators=(",",":"))+"\n").encode()
+        while True:
+            try:
+                if os.write(fd,data)!=len(data):
+                    raise OSError("short lifecycle FIFO write")
+                break
+            except BlockingIOError:
+                remaining=deadline-time.monotonic()
+                if remaining<=0 or not select.select([], [fd], [], remaining)[1]:
+                    raise TimeoutError("bounded receipt fixture FIFO write expired")
+finally:
+    os.close(fd)
+"#;
+    let queued_event_ids_json = serde_json::to_string(&queued_event_ids).unwrap();
+    let write_command = python_exec_command(
+        queue_writer_script,
+        &[
+            &root,
+            &nonce.remote_lifecycle_token(),
+            &queued_event_ids_json,
+        ],
+    );
+    let writer = connection.operation_spec(&write_command).unwrap();
+    let output = Command::new(&writer.program)
+        .args(&writer.args)
+        .output()
+        .expect("fill the remote stream's bounded receipt queue");
+    assert!(
+        output.status.success(),
+        "receipt queue writer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for expected_id in queued_event_ids
+        .iter()
+        .take(zmux_remote_runtime::agent_lifecycle::MAX_PENDING_HOOK_RECEIPTS)
+    {
+        loop {
+            let line = stream_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("bounded receipt queue hook frame");
+            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if frame["kind"] == "heartbeat" {
+                last_stream_sequence = frame["sequence"].as_u64().unwrap();
+                continue;
+            }
+            assert_eq!(frame["kind"], "hook");
+            let sequence = frame["sequence"].as_u64().unwrap();
+            assert!(sequence > last_stream_sequence);
+            last_stream_sequence = sequence;
+            assert_eq!(frame["event_id"], expected_id.to_string());
+            assert_eq!(frame["receipt_requested"], true);
+            break;
+        }
+    }
+    for (_, endpoint, path) in queued_receipts {
+        drop(endpoint);
+        fs::remove_file(path).expect("remove bounded queue receipt socket");
+    }
+
+    let overflow_hook_script = r#"import json,os,shutil,subprocess,sys,uuid
+source_root=sys.argv[1]
+nonce=uuid.uuid4().hex
+root=f"/tmp/zmux-shell-{nonce}"
+descriptors=[]
+created=False
+try:
+    os.mkdir(root,0o700)
+    created=True
+    hook_path=os.path.join(root,"claude-lifecycle-hook.py")
+    shutil.copyfile(os.path.join(source_root,"claude-lifecycle-hook.py"),hook_path)
+    for name in ("agent-events","agent-events-loss","attention"):
+        path=os.path.join(root,name)
+        os.mkfifo(path,0o600)
+        os.chmod(path,0o600)
+    event_path=os.path.join(root,"agent-events")
+    loss_path=os.path.join(root,"agent-events-loss")
+    attention_path=os.path.join(root,"attention")
+    event_reader=os.open(event_path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+    descriptors.append(event_reader)
+    event_writer=os.open(event_path,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+    descriptors.append(event_writer)
+    loss_reader=os.open(loss_path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+    descriptors.append(loss_reader)
+    loss_writer=os.open(loss_path,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+    descriptors.append(loss_writer)
+    attention_reader=os.open(attention_path,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+    descriptors.append(attention_reader)
+    attention_writer=os.open(attention_path,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+    descriptors.append(attention_writer)
+    total=0
+    saturated=False
+    while total<1048576:
+        try:
+            total+=os.write(event_writer,b"x"*4096)
+        except BlockingIOError:
+            saturated=True
+            break
+    if not saturated:
+        sys.exit(2)
+    environment=os.environ.copy()
+    environment["ZMUX_AGENT_LIFECYCLE_NONCE"]=nonce
+    environment["ZMUX_SHELL_INTEGRATION_DIRECTORY"]=root
+    payload=json.dumps({"hook_event_name":"Notification","session_id":"00000000-0000-4000-8000-000000000002","notification_type":"permission_prompt"}).encode()
+    result=subprocess.run(["python3",hook_path],input=payload,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+    if result.returncode!=0:
+        sys.stderr.write(result.stderr.decode(errors="replace"))
+        sys.exit(3)
+    if os.read(loss_reader,1)!=b"!":
+        sys.exit(4)
+    if os.read(attention_reader,128)!=b"attention_silent\n":
+        sys.exit(5)
+    written=b""
+    while True:
+        try:
+            chunk=os.read(event_reader,8192)
+        except BlockingIOError:
+            break
+        if not chunk:
+            break
+        written+=chunk
+    if b'"event_id"' in written:
+        sys.exit(6)
+finally:
+    for descriptor in descriptors:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    if created:
+        shutil.rmtree(root,ignore_errors=True)
+"#;
+    let overflow_command = python_exec_command(overflow_hook_script, &[&root]);
+    let overflow = connection.operation_spec(&overflow_command).unwrap();
+    let output = Command::new(&overflow.program)
+        .args(&overflow.args)
+        .output()
+        .expect("run production hook FIFO-overflow fallback regression");
+    assert!(
+        output.status.success(),
+        "nonblocking hook overflow did not signal evidence loss and render its fallback: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     session
         .send_input(b"open https://ssh.example.test/login\n")
@@ -428,15 +746,15 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
     assert_eq!(opened.len(), 1);
     assert_eq!(opened[0].as_str(), "https://ssh.example.test/login");
 
-    // Simulate a failed primary FIFO open while the stream reader and its
-    // dedicated loss-signal FIFO remain live. The reader must fence this
-    // generation instead of silently continuing with stale provider evidence.
+    // Make the primary FIFO unsafe while the stream reader and its dedicated
+    // loss-signal FIFO remain live. The hook reports loss and the reader fences
+    // this generation instead of continuing with stale provider evidence.
     let root = nonce.remote_integration_directory();
     let lifecycle_token = nonce.remote_lifecycle_token();
     let hook_input =
         format!("{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"{provider_session}\"}}");
     let drop_hook_command = format!(
-        "rm -f '{root}/agent-events' && printf '%s\\n' '{hook_input}' | ZMUX_AGENT_LIFECYCLE_NONCE={lifecycle_token} ZMUX_SHELL_INTEGRATION_DIRECTORY='{root}' python3 '{root}/claude-lifecycle-hook.py'"
+        "chmod 0666 '{root}/agent-events' && printf '%s\\n' '{hook_input}' | ZMUX_AGENT_LIFECYCLE_NONCE={lifecycle_token} ZMUX_SHELL_INTEGRATION_DIRECTORY='{root}' python3 '{root}/claude-lifecycle-hook.py'"
     );
     let drop_hook = connection.operation_spec(&drop_hook_command).unwrap();
     let output = Command::new(&drop_hook.program)
@@ -451,9 +769,17 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
     let gap = stream_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("remote hook loss gap frame");
-    let gap: serde_json::Value = serde_json::from_str(&gap).unwrap();
+    let mut gap: serde_json::Value = serde_json::from_str(&gap).unwrap();
+    while gap["kind"] == "heartbeat" {
+        last_stream_sequence = gap["sequence"].as_u64().unwrap();
+        let line = stream_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("remote hook loss gap frame after heartbeat");
+        gap = serde_json::from_str(&line).unwrap();
+    }
     assert_eq!(gap["kind"], "gap");
-    assert_eq!(gap["sequence"], 3);
+    assert!(gap["sequence"].as_u64().unwrap() > last_stream_sequence);
+    assert_eq!(gap["generation"], generation.to_string());
     drop(stream_stdin);
     assert_eq!(remote_notice(), "attention\n");
 
@@ -464,6 +790,391 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .unwrap()
         .recv_timeout(Duration::from_secs(3))
         .unwrap();
+}
+
+#[test]
+fn required_remote_receipt_failures_emit_a_generation_gap() {
+    use zmux_remote_runtime::agent_lifecycle::MAX_PENDING_HOOK_RECEIPTS;
+
+    for deadline_seconds in [2.5, -1.0] {
+        let mut stream = LocalLifecycleStream::start();
+        let event_id = uuid::Uuid::new_v4();
+        let endpoint = if deadline_seconds < 0.0 {
+            let path = stream.receipt_path(event_id);
+            let socket = UnixDatagram::bind(&path).expect("bind expired receipt endpoint");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("secure expired receipt endpoint");
+            socket
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .expect("bound expired receipt assertion");
+            Some(socket)
+        } else {
+            None
+        };
+        stream.write_events(&[event_id], deadline_seconds);
+        let gap = stream.read_until_gap();
+        assert_eq!(gap["kind"], "gap");
+        assert_eq!(gap["version"], 3);
+        assert_eq!(gap["nonce"], stream.nonce_token);
+        assert_eq!(gap["generation"], stream.generation.to_string());
+        assert!(gap["sequence"].as_u64().unwrap() > 0);
+        assert_eq!(stream.wait_status().code(), Some(74));
+        if let Some(endpoint) = endpoint {
+            let mut receipt = [0; 512];
+            assert!(matches!(
+                endpoint.recv(&mut receipt),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    )
+            ));
+        }
+    }
+
+    let mut stream = LocalLifecycleStream::start();
+    let event_ids: Vec<_> = (0..=MAX_PENDING_HOOK_RECEIPTS)
+        .map(|_| uuid::Uuid::new_v4())
+        .collect();
+    let mut endpoints = Vec::with_capacity(event_ids.len());
+    for event_id in &event_ids {
+        let path = stream.receipt_path(*event_id);
+        let endpoint = UnixDatagram::bind(&path).expect("bind queued receipt endpoint");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("secure queued receipt endpoint");
+        endpoints.push(endpoint);
+    }
+    stream.write_events(&event_ids, 2.5);
+    let mut last_sequence = 0;
+    for event_id in event_ids.iter().take(MAX_PENDING_HOOK_RECEIPTS) {
+        let frame = stream.read_until_hook_or_gap();
+        assert_eq!(frame["kind"], "hook");
+        assert_eq!(frame["event_id"], event_id.to_string());
+        assert_eq!(frame["receipt_requested"], true);
+        let sequence = frame["sequence"].as_u64().unwrap();
+        assert!(sequence > last_sequence);
+        last_sequence = sequence;
+    }
+    let gap = stream.read_until_gap();
+    assert_eq!(gap["kind"], "gap");
+    assert_eq!(gap["generation"], stream.generation.to_string());
+    assert!(gap["sequence"].as_u64().unwrap() > last_sequence);
+    assert_ne!(
+        gap["event_id"],
+        event_ids[MAX_PENDING_HOOK_RECEIPTS].to_string()
+    );
+    assert_eq!(stream.wait_status().code(), Some(74));
+}
+
+#[test]
+fn configured_remote_hooks_fallback_for_unreadable_payloads_and_ignore_other_notifications() {
+    for (hook_name, matcher, payload, fallback) in [
+        ("Stop", None, b"{".to_vec(), "stop_silent\n"),
+        (
+            "Notification",
+            Some("permission_prompt"),
+            vec![b'x'; 65_537],
+            "attention_silent\n",
+        ),
+    ] {
+        let mut stream = LocalLifecycleStream::start();
+        let command = LocalLifecycleStream::configured_hook_command(hook_name, matcher);
+        assert_eq!(stream.run_configured_hook(&command, &payload), fallback);
+        let gap = stream.read_until_gap();
+        assert_eq!(gap["kind"], "gap");
+        assert_eq!(gap["generation"], stream.generation.to_string());
+        assert_eq!(stream.wait_status().code(), Some(74));
+    }
+
+    let mut stream = LocalLifecycleStream::start();
+    let valid_other_notification = serde_json::json!({
+        "hook_event_name":"Notification",
+        "session_id":"00000000-0000-4000-8000-000000000002",
+        "notification_type":"auth_success"
+    })
+    .to_string()
+    .into_bytes();
+    let generic_command = LocalLifecycleStream::configured_hook_command("Notification", None);
+    assert_eq!(
+        stream.run_configured_hook(&generic_command, &valid_other_notification),
+        ""
+    );
+    let frame = stream.read_until_hook_or_gap();
+    assert_eq!(frame["kind"], "hook");
+    assert_eq!(frame["event"]["notification_type"], "auth_success");
+
+    let matcher_command =
+        LocalLifecycleStream::configured_hook_command("Notification", Some("permission_prompt"));
+    assert_eq!(
+        stream.run_configured_hook(&matcher_command, &valid_other_notification),
+        ""
+    );
+    assert!(matches!(
+        stream.stdout.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+
+    let mut stream = LocalLifecycleStream::start();
+    let valid_attention = serde_json::json!({
+        "hook_event_name":"Notification",
+        "session_id":"00000000-0000-4000-8000-000000000002",
+        "notification_type":"permission_prompt"
+    })
+    .to_string()
+    .into_bytes();
+    assert_eq!(
+        stream.run_configured_hook(&generic_command, &valid_attention),
+        "attention_silent\n"
+    );
+    let frame = stream.read_until_hook_or_gap();
+    assert_eq!(frame["kind"], "hook");
+    assert_eq!(frame["event"]["notification_type"], "permission_prompt");
+    assert_eq!(frame["receipt_requested"], true);
+    assert_eq!(
+        stream.run_configured_hook(&matcher_command, &valid_attention),
+        ""
+    );
+    assert!(matches!(
+        stream.stdout.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+}
+
+struct LocalLifecycleStream {
+    _root: FixtureRoot,
+    root_path: PathBuf,
+    nonce_token: String,
+    generation: uuid::Uuid,
+    child: Child,
+    stdout: mpsc::Receiver<String>,
+    _stdin: ChildStdin,
+}
+
+impl LocalLifecycleStream {
+    fn start() -> Self {
+        let nonce = zmux_session_runtime::shell_integration::OpenRequestNonce::generate();
+        let nonce_token = nonce.remote_lifecycle_token();
+        let root_path = PathBuf::from(nonce.remote_integration_directory());
+        let root = FixtureRoot::new(root_path.clone());
+        for name in ["agent-events", "agent-events-loss", "attention"] {
+            let path = root_path.join(name);
+            let status = Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .expect("mkfifo is available for the local lifecycle stream fixture");
+            assert!(status.success(), "create lifecycle FIFO {path:?}");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+                .expect("secure lifecycle FIFO");
+        }
+        let hook_source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../session-runtime/src/shell/claude-lifecycle-hook.py");
+        let hook_destination = root_path.join("claude-lifecycle-hook.py");
+        fs::copy(hook_source, &hook_destination).expect("install production lifecycle hook helper");
+        fs::set_permissions(&hook_destination, fs::Permissions::from_mode(0o700))
+            .expect("secure production lifecycle hook helper");
+
+        let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../session-runtime/src/shell/claude-lifecycle-stream.py");
+        let mut child = Command::new("python3")
+            .arg(script_path)
+            .arg(&nonce_token)
+            .env("ZMUX_SHELL_INTEGRATION_DIRECTORY", &root_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("start local production lifecycle stream helper");
+        let stdout = child.stdout.take().unwrap();
+        let (stdout_sender, stdout_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if stdout_sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut stream = Self {
+            _root: root,
+            root_path,
+            nonce_token,
+            generation: uuid::Uuid::new_v4(),
+            _stdin: child.stdin.take().unwrap(),
+            stdout: stdout_receiver,
+            child,
+        };
+        let hello = stream.read_frame();
+        assert_eq!(hello["kind"], "hello");
+        assert_eq!(hello["nonce"], stream.nonce_token);
+        writeln!(
+            stream._stdin,
+            "{}",
+            serde_json::to_string(
+                &zmux_remote_runtime::agent_lifecycle::ClientFrame::Activate {
+                    version: 3,
+                    nonce: stream.nonce_token.parse().unwrap(),
+                    generation: stream.generation,
+                }
+            )
+            .unwrap()
+        )
+        .unwrap();
+        let active = stream.read_frame();
+        assert_eq!(active["kind"], "active");
+        assert_eq!(active["generation"], stream.generation.to_string());
+        stream
+    }
+
+    fn receipt_path(&self, event_id: uuid::Uuid) -> PathBuf {
+        self.root_path.join(format!("r-{}", event_id.simple()))
+    }
+
+    fn configured_hook_command(hook_name: &str, matcher: Option<&str>) -> String {
+        let config: serde_json::Value = serde_json::from_str(include_str!(
+            "../../session-runtime/src/shell/claude-hooks-remote.json"
+        ))
+        .expect("parse production remote Claude hook configuration");
+        let groups = config["hooks"][hook_name]
+            .as_array()
+            .expect("configured remote hook event");
+        let group = groups
+            .iter()
+            .find(|group| match matcher {
+                Some(matcher) => group["matcher"] == matcher,
+                None => group.get("matcher").is_none(),
+            })
+            .expect("configured remote hook matcher");
+        group["hooks"][0]["command"]
+            .as_str()
+            .expect("configured remote hook command")
+            .to_owned()
+    }
+
+    fn run_configured_hook(&self, command: &str, payload: &[u8]) -> String {
+        let runner = r#"import os,select,subprocess,sys
+root,nonce,command=sys.argv[1:]
+attention=os.path.join(root,"attention")
+reader=os.open(attention,os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+hold=os.open(attention,os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+environment=os.environ.copy()
+environment["ZMUX_AGENT_LIFECYCLE_NONCE"]=nonce
+environment["ZMUX_SHELL_INTEGRATION_DIRECTORY"]=root
+payload=sys.stdin.buffer.read()
+result=subprocess.run(["/bin/sh","-c",command],input=payload,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+if result.returncode:
+    sys.stderr.buffer.write(result.stderr)
+    sys.exit(result.returncode)
+data=os.read(reader,128) if select.select([reader],[],[],0.1)[0] else b""
+sys.stdout.buffer.write(data)
+os.close(reader)
+os.close(hold)
+"#;
+        let mut child = Command::new("python3")
+            .arg("-c")
+            .arg(runner)
+            .arg(&self.root_path)
+            .arg(&self.nonce_token)
+            .arg(command)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run production configured remote hook command");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload)
+            .expect("write payload to configured remote hook");
+        let output = child
+            .wait_with_output()
+            .expect("wait for configured remote hook command");
+        assert!(
+            output.status.success(),
+            "configured remote hook failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).expect("decode silent fallback token")
+    }
+
+    fn write_events(&self, event_ids: &[uuid::Uuid], deadline_seconds: f64) {
+        let ids = serde_json::to_string(event_ids).unwrap();
+        let script = r#"import json,os,select,sys,time
+root,nonce,ids,deadline=sys.argv[1:]
+event={"name":"Notification","session_id":"00000000-0000-4000-8000-000000000002","main_session":True,"notification_type":"permission_prompt"}
+fd=os.open(os.path.join(root,"agent-events"),os.O_WRONLY|os.O_NONBLOCK|os.O_NOFOLLOW|os.O_CLOEXEC)
+try:
+    for event_id in json.loads(ids):
+        record={"nonce":nonce,"event_id":event_id,"receipt_required":True,"receipt_requested":True,"receipt_deadline":time.monotonic()+float(deadline),"event":event}
+        data=(json.dumps(record,separators=(",",":"))+"\n").encode()
+        while True:
+            try:
+                if os.write(fd,data)!=len(data):
+                    raise OSError("short lifecycle FIFO write")
+                break
+            except BlockingIOError:
+                if not select.select([], [fd], [], 5.0)[1]:
+                    raise TimeoutError("lifecycle FIFO write expired")
+finally:
+    os.close(fd)
+"#;
+        let output = Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .arg(&self.root_path)
+            .arg(&self.nonce_token)
+            .arg(ids)
+            .arg(deadline_seconds.to_string())
+            .output()
+            .expect("write lifecycle test records");
+        assert!(
+            output.status.success(),
+            "lifecycle FIFO writer failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn read_frame(&mut self) -> serde_json::Value {
+        let line = self
+            .stdout
+            .recv_timeout(Duration::from_secs(5))
+            .expect("read lifecycle stream frame");
+        serde_json::from_str(&line).expect("decode lifecycle stream frame")
+    }
+
+    fn read_until_hook_or_gap(&mut self) -> serde_json::Value {
+        loop {
+            let frame = self.read_frame();
+            if frame["kind"] == "heartbeat" {
+                continue;
+            }
+            return frame;
+        }
+    }
+
+    fn read_until_gap(&mut self) -> serde_json::Value {
+        loop {
+            let frame = self.read_frame();
+            assert_ne!(frame["kind"], "hook", "dropped hook must not be admitted");
+            if frame["kind"] == "gap" {
+                return frame;
+            }
+            assert_eq!(frame["kind"], "heartbeat");
+        }
+    }
+
+    fn wait_status(&mut self) -> std::process::ExitStatus {
+        self.child.wait().expect("wait for fenced lifecycle stream")
+    }
+}
+
+impl Drop for LocalLifecycleStream {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 struct SshdFixture {
@@ -651,6 +1362,25 @@ fn wait_for_sshd(port: u16, child: &mut Child) -> Result<(), &'static str> {
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn python_exec_command(script: &str, arguments: &[&str]) -> String {
+    let launcher = "import json,sys; original=sys.argv; sys.argv=['zmux-test']+original[2:]; exec(json.loads(original[1]))";
+    let script_argument = serde_json::to_string(script).unwrap();
+    let mut command = format!(
+        "python3 -c {} {}",
+        shell_quote(launcher),
+        shell_quote(&script_argument)
+    );
+    for argument in arguments {
+        command.push(' ');
+        command.push_str(&shell_quote(argument));
+    }
+    command
 }
 
 fn wait_for_control_socket(path: &Path, session: &mut zmux_session_runtime::Session) {

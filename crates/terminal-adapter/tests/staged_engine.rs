@@ -52,7 +52,7 @@ fn ghostty() -> Engine {
 #[test]
 fn linked_engine_publishes_cells_modes_metadata_and_reply_as_one_exact_generation() {
     let mut engine = ghostty();
-    let batch = engine.stage_process("界e\u{301}\x1b]0;title;rest\x07\x1b]7;file://host/a%20b;c\x07\x1b]777;notify;hello;body;rest\x07\x1b[?1h\x1b[?2004h\x1b[6n".as_bytes()).unwrap();
+    let batch = engine.stage_process("界e\u{301}\x1b]0;title;rest\x07\x1b]7;file://host/a%20b;c\x07\x1b]777;notify;hello;body;rest\x07\x1b]777;notify;ZMUX_INBOX;Claude;Silent fallback\x07\x1b[?1h\x1b[?2004h\x1b[6n".as_bytes()).unwrap();
     assert_eq!(batch.replies(), b"\x1b[1;4R");
     assert_eq!(engine.viewport().contents, "");
     assert_eq!(engine.viewport().title, "");
@@ -70,8 +70,11 @@ fn linked_engine_publishes_cells_modes_metadata_and_reply_as_one_exact_generatio
     assert_eq!(retained.lines[0][0].width, 2);
     assert_eq!(retained.title, "title;rest");
     assert_eq!(retained.working_directory.as_deref(), Some("/a b;c"));
-    assert_eq!(retained.notices.len(), 1);
+    assert_eq!(retained.notices.len(), 2);
     assert_eq!(retained.notices[0].body, "body;rest");
+    assert_eq!(retained.notices[1].source, "osc777-inbox");
+    assert_eq!(retained.notices[1].title, "Claude");
+    assert_eq!(retained.notices[1].body, "Silent fallback");
     assert!(retained.application_cursor && retained.bracketed_paste);
     let batch = engine.stage_resize(Size { rows: 2, cols: 6 }).unwrap();
     assert_eq!(engine.viewport().size, size());
