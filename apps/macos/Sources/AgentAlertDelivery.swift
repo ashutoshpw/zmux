@@ -225,7 +225,7 @@ struct AgentAlertEventGate {
             rememberedEventSet.removeAll(keepingCapacity: true)
         }
         for event in snapshot.events.prefix(128) {
-            remember(AgentAlertEventKey(identity: event.identity, sequence: event.sequence, kind: event.kind))
+            _ = remember(AgentAlertEventKey(identity: event.identity, sequence: event.sequence, kind: event.kind))
         }
         epoch = snapshot.epoch
         cursor = snapshot.cursor

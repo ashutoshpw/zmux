@@ -149,3 +149,9 @@ Verification:
 - The populated sidebar smoke has not been compiled or run on macOS. The packaged screenshot and app-selection acceptance are therefore pending; the Linux source check does not cover them.
 - The current sound limitation remains: generic untagged OSC terminal notices can request the OS default sound even when the Alerts master switch is muted. A correlated event can therefore produce both the OS default and the selected Zmux agent sound. Actual audibility and banner presentation remain unverified on macOS.
 - Codex lifecycle remains unsupported. Real Claude provider execution remains unverified; local synthetic hook and control-socket fixtures do not establish provider authentication or live Claude behavior.
+
+## Latest verification update — 2026-11-01
+
+- macOS development workflow [41304763573](https://github.com/ashutoshpw/zmux/actions/runs/41304763573) failed in `swift-typecheck` because the result of `remember(...)` was unused. The `_ =` fix has been applied. The dependent sidebar and development jobs were skipped, so this run provides no packaged sidebar or screenshot acceptance.
+- The full `scripts/check` retry r10 passed on Linux after the unused-result fix; log: `/tmp/zmux-agent-sidebar-check-r10.log`. This source-check pass does not establish native macOS acceptance.
+- Exact-event receipts for lifecycle sound mute and deduplication remain outstanding. The existing synthetic state smoke does not close this receipt gap.
