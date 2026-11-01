@@ -225,3 +225,23 @@ The fixture now binds the platform's default control-socket path. The publicatio
 
 - The full `scripts/check` retry r17 passed on Linux. Log: `/tmp/zmux-agent-sidebar-check-r17.log`. This does not establish hosted macOS or packaged app acceptance.
 - The hosted `ad4f501` run remains failed pending a macOS rerun. The platform socket-path mismatch is the suspected cause, but Actions did not retain the fallback stderr, so the exact runtime reason was not directly observed. The fixture path correction is in place; no downloadable build or packaged acceptance is claimed from that run.
+
+## macOS test wait hardening — 2026-11-01
+
+The automatic compatibility fallback PTY fixture previously waited for the child to exit before reading PTY output. That order can deadlock when child output fills the PTY queue. The fixture now drains concurrently using a nonblocking, cancellable reader, bounds child exit to 30 seconds and PTY EOF to 5 seconds, and requests child/process-group cleanup on timeout. The reader thread is joined after completion or cancellation; captured output is capped at 1 MiB for diagnostics. The synthetic provider emits 64 KiB before a final marker so the regression exercises PTY backpressure. `portable-pty` normalizes Unix PTY `EIO` after slave closure to EOF; this is not evidence of a Darwin-specific failure.
+
+The cleanup guard records when `try_wait` reaps the PTY leader and then refuses to signal its cached process-group ID, which may already be reusable. Timeout cleanup still signals the live process group before the bounded reap wait. If PTY EOF times out after the child was reaped, reader cancellation and join proceed without signaling that stale group ID.
+
+Heartbeat-aware Hook/Gap test receives now share one 15-second absolute deadline per awaited frame. Heartbeats continue to count as progress without resetting that deadline, and timeout failures include the last heartbeat sequence.
+
+Focused verification on Linux:
+
+- After the cleanup guard adjustment, `RUST_TEST_THREADS=2 cargo test -p zmux --test provider_hooks -- --nocapture` passed: 10 passed, 1 ignored; `cargo test -p zmux-remote-runtime --test connection -- --nocapture` passed: 9 passed; and `cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 3 passed.
+- `cargo clippy -p zmux --test provider_hooks -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed after the cleanup guard adjustment.
+- The full `scripts/check` was stopped by the parent and is not part of this follow-up; a hosted macOS rerun was not run. These Linux checks do not establish Darwin PTY behavior.
+
+## Latest verification update — 2026-11-01
+
+- The full `scripts/check` retry r19 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r19.log`. This run includes the concurrent PTY drain, bounded child/EOF waits, reaped-process cleanup guard, and absolute heartbeat-frame deadlines.
+- Hosted workflow [41316003003](https://github.com/ashutoshpw/zmux/actions/runs/41316003003) was canceled after more than 20 minutes in `Validate Rust core and foreign ABI`. Logs show `automatic_compatibility...` exceeding 60 seconds, but the exact blocked call is unproven; a specific hang cause is not established. A hosted rerun is still needed.
+- The canceled workflow skipped the universal app build, packaged sidebar smoke, downloadable artifact, and build receipt. No hosted acceptance or delivered build is claimed.

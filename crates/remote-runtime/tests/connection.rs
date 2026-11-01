@@ -16,6 +16,35 @@ use zmux_remote_runtime::{
     connection::{ConnectionError, ManagedConnection},
 };
 
+const LIFECYCLE_FRAME_DEADLINE: Duration = Duration::from_secs(15);
+
+fn receive_non_heartbeat_lifecycle_frame(
+    receiver: &mpsc::Receiver<String>,
+    expectation: &str,
+) -> (serde_json::Value, Option<u64>) {
+    let deadline = Instant::now() + LIFECYCLE_FRAME_DEADLINE;
+    let mut last_heartbeat_sequence = None;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "timed out after {LIFECYCLE_FRAME_DEADLINE:?} waiting for {expectation}; last heartbeat sequence: {last_heartbeat_sequence:?}"
+        );
+        let line = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+            panic!(
+                "timed out after {LIFECYCLE_FRAME_DEADLINE:?} waiting for {expectation}; last heartbeat sequence: {last_heartbeat_sequence:?}; receive error: {error}"
+            )
+        });
+        let frame: serde_json::Value = serde_json::from_str(&line)
+            .unwrap_or_else(|error| panic!("decode {expectation} lifecycle frame: {error}"));
+        if frame["kind"] == "heartbeat" {
+            last_heartbeat_sequence = frame["sequence"].as_u64();
+            continue;
+        }
+        return (frame, last_heartbeat_sequence);
+    }
+}
+
 #[test]
 fn private_control_paths_are_short_unique_and_mode_0700() {
     let first = ManagedConnection::create(descriptor("first-host")).unwrap();
@@ -387,21 +416,16 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
                 nonce.remote_integration_directory()
             );
             session.send_input(command.as_bytes()).unwrap();
-            loop {
-                let line = stream_rx
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("remote provider hook frame");
-                let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
-                if frame["kind"] == "heartbeat" {
-                    last_stream_sequence = frame["sequence"].as_u64().unwrap();
-                    continue;
-                }
-                assert_eq!(frame["kind"], "hook");
-                let sequence = frame["sequence"].as_u64().unwrap();
-                assert!(sequence > last_stream_sequence);
-                last_stream_sequence = sequence;
-                break frame;
+            let (frame, heartbeat_sequence) =
+                receive_non_heartbeat_lifecycle_frame(&stream_rx, "remote provider Hook frame");
+            if let Some(heartbeat_sequence) = heartbeat_sequence {
+                last_stream_sequence = last_stream_sequence.max(heartbeat_sequence);
             }
+            assert_eq!(frame["kind"], "hook");
+            let sequence = frame["sequence"].as_u64().unwrap();
+            assert!(sequence > last_stream_sequence);
+            last_stream_sequence = sequence;
+            frame
         };
         let started = push_remote_hook(serde_json::json!({
             "name":"SessionStart",
@@ -462,17 +486,13 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         "remote event writer failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let hook_frame: serde_json::Value = loop {
-        let hook_line = stream_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("receipt-requested remote provider hook frame");
-        let frame: serde_json::Value = serde_json::from_str(&hook_line).unwrap();
-        if frame["kind"] == "heartbeat" {
-            last_stream_sequence = frame["sequence"].as_u64().unwrap();
-            continue;
-        }
-        break frame;
-    };
+    let (hook_frame, heartbeat_sequence) = receive_non_heartbeat_lifecycle_frame(
+        &stream_rx,
+        "receipt-requested remote provider Hook frame",
+    );
+    if let Some(heartbeat_sequence) = heartbeat_sequence {
+        last_stream_sequence = last_stream_sequence.max(heartbeat_sequence);
+    }
     assert_eq!(hook_frame["kind"], "hook");
     let hook_sequence = hook_frame["sequence"].as_u64().unwrap();
     assert!(hook_sequence > last_stream_sequence);
@@ -613,23 +633,17 @@ finally:
         .iter()
         .take(zmux_remote_runtime::agent_lifecycle::MAX_PENDING_HOOK_RECEIPTS)
     {
-        loop {
-            let line = stream_rx
-                .recv_timeout(Duration::from_secs(5))
-                .expect("bounded receipt queue hook frame");
-            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
-            if frame["kind"] == "heartbeat" {
-                last_stream_sequence = frame["sequence"].as_u64().unwrap();
-                continue;
-            }
-            assert_eq!(frame["kind"], "hook");
-            let sequence = frame["sequence"].as_u64().unwrap();
-            assert!(sequence > last_stream_sequence);
-            last_stream_sequence = sequence;
-            assert_eq!(frame["event_id"], expected_id.to_string());
-            assert_eq!(frame["receipt_requested"], true);
-            break;
+        let (frame, heartbeat_sequence) =
+            receive_non_heartbeat_lifecycle_frame(&stream_rx, "bounded receipt queue Hook frame");
+        if let Some(heartbeat_sequence) = heartbeat_sequence {
+            last_stream_sequence = last_stream_sequence.max(heartbeat_sequence);
         }
+        assert_eq!(frame["kind"], "hook");
+        let sequence = frame["sequence"].as_u64().unwrap();
+        assert!(sequence > last_stream_sequence);
+        last_stream_sequence = sequence;
+        assert_eq!(frame["event_id"], expected_id.to_string());
+        assert_eq!(frame["receipt_requested"], true);
     }
     for (_, endpoint, path) in queued_receipts {
         drop(endpoint);
@@ -766,16 +780,10 @@ finally:
         "remote hook loss fixture failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let gap = stream_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("remote hook loss gap frame");
-    let mut gap: serde_json::Value = serde_json::from_str(&gap).unwrap();
-    while gap["kind"] == "heartbeat" {
-        last_stream_sequence = gap["sequence"].as_u64().unwrap();
-        let line = stream_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("remote hook loss gap frame after heartbeat");
-        gap = serde_json::from_str(&line).unwrap();
+    let (gap, heartbeat_sequence) =
+        receive_non_heartbeat_lifecycle_frame(&stream_rx, "remote hook loss Gap frame");
+    if let Some(heartbeat_sequence) = heartbeat_sequence {
+        last_stream_sequence = last_stream_sequence.max(heartbeat_sequence);
     }
     assert_eq!(gap["kind"], "gap");
     assert!(gap["sequence"].as_u64().unwrap() > last_stream_sequence);
@@ -1143,24 +1151,19 @@ finally:
     }
 
     fn read_until_hook_or_gap(&mut self) -> serde_json::Value {
-        loop {
-            let frame = self.read_frame();
-            if frame["kind"] == "heartbeat" {
-                continue;
-            }
-            return frame;
-        }
+        let (frame, _) = receive_non_heartbeat_lifecycle_frame(
+            &self.stdout,
+            "local lifecycle Hook or Gap frame",
+        );
+        frame
     }
 
     fn read_until_gap(&mut self) -> serde_json::Value {
-        loop {
-            let frame = self.read_frame();
-            assert_ne!(frame["kind"], "hook", "dropped hook must not be admitted");
-            if frame["kind"] == "gap" {
-                return frame;
-            }
-            assert_eq!(frame["kind"], "heartbeat");
-        }
+        let (frame, _) =
+            receive_non_heartbeat_lifecycle_frame(&self.stdout, "local lifecycle Gap frame");
+        assert_ne!(frame["kind"], "hook", "dropped hook must not be admitted");
+        assert_eq!(frame["kind"], "gap", "expected a local lifecycle Gap frame");
+        frame
     }
 
     fn wait_status(&mut self) -> std::process::ExitStatus {

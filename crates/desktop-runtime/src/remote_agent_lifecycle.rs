@@ -785,6 +785,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
         bool,
         zmux_remote_runtime::agent_lifecycle::ClaudeHook,
     ) {
+        const FRAME_DEADLINE: Duration = Duration::from_secs(15);
+
         let root = nonce.remote_integration_directory();
         let command = format!(
             "printf '%s\\n' {} | ZMUX_AGENT_LIFECYCLE_NONCE={} ZMUX_SHELL_INTEGRATION_DIRECTORY={} python3 {root}/claude-lifecycle-hook.py",
@@ -802,11 +804,20 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
             .stderr(Stdio::null())
             .spawn()
             .expect("run the remote lifecycle hook command");
+        let deadline = Instant::now() + FRAME_DEADLINE;
+        let mut last_heartbeat_sequence = None;
         loop {
-            match receiver
-                .recv_timeout(Duration::from_secs(5))
-                .expect("remote lifecycle frame should arrive")
-            {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "remote lifecycle Hook frame did not arrive within {FRAME_DEADLINE:?}; last heartbeat sequence: {last_heartbeat_sequence:?}"
+            );
+            let message = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+                panic!(
+                    "remote lifecycle Hook frame did not arrive within {FRAME_DEADLINE:?}; last heartbeat sequence: {last_heartbeat_sequence:?}; receive error: {error}"
+                )
+            });
+            match message {
                 Message::Frame {
                     frame:
                         zmux_remote_runtime::agent_lifecycle::Frame::Hook {
@@ -828,9 +839,9 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     );
                 }
                 Message::Frame {
-                    frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { .. },
+                    frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { sequence, .. },
                     ..
-                } => {}
+                } => last_heartbeat_sequence = Some(sequence),
                 Message::Frame { frame, .. } => {
                     panic!("unexpected remote lifecycle frame before hook admission: {frame:?}")
                 }

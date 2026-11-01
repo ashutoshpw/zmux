@@ -1,5 +1,10 @@
 //! Owned plugin publication and nonblocking hook ingress through the shipped CLI.
 //! Synthetic provider --version only; no Claude invocation or user configuration.
+use nix::{
+    fcntl::{FcntlArg, OFlag, fcntl},
+    sys::signal::{Signal, killpg},
+    unistd::Pid,
+};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::{Value, json};
 use std::{
@@ -11,7 +16,11 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -225,6 +234,193 @@ fn write_event_frame(stream: &mut UnixStream, frame: &Value) {
     stream.write_all(&bytes).unwrap();
 }
 
+const PTY_CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+const PTY_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const PTY_CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_CAPTURED_PTY_OUTPUT_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct PtyOutputCapture {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn pty_output_diagnostic(capture: &Arc<Mutex<PtyOutputCapture>>) -> String {
+    let capture = capture.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut output = String::from_utf8_lossy(&capture.bytes).into_owned();
+    if capture.truncated {
+        output.push_str("\n[PTY output truncated after 1 MiB]");
+    }
+    output
+}
+
+struct PtyChildCleanup {
+    child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    process_group: Option<Pid>,
+    child_reaped: bool,
+    armed: bool,
+}
+
+impl PtyChildCleanup {
+    fn new(
+        child_killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+        process_group: Option<Pid>,
+    ) -> Self {
+        Self {
+            child_killer,
+            process_group,
+            child_reaped: false,
+            armed: true,
+        }
+    }
+
+    fn terminate(&mut self) {
+        // Reaping the child releases its PID, which is also the PTY process
+        // group leader ID. Never signal that cached group after reaping.
+        if self.child_reaped {
+            return;
+        }
+        if let Some(process_group) = self.process_group {
+            let _ = killpg(process_group, Signal::SIGKILL);
+        }
+        let _ = self.child_killer.kill();
+    }
+
+    fn mark_child_reaped(&mut self) {
+        self.child_reaped = true;
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PtyChildCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            self.terminate();
+        }
+    }
+}
+
+struct PtyOutputReader {
+    cancelled: Arc<AtomicBool>,
+    done: mpsc::Receiver<Result<(), String>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl PtyOutputReader {
+    fn start(mut reader: Box<dyn Read + Send>, capture: Arc<Mutex<PtyOutputCapture>>) -> Self {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let reader_cancelled = Arc::clone(&cancelled);
+        let (done_tx, done) = mpsc::sync_channel(1);
+        let thread = thread::Builder::new()
+            .name("provider-hook-pty-reader".into())
+            .spawn(move || {
+                let mut buffer = [0; 8192];
+                let result = loop {
+                    if reader_cancelled.load(Ordering::Acquire) {
+                        break Err("PTY output reader was cancelled".into());
+                    }
+                    match reader.read(&mut buffer) {
+                        Ok(0) => break Ok(()),
+                        Ok(read) => {
+                            let mut capture =
+                                capture.lock().unwrap_or_else(|poison| poison.into_inner());
+                            let available =
+                                MAX_CAPTURED_PTY_OUTPUT_BYTES.saturating_sub(capture.bytes.len());
+                            let captured = read.min(available);
+                            capture.bytes.extend_from_slice(&buffer[..captured]);
+                            capture.truncated |= captured < read;
+                        }
+                        Err(error)
+                            if error.raw_os_error() == Some(nix::errno::Errno::EIO as i32) =>
+                        {
+                            // On Unix, portable-pty maps EIO to EOF after the
+                            // last slave descriptor closes.
+                            break Ok(());
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => break Err(format!("read PTY master: {error}")),
+                    }
+                };
+                let _ = done_tx.send(result);
+            })
+            .unwrap_or_else(|error| panic!("start automatic Claude PTY output reader: {error}"));
+        Self {
+            cancelled,
+            done,
+            thread: Some(thread),
+        }
+    }
+
+    fn wait(&mut self, timeout: Duration, expectation: &str) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "timed out waiting for {expectation} after {timeout:?}"
+            ));
+        }
+        let result = match self.done.recv_timeout(remaining) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(format!(
+                    "timed out waiting for {expectation} after {timeout:?}"
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(format!("PTY output reader ended before {expectation}"));
+            }
+        };
+
+        let join_deadline = Instant::now() + PTY_CLEANUP_TIMEOUT;
+        while self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            if Instant::now() >= join_deadline {
+                return Err(format!(
+                    "PTY output reader did not stop within {PTY_CLEANUP_TIMEOUT:?}"
+                ));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        self.thread
+            .take()
+            .ok_or_else(|| "PTY output reader was already joined".to_owned())?
+            .join()
+            .map_err(|_| "PTY output reader panicked".to_owned())?;
+        result
+    }
+
+    fn cancel_and_wait(&mut self, timeout: Duration) -> Result<(), String> {
+        self.cancelled.store(true, Ordering::Release);
+        if self.thread.is_none() {
+            return Ok(());
+        }
+        match self.wait(timeout, "PTY output reader cleanup") {
+            Err(error) if error == "PTY output reader was cancelled" => Ok(()),
+            result => result,
+        }
+    }
+}
+
+impl Drop for PtyOutputReader {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            // Nonblocking reads and cancellation checks ensure the reader
+            // cannot remain stuck waiting for PTY output during cleanup.
+            let _ = thread.join();
+        }
+    }
+}
+
 fn run_terminal_command(command: CommandBuilder) -> (portable_pty::ExitStatus, String) {
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -234,18 +430,87 @@ fn run_terminal_command(command: CommandBuilder) -> (portable_pty::ExitStatus, S
             pixel_height: 0,
         })
         .unwrap();
-    let mut reader = pair.master.try_clone_reader().unwrap();
+    let reader = pair.master.try_clone_reader().unwrap();
     let mut child = pair.slave.spawn_command(command).unwrap();
     drop(pair.slave);
-    let status = child.wait().unwrap();
-    drop(pair.master);
-    let mut output = Vec::new();
-    match reader.read_to_end(&mut output) {
-        Ok(_) => (),
-        Err(error) if error.raw_os_error() == Some(nix::errno::Errno::EIO as i32) => (),
-        Err(error) => panic!("read automatic Claude PTY output: {error}"),
+    let process_group = pair.master.process_group_leader().map(Pid::from_raw);
+    let mut cleanup = PtyChildCleanup::new(child.clone_killer(), process_group);
+    let output_capture = Arc::new(Mutex::new(PtyOutputCapture::default()));
+    // Drain output while the child runs: waiting first can block forever when
+    // the PTY output queue fills before the child exits. O_NONBLOCK makes the
+    // reader thread cancellable on every Unix platform.
+    let master_fd = pair
+        .master
+        .as_raw_fd()
+        .expect("Unix PTY master exposes its file descriptor");
+    let flags = fcntl(master_fd, FcntlArg::F_GETFL).expect("read PTY master flags");
+    fcntl(
+        master_fd,
+        FcntlArg::F_SETFL(OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK),
+    )
+    .expect("make PTY master reads cancellable");
+    let mut output_reader = PtyOutputReader::start(reader, Arc::clone(&output_capture));
+
+    let child_deadline = Instant::now() + PTY_CHILD_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                cleanup.mark_child_reaped();
+                break status;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                cleanup.terminate();
+                let reader_cleanup = output_reader.cancel_and_wait(PTY_CLEANUP_TIMEOUT);
+                panic!(
+                    "poll automatic Claude PTY child failed: {error}; output reader cleanup: {reader_cleanup:?}; captured output:\n{}",
+                    pty_output_diagnostic(&output_capture)
+                );
+            }
+        }
+        if Instant::now() >= child_deadline {
+            cleanup.terminate();
+            let cleanup_deadline = Instant::now() + PTY_CLEANUP_TIMEOUT;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        cleanup.mark_child_reaped();
+                        break;
+                    }
+                    Ok(None) if Instant::now() < cleanup_deadline => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Ok(None) => panic!(
+                        "automatic Claude PTY child did not exit within {PTY_CHILD_TIMEOUT:?} or after process-group termination; captured output:\n{}",
+                        pty_output_diagnostic(&output_capture)
+                    ),
+                    Err(error) => panic!(
+                        "reap automatic Claude PTY child after timeout: {error}; captured output:\n{}",
+                        pty_output_diagnostic(&output_capture)
+                    ),
+                }
+            }
+            let reader_cleanup = output_reader.cancel_and_wait(PTY_CLEANUP_TIMEOUT);
+            panic!(
+                "automatic Claude PTY child exceeded {PTY_CHILD_TIMEOUT:?}; requested PTY child/process-group cleanup; output reader cleanup: {reader_cleanup:?}; captured output:\n{}",
+                pty_output_diagnostic(&output_capture)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    if let Err(error) = output_reader.wait(PTY_OUTPUT_DRAIN_TIMEOUT, "PTY EOF") {
+        cleanup.terminate();
+        let reader_cleanup = output_reader.cancel_and_wait(PTY_CLEANUP_TIMEOUT);
+        panic!(
+            "automatic Claude PTY child was reaped, but PTY output did not reach EOF cleanly: {error}; skipped process-group signaling after reap; reader cleanup: {reader_cleanup:?}; captured output:\n{}",
+            pty_output_diagnostic(&output_capture)
+        );
     }
-    (status, String::from_utf8_lossy(&output).into_owned())
+    cleanup.disarm();
+    drop(pair.master);
+    let output = pty_output_diagnostic(&output_capture);
+    (status, output)
 }
 
 #[test]
@@ -452,7 +717,7 @@ fn automatic_compatibility_fallback_runs_once_before_lifecycle_setup() {
     let provider = dir.path.join("claude");
     fs::write(
         &provider,
-        "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '99.0 (Claude Code)\\n'; exit 0; fi\nprintf '<%s>\\n' \"$@\" > \"$FIXTURE_AUTO_ARGS\"\nprintf '%s' \"${ZMUX_CLAUDE_LIFECYCLE_ALERTS_ACTIVE-unset}\" > \"$FIXTURE_AUTO_ALERT_MODE\"\nprintf started > \"$FIXTURE_AUTO_CALLED\"\nprintf 'FALLBACK_PROVIDER_STARTED\\n'\nexit 23\n",
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '99.0 (Claude Code)\\n'; exit 0; fi\nprintf '<%s>\\n' \"$@\" > \"$FIXTURE_AUTO_ARGS\"\nprintf '%s' \"${ZMUX_CLAUDE_LIFECYCLE_ALERTS_ACTIVE-unset}\" > \"$FIXTURE_AUTO_ALERT_MODE\"\nprintf started > \"$FIXTURE_AUTO_CALLED\"\nprintf 'FALLBACK_PROVIDER_STARTED\\n'\n/usr/bin/head -c 65536 /dev/zero\nprintf '\\nFALLBACK_PROVIDER_OUTPUT_DRAINED\\n'\nexit 23\n",
     )
     .unwrap();
     fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
@@ -487,6 +752,7 @@ fn automatic_compatibility_fallback_runs_once_before_lifecycle_setup() {
     assert_eq!(status.exit_code(), 23, "{output}");
     assert!(output.contains("automatic Claude lifecycle unavailable"));
     assert!(output.contains("FALLBACK_PROVIDER_STARTED"));
+    assert!(output.contains("FALLBACK_PROVIDER_OUTPUT_DRAINED"));
     assert_eq!(
         fs::read_to_string(report).unwrap(),
         format!(
