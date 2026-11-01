@@ -516,3 +516,19 @@ Focused Linux verification:
 - `RUST_TEST_THREADS=2 cargo test -p zmux --test local_zellij -- --nocapture` passed: 3 passed.
 - Full `RUST_TEST_THREADS=2 scripts/check` r39 passed locally on Linux; log: `/tmp/zmux-agent-sidebar-check-r39.log`.
 - `cargo fmt --all -- --check` and `git diff --check` passed. A hosted Darwin rerun remains pending; no commit was made.
+
+## Hosted universal build and packaged sidebar acceptance — 2026-11-01
+
+This verifies the delivered native build and the implemented agent-selection smoke slice. The broader live-agent sidebar task remains in progress; unsupported providers, alert-delivery limitations, and physical/real-provider evidence gaps below remain open.
+
+- macOS development workflow [41358822811](https://github.com/ashutoshpw/zmux/actions/runs/41358822811) passed for source SHA `d348aab6dff4644c36f643a53acac0e4f9d7032e`. Download: [universal development build artifact 13105106870](https://github.com/ashutoshpw/zmux/actions/runs/41358822811/artifacts/13105106870). Inner ZIP SHA-256: `36ac1815a4768c27d43b50e83d4659c76d6d092242fc7fc20f26ad9691d1d75f`.
+- Build target: universal macOS 14+, arm64 and x86_64. Signing: ad hoc. Notarization: none.
+- Foundation workflow [41358822843](https://github.com/ashutoshpw/zmux/actions/runs/41358822843) passed on both macOS and Ubuntu for the exact source.
+- Packaged sidebar smoke, status menu checks, and agent selection passed. Selection verified the full window/workspace/pane/surface/session identity and unchanged surface/PTY inventory. The packaged screenshot was inspected; it uses a synthetic fixture and does not establish live provider behavior.
+
+Remaining limitations and acceptance gaps:
+
+- Codex lifecycle support is not implemented. The automatic local Claude adapter was verified with Claude Code `2.1.301`; other versions remain unverified. The remote adapter requires Python 3 on the remote host.
+- A lost alert receipt can leave the visual indication without sound. Alert delivery is at-least-once, so duplicate delivery remains possible.
+- Physical Mac use, audible real-provider events, and authenticated remote-provider behavior remain unverified.
+- The broader task is not complete; its unchecked design, provider, sound-preference, and remote-acceptance criteria remain open.
