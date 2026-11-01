@@ -400,3 +400,10 @@ The stalled-stdin regression now stops and joins its receipt pump when `Lost` ar
 - The native smoke failure path now reports named predicates, bounded rendered text, model status/log summaries, and focus/responder context. All existing acceptance predicates remain enabled and unchanged; this adds diagnostic detail without weakening the smoke.
 - `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r32). Log: `/tmp/zmux-agent-sidebar-check-r32.log`. This does not typecheck or run the AppKit smoke.
 - A hosted macOS rerun with the diagnostics is pending. The current run does not establish packaged native smoke acceptance or a delivered artifact.
+
+## Diagnostic expression typecheck correction — 2026-11-01
+
+- Hosted workflow [41340991316](https://github.com/ashutoshpw/zmux/actions/runs/41340991316) failed Swift typechecking in the new failure diagnostic: optional chaining made `.map(String.init)` resolve against the unwrapped workspace and pane ID types.
+- The diagnostic now formats focused workspace and pane IDs through explicit optional `flatMap` steps. All native smoke acceptance predicates remain unchanged.
+- The full `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r33). Log: `/tmp/zmux-agent-sidebar-check-r33.log`. This does not replace the macOS typecheck or packaged smoke.
+- A hosted macOS rerun is needed to confirm the corrected diagnostic typechecks and to identify the original workspace-activity failure predicate.

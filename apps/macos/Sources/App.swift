@@ -3011,10 +3011,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let statusSummary = metadata?.statuses.map { "\($0.key)=\($0.value)@\($0.priority)" }.joined(separator: ",") ?? "missing"
         let logSummary = metadata?.logs.map { "\($0.sequence):\($0.level.rawValue):\($0.source ?? "nil"):bytes=\($0.message.utf8.count)" }.joined(separator: ",") ?? "missing"
         let selectedTargets = snapshot?.workspace?.root.panes.map { "\($0.id):\($0.selectedSurface)" }.joined(separator: ",") ?? "missing"
+        let focusedWorkspaceDescription = snapshot.flatMap { $0.model.focusedWorkspace }.map { String($0) } ?? "nil"
+        let focusedPaneDescription = snapshot.flatMap { $0.workspace }.map { String($0.focusedPane) } ?? "nil"
         let responderDescription = window.firstResponder.map { String(reflecting: type(of: $0)) } ?? "nil"
         guard failedDetailChecks.isEmpty else {
             let observedText = String(detailsText.prefix(1200)).debugDescription
-            throw BridgeFailure(message: "Workspace activity details failed checks \(failedDetailChecks.joined(separator: ",")); statuses=[\(statusSummary)]; logs=[\(logSummary)]; focus=workspace:\(snapshot?.model.focusedWorkspace.map(String.init) ?? "nil"),pane:\(snapshot?.workspace?.focusedPane.map(String.init) ?? "nil"),tabs:[\(selectedTargets)],responder:\(responderDescription); text=\(observedText)")
+            throw BridgeFailure(message: "Workspace activity details failed checks \(failedDetailChecks.joined(separator: ",")); statuses=[\(statusSummary)]; logs=[\(logSummary)]; focus=workspace:\(focusedWorkspaceDescription),pane:\(focusedPaneDescription),tabs:[\(selectedTargets)],responder:\(responderDescription); text=\(observedText)")
         }
         guard let inspector, inspector.workspaceID == workspaceID, let scroll, let details else {
             throw BridgeFailure(message: "Workspace activity details passed optional checks but the inspector hierarchy disappeared")
