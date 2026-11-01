@@ -304,3 +304,24 @@ Three test helpers used loops around exactly one `recv_timeout`; every match arm
 
 - `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 5 tests.
 - `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. No lint allowances were added.
+
+## Hosted stalled-stdin regression follow-up — 2026-11-01
+
+Hosted workflow [41327050533](https://github.com/ashutoshpw/zmux/actions/runs/41327050533) timed out waiting for `Lost` after 441 admitted receipts. The old 750 ms submission phase established bounded queue admission, but did not establish that the SSH client's or kernel's buffers had filled; the remote SSH channel could accept the data while the child never read stdin. This run therefore did not show a production writer failure.
+
+The stalled peer now sends valid Heartbeats every 100 ms while never reading Receipt frames. A continuous receipt pump records admissions and rejections. The test requires four consecutive Heartbeat intervals with no admission progress and increasing rejection counts before it calls the backpressure sustained. It then waits for `Lost` under one absolute `HANDSHAKE_TIMEOUT`, verifies loss follows the observed live-peer pressure, retains the prior `MAX_PENDING_RECEIPTS` admission lower bound, and asserts prompt loss. The cancellation phase waits for the same sustained pressure, stops the producer, drops the stream promptly, and drains any queued Heartbeats while waiting for sender disconnection.
+
+Focused Linux loopback verification:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::real_managed_ssh_stalled_stdin_has_bounded_loss_and_cancellation -- --nocapture` passed. It admitted 10,187 receipts, observed 3,557,675 rejected calls, confirmed sustained pressure, then received `Lost` 2.27 seconds after production began.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed all 5 lifecycle tests, including both loopback SSH tests running concurrently. The stalled case admitted 10,187 receipts, observed 3,598,727 rejections, and received `Lost` after 2.28 seconds. Cancellation drained one Heartbeat and disconnected the sender 110 ms after dropping the stream.
+- `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- The workspace `scripts/check`, hosted rerun, macOS build, and downloadable artifact were not run for this parent-owned follow-up. The loopback test is local Linux evidence; hosted macOS acceptance remains unverified.
+
+## Latest verification update — 2026-11-01
+
+- The full `RUST_TEST_THREADS=2 scripts/check` retry r26 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r26.log`.
+- Hosted workflow [41327050533](https://github.com/ashutoshpw/zmux/actions/runs/41327050533) failed in the managed SSH stalled-stdin regression after 441 receipts. Its prior 750 ms receipt burst established queue admission but did not prove SSH/kernel pipe saturation; this was a test-evidence gap, not evidence of a production writer failure. Swift typecheck and scheduler jobs passed; the workflow stopped before universal app packaging and sidebar smoke.
+- The regression now uses a continuous receipt pump while the stalled peer sends valid Heartbeats every 100 ms. It requires four heartbeat intervals with no new admissions and increasing rejection counts before classifying pressure as sustained, then waits for `Lost` under one absolute `HANDSHAKE_TIMEOUT`. Focused and concurrent local Linux lifecycle tests passed; detailed commands and measurements are recorded above.
+- Independent review found two coverage limits: the producer yields while retrying rejected receipts but does not bound CPU use (observed test runs reached roughly 3.6 million rejections in about 2.3 seconds), and the cancellation phase verifies prompt stream shutdown/sender disconnection but does not itself assert integration-child reap completion. A separate `ChildOwner` test covers process-group termination, leader reaping, stdout closure, and no signaling after reap. The loopback test skips when Python or SSH prerequisites are unavailable.
+- A hosted macOS rerun remains pending. This failed run produced no packaged app, sidebar smoke evidence, or downloadable artifact; no hosted acceptance or delivered build is claimed.

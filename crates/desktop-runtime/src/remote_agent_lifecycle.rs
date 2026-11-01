@@ -865,6 +865,7 @@ mod tests {
         os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
         process::{Child, Command, Stdio},
+        sync::atomic::AtomicUsize,
         sync::mpsc::TryRecvError,
     };
     use zmux_remote_runtime::SshDescriptor;
@@ -897,8 +898,6 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
 
     const STALLED_LIFECYCLE_PEER: &str = r#"
 import json
-import os
-import select
 import sys
 import time
 import uuid
@@ -912,17 +911,19 @@ send({"kind": "hello", "version": 3, "nonce": nonce})
 activation = json.loads(sys.stdin.buffer.readline(4097))
 if activation.get("kind") != "activate" or activation.get("version") != 3 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
     sys.exit(70)
-send({"kind": "active", "version": 3, "nonce": nonce, "generation": activation["generation"]})
+generation = activation["generation"]
+send({"kind": "active", "version": 3, "nonce": nonce, "generation": generation})
 
-# Keep the actual SSH child's stdin pipe unread long enough to fill it and hold
-# a partial client frame. Drain later so a failing implementation can still
-# unwind its test process instead of leaving a permanently blocked writer.
-time.sleep(8)
-deadline = time.monotonic() + 2
-while time.monotonic() < deadline:
-    readable, _, _ = select.select([sys.stdin.fileno()], [], [], 0.1)
-    if readable and not os.read(sys.stdin.fileno(), 4096):
-        break
+# Never read receipts. Keep the independent stdout path alive so the local
+# owner can distinguish stdin backpressure from peer exit or heartbeat expiry.
+sequence = 0
+try:
+    while True:
+        sequence += 1
+        send({"kind": "heartbeat", "version": 3, "nonce": nonce, "generation": generation, "sequence": sequence})
+        time.sleep(0.1)
+except BrokenPipeError:
+    pass
 "#;
 
     const INSTALLED_LIFECYCLE_SCRIPT: &str =
@@ -1562,33 +1563,110 @@ while time.monotonic() < deadline:
         }
     }
 
-    fn fill_stalled_receipt_pipe(stream: &Stream, binding: Binding) -> usize {
-        let deadline = Instant::now() + Duration::from_millis(750);
-        let mut accepted = 0;
-        let mut rejected = 0;
-        let mut event_id = 1_u128;
-        while Instant::now() < deadline {
-            if stream.send_receipt(
-                binding,
-                Uuid::from_u128(event_id),
-                HookDisposition::NotHandled,
-            ) {
-                accepted += 1;
-            } else {
-                rejected += 1;
-                thread::yield_now();
+    struct ReceiptPump {
+        stop: Arc<AtomicBool>,
+        accepted: Arc<AtomicUsize>,
+        rejected: Arc<AtomicUsize>,
+        worker: Option<thread::JoinHandle<()>>,
+    }
+
+    impl ReceiptPump {
+        fn start(stream: Arc<Stream>, binding: Binding) -> Self {
+            let stop = Arc::new(AtomicBool::new(false));
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let rejected = Arc::new(AtomicUsize::new(0));
+            let worker_stop = Arc::clone(&stop);
+            let worker_accepted = Arc::clone(&accepted);
+            let worker_rejected = Arc::clone(&rejected);
+            let worker = thread::spawn(move || {
+                let mut event_id = 1_u128;
+                while !worker_stop.load(Ordering::Acquire) {
+                    if stream.send_receipt(
+                        binding,
+                        Uuid::from_u128(event_id),
+                        HookDisposition::NotHandled,
+                    ) {
+                        worker_accepted.fetch_add(1, Ordering::Relaxed);
+                        event_id = event_id.wrapping_add(1).max(1);
+                    } else {
+                        worker_rejected.fetch_add(1, Ordering::Relaxed);
+                        thread::yield_now();
+                    }
+                }
+            });
+            Self {
+                stop,
+                accepted,
+                rejected,
+                worker: Some(worker),
             }
-            event_id += 1;
         }
-        assert!(
-            accepted > MAX_PENDING_RECEIPTS,
-            "only {accepted} receipt frames entered the pipe before backpressure"
-        );
-        assert!(
-            rejected > 0,
-            "the bounded receipt queue never applied pressure"
-        );
-        accepted
+
+        fn stats(&self) -> (usize, usize) {
+            (
+                self.accepted.load(Ordering::Acquire),
+                self.rejected.load(Ordering::Acquire),
+            )
+        }
+
+        fn stop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(worker) = self.worker.take() {
+                worker.join().expect("join managed lifecycle receipt pump");
+            }
+        }
+    }
+
+    impl Drop for ReceiptPump {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+
+    const STALLED_HEARTBEAT_INTERVALS: usize = 4;
+
+    struct HeartbeatBackpressure {
+        last_sequence: u64,
+        last_accepted: usize,
+        last_rejected: usize,
+        no_progress_intervals: usize,
+        sustained_since: Option<Instant>,
+    }
+
+    impl HeartbeatBackpressure {
+        fn new(pump: &ReceiptPump) -> Self {
+            let (last_accepted, last_rejected) = pump.stats();
+            Self {
+                last_sequence: 0,
+                last_accepted,
+                last_rejected,
+                no_progress_intervals: 0,
+                sustained_since: None,
+            }
+        }
+
+        fn observe(&mut self, sequence: u64, pump: &ReceiptPump) -> (usize, usize) {
+            assert!(
+                sequence > self.last_sequence,
+                "stalled peer Heartbeat sequence did not advance: previous={}, current={sequence}",
+                self.last_sequence
+            );
+            self.last_sequence = sequence;
+
+            let (accepted, rejected) = pump.stats();
+            if accepted == self.last_accepted && rejected > self.last_rejected {
+                self.no_progress_intervals += 1;
+                if self.no_progress_intervals >= STALLED_HEARTBEAT_INTERVALS {
+                    self.sustained_since.get_or_insert_with(Instant::now);
+                }
+            } else {
+                self.no_progress_intervals = 0;
+                self.sustained_since = None;
+            }
+            self.last_accepted = accepted;
+            self.last_rejected = rejected;
+            (accepted, rejected)
+        }
     }
 
     #[test]
@@ -1684,28 +1762,85 @@ while time.monotonic() < deadline:
         .expect("start managed lifecycle stream through loopback SSH");
         drop(sender);
         let binding = wait_stream_connected(&receiver);
+        let stream = Arc::new(stream);
+        let mut pump = ReceiptPump::start(Arc::clone(&stream), binding);
         let stalled_started = Instant::now();
-        let queued = fill_stalled_receipt_pipe(&stream, binding);
-        eprintln!("queued {queued} managed lifecycle receipts against stalled SSH stdin");
-
-        let loss_deadline = Instant::now() + Duration::from_secs(5);
-        let remaining = loss_deadline.saturating_duration_since(Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "stalled SSH stdin loss deadline elapsed"
-        );
-        let lost = match receiver.recv_timeout(remaining) {
-            Ok(Message::Lost { binding }) => binding,
-            Ok(Message::Connected { .. }) => panic!("unexpected reconnect after stalled stdin"),
-            Ok(Message::Frame { frame, .. }) => {
-                panic!("unexpected lifecycle frame from stalled peer: {frame:?}")
+        let loss_deadline = stalled_started + HANDSHAKE_TIMEOUT;
+        let mut pressure = HeartbeatBackpressure::new(&pump);
+        let lost = loop {
+            let remaining = loss_deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "stalled SSH stdin did not report bounded loss within {HANDSHAKE_TIMEOUT:?}; accepted={}, rejected={}, last heartbeat={}",
+                pump.stats().0,
+                pump.stats().1,
+                pressure.last_sequence
+            );
+            let message = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+                let (accepted, rejected) = pump.stats();
+                panic!(
+                    "stalled SSH stdin did not report bounded loss within {HANDSHAKE_TIMEOUT:?}: {error}; accepted={accepted}, rejected={rejected}, last heartbeat={}",
+                    pressure.last_sequence
+                )
+            });
+            match message {
+                Message::Frame {
+                    binding: frame_binding,
+                    frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { sequence, .. },
+                } => {
+                    assert_eq!(
+                        frame_binding, binding,
+                        "stalled peer Heartbeat binding changed while stdin was pressured"
+                    );
+                    pressure.observe(sequence, &pump);
+                }
+                Message::Lost {
+                    binding: lost_binding,
+                } => {
+                    assert_eq!(lost_binding, binding);
+                    assert!(
+                        pressure.sustained_since.is_some(),
+                        "managed SSH reported loss before sustained receipt backpressure; accepted={}, rejected={}, last heartbeat={}",
+                        pump.stats().0,
+                        pump.stats().1,
+                        pressure.last_sequence
+                    );
+                    break lost_binding;
+                }
+                Message::Connected { .. } => {
+                    panic!("unexpected reconnect after stalled stdin")
+                }
+                Message::Frame { frame, .. } => {
+                    panic!("unexpected lifecycle frame from stalled peer: {frame:?}")
+                }
             }
-            Err(error) => panic!("stalled SSH stdin did not report bounded loss: {error}"),
         };
+        pump.stop();
+        let (accepted, rejected) = pump.stats();
+        let pressure_started = pressure
+            .sustained_since
+            .expect("loss followed sustained receipt backpressure");
+        assert!(
+            accepted > MAX_PENDING_RECEIPTS,
+            "only {accepted} receipts were admitted before managed SSH loss"
+        );
+        assert!(
+            rejected > 0,
+            "receipt admission never observed backpressure"
+        );
+        eprintln!(
+            "managed lifecycle stalled stdin: accepted={accepted}, rejected={rejected}, backpressure_for={:?}, loss_after={:?}, last_heartbeat={}",
+            stalled_started
+                .elapsed()
+                .saturating_sub(pressure_started.elapsed()),
+            stalled_started.elapsed(),
+            pressure.last_sequence
+        );
         assert_eq!(lost, binding);
         assert!(
-            stalled_started.elapsed() < Duration::from_secs(4),
-            "stalled SSH stdin did not reach bounded loss promptly"
+            stalled_started.elapsed() < Duration::from_secs(10),
+            "stalled SSH stdin did not reach bounded loss promptly: accepted={accepted}, rejected={rejected}, last heartbeat={}",
+            pressure.last_sequence
         );
         drop(stream);
         assert!(matches!(
@@ -1732,18 +1867,115 @@ while time.monotonic() < deadline:
         .expect("start second managed lifecycle stream for cancellation");
         drop(sender);
         let binding = wait_stream_connected(&receiver);
-        let queued = fill_stalled_receipt_pipe(&stream, binding);
-        eprintln!("queued {queued} managed lifecycle receipts before cancellation");
+        let stream = Arc::new(stream);
+        let mut pump = ReceiptPump::start(Arc::clone(&stream), binding);
+        let cancellation_deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+        let mut pressure = HeartbeatBackpressure::new(&pump);
+        loop {
+            let remaining = cancellation_deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "cancellation phase did not reach sustained receipt backpressure within {HANDSHAKE_TIMEOUT:?}; accepted={}, rejected={}, last heartbeat={}",
+                pump.stats().0,
+                pump.stats().1,
+                pressure.last_sequence
+            );
+            let message = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+                let (accepted, rejected) = pump.stats();
+                panic!(
+                    "cancellation phase did not reach sustained receipt backpressure within {HANDSHAKE_TIMEOUT:?}: {error}; accepted={accepted}, rejected={rejected}, last heartbeat={}",
+                    pressure.last_sequence
+                )
+            });
+            match message {
+                Message::Frame {
+                    binding: frame_binding,
+                    frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { sequence, .. },
+                } => {
+                    assert_eq!(
+                        frame_binding, binding,
+                        "cancellation peer Heartbeat binding changed under receipt pressure"
+                    );
+                    pressure.observe(sequence, &pump);
+                    if pressure.sustained_since.is_some() {
+                        break;
+                    }
+                }
+                Message::Lost { .. } => {
+                    panic!("managed lifecycle was lost before cancellation under backpressure")
+                }
+                Message::Connected { .. } => {
+                    panic!("unexpected reconnect during cancellation pressure phase")
+                }
+                Message::Frame { frame, .. } => {
+                    panic!("unexpected lifecycle frame during cancellation: {frame:?}")
+                }
+            }
+        }
+        let (accepted, rejected) = pump.stats();
+        assert!(
+            accepted > MAX_PENDING_RECEIPTS,
+            "only {accepted} receipts were admitted before cancellation"
+        );
+        assert!(
+            rejected > 0,
+            "cancellation phase reached a no-progress marker without a rejected receipt"
+        );
+        pump.stop();
+        let (accepted, rejected) = pump.stats();
+        let mut last_sequence = pressure.last_sequence;
+        drop(pump);
         let drop_started = Instant::now();
         drop(stream);
         assert!(
             drop_started.elapsed() < Duration::from_millis(100),
             "dropping a stalled managed lifecycle stream blocked the caller"
         );
-        assert!(matches!(
-            receiver.recv_timeout(Duration::from_secs(2)),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
-        ));
+        let shutdown_deadline = drop_started + Duration::from_secs(2);
+        let mut drained_heartbeats = 0;
+        loop {
+            let remaining = shutdown_deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "cancellation did not disconnect the lifecycle sender promptly; drained {drained_heartbeats} Heartbeats, accepted={accepted}, rejected={rejected}"
+            );
+            match receiver.recv_timeout(remaining) {
+                Ok(Message::Frame {
+                    binding: frame_binding,
+                    frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { sequence, .. },
+                }) => {
+                    assert_eq!(
+                        frame_binding, binding,
+                        "cancellation drain received a Heartbeat from a different binding"
+                    );
+                    assert!(
+                        sequence > last_sequence,
+                        "cancellation drain Heartbeat sequence did not advance: previous={last_sequence}, current={sequence}"
+                    );
+                    last_sequence = sequence;
+                    drained_heartbeats += 1;
+                }
+                Ok(Message::Lost { .. }) => {
+                    panic!("cancellation reported lifecycle loss instead of stopping the sender")
+                }
+                Ok(Message::Connected { .. }) => {
+                    panic!("cancellation unexpectedly reconnected the lifecycle stream")
+                }
+                Ok(Message::Frame { frame, .. }) => {
+                    panic!("unexpected lifecycle frame while draining cancellation: {frame:?}")
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!(
+                        "cancellation did not disconnect the lifecycle sender within two seconds; drained {drained_heartbeats} Heartbeats, accepted={accepted}, rejected={rejected}"
+                    )
+                }
+            }
+        }
+        eprintln!(
+            "managed lifecycle cancellation: accepted={accepted}, rejected={rejected}, drained_heartbeats={drained_heartbeats}, shutdown_after={:?}",
+            drop_started.elapsed()
+        );
 
         drop(session);
         drop(fixture);
