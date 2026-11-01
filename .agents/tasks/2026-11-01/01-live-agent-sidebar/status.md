@@ -214,3 +214,14 @@ Focused remote verification:
 - Local lifecycle receipts now scope fallback behavior: `AlertCovered` avoids a duplicate visual fallback, muted lifecycle events remain silent, and synthetic/loopback checks cover receipt and no-extra-alert paths. This does not prove audible output or native banner behavior.
 - Remote receipts remain at-least-once. If a Stop receipt is lost before the later `idle_prompt`, a silent visual fallback can appear alongside the single completion alert; the Stop adds no second lifecycle sound.
 - Codex lifecycle remains unsupported. Real Claude-provider execution and hosted macOS build/package acceptance remain pending; synthetic providers, control-socket fixtures, and loopback SSH do not authenticate the Claude process or prove live provider behavior.
+
+## macOS automatic-launch fixture routing follow-up — 2026-11-01
+
+Workflow [41313848699](https://github.com/ashutoshpw/zmux/actions/runs/41313848699), source `ad4f50101bb2d34104aa3fdebfe09e63ceed6824`, failed the provider-hook regression because the synthetic provider started before `claude-auto-*/installation.json` was published. The fixture had bound `ControlServer` at `$HOME/.local/run/zmux/control.sock`, while the macOS CLI's default route is `$HOME/Library/Application Support/zmux/control.sock`. With `XDG_RUNTIME_DIR` removed, the test's macOS CLI could not reach that fixture server, causing automatic launch to take its notice-only fallback path; the observed provider args contained only the session notice plugin. The Actions output did not retain the fallback stderr, so that exact runtime reason was not directly captured.
+
+The fixture now binds the platform's default control-socket path. The publication assertion remains unchanged and its failure diagnostics include the owning PTY output. Local Linux validation: `cargo fmt --all -- --check`, `git diff --check`, and `RUST_TEST_THREADS=2 cargo test -p zmux --test provider_hooks -- --nocapture` passed (10 passed, 1 ignored). The macOS-specific path branch and hosted rerun remain unverified in this workspace; no full `scripts/check` was run for this scoped follow-up.
+
+## Latest verification update — 2026-11-01
+
+- The full `scripts/check` retry r17 passed on Linux. Log: `/tmp/zmux-agent-sidebar-check-r17.log`. This does not establish hosted macOS or packaged app acceptance.
+- The hosted `ad4f501` run remains failed pending a macOS rerun. The platform socket-path mismatch is the suspected cause, but Actions did not retain the fallback stderr, so the exact runtime reason was not directly observed. The fixture path correction is in place; no downloadable build or packaged acceptance is claimed from that run.

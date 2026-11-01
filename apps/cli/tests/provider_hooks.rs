@@ -94,6 +94,21 @@ impl RunningDesktop {
         self.desktop.shutdown(Duration::from_secs(5)).unwrap();
     }
 }
+
+fn terminal_output_for(desktop: &Desktop, session_id: zmux_workspace_core::SessionId) -> String {
+    desktop
+        .snapshot()
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .control_frames
+                .iter()
+                .find(|frame| frame.session_id == session_id)
+                .and_then(|frame| frame.snapshot.as_ref())
+                .map(|terminal| terminal.viewport.contents.clone())
+        })
+        .unwrap_or_else(|| "<terminal snapshot unavailable>".into())
+}
 impl Drop for RunningDesktop {
     fn drop(&mut self) {
         if let Some(server) = self.server.take() {
@@ -606,6 +621,9 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         })
         .unwrap(),
     );
+    #[cfg(target_os = "macos")]
+    let control_socket = root.join("Library/Application Support/zmux/control.sock");
+    #[cfg(not(target_os = "macos"))]
     let control_socket = root.join(".local/run/zmux/control.sock");
     let server = ControlServer::start(&control_socket, Arc::clone(&desktop)).unwrap();
     let mut running = RunningDesktop {
@@ -681,11 +699,15 @@ fn automatic_install_to_runtime_lease_real_desktop_child() {
         }
         if provider_called.exists() {
             let report = fs::read_to_string(&args_report).unwrap_or_default();
-            panic!("Claude started before automatic plugin publication: {report}");
+            let terminal_output = terminal_output_for(&running.desktop, session_id);
+            panic!(
+                "Claude started before automatic plugin publication: {report}\nterminal output:\n{terminal_output}"
+            );
         }
         assert!(
             Instant::now() < setup_deadline,
-            "real automatic launch did not publish its lifecycle plugin"
+            "real automatic launch did not publish its lifecycle plugin; terminal output:\n{}",
+            terminal_output_for(&running.desktop, session_id)
         );
         thread::sleep(Duration::from_millis(2));
     };
