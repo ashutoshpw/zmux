@@ -2,13 +2,14 @@ import AppKit
 
 @MainActor
 enum ZmuxPalette {
-    static let window = NSColor(calibratedWhite: 0.075, alpha: 1)
-    static let sidebar = NSColor(calibratedWhite: 0.095, alpha: 1)
-    static let terminal = NSColor(calibratedRed: 28 / 255, green: 28 / 255, blue: 30 / 255, alpha: 1)
-    static let chrome = NSColor(calibratedWhite: 0.105, alpha: 1)
+    static let window = NSColor(calibratedWhite: 0.055, alpha: 1)
+    static let sidebar = NSColor(calibratedWhite: 0.075, alpha: 1)
+    static let terminal = NSColor(calibratedRed: 24 / 255, green: 24 / 255, blue: 26 / 255, alpha: 1)
+    static let chrome = NSColor(calibratedWhite: 0.085, alpha: 1)
     static let separator = NSColor(calibratedWhite: 1, alpha: 0.085)
-    static let selection = NSColor(calibratedRed: 0.09, green: 0.36, blue: 0.78, alpha: 1)
-    static let selectionBorder = NSColor(calibratedRed: 0.24, green: 0.55, blue: 1, alpha: 0.45)
+    static let selection = NSColor(calibratedWhite: 0.14, alpha: 1)
+    static let selectionBorder = NSColor(calibratedWhite: 1, alpha: 0.05)
+    static let dropInsertion = NSColor(calibratedRed: 0.24, green: 0.55, blue: 1, alpha: 0.45)
     static let subdued = NSColor(calibratedWhite: 0.64, alpha: 1)
     static let success = NSColor(calibratedRed: 0.28, green: 0.78, blue: 0.46, alpha: 1)
     static let inactive = NSColor(calibratedWhite: 0.38, alpha: 1)
@@ -245,9 +246,9 @@ final class WorkspaceRowView: NSControl, NSDraggingSource {
         statusDot.layer?.backgroundColor = (unread > 0 ? NSColor.systemOrange : (isRunning ? ZmuxPalette.success : ZmuxPalette.inactive)).cgColor
         layer?.backgroundColor = isSelected ? ZmuxPalette.selection.cgColor : NSColor.clear.cgColor
         layer?.borderColor = isSelected ? ZmuxPalette.selectionBorder.cgColor : NSColor.clear.cgColor
-        terminalIcon.contentTintColor = isSelected ? .white : .secondaryLabelColor
-        titleLabel.textColor = isSelected ? .white : .labelColor
-        subtitleLabel.textColor = isSelected ? NSColor.white.withAlphaComponent(0.74) : ZmuxPalette.subdued
+        terminalIcon.contentTintColor = isSelected ? .labelColor : .secondaryLabelColor
+        titleLabel.textColor = .labelColor
+        subtitleLabel.textColor = isSelected ? .secondaryLabelColor : ZmuxPalette.subdued
         updateMetadata(normalizedMetadata)
         metadataButton.setAccessibilityLabel("Show workspace activity for \(title)")
         let activity = self.metadata.map { value in
@@ -536,7 +537,7 @@ final class WorkspaceSidebarList: FlippedStackView {
         super.init(frame: frameRect)
         registerForDraggedTypes([Self.dragType])
         indicator.wantsLayer = true
-        indicator.layer?.backgroundColor = ZmuxPalette.selectionBorder.cgColor
+        indicator.layer?.backgroundColor = ZmuxPalette.dropInsertion.cgColor
         indicator.layer?.cornerRadius = 1
         indicator.isHidden = true
         addSubview(indicator)
