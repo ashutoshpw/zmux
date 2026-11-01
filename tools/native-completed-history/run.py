@@ -65,7 +65,7 @@ def run_decoder_contract(root, receipt, frozen, inputs, archive, native, runner,
                 '-import-objc-header', str(retained / 'crates/native-bridge/include/zmux.h'),
                 *[str(retained / name) for name in inputs if name.endswith('.swift')],
                 '-L', str(frameworks), '-lzmux_native_bridge',
-                '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'UserNotifications',
+                *selection.METADATA_FRAMEWORK_ARGS,
                 '-Xlinker', '-rpath', '-Xlinker', str(frameworks), '-o', str(probe)],
                'history-decoder-compile', root, receipt['phases'], timeout=60, cwd=REPO, env=environment)
     output = runner.run([str(probe)], 'history-decoder-contract', root, receipt['phases'],

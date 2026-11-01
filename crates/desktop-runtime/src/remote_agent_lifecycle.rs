@@ -1225,20 +1225,33 @@ except BrokenPipeError:
         }
     }
 
-    fn current_notices(session: &Session) -> Vec<zmux_terminal_adapter::TerminalNotice> {
-        let deadline = Instant::now() + Duration::from_secs(2);
+    fn session_snapshot_before(
+        session: &Session,
+        deadline: Instant,
+        operation: &str,
+    ) -> Arc<zmux_session_runtime::Snapshot> {
         loop {
-            match session.snapshot() {
-                Ok(snapshot) => return snapshot.viewport.notices.clone(),
-                Err(zmux_session_runtime::SessionError::Busy) => {}
-                Err(error) => panic!("inspect SSH terminal notices: {error}"),
-            }
             assert!(
                 Instant::now() < deadline,
-                "SSH terminal notice snapshot stayed busy"
+                "{operation}: session snapshot stayed busy until its deadline"
             );
-            thread::sleep(Duration::from_millis(10));
+            match session.snapshot() {
+                Ok(snapshot) => return snapshot,
+                Err(zmux_session_runtime::SessionError::Busy) => thread::yield_now(),
+                Err(error) => panic!("{operation}: {error}"),
+            }
         }
+    }
+
+    fn current_notices(session: &Session) -> Vec<zmux_terminal_adapter::TerminalNotice> {
+        session_snapshot_before(
+            session,
+            Instant::now() + Duration::from_secs(2),
+            "inspect SSH terminal notices",
+        )
+        .viewport
+        .notices
+        .clone()
     }
 
     #[test]
@@ -1762,7 +1775,11 @@ except BrokenPipeError:
         let bootstrap_started = fixture.remote_root.join(".bootstrap-started");
         let bootstrap_deadline = Instant::now() + Duration::from_secs(10);
         while !bootstrap_started.exists() {
-            let snapshot = session.snapshot().expect("inspect managed SSH bootstrap");
+            let snapshot = session_snapshot_before(
+                &session,
+                bootstrap_deadline,
+                "inspect managed SSH bootstrap",
+            );
             assert_ne!(
                 snapshot.state,
                 zmux_session_runtime::State::Failed,
@@ -1788,9 +1805,11 @@ except BrokenPipeError:
             {
                 break;
             }
-            let snapshot = session
-                .snapshot()
-                .expect("inspect lifecycle helper install");
+            let snapshot = session_snapshot_before(
+                &session,
+                install_deadline,
+                "inspect lifecycle helper install",
+            );
             assert_ne!(
                 snapshot.state,
                 zmux_session_runtime::State::Failed,
@@ -2099,7 +2118,8 @@ except BrokenPipeError:
         let bootstrap_started = fixture.remote_root.join(".bootstrap-started");
         let deadline = Instant::now() + Duration::from_secs(10);
         while !bootstrap_started.exists() {
-            let snapshot = session.snapshot().expect("inspect SSH terminal session");
+            let snapshot =
+                session_snapshot_before(&session, deadline, "inspect SSH terminal session");
             assert_ne!(
                 snapshot.state,
                 zmux_session_runtime::State::Failed,

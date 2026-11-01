@@ -407,3 +407,18 @@ The stalled-stdin regression now stops and joins its receipt pump when `Lost` ar
 - The diagnostic now formats focused workspace and pane IDs through explicit optional `flatMap` steps. All native smoke acceptance predicates remain unchanged.
 - The full `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r33). Log: `/tmp/zmux-agent-sidebar-check-r33.log`. This does not replace the macOS typecheck or packaged smoke.
 - A hosted macOS rerun is needed to confirm the corrected diagnostic typechecks and to identify the original workspace-activity failure predicate.
+
+## Managed SSH snapshot Busy retry and hosted failure reassessment — 2026-11-01
+
+macOS workflow [41341700406](https://github.com/ashutoshpw/zmux/actions/runs/41341700406), source SHA `ff8f8e42d6aa8a28e1acb7353b8b0447f8b21457`, passed Swift typecheck and both Linux scheduler jobs. Its development job failed one Rust library test, `retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss`, at `inspect SSH terminal session: Busy`; the other 112 library tests passed. `Session::snapshot()` intentionally uses `try_lock`, so this is a transient snapshot-contention case in test observation, not evidence that the managed SSH session entered `Failed`. App packaging, packaged sidebar smoke, and artifact upload were skipped after the core test failure.
+
+The lifecycle tests now use one test-only `session_snapshot_before` helper at all three state-inspection sites. It retries `SessionError::Busy` with `thread::yield_now()` until the caller's existing absolute deadline, propagates other errors, and keeps the `State::Failed` assertions intact. The helper adds no sleep and does not change production behavior or the existing outer bootstrap polling cadence. The existing SSH-notice snapshot helper now uses the same bounded retry.
+
+Hosted-failure reassessment: workflow 41340991316's Swift diagnostic type error is resolved; the subsequent 41341700406 Swift typecheck passed. Workflow 41338107926 still leaves the original workspace-activity smoke predicate unknown: its failure diagnostics were added, but 41341700406 stopped before packaged smoke and therefore does not resolve that product-level question. Earlier stalled-stdin failures at 41329593839 and 41331773961 were separate test-evidence/deadline issues recorded above; this snapshot fix does not establish their macOS rerun acceptance. No hosted workflow in this sequence produced an accepted app artifact.
+
+Local verification after the retry:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss -- --nocapture` passed: 1 test.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed all 5 lifecycle tests. The stalled case confirmed pressure after 877 ms and received `Lost` 1.409 seconds later, within the 2.45-second bound; cancellation disconnected the sender 110 ms after stream drop.
+- `RUST_TEST_THREADS=2 scripts/check` passed on Linux with exit status 0. Log: `/tmp/zmux-bootstrap-snapshot-r1.log`. `cargo fmt --all -- --check` and `git diff --check` passed.
+- These are Linux source checks. A hosted macOS rerun remains necessary; no macOS package, sidebar acceptance, artifact, commit, or delivery is claimed.
