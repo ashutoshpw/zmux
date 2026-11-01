@@ -433,26 +433,22 @@ fn send_text_delimiter_preserves_literal_stdin_marker_on_the_wire() {
         (vec!["send-text", "--stdin"], "input from stdin"),
     ] {
         let socket = socket_path();
+        let stdin_path = socket.parent().unwrap().join("stdin");
         fs::create_dir_all(socket.parent().unwrap()).unwrap();
+        fs::write(&stdin_path, b"input from stdin").unwrap();
         let listener = UnixListener::bind(&socket).unwrap();
         let capture = capture_request(listener, 2);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_zmux"))
+        let child = Command::new(env!("CARGO_BIN_EXE_zmux"))
             .arg("--socket")
             .arg(&socket)
             .args(arguments)
             .env_remove("ZMUX_WORKSPACE_ID")
             .env_remove("ZMUX_SURFACE_ID")
             .env_remove("ZMUX_TAB_ID")
-            .stdin(Stdio::piped())
+            .stdin(Stdio::from(fs::File::open(&stdin_path).unwrap()))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(b"input from stdin")
             .unwrap();
         let output = child.wait_with_output().unwrap();
         assert!(
@@ -461,6 +457,7 @@ fn send_text_delimiter_preserves_literal_stdin_marker_on_the_wire() {
             String::from_utf8_lossy(&output.stderr)
         );
         let request = capture.join().unwrap();
+        fs::remove_file(&stdin_path).unwrap();
         fs::remove_file(&socket).unwrap();
         fs::remove_dir(socket.parent().unwrap()).unwrap();
         assert_eq!(request["command"]["request"]["operation"]["text"], expected);

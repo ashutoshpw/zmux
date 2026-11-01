@@ -408,6 +408,13 @@ The stalled-stdin regression now stops and joins its receipt pump when `Lost` ar
 - The full `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r33). Log: `/tmp/zmux-agent-sidebar-check-r33.log`. This does not replace the macOS typecheck or packaged smoke.
 - A hosted macOS rerun is needed to confirm the corrected diagnostic typechecks and to identify the original workspace-activity failure predicate.
 
+## CLI stdin fixture race follow-up — 2026-11-01
+
+- A scoped fix addresses a race in the CLI stdin fixture using an explicit red interleaving and file-backed input while preserving the production wire contracts. Independent review found no issue with the scoped approach.
+- The full `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r34). Log: `/tmp/zmux-agent-sidebar-check-r34.log`.
+- Foundation workflow [41343399055](https://github.com/ashutoshpw/zmux/actions/runs/41343399055) passed on macOS but failed on Ubuntu with `BrokenPipe` in a pre-existing CLI test. This is separate from the scoped stdin fixture race fix.
+- macOS workflow [41343399053](https://github.com/ashutoshpw/zmux/actions/runs/41343399053) is still running for an earlier source SHA. Its result does not yet verify the latest source.
+
 ## Managed SSH snapshot Busy retry and hosted failure reassessment — 2026-11-01
 
 macOS workflow [41341700406](https://github.com/ashutoshpw/zmux/actions/runs/41341700406), source SHA `ff8f8e42d6aa8a28e1acb7353b8b0447f8b21457`, passed Swift typecheck and both Linux scheduler jobs. Its development job failed one Rust library test, `retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss`, at `inspect SSH terminal session: Busy`; the other 112 library tests passed. `Session::snapshot()` intentionally uses `try_lock`, so this is a transient snapshot-contention case in test observation, not evidence that the managed SSH session entered `Failed`. App packaging, packaged sidebar smoke, and artifact upload were skipped after the core test failure.
@@ -422,3 +429,16 @@ Local verification after the retry:
 - `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed all 5 lifecycle tests. The stalled case confirmed pressure after 877 ms and received `Lost` 1.409 seconds later, within the 2.45-second bound; cancellation disconnected the sender 110 ms after stream drop.
 - `RUST_TEST_THREADS=2 scripts/check` passed on Linux with exit status 0. Log: `/tmp/zmux-bootstrap-snapshot-r1.log`. `cargo fmt --all -- --check` and `git diff --check` passed.
 - These are Linux source checks. A hosted macOS rerun remains necessary; no macOS package, sidebar acceptance, artifact, commit, or delivery is claimed.
+
+## CLI literal-stdin test fixture race — 2026-11-01
+
+Foundation workflow [41343399055](https://github.com/ashutoshpw/zmux/actions/runs/41343399055), SHA `a886db84dd8ea31973dcc1a5fc72920a3974c4d3`, failed Ubuntu's `send_text_delimiter_preserves_literal_stdin_marker_on_the_wire` at `apps/cli/tests/cli.rs:456` with `BrokenPipe` from the test's write to the spawned CLI stdin. The paired macOS Foundation job passed, including that named test. Previous Foundation workflow [41334872121](https://github.com/ashutoshpw/zmux/actions/runs/41334872121), SHA `1f413138bea5bddf8d0b44062527959ff44a7c9b`, passed the test on both Ubuntu and macOS. The test was introduced in `66ec345` and is unchanged since; the current source has no `apps/cli` diff from that previous green SHA.
+
+The failing write is test-harness I/O, not the CLI's `send-text` request path. The first case passes `send-text -- --stdin`; the production parser keeps `--stdin` literal and does not read stdin, then completes its Unix control request. If the child handles the request and exits before the test parent writes, the pipe reader is closed and the parent's `write_all` returns `BrokenPipe`. The stdin payload is still needed: if delimiter handling regressed and read stdin instead, the test must observe `input from stdin` rather than the expected literal marker. A deterministic child-first red proof using the real CLI and the same framed mock peer confirmed successful literal-marker request handling followed by `BrokenPipe` on a later parent write. The original test passed 200 local repetitions normally and 200 repetitions pinned to one CPU; this does not rule out the hosted interleaving.
+
+The fixture now preloads `input from stdin` into a file and passes that file as the child's stdin before spawn. This keeps both cases' input bytes and the exact wire-payload assertions while removing the post-spawn writer race. No production CLI code changed.
+
+- Focused `send_text_delimiter_preserves_literal_stdin_marker_on_the_wire` passed after the fix; all 13 `apps/cli/tests/cli.rs` tests passed.
+- The fixed test passed 200 repetitions pinned to one CPU. `cargo fmt --all -- --check` and `git diff --check` passed.
+- The full `scripts/check` was not rerun for this test-fixture-only change. The prior full local check passed all 13 CLI tests before the fixture edit. No hosted rerun or commit was started.
+- `scripts/check-changed.mjs` and an automated `autoreview` tool are unavailable in this checkout/session; focused package verification and source review were used.
