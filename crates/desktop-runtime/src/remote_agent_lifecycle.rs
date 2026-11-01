@@ -5,17 +5,18 @@
 //! process authentication or a replay cursor.
 
 use crate::agent_lifecycle::Target;
-use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, poll, pollfd};
+use filedescriptor::{AsRawFileDescriptor, FileDescriptor, POLLIN, POLLOUT, poll, pollfd};
 use nix::{
     sys::signal::{Signal, killpg},
     unistd::Pid,
 };
 use std::{
+    collections::VecDeque,
     io::{self, Read, Write},
     os::unix::process::CommandExt,
     process::{Child, Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel},
     },
@@ -36,6 +37,9 @@ const MAX_PARTIAL_FRAME_BYTES: usize = MAX_AGENT_LIFECYCLE_FRAME_BYTES;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
+const CLIENT_FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+const CHILD_REAP_SYNC_TIMEOUT: Duration = Duration::from_millis(250);
+const CHILD_REAP_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MAX_RECONNECT_ATTEMPTS: usize = 5;
 const MAX_RECONNECT_GENERATIONS: usize = 8;
 const MAX_PENDING_RECEIPTS: usize = MAX_PENDING_HOOK_RECEIPTS;
@@ -174,18 +178,205 @@ impl Drop for Stream {
     }
 }
 
-struct ChildOwner(Child);
+struct ReapJob {
+    child: Child,
+    _slot: ReapSlot,
+}
 
-impl Drop for ChildOwner {
+struct ReapState {
+    reserved: usize,
+    pending: VecDeque<ReapJob>,
+}
+
+struct ReapManager {
+    state: Mutex<ReapState>,
+    ready: Condvar,
+}
+
+impl ReapManager {
+    fn start() -> io::Result<Arc<Self>> {
+        static MANAGER: OnceLock<Result<Arc<ReapManager>, String>> = OnceLock::new();
+        match MANAGER.get_or_init(|| {
+            let manager = Arc::new(Self {
+                state: Mutex::new(ReapState {
+                    reserved: 0,
+                    pending: VecDeque::new(),
+                }),
+                ready: Condvar::new(),
+            });
+            let worker = Arc::clone(&manager);
+            thread::Builder::new()
+                .name("zmux-agent-child-reaper".into())
+                .spawn(move || worker.run())
+                .map_err(|error| format!("start managed SSH child reaper: {error}"))?;
+            Ok(manager)
+        }) {
+            Ok(manager) => Ok(Arc::clone(manager)),
+            Err(error) => Err(io::Error::other(error.clone())),
+        }
+    }
+
+    fn reserve(self: &Arc<Self>) -> io::Result<ReapSlot> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.reserved >= crate::MAX_TERMINALS {
+            return Err(io::Error::other(
+                "managed SSH child reaper capacity is exhausted",
+            ));
+        }
+        state.reserved += 1;
+        Ok(ReapSlot {
+            manager: Arc::clone(self),
+        })
+    }
+
+    fn enqueue(&self, job: ReapJob) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        // Every queued job keeps one of the MAX_TERMINALS reservations. The
+        // worker owns at most one more, so this queue cannot grow without bound.
+        debug_assert!(state.pending.len() < crate::MAX_TERMINALS);
+        state.pending.push_back(job);
+        self.ready.notify_one();
+    }
+
+    fn run(self: Arc<Self>) -> ! {
+        loop {
+            let job = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                while state.pending.is_empty() {
+                    state = self
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(|poison| poison.into_inner());
+                }
+                state.pending.pop_front().expect("pending reaper job")
+            };
+            let ReapJob { mut child, _slot } = job;
+            if let Err(error) = child.wait() {
+                // `wait` can fail only after the process is already unavailable
+                // to this owner (for example, an external reaper consumed it).
+                eprintln!("zmux remote lifecycle background reap: {error}");
+            }
+            drop(_slot);
+        }
+    }
+}
+
+struct ReapSlot {
+    manager: Arc<ReapManager>,
+}
+
+impl Drop for ReapSlot {
     fn drop(&mut self) {
-        if let Err(error) = killpg(Pid::from_raw(self.0.id() as i32), Signal::SIGKILL)
+        let mut state = self
+            .manager
+            .state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        debug_assert!(state.reserved > 0);
+        state.reserved = state.reserved.saturating_sub(1);
+    }
+}
+
+struct ChildOwner {
+    child: Option<Child>,
+    reaped: bool,
+    slot: Option<ReapSlot>,
+    deferred_reap: Arc<AtomicBool>,
+}
+
+impl ChildOwner {
+    fn spawn(command: &mut Command, deferred_reap: Arc<AtomicBool>) -> io::Result<Self> {
+        // Reserve before spawn so even a child that cannot be reaped promptly
+        // has a guaranteed place in the bounded background reaper.
+        let slot = ReapManager::start()?.reserve()?;
+        let child = command.spawn()?;
+        Ok(Self {
+            child: Some(child),
+            reaped: false,
+            slot: Some(slot),
+            deferred_reap,
+        })
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("owned managed SSH child")
+    }
+
+    #[cfg(test)]
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        let status = self.child_mut().try_wait()?;
+        self.reaped |= status.is_some();
+        Ok(status)
+    }
+
+    fn terminate_group(&mut self) -> bool {
+        // `try_wait` releases the PID once the child exits. Since this PID is
+        // also the process-group ID, it may already belong to an unrelated
+        // process group and must never be signaled after reaping.
+        if self.reaped {
+            return false;
+        }
+        let Some(child) = &self.child else {
+            return false;
+        };
+        if let Err(error) = killpg(Pid::from_raw(child.id() as i32), Signal::SIGKILL)
             && error != nix::errno::Errno::ESRCH
         {
             eprintln!("zmux remote lifecycle process cancellation: {error}");
         }
-        if let Err(error) = self.0.wait() {
-            eprintln!("zmux remote lifecycle process reap: {error}");
+        true
+    }
+}
+
+impl Drop for ChildOwner {
+    fn drop(&mut self) {
+        self.terminate_group();
+        if !self.reaped {
+            let deadline = Instant::now() + CHILD_REAP_SYNC_TIMEOUT;
+            loop {
+                match self.child_mut().try_wait() {
+                    Ok(Some(_)) => {
+                        self.reaped = true;
+                        break;
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                        thread::sleep(
+                            CHILD_REAP_POLL_INTERVAL
+                                .min(deadline.saturating_duration_since(Instant::now())),
+                        );
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        eprintln!("zmux remote lifecycle process reap poll: {error}");
+                        break;
+                    }
+                }
+            }
         }
+
+        let Some(child) = self.child.take() else {
+            return;
+        };
+        if self.reaped {
+            self.slot.take();
+            return;
+        }
+
+        let Some(slot) = self.slot.take() else {
+            eprintln!("managed SSH child reached teardown without a reap reservation");
+            return;
+        };
+        self.deferred_reap.store(true, Ordering::Release);
+        Arc::clone(&slot.manager).enqueue(ReapJob { child, _slot: slot });
     }
 }
 
@@ -201,6 +392,7 @@ fn supervise(
     let mut connected = false;
     let mut reconnect_generations = 0;
     let mut failures = 0;
+    let reap_deferred = Arc::new(AtomicBool::new(false));
     let first_handshake_deadline = Instant::now() + HANDSHAKE_TIMEOUT;
     loop {
         if cancellation.load(Ordering::Acquire) {
@@ -216,6 +408,7 @@ fn supervise(
             connected: &mut connected,
             handshake_generation: &mut handshake_generation,
             reconnect_previous_generation: &mut reconnect_previous_generation,
+            reap_deferred: &reap_deferred,
         };
         let result = run_attempt(
             Arc::clone(&connection),
@@ -228,6 +421,14 @@ fn supervise(
         );
         if cancellation.load(Ordering::Acquire) {
             return Ok(());
+        }
+        if reap_deferred.load(Ordering::Acquire) {
+            if handshake_generation.is_some() {
+                send_cancellable(&sender, Message::Lost { binding }, cancellation)?;
+            }
+            return result.and(Err(
+                "managed SSH lifecycle child was handed to the bounded reaper".into(),
+            ));
         }
         if !connected {
             // The login shell may still be writing its nonce-scoped integration
@@ -325,6 +526,7 @@ struct AttemptState<'a> {
     connected: &'a mut bool,
     handshake_generation: &'a mut Option<Uuid>,
     reconnect_previous_generation: &'a mut Option<Uuid>,
+    reap_deferred: &'a Arc<AtomicBool>,
 }
 
 fn run_attempt(
@@ -346,18 +548,21 @@ fn run_attempt(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut child = ChildOwner(
-        command
-            .spawn()
-            .map_err(|error| format!("start managed SSH stream: {error}"))?,
-    );
-    let mut input = child
-        .0
+    let mut child = ChildOwner::spawn(&mut command, Arc::clone(state.reap_deferred))
+        .map_err(|error| format!("start managed SSH stream: {error}"))?;
+    let stdin = child
+        .child_mut()
         .stdin
         .take()
         .ok_or_else(|| "managed SSH stream has no stdin pipe".to_owned())?;
+    let mut input = FileDescriptor::dup(&stdin)
+        .map_err(|error| format!("open managed SSH stream input: {error}"))?;
+    input
+        .set_non_blocking(true)
+        .map_err(|error| format!("configure managed SSH stream input: {error}"))?;
+    drop(stdin);
     let stdout = child
-        .0
+        .child_mut()
         .stdout
         .take()
         .ok_or_else(|| "managed SSH stream has no stdout pipe".to_owned())?;
@@ -372,17 +577,19 @@ fn run_attempt(
     let handshake_deadline =
         first_handshake_deadline.unwrap_or_else(|| started_at + HANDSHAKE_TIMEOUT);
     let mut last_frame_at = started_at;
-    let mut pending = Vec::new();
+    let mut output_pending = Vec::new();
+    let mut pending_write = None;
     let mut hello_seen = false;
     let mut active_seen = false;
+    let mut activation_sent = false;
     let mut last_sequence = 0;
     let mut output_eof = false;
     loop {
         if cancellation.load(Ordering::Acquire) {
             return Ok(());
         }
-        if active_seen {
-            flush_receipts(&mut input, receipt_receiver, *state.binding)?;
+        if active_seen && pending_write.is_none() {
+            pending_write = take_next_receipt(receipt_receiver, *state.binding)?;
         }
         let now = Instant::now();
         if (!active_seen && now >= handshake_deadline)
@@ -390,23 +597,38 @@ fn run_attempt(
         {
             return Err("managed SSH lifecycle heartbeat expired".into());
         }
-        let status = child
-            .0
-            .try_wait()
-            .map_err(|error| format!("poll managed SSH stream: {error}"))?;
-        if status.is_some() && output_eof {
-            return Err("managed SSH lifecycle command exited".into());
+        if pending_write
+            .as_ref()
+            .is_some_and(|pending: &PendingClientWrite| Instant::now() >= pending.deadline)
+        {
+            return Err("managed SSH lifecycle client frame write timed out".into());
         }
-
-        let mut descriptors = [pollfd {
-            fd: output.as_raw_file_descriptor(),
-            events: POLLIN,
-            revents: 0,
-        }];
-        if let Err(error) = poll(&mut descriptors, Some(POLL_INTERVAL))
+        let mut descriptors = [
+            pollfd {
+                fd: output.as_raw_file_descriptor(),
+                events: POLLIN,
+                revents: 0,
+            },
+            pollfd {
+                fd: input.as_raw_file_descriptor(),
+                events: if pending_write.is_some() { POLLOUT } else { 0 },
+                revents: 0,
+            },
+        ];
+        let descriptor_count = if pending_write.is_some() { 2 } else { 1 };
+        let poll_timeout = pending_write
+            .as_ref()
+            .map(|pending: &PendingClientWrite| {
+                POLL_INTERVAL.min(pending.deadline.saturating_duration_since(Instant::now()))
+            })
+            .unwrap_or(POLL_INTERVAL);
+        if let Err(error) = poll(&mut descriptors[..descriptor_count], Some(poll_timeout))
             && !matches!(&error, filedescriptor::Error::Poll(error) if error.kind() == io::ErrorKind::Interrupted)
         {
-            return Err(format!("poll managed SSH lifecycle output: {error}"));
+            return Err(format!("poll managed SSH lifecycle pipes: {error}"));
+        }
+        if descriptor_count == 2 && descriptors[1].revents != 0 {
+            write_pending_client_frame(&mut input, &mut pending_write, &mut activation_sent)?;
         }
         if descriptors[0].revents == 0 {
             continue;
@@ -419,14 +641,15 @@ fn run_attempt(
                     break;
                 }
                 Ok(length) => {
-                    pending.extend_from_slice(&bytes[..length]);
-                    while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                    output_pending.extend_from_slice(&bytes[..length]);
+                    while let Some(newline) = output_pending.iter().position(|byte| *byte == b'\n')
+                    {
                         if newline > MAX_PARTIAL_FRAME_BYTES {
                             return Err(
                                 "managed SSH lifecycle frame exceeded its byte bound".into()
                             );
                         }
-                        let line: Vec<_> = pending.drain(..=newline).collect();
+                        let line: Vec<_> = output_pending.drain(..=newline).collect();
                         if line[..newline].is_empty() {
                             continue;
                         }
@@ -459,17 +682,20 @@ fn run_attempt(
                                         .unwrap_or_else(|poison| poison.into_inner()) =
                                         *state.binding;
                                 }
-                                write_client_frame(
-                                    &mut input,
+                                pending_write = Some(PendingClientWrite::new(
                                     &ClientFrame::Activate {
                                         version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
                                         nonce: state.binding.nonce,
                                         generation: state.binding.generation,
                                     },
-                                )?;
+                                    ClientFrameKind::Activate,
+                                )?);
                             }
                             Frame::Active { .. }
-                                if hello_seen && !active_seen && last_sequence == 0 =>
+                                if hello_seen
+                                    && activation_sent
+                                    && !active_seen
+                                    && last_sequence == 0 =>
                             {
                                 active_seen = true;
                                 *state.connected = true;
@@ -521,7 +747,7 @@ fn run_attempt(
                             }
                         }
                     }
-                    if pending.len() > MAX_PARTIAL_FRAME_BYTES {
+                    if output_pending.len() > MAX_PARTIAL_FRAME_BYTES {
                         return Err("managed SSH lifecycle frame exceeded its byte bound".into());
                     }
                 }
@@ -544,36 +770,80 @@ fn run_attempt(
 
 fn _protocol_type_anchor(_: Frame) {}
 
-fn write_client_frame(input: &mut impl Write, frame: &ClientFrame) -> Result<(), String> {
-    let mut bytes = serde_json::to_vec(frame)
-        .map_err(|error| format!("encode managed SSH lifecycle client frame: {error}"))?;
-    if bytes.len() + 1 > MAX_AGENT_LIFECYCLE_FRAME_BYTES {
-        return Err("managed SSH lifecycle client frame exceeded its byte bound".into());
-    }
-    bytes.push(b'\n');
-    input
-        .write_all(&bytes)
-        .map_err(|error| format!("write managed SSH lifecycle client frame: {error}"))?;
-    input
-        .flush()
-        .map_err(|error| format!("flush managed SSH lifecycle client frame: {error}"))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClientFrameKind {
+    Activate,
+    Receipt,
 }
 
-fn flush_receipts(
+struct PendingClientWrite {
+    bytes: Vec<u8>,
+    offset: usize,
+    deadline: Instant,
+    kind: ClientFrameKind,
+}
+
+impl PendingClientWrite {
+    fn new(frame: &ClientFrame, kind: ClientFrameKind) -> Result<Self, String> {
+        let mut bytes = serde_json::to_vec(frame)
+            .map_err(|error| format!("encode managed SSH lifecycle client frame: {error}"))?;
+        if bytes.len() + 1 > MAX_AGENT_LIFECYCLE_FRAME_BYTES {
+            return Err("managed SSH lifecycle client frame exceeded its byte bound".into());
+        }
+        bytes.push(b'\n');
+        Ok(Self {
+            bytes,
+            offset: 0,
+            deadline: Instant::now() + CLIENT_FRAME_WRITE_TIMEOUT,
+            kind,
+        })
+    }
+}
+
+fn write_pending_client_frame(
     input: &mut impl Write,
+    pending: &mut Option<PendingClientWrite>,
+    activation_sent: &mut bool,
+) -> Result<(), String> {
+    let Some(frame) = pending.as_mut() else {
+        return Ok(());
+    };
+    match input.write(&frame.bytes[frame.offset..]) {
+        Ok(0) => Err("managed SSH lifecycle client frame write returned zero bytes".into()),
+        Ok(length) => {
+            frame.offset += length;
+            if frame.offset == frame.bytes.len() {
+                let kind = frame.kind;
+                *pending = None;
+                if kind == ClientFrameKind::Activate {
+                    *activation_sent = true;
+                }
+            }
+            Ok(())
+        }
+        Err(error)
+            if error.kind() == io::ErrorKind::WouldBlock
+                || error.kind() == io::ErrorKind::Interrupted =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(format!("write managed SSH lifecycle client frame: {error}")),
+    }
+}
+
+fn take_next_receipt(
     receiver: &Receiver<ReceiptCommand>,
     binding: Binding,
-) -> Result<(), String> {
+) -> Result<Option<PendingClientWrite>, String> {
     loop {
         let command = match receiver.try_recv() {
             Ok(command) => command,
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(()),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(None),
         };
         if command.binding != binding || command.event_id.is_nil() {
             continue;
         }
-        write_client_frame(
-            input,
+        return PendingClientWrite::new(
             &ClientFrame::Receipt {
                 version: AGENT_LIFECYCLE_PROTOCOL_VERSION,
                 nonce: binding.nonce,
@@ -581,7 +851,9 @@ fn flush_receipts(
                 event_id: command.event_id,
                 disposition: command.disposition,
             },
-        )?;
+            ClientFrameKind::Receipt,
+        )
+        .map(Some);
     }
 }
 
@@ -622,6 +894,39 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
     while not (root / ".fixture-controller-stop").exists():
         time.sleep(0.02)
 "#;
+
+    const STALLED_LIFECYCLE_PEER: &str = r#"
+import json
+import os
+import select
+import sys
+import time
+import uuid
+
+nonce = sys.argv[1]
+def send(frame):
+    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+send({"kind": "hello", "version": 3, "nonce": nonce})
+activation = json.loads(sys.stdin.buffer.readline(4097))
+if activation.get("kind") != "activate" or activation.get("version") != 3 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
+    sys.exit(70)
+send({"kind": "active", "version": 3, "nonce": nonce, "generation": activation["generation"]})
+
+# Keep the actual SSH child's stdin pipe unread long enough to fill it and hold
+# a partial client frame. Drain later so a failing implementation can still
+# unwind its test process instead of leaving a permanently blocked writer.
+time.sleep(8)
+deadline = time.monotonic() + 2
+while time.monotonic() < deadline:
+    readable, _, _ = select.select([sys.stdin.fileno()], [], [], 0.1)
+    if readable and not os.read(sys.stdin.fileno(), 4096):
+        break
+"#;
+
+    const INSTALLED_LIFECYCLE_SCRIPT: &str =
+        include_str!("../../session-runtime/src/shell/claude-lifecycle-stream.py");
 
     struct SshFixture {
         local_root: PathBuf,
@@ -777,6 +1082,7 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
         nonce: OpenRequestNonce,
         input: serde_json::Value,
         receiver: &std::sync::mpsc::Receiver<Message>,
+        last_stream_sequence: &mut u64,
     ) -> (
         Child,
         Binding,
@@ -829,6 +1135,11 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                         },
                     binding,
                 } => {
+                    assert!(
+                        sequence > *last_stream_sequence,
+                        "remote lifecycle Hook sequence did not advance: previous={last_stream_sequence}, current={sequence}"
+                    );
+                    *last_stream_sequence = sequence;
                     return (
                         child,
                         binding,
@@ -841,7 +1152,14 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 Message::Frame {
                     frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { sequence, .. },
                     ..
-                } => last_heartbeat_sequence = Some(sequence),
+                } => {
+                    assert!(
+                        sequence > *last_stream_sequence,
+                        "remote lifecycle Heartbeat sequence did not advance: previous={last_stream_sequence}, current={sequence}"
+                    );
+                    *last_stream_sequence = sequence;
+                    last_heartbeat_sequence = Some(sequence);
+                }
                 Message::Frame { frame, .. } => {
                     panic!("unexpected remote lifecycle frame before hook admission: {frame:?}")
                 }
@@ -849,6 +1167,44 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 Message::Connected { .. } => {
                     panic!("unexpected reconnect during hook interleaving")
                 }
+            }
+        }
+    }
+
+    fn wait_for_remote_heartbeat(
+        receiver: &std::sync::mpsc::Receiver<Message>,
+        last_stream_sequence: &mut u64,
+    ) {
+        const HEARTBEAT_DEADLINE: Duration = Duration::from_secs(8);
+
+        let deadline = Instant::now() + HEARTBEAT_DEADLINE;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "managed lifecycle heartbeat did not arrive within {HEARTBEAT_DEADLINE:?}; last stream sequence: {last_stream_sequence}"
+        );
+        let message = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+            panic!(
+                "managed lifecycle heartbeat did not arrive within {HEARTBEAT_DEADLINE:?}; last stream sequence: {last_stream_sequence}; receive error: {error}"
+            )
+        });
+        match message {
+            Message::Frame {
+                frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { sequence, .. },
+                ..
+            } => {
+                assert!(
+                    sequence > *last_stream_sequence,
+                    "remote lifecycle Heartbeat sequence did not advance: previous={last_stream_sequence}, current={sequence}"
+                );
+                *last_stream_sequence = sequence;
+            }
+            Message::Frame { frame, .. } => {
+                panic!("unexpected lifecycle frame while awaiting heartbeat: {frame:?}")
+            }
+            Message::Lost { .. } => panic!("remote lifecycle stream was lost before heartbeat"),
+            Message::Connected { .. } => {
+                panic!("unexpected reconnect while awaiting heartbeat")
             }
         }
     }
@@ -1131,6 +1487,269 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
     }
 
     #[test]
+    fn child_owner_signals_live_group_then_skips_the_group_after_reap() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "/bin/sleep 30 & wait"])
+            .stdout(Stdio::piped())
+            .process_group(0);
+        let mut owner = ChildOwner::spawn(&mut command, Arc::new(AtomicBool::new(false)))
+            .expect("start a private process group with a stdout-holding descendant");
+        let child_stdout = owner
+            .child_mut()
+            .stdout
+            .take()
+            .expect("capture child stdout");
+        let mut stdout = FileDescriptor::dup(&child_stdout).expect("duplicate child stdout");
+        stdout
+            .set_non_blocking(true)
+            .expect("make child stdout nonblocking");
+        assert!(
+            owner.terminate_group(),
+            "a live child group must be signaled"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let status = loop {
+            if let Some(status) = owner.try_wait().expect("reap signaled child") {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "signaled child did not exit");
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert!(
+            !status.success(),
+            "SIGKILL should stop the process-group leader"
+        );
+        let mut byte = [0; 1];
+        let stdout_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match stdout.read(&mut byte) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == io::ErrorKind::Interrupted
+                        || error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("read process-group stdout after teardown: {error}"),
+            }
+            assert!(
+                Instant::now() < stdout_deadline,
+                "the process-group descendant retained stdout after teardown"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(owner.reaped);
+        assert!(
+            !owner.terminate_group(),
+            "a reaped process-group ID may have been reused and must not be signaled"
+        );
+    }
+
+    fn wait_stream_connected(receiver: &std::sync::mpsc::Receiver<Message>) -> Binding {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "managed lifecycle Active handshake deadline elapsed"
+        );
+        match receiver.recv_timeout(remaining) {
+            Ok(Message::Connected { binding, .. }) => binding,
+            Ok(Message::Lost { .. }) => panic!("managed lifecycle stream was lost before Active"),
+            Ok(Message::Frame { frame, .. }) => {
+                panic!("unexpected frame before stalled lifecycle peer: {frame:?}")
+            }
+            Err(error) => panic!("managed lifecycle Active handshake failed: {error}"),
+        }
+    }
+
+    fn fill_stalled_receipt_pipe(stream: &Stream, binding: Binding) -> usize {
+        let deadline = Instant::now() + Duration::from_millis(750);
+        let mut accepted = 0;
+        let mut rejected = 0;
+        let mut event_id = 1_u128;
+        while Instant::now() < deadline {
+            if stream.send_receipt(
+                binding,
+                Uuid::from_u128(event_id),
+                HookDisposition::NotHandled,
+            ) {
+                accepted += 1;
+            } else {
+                rejected += 1;
+                thread::yield_now();
+            }
+            event_id += 1;
+        }
+        assert!(
+            accepted > MAX_PENDING_RECEIPTS,
+            "only {accepted} receipt frames entered the pipe before backpressure"
+        );
+        assert!(
+            rejected > 0,
+            "the bounded receipt queue never applied pressure"
+        );
+        accepted
+    }
+
+    #[test]
+    fn real_managed_ssh_stalled_stdin_has_bounded_loss_and_cancellation() {
+        if !private_ssh_prerequisites_available() {
+            eprintln!(
+                "skipping remote lifecycle stalled-stdin test: private SSH prerequisites unavailable"
+            );
+            return;
+        }
+
+        let fixture = SshFixture::start();
+        let connection = fixture.connection();
+        let nonce = OpenRequestNonce::generate();
+        let registration = OpenRequestRegistration::new(nonce, OpenRequestSource::ManagedSsh);
+        let terminal = connection.terminal_spec(&nonce);
+        let session = Session::spawn_with_open_requests(
+            Launch {
+                program: terminal.program,
+                args: terminal.args,
+                cwd: None,
+                size: zmux_session_runtime::default_size(),
+            },
+            &[],
+            &[],
+            ShutdownPolicy::Kill,
+            None,
+            Some(registration),
+            Arc::clone(&connection),
+        )
+        .expect("spawn exact managed SSH terminal for stalled lifecycle peer");
+
+        let bootstrap_started = fixture.remote_root.join(".bootstrap-started");
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(10);
+        while !bootstrap_started.exists() {
+            let snapshot = session.snapshot().expect("inspect managed SSH bootstrap");
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH bootstrap failed before stalled peer setup: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < bootstrap_deadline,
+                "managed SSH terminal did not enter its bootstrap gate"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(fixture.remote_root.join(".release-bootstrap"), b"go")
+            .expect("release the managed SSH shell bootstrap");
+
+        let integration_root = PathBuf::from(nonce.remote_integration_directory());
+        let lifecycle_script = integration_root.join("claude-lifecycle-stream.py");
+        let expected_script = format!("{INSTALLED_LIFECYCLE_SCRIPT}\n");
+        let install_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if fs::read_to_string(&lifecycle_script).ok().as_deref()
+                == Some(expected_script.as_str())
+            {
+                break;
+            }
+            let snapshot = session
+                .snapshot()
+                .expect("inspect lifecycle helper install");
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH bootstrap failed before lifecycle helper install: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < install_deadline,
+                "managed SSH bootstrap did not install its lifecycle helper"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(&lifecycle_script, STALLED_LIFECYCLE_PEER)
+            .expect("install protocol-valid peer that stalls on the real child stdin pipe");
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let stream = Stream::start(
+            Arc::clone(&connection),
+            nonce,
+            Target {
+                identity_namespace: Uuid::new_v4(),
+                surface_id: SurfaceId(41),
+                surface_uuid: Uuid::new_v4(),
+                session_id: SessionId(53),
+            },
+            1,
+            sender.clone(),
+        )
+        .expect("start managed lifecycle stream through loopback SSH");
+        drop(sender);
+        let binding = wait_stream_connected(&receiver);
+        let stalled_started = Instant::now();
+        let queued = fill_stalled_receipt_pipe(&stream, binding);
+        eprintln!("queued {queued} managed lifecycle receipts against stalled SSH stdin");
+
+        let loss_deadline = Instant::now() + Duration::from_secs(5);
+        let remaining = loss_deadline.saturating_duration_since(Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "stalled SSH stdin loss deadline elapsed"
+        );
+        let lost = match receiver.recv_timeout(remaining) {
+            Ok(Message::Lost { binding }) => binding,
+            Ok(Message::Connected { .. }) => panic!("unexpected reconnect after stalled stdin"),
+            Ok(Message::Frame { frame, .. }) => {
+                panic!("unexpected lifecycle frame from stalled peer: {frame:?}")
+            }
+            Err(error) => panic!("stalled SSH stdin did not report bounded loss: {error}"),
+        };
+        assert_eq!(lost, binding);
+        assert!(
+            stalled_started.elapsed() < Duration::from_secs(4),
+            "stalled SSH stdin did not reach bounded loss promptly"
+        );
+        drop(stream);
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(2)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ));
+
+        // Exercise cancellation while the second real SSH child is blocked on
+        // the same stalled pipe. Dropping Stream is immediate, and the reader
+        // thread must notice cancellation without waiting for the peer to read.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let stream = Stream::start(
+            Arc::clone(&connection),
+            nonce,
+            Target {
+                identity_namespace: Uuid::new_v4(),
+                surface_id: SurfaceId(42),
+                surface_uuid: Uuid::new_v4(),
+                session_id: SessionId(54),
+            },
+            2,
+            sender.clone(),
+        )
+        .expect("start second managed lifecycle stream for cancellation");
+        drop(sender);
+        let binding = wait_stream_connected(&receiver);
+        let queued = fill_stalled_receipt_pipe(&stream, binding);
+        eprintln!("queued {queued} managed lifecycle receipts before cancellation");
+        let drop_started = Instant::now();
+        drop(stream);
+        assert!(
+            drop_started.elapsed() < Duration::from_millis(100),
+            "dropping a stalled managed lifecycle stream blocked the caller"
+        );
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(2)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ));
+
+        drop(session);
+        drop(fixture);
+    }
+
+    #[test]
     fn retries_a_real_managed_ssh_bootstrap_race_then_reports_session_loss() {
         if !private_ssh_prerequisites_available() {
             eprintln!("skipping remote lifecycle race test: private SSH prerequisites unavailable");
@@ -1222,6 +1841,9 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
             binding.nonce,
             nonce.remote_lifecycle_token().parse::<Uuid>().unwrap()
         );
+        // Heartbeats and Hooks share one transport sequence, so validate strict
+        // ordering across every received frame instead of requiring adjacency.
+        let mut last_stream_sequence = 0;
 
         // A Zmux-generated hook ID correlates this exact invocation; no-prompt
         // attention is rejected and gets a silent generic terminal fallback.
@@ -1238,8 +1860,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     "notification_type":"permission_prompt"
                 }),
                 &receiver,
+                &mut last_stream_sequence,
             );
-        assert_eq!(sequence, 1);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         assert!(
@@ -1272,8 +1894,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     "session_id":provider_session
                 }),
                 &receiver,
+                &mut last_stream_sequence,
             );
-        assert_eq!(sequence, 2);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         assert!(
@@ -1307,8 +1929,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 "source":"startup"
             }),
             &receiver,
+            &mut last_stream_sequence,
         );
-        assert_eq!(sequence, 3);
         assert_eq!(hook_binding, binding);
         assert!(!receipt_requested);
         assert_eq!(
@@ -1336,8 +1958,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 "permission_mode":"default"
             }),
             &receiver,
+            &mut last_stream_sequence,
         );
-        assert_eq!(sequence, 4);
         assert_eq!(hook_binding, binding);
         assert!(!receipt_requested);
         assert_eq!(
@@ -1365,8 +1987,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     "notification_type":"permission_prompt"
                 }),
                 &receiver,
+                &mut last_stream_sequence,
             );
-        assert_eq!(sequence, 5);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         let disposition = lifecycle
@@ -1421,8 +2043,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     "notification_type":"permission_prompt"
                 }),
                 &receiver,
+                &mut last_stream_sequence,
             );
-        assert_eq!(sequence, 6);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         let disposition = lifecycle
@@ -1452,8 +2074,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 "session_id":provider_session
             }),
             &receiver,
+            &mut last_stream_sequence,
         );
-        assert_eq!(sequence, 7);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         let disposition = lifecycle
@@ -1492,6 +2114,10 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
         };
         assert_eq!(stop_fallback_notice_count, lost_receipt_notice_count + 1);
 
+        // Hold the same live stream through one real heartbeat before the next
+        // Hook. This covers the shared heartbeat/Hook sequence interleaving
+        // instead of assuming consecutive Hook frame numbers.
+        wait_for_remote_heartbeat(&receiver, &mut last_stream_sequence);
         let (child, hook_binding, sequence, hook_id, receipt_requested, idle) = push_remote_hook(
             &connection,
             nonce,
@@ -1501,8 +2127,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                 "notification_type":"idle_prompt"
             }),
             &receiver,
+            &mut last_stream_sequence,
         );
-        assert_eq!(sequence, 8);
         assert_eq!(hook_binding, binding);
         assert!(!receipt_requested);
         assert_eq!(
@@ -1531,8 +2157,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     "session_id":provider_session
                 }),
                 &receiver,
+                &mut last_stream_sequence,
             );
-        assert_eq!(sequence, 9);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         let disposition = lifecycle
@@ -1564,8 +2190,8 @@ with fixture.native_ssh_fixture(configuration, diagnostic):
                     "stop_hook_active":true
                 }),
                 &receiver,
+                &mut last_stream_sequence,
             );
-        assert_eq!(sequence, 10);
         assert_eq!(hook_binding, binding);
         assert!(receipt_requested);
         let disposition = lifecycle

@@ -36,6 +36,37 @@ impl Drop for Directory {
     }
 }
 
+fn wait_for_session_output(session: &Session, expected: &str, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match session.snapshot() {
+            Ok(snapshot) if snapshot.state == State::Failed => {
+                panic!("{context}: session failed: {:?}", snapshot.failure)
+            }
+            Ok(snapshot) if snapshot.viewport.contents.contains(expected) => return,
+            Ok(_) | Err(SessionError::Busy) => {}
+            Err(error) => panic!("{context}: read session snapshot: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{context}: session output did not contain {expected:?}"
+        );
+        thread::yield_now();
+    }
+}
+
+fn wait_for_file(path: &std::path::Path, context: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.is_file() {
+        assert!(
+            Instant::now() < deadline,
+            "{context}: {} was not created",
+            path.display()
+        );
+        thread::yield_now();
+    }
+}
+
 #[test]
 fn shell_integration_canonicalizes_a_symlinked_temp_directory() {
     let directory = Directory::new();
@@ -200,7 +231,7 @@ fn automatic_local_claude_wrapper_dispatches_once_with_notice_plugin_and_origina
     let cli = directory.0.join("zmux-test-cli");
     fs::write(
         &cli,
-        "#!/bin/sh\ncase \"$3\" in\n auto) printf '<%s>\\n' \"$@\" > \"$ZMUX_AUTO_CLI_REPORT\"; printf 'AUTO_DISPATCH_OK\\n'; exit 37 ;;\n cleanup) exit 0 ;;\n *) exit 91 ;;\nesac\n",
+        "#!/bin/sh\ncase \"$3\" in\n auto) report_tmp=\"$ZMUX_AUTO_CLI_REPORT.tmp\"; printf '<%s>\\n' \"$@\" > \"$report_tmp\" || exit 92; mv \"$report_tmp\" \"$ZMUX_AUTO_CLI_REPORT\" || exit 93; printf 'AUTO_DISPATCH_OK\\n'; exit 37 ;;\n cleanup) exit 0 ;;\n *) exit 91 ;;\nesac\n",
     )
     .unwrap();
     fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
@@ -246,24 +277,11 @@ fn automatic_local_claude_wrapper_dispatches_once_with_notice_plugin_and_origina
         lease,
     )
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        let snapshot = session.snapshot().unwrap();
-        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
-        if snapshot.viewport.contents.contains("AUTO_SHELL_READY") {
-            break;
-        }
-        assert!(Instant::now() < deadline, "automatic shell did not start");
-        thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_session_output(&session, "AUTO_SHELL_READY", "automatic shell startup");
     session
         .send_input(b"claude --model sonnet 'literal $HOME ; prompt'\n")
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !report.exists() {
-        assert!(Instant::now() < deadline, "Claude wrapper did not dispatch");
-        thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_file(&report, "Claude wrapper dispatch");
     let arguments = fs::read_to_string(report).unwrap();
     let lines: Vec<_> = arguments.lines().collect();
     assert_eq!(lines[0], "<hooks>");
@@ -287,20 +305,7 @@ fn automatic_local_claude_wrapper_dispatches_once_with_notice_plugin_and_origina
         !provider_called.exists(),
         "failed adapter dispatch was replayed"
     );
-    let output_deadline = Instant::now() + Duration::from_secs(5);
-    while !session
-        .snapshot()
-        .unwrap()
-        .viewport
-        .contents
-        .contains("AUTO_DISPATCH_OK")
-    {
-        assert!(
-            Instant::now() < output_deadline,
-            "auto CLI status was not displayed"
-        );
-        thread::sleep(Duration::from_millis(5));
-    }
+    wait_for_session_output(&session, "AUTO_DISPATCH_OK", "automatic CLI result");
     session.shutdown(Duration::from_secs(3)).unwrap();
 }
 

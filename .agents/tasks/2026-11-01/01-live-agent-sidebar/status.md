@@ -251,3 +251,56 @@ Focused verification on Linux:
 - The full `scripts/check` retry r20 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r20.log`.
 - Hosted workflow [41320417182](https://github.com/ashutoshpw/zmux/actions/runs/41320417182) failed in `provider_hooks` with `Not a directory (os error 20)` in the symlinked-plugin fixture. Source diagnosis traced this to the Darwin `/tmp` symlink; the fixture now canonicalizes the trusted temporary root and enforces a 98-byte socket-path budget. Independent review found no blocker.
 - A macOS hosted rerun is still needed. The failed workflow skipped app packaging and the sidebar smoke, so no hosted acceptance or delivered build is claimed.
+
+## Latest verification update — 2026-11-01
+
+- The full `scripts/check` retry r25 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r25.log`. It includes the heartbeat sequence and SSH child-cleanup fixes, the shell `Busy` test handling, and lint fixes.
+- Hosted workflow [41321843638](https://github.com/ashutoshpw/zmux/actions/runs/41321843638) failed in the managed SSH lifecycle regression: it observed sequence 9 where the test expected 8, alongside `EPERM` process-cancellation diagnostics. Source review traced the interleaving to the shared heartbeat counter and cleanup of a reaped process group; both were fixed locally.
+- A macOS hosted rerun is pending. The failed run skipped universal app packaging, packaged sidebar smoke, artifact upload, and build receipt; no hosted acceptance or delivered build is claimed.
+
+## Remote lifecycle heartbeat and process cleanup follow-up — 2026-11-01
+
+Hosted workflow [41321843638](https://github.com/ashutoshpw/zmux/actions/runs/41321843638) failed the loopback SSH lifecycle test at its exact `sequence == 8` assertion: the idle Hook arrived with sequence 9. The stream helper increments one sequence for both Hooks and five-second Heartbeats, while the test helper consumed Heartbeats without advancing its expected sequence. The test now checks strict monotonic order across each observed Hook and Heartbeat and waits for a real heartbeat before the idle Hook, preserving event order and replay checks without assuming contiguous Hook values.
+
+The same workflow logged `remote lifecycle process cancellation: EPERM` as pre-handshake SSH attempts closed. `ChildOwner::drop` was signaling `child.id()` as a process-group ID even though the polling loop could have reaped that child with `try_wait`; the PID/PGID may then be reused. The hosted log does not identify which extant process group caused `EPERM`. The supervisor now relies on bounded stdout EOF, handshake, heartbeat, and cancellation checks and keeps the child unreaped until cleanup signals its process group and then waits. The guard also skips any group signal after reaping. A regression kills a live group containing a descendant that holds stdout, verifies EOF after teardown, and verifies no second signal after reap.
+
+Focused Linux verification after these changes:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 4 tests, including the real loopback SSH interleaving and child-group cleanup regression.
+- `cargo clippy -p zmux-desktop-runtime --lib -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- The full `scripts/check` and another hosted run were not performed for this follow-up. Darwin process-group behavior and hosted macOS acceptance remain unverified.
+
+## Remote lifecycle stdin backpressure and bounded reaping — 2026-11-01
+
+Managed SSH lifecycle Activate and Receipt frames now share one nonblocking stdin writer. It retains each serialized frame and partial-write offset until completion, polls child stdin and stdout together, preserves frame order, and applies a fixed two-second write deadline that cancellation checks can interrupt. A stalled or closed remote reader becomes lifecycle loss and enters the existing generation fencing path.
+
+Child cleanup now signals its process group only while the leader remains unreaped, polls `try_wait` for at most 250 ms, then transfers the child to one bounded background reaper. A pre-spawn global reservation caps active plus deferred child ownership at `MAX_TERMINALS`; a stream that defers a reap stops reconnecting, so it cannot accumulate pending children. The background reaper never signals a process group.
+
+Focused Linux verification:
+
+- `RUST_TEST_THREADS=1 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 5 tests, including the real loopback SSH stalled-stdin test. The test filled the actual child stdin pipe with over 10,000 receipts, observed bounded `Lost`, and verified cancellation disconnects the supervisor while a second pipe remains stalled.
+- `cargo clippy -p zmux-desktop-runtime --lib -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- The full `scripts/check`, hosted macOS workflow, app build, and downloadable artifact were not run for this parent-scoped follow-up. These local loopback checks do not establish Darwin process behavior or hosted acceptance.
+
+The r22 failure was a test-bootstrap race: checking only `is_file()` could observe the stream helper immediately after shell redirection created it, before its here-doc body finished writing. The test now waits for the full generated helper contents, including the bootstrap's trailing newline, before replacing it with the stalled peer. No timing delay was added.
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 5 tests with the two real loopback SSH lifecycle tests running concurrently.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime --lib` passed: 115 tests, including the stalled-stdin test under the full desktop-runtime unit-test load.
+
+## Local Claude wrapper snapshot contention follow-up — 2026-11-01
+
+The r23 failure in `automatic_local_claude_wrapper_dispatches_once_with_notice_plugin_and_original_args` occurred after the test CLI had written its argument report. The failing unwrap was a later `Session::snapshot()`: that API intentionally uses `try_lock`, and returns `SessionError::Busy` while the PTY worker publishes a snapshot. The command's `send_input` had already succeeded, so this did not demonstrate input queue saturation or failed CLI dispatch.
+
+The test now waits for expected PTY output while treating `Busy` as transient and other errors as failures. Its fake CLI writes the argument report to a sibling temporary file and renames it into place, making report existence a completed-write barrier. The readiness helpers use bounded deadlines and scheduler yields, with no fixed sleep.
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-session-runtime --test shell_integration automatic_local_claude_wrapper_dispatches_once_with_notice_plugin_and_original_args -- --nocapture` passed: 1 test.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-session-runtime --test shell_integration -- --nocapture` passed: 8 passed, 1 ignored.
+- `cargo clippy -p zmux-session-runtime --test shell_integration -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- The workspace `scripts/check` rerun is owned by the parent; no workspace check or commit was performed in this follow-up.
+
+## Remote lifecycle one-shot receive lint cleanup — 2026-11-01
+
+Three test helpers used loops around exactly one `recv_timeout`; every match arm already returned, panicked, or broke. They now use direct matches while retaining the absolute deadlines, timeout assertions, binding checks, and unexpected-message failures.
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed: 5 tests.
+- `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. No lint allowances were added.
