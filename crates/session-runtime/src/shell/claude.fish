@@ -11,6 +11,17 @@ function claude
                 return $status
         end
     end
+    if test "$ZMUX_LOCAL_CLAUDE_LIFECYCLE" = 1
+        if test -x "$ZMUX_CLI_PATH"; and test -n "$ZMUX_SURFACE_ID"
+            "$ZMUX_CLI_PATH" hooks claude auto \
+                --root "$ZMUX_SHELL_INTEGRATION_DIRECTORY" \
+                --surface "$ZMUX_SURFACE_ID" \
+                --notice-plugin "$ZMUX_SHELL_INTEGRATION_DIRECTORY/plugin" \
+                -- $argv
+            return $status
+        end
+        printf 'zmux: automatic local Claude lifecycle unavailable; launching with terminal notices only\n' >&2
+    end
     command claude --plugin-dir "$ZMUX_SHELL_INTEGRATION_DIRECTORY/plugin" $argv
 end
 

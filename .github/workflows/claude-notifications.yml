@@ -52,6 +52,7 @@ jobs:
             dist/claude-ssh-receipt.json
             dist/claude-tmux-receipt.json
             dist/native-sidebar*
+            dist/zmux-sidebar*.png
             dist/repaint-baseline/
           if-no-files-found: error
           retention-days: 7

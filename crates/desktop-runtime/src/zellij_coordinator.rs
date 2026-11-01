@@ -415,6 +415,7 @@ impl Worker {
                     launch_id: self.next_launch_id,
                     session: None,
                     connection: None,
+                    remote_lifecycle: None,
                     cached: None,
                     starting: false,
                     reconnectable: false,
@@ -553,6 +554,7 @@ impl Worker {
                     id: session,
                     result,
                     connection: None,
+                    remote_lifecycle: None,
                     cleanup,
                     zellij: Some(metadata),
                 }) {
@@ -583,6 +585,7 @@ impl Worker {
                     launch_id,
                     session: None,
                     connection: None,
+                    remote_lifecycle: None,
                     cached: None,
                     starting: true,
                     reconnectable: false,

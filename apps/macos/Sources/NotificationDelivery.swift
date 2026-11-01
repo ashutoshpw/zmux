@@ -156,6 +156,8 @@ struct NativeNotificationRequest: Codable, Sendable, Equatable {
     let subtitle: String
     let body: String
     let replyEnabled: Bool
+    /// Tagged lifecycle banners are silent at the OS layer; recognized events use NSSound.
+    let agentAlertKind: String?
 }
 
 struct NativeNotificationSnapshot: Codable, Sendable {
@@ -276,6 +278,8 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     private let performAction: @MainActor (NativeAttentionAction) async throws -> NativeNotificationExecution
     private let activate: @MainActor (NativeNotificationExecution) -> Void
     private let reportError: @MainActor (String) -> Void
+    private let agentAlertAudio: AgentAlertAudioPlayer
+    private var agentAlertEventGate = AgentAlertEventGate()
     private var epoch: UUID?
     private var authorizationGeneration: UInt64 = 0
     private var permissionObservations = PermissionObservations()
@@ -299,9 +303,11 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
     init(sendEvent: @escaping @MainActor (NativeNotificationEvent) async throws -> Void,
          performAction: @escaping @MainActor (NativeAttentionAction) async throws -> NativeNotificationExecution,
          activate: @escaping @MainActor (NativeNotificationExecution) -> Void,
-         reportError: @escaping @MainActor (String) -> Void) {
+         reportError: @escaping @MainActor (String) -> Void,
+         agentAlertPreferences: AgentAlertPreferences? = nil) {
         self.sendEvent = sendEvent; self.performAction = performAction
         self.activate = activate; self.reportError = reportError
+        agentAlertAudio = AgentAlertAudioPlayer(preferences: agentAlertPreferences ?? AgentAlertPreferences())
         super.init()
         center.delegate = self
         let reply = UNTextInputNotificationAction(identifier: Self.replyActionIdentifier, title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Reply to terminal")
@@ -312,6 +318,31 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         // A previous process's tokens must never target this process's inbox.
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
+    }
+
+    var agentAlertPreferences: AgentAlertPreferences { agentAlertAudio.preferences }
+    var authorizationForSettings: NotificationAuthorization { observedAuthorization }
+    func agentAlertAvailability(for kind: AgentAlertKind) -> String? { agentAlertAudio.availability(for: kind) }
+
+    func updateAgentAlerts(_ snapshot: NativeAgentAlertSnapshot,
+                           current: Set<AgentAlertIdentity>,
+                           mode: AgentAlertSnapshotMode = .live) -> Bool {
+        guard !stopped else { return false }
+        let events = agentAlertEventGate.update(snapshot, current: current, mode: mode)
+        if agentAlertEventGate.lastUpdateAccepted && agentAlertEventGate.droppedEventsSinceLastUpdate {
+            reportError("Some earlier agent alert events were dropped from the bounded history; only retained new events can be delivered.")
+        }
+        for event in events {
+            guard let kind = event.supportedKind else { continue }
+            if case .unavailable(let reason) = agentAlertAudio.playEvent(kind) {
+                reportError("Agent alert audio unavailable: \(reason). In-app inbox delivery remains available; system banners follow notification permissions.")
+            }
+        }
+        return agentAlertEventGate.lastUpdateAccepted
+    }
+
+    func previewAgentAlertSound(_ kind: AgentAlertKind) -> AgentAlertPlaybackResult {
+        agentAlertAudio.preview(kind)
     }
 
     func update(_ snapshot: NativeNotificationSnapshot) {
@@ -473,7 +504,8 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
             attempted[request.identifier] = request.authorizationGeneration
             let content = UNMutableNotificationContent()
             content.title = String(request.title.prefix(128)); content.subtitle = String(request.subtitle.prefix(128))
-            content.body = String(request.body.prefix(2048)); content.sound = .default
+            content.body = String(request.body.prefix(2048))
+            content.sound = request.agentAlertKind == nil ? .default : nil
             content.categoryIdentifier = request.replyEnabled ? "zmux.inbox.reply" : "zmux.inbox"
             pending[request.identifier] = Pending(request: request)
             pending[request.identifier]?.timer = Task { [weak self] in
@@ -557,7 +589,7 @@ final class NotificationDelivery: NSObject, UNUserNotificationCenterDelegate {
         guard let request = desired[identifier], current(request), pending[identifier]?.expired != true else {
             remove([identifier]); return []
         }
-        return [.banner, .list, .sound]
+        return request.agentAlertKind == nil ? [.banner, .list, .sound] : [.banner, .list]
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let identifier = response.notification.request.identifier

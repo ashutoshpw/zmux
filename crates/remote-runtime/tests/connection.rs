@@ -1,10 +1,12 @@
 use std::{
     fs,
+    io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
     ops::Deref,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -51,7 +53,7 @@ fn terminal_owns_the_master_and_preserves_the_validated_descriptor() {
         .build()
         .unwrap();
     let original = descriptor.process_spec();
-    let connection = ManagedConnection::create(descriptor).unwrap();
+    let connection = Arc::new(ManagedConnection::create(descriptor).unwrap());
     assert!(!connection.shell_integration_enabled());
     let spec = connection
         .terminal_spec(&zmux_session_runtime::shell_integration::OpenRequestNonce::generate());
@@ -78,13 +80,35 @@ fn terminal_owns_the_master_and_preserves_the_validated_descriptor() {
 fn operations_have_a_closed_route_and_reject_unsafe_commands() {
     let descriptor = SshDescriptor::builder("deploy@prod-alias")
         .unwrap()
-        .config_file("/tmp/config")
         .port(2222)
         .identity("/tmp/key")
         .jump_host(JumpHost::parse("bastion", None).unwrap())
         .build()
         .unwrap();
-    let connection = ManagedConnection::create(descriptor).unwrap();
+    let connection = Arc::new(ManagedConnection::create(descriptor).unwrap());
+    let nonce = zmux_session_runtime::shell_integration::OpenRequestNonce::generate();
+    let lifecycle = connection.agent_lifecycle_spec(&nonce).unwrap();
+    assert_eq!(lifecycle.program, SSH_PROGRAM);
+    assert_eq!(
+        lifecycle.args[3],
+        connection.control_path().to_str().unwrap()
+    );
+    assert_eq!(lifecycle.args[5], "ControlMaster=no");
+    assert_eq!(lifecycle.args[11], "ProxyCommand=/usr/bin/false");
+    assert!(
+        lifecycle
+            .args
+            .last()
+            .unwrap()
+            .contains("claude-lifecycle-stream.py")
+    );
+    assert!(
+        lifecycle
+            .args
+            .last()
+            .unwrap()
+            .contains(&nonce.remote_integration_directory())
+    );
 
     assert_eq!(
         connection.operation_spec("printf '%s' value").unwrap(),
@@ -106,8 +130,12 @@ fn operations_have_a_closed_route_and_reject_unsafe_commands() {
                 "-o".into(),
                 "PermitLocalCommand=no".into(),
                 "-T".into(),
+                "-p".into(),
+                "2222".into(),
+                "-l".into(),
+                "deploy".into(),
                 "--".into(),
-                "deploy@prod-alias".into(),
+                "prod-alias".into(),
                 "printf '%s' value".into(),
             ],
         }
@@ -140,6 +168,12 @@ fn openssh_config_applies_to_master_but_cannot_change_auxiliary_route() {
         .unwrap();
     let connection = ManagedConnection::create(descriptor).unwrap();
     assert!(!connection.shell_integration_enabled());
+    assert!(matches!(
+        connection.agent_lifecycle_spec(
+            &zmux_session_runtime::shell_integration::OpenRequestNonce::generate()
+        ),
+        Err(ConnectionError::ShellIntegrationUnavailable)
+    ));
 
     let terminal = effective_config(
         connection
@@ -162,7 +196,12 @@ fn openssh_config_applies_to_master_but_cannot_change_auxiliary_route() {
     );
 
     let operation = effective_config(connection.operation_spec("true").unwrap());
-    assert_eq!(config_value(&operation, "hostname"), Some("prod-alias"));
+    assert_eq!(
+        config_value(&operation, "hostname"),
+        Some("configured.invalid")
+    );
+    assert_eq!(config_value(&operation, "user"), Some("configured-user"));
+    assert_eq!(config_value(&operation, "port"), Some("2202"));
     assert_eq!(
         config_value(&operation, "proxycommand"),
         Some("/usr/bin/false")
@@ -206,7 +245,7 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         .identity(fixture.identity.to_str().unwrap())
         .build()
         .unwrap();
-    let connection = ManagedConnection::create(descriptor).unwrap();
+    let connection = Arc::new(ManagedConnection::create(descriptor).unwrap());
     assert!(connection.shell_integration_enabled());
 
     let nonce = zmux_session_runtime::shell_integration::OpenRequestNonce::generate();
@@ -227,7 +266,7 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         zmux_session_runtime::ShutdownPolicy::Kill,
         None,
         Some(registration),
-        connection,
+        Arc::clone(&connection),
     )
     .unwrap();
     let active_registration = session
@@ -241,6 +280,127 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
         active_registration.source(),
         zmux_session_runtime::shell_integration::OpenRequestSource::ManagedSsh
     ));
+
+    wait_for_control_socket(connection.control_path(), &mut session);
+    wait_for_remote_lifecycle_files(&connection, &nonce, &mut session);
+    let remote_hooks = format!(
+        "{}/plugin/hooks/hooks.json",
+        nonce.remote_integration_directory()
+    );
+    let validate_hooks = connection
+        .operation_spec(&format!("python3 -m json.tool '{remote_hooks}' >/dev/null"))
+        .unwrap();
+    let output = Command::new(&validate_hooks.program)
+        .args(&validate_hooks.args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "managed SSH bootstrap published invalid Claude hook JSON: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stream_spec = connection.agent_lifecycle_spec(&nonce).unwrap();
+    let mut stream_child = Command::new(&stream_spec.program)
+        .args(&stream_spec.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let (stream_tx, stream_rx) = mpsc::sync_channel(16);
+    let stream_stdout = stream_child.stdout.take().unwrap();
+    thread::spawn(move || {
+        for line in BufReader::new(stream_stdout).lines() {
+            let Ok(line) = line else { break };
+            if stream_tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let hello = stream_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("managed lifecycle stream handshake");
+    let hello: serde_json::Value = serde_json::from_str(&hello).unwrap();
+    assert_eq!(hello["kind"], "hello");
+    assert_eq!(hello["version"], 2);
+    assert_eq!(hello["nonce"], nonce.remote_lifecycle_token());
+    let mut stream_stdin = stream_child.stdin.take().unwrap();
+    writeln!(
+        stream_stdin,
+        "{{\"kind\":\"activate\",\"version\":2,\"nonce\":\"{}\"}}",
+        nonce.remote_lifecycle_token()
+    )
+    .unwrap();
+    let active = stream_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("managed lifecycle stream activation");
+    let active: serde_json::Value = serde_json::from_str(&active).unwrap();
+    assert_eq!(active["kind"], "active");
+    assert_eq!(active["version"], 2);
+    assert_eq!(active["nonce"], nonce.remote_lifecycle_token());
+    let remote_notice = || {
+        let root = nonce.remote_integration_directory();
+        let script = r#"import json,os,subprocess,sys; root,nonce=sys.argv[1:]; fifo=os.path.join(root,"attention"); os.path.exists(fifo) and os.unlink(fifo); os.mkfifo(fifo,0o600); os.chmod(fifo,0o600); reader=os.open(fifo,os.O_RDONLY|os.O_NONBLOCK); environment=os.environ.copy(); environment["ZMUX_AGENT_LIFECYCLE_NONCE"]=nonce; environment["ZMUX_SHELL_INTEGRATION_DIRECTORY"]=root; payload=json.dumps({"hook_event_name":"Notification","session_id":"00000000-0000-4000-8000-000000000002","notification_type":"permission_prompt"}); result=subprocess.run(["python3",os.path.join(root,"claude-lifecycle-notice.py"),"attention"],input=payload.encode(),env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE); result.returncode and sys.stderr.write(result.stderr.decode()); result.returncode and sys.exit(2); data=os.read(reader,128); data!=b"attention\n" and sys.exit(4); sys.stdout.write(data.decode())"#;
+        let command = format!(
+            "python3 -c '{}' '{}' '{}'",
+            script,
+            root,
+            nonce.remote_lifecycle_token()
+        );
+        let spec = connection.operation_spec(&command).unwrap();
+        let output = Command::new(&spec.program)
+            .args(&spec.args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "remote notice state check failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(
+        remote_notice(),
+        "attention\n",
+        "a live lifecycle transport must not suppress a notice without event admission"
+    );
+
+    let provider_session = uuid::Uuid::new_v4();
+    let prompt_id = uuid::Uuid::new_v4();
+    let push_remote_hook = |event: serde_json::Value| {
+        let record = serde_json::json!({
+            "nonce": nonce.remote_lifecycle_token(),
+            "event": event,
+        });
+        let record = serde_json::to_string(&record).unwrap();
+        let command = format!(
+            "printf '%s\\n' '{}' > '{}/agent-events'\n",
+            record,
+            nonce.remote_integration_directory()
+        );
+        session.send_input(command.as_bytes()).unwrap();
+        let line = stream_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("remote provider hook frame");
+        serde_json::from_str::<serde_json::Value>(&line).unwrap()
+    };
+    let started = push_remote_hook(serde_json::json!({
+        "name":"SessionStart",
+        "session_id":provider_session,
+        "main_session":true,
+        "source":"startup"
+    }));
+    assert_eq!(started["kind"], "hook");
+    assert_eq!(started["sequence"], 1);
+    let prompted = push_remote_hook(serde_json::json!({
+        "name":"UserPromptSubmit",
+        "session_id":provider_session,
+        "main_session":true,
+        "prompt_id":prompt_id,
+        "permission_mode":"default"
+    }));
+    assert_eq!(prompted["sequence"], 2);
+    assert_eq!(prompted["event"]["prompt_id"], prompt_id.to_string());
 
     session
         .send_input(b"open https://ssh.example.test/login\n")
@@ -267,6 +427,38 @@ fn managed_ssh_shell_routes_nonce_bound_opener_requests_from_loopback_sshd() {
     };
     assert_eq!(opened.len(), 1);
     assert_eq!(opened[0].as_str(), "https://ssh.example.test/login");
+
+    // Simulate a failed primary FIFO open while the stream reader and its
+    // dedicated loss-signal FIFO remain live. The reader must fence this
+    // generation instead of silently continuing with stale provider evidence.
+    let root = nonce.remote_integration_directory();
+    let lifecycle_token = nonce.remote_lifecycle_token();
+    let hook_input =
+        format!("{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"{provider_session}\"}}");
+    let drop_hook_command = format!(
+        "rm -f '{root}/agent-events' && printf '%s\\n' '{hook_input}' | ZMUX_AGENT_LIFECYCLE_NONCE={lifecycle_token} ZMUX_SHELL_INTEGRATION_DIRECTORY='{root}' python3 '{root}/claude-lifecycle-hook.py'"
+    );
+    let drop_hook = connection.operation_spec(&drop_hook_command).unwrap();
+    let output = Command::new(&drop_hook.program)
+        .args(&drop_hook.args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "remote hook loss fixture failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let gap = stream_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("remote hook loss gap frame");
+    let gap: serde_json::Value = serde_json::from_str(&gap).unwrap();
+    assert_eq!(gap["kind"], "gap");
+    assert_eq!(gap["sequence"], 3);
+    drop(stream_stdin);
+    assert_eq!(remote_notice(), "attention\n");
+
+    let _ = stream_child.kill();
+    let _ = stream_child.wait();
     session.shutdown(Duration::from_secs(5)).unwrap();
     zmux_remote_runtime::connection::request_cleanup_barrier()
         .unwrap()
@@ -457,6 +649,64 @@ fn wait_for_sshd(port: u16, child: &mut Child) -> Result<(), &'static str> {
         if Instant::now() >= deadline {
             return Err("isolated sshd did not listen");
         }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_control_socket(path: &Path, session: &mut zmux_session_runtime::Session) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if path.exists() {
+            return;
+        }
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(
+            snapshot.state,
+            zmux_session_runtime::State::Failed,
+            "managed SSH session failed before opening its control socket: {:?}",
+            snapshot.failure
+        );
+        assert!(
+            Instant::now() < deadline,
+            "managed SSH control socket was not ready"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_remote_lifecycle_files(
+    connection: &ManagedConnection,
+    nonce: &zmux_session_runtime::shell_integration::OpenRequestNonce,
+    session: &mut zmux_session_runtime::Session,
+) {
+    let root = nonce.remote_integration_directory();
+    let command = format!(
+        "test -f {root}/claude-lifecycle-stream.py && test -p {root}/agent-events && test -p {root}/agent-events-loss"
+    );
+    let spec = connection.operation_spec(&command).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let ready = Command::new(&spec.program)
+            .args(&spec.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if ready {
+            return;
+        }
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(
+            snapshot.state,
+            zmux_session_runtime::State::Failed,
+            "managed SSH session failed before lifecycle files were ready: {:?}",
+            snapshot.failure
+        );
+        assert!(
+            Instant::now() < deadline,
+            "managed SSH lifecycle files were not ready"
+        );
         thread::sleep(Duration::from_millis(10));
     }
 }

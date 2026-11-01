@@ -282,6 +282,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
         }
         ControlCommand::LocalTmux { .. }
         | ControlCommand::AgentLifecycle { .. }
+        | ControlCommand::SelectAgentTarget { .. }
         | ControlCommand::BrowserProfiles { .. }
         | ControlCommand::BrowserProfileReconcile { .. }
         | ControlCommand::Session { .. }

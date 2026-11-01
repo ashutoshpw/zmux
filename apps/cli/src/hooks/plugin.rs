@@ -215,6 +215,28 @@ impl Directory {
         }
     }
 }
+
+pub(super) fn auto_lock(root: &Path) -> Result<File, CliError> {
+    Directory::open(root, false)?.lock("claude-auto.lock", false)
+}
+
+pub(super) fn remove_empty_auto_directory(path: &Path) -> Result<(), CliError> {
+    let root = Directory::open(path, false)?;
+    let lock = root.lock("installation.lock", false)?;
+    let entries = std::fs::read_dir(path)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if entries.len() != 1 || entries[0] != OsStr::new("installation.lock") {
+        return Err(CliError(
+            "automatic Claude directory contains unowned files; retained".into(),
+        ));
+    }
+    at::unlinkat(&root.0, "installation.lock", AtFlags::empty()).map_err(io::Error::from)?;
+    drop(lock);
+    drop(root);
+    std::fs::remove_dir(path)?;
+    Ok(())
+}
 fn read_file(mut file: File) -> Result<Vec<u8>, CliError> {
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
@@ -394,9 +416,9 @@ fn generation(root: &Directory, i: &Installation) -> Result<Directory, CliError>
     Ok(dir)
 }
 pub(super) fn install(path: &Path, provider: Binary) -> Result<Value, CliError> {
+    let adapter = binary(&env::current_exe()?)?;
     let root = Directory::open(path, true)?;
     let _lock = root.lock("installation.lock", false)?;
-    let adapter = binary(&env::current_exe()?)?;
     let mut owned = if root.exists(RECORD)? {
         record(&root)?
     } else {
@@ -500,6 +522,17 @@ pub(super) fn lease(path: &Path, i: &Installation) -> Result<File, CliError> {
     Ok(lock)
 }
 pub(super) fn uninstall(path: &Path) -> Result<Value, CliError> {
+    uninstall_inner(path, false)
+}
+
+/// Retire an automatic generation only when no launched provider holds its
+/// runtime lease. Unlike explicit uninstall, cleanup must not disable a live
+/// adapter merely because it cannot remove the generation yet.
+pub(super) fn uninstall_if_idle(path: &Path) -> Result<Value, CliError> {
+    uninstall_inner(path, true)
+}
+
+fn uninstall_inner(path: &Path, require_idle: bool) -> Result<Value, CliError> {
     if !path.try_exists()? {
         return Ok(json!({"installed":false,"cleanup_pending":false}));
     }
@@ -509,8 +542,35 @@ pub(super) fn uninstall(path: &Path) -> Result<Value, CliError> {
     }
     let _lock = root.lock("installation.lock", false)?;
     let mut r = record(&root)?;
+    let mut leases = Vec::new();
+    if require_idle {
+        for installation in &r.generations {
+            let name = installation.generation.to_string();
+            let lease = if root.exists(&name)? {
+                let dir = root.child(OsStr::new(&name), false)?;
+                dir.private()?;
+                match dir.try_runtime_lock(&installation.files.runtime_lock) {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        return Ok(json!({
+                            "installed": true,
+                            "disabled": false,
+                            "cleanup_pending": true,
+                            "diagnostics": [error.0],
+                            "retirement": "active automatic generations remain enabled until their provider exits"
+                        }));
+                    }
+                }
+            } else {
+                None
+            };
+            leases.push((installation.generation, lease));
+        }
+    }
     // Disable admission durably before attempting removal. A running wrapper
     // observes this publication, retires its exact capability, and keeps its Child.
+    // Automatic cleanup reaches this point only after taking every generation's
+    // exclusive runtime lease, so a live provider remains admitted until exit.
     r.enabled = false;
     root.write(RECORD, &bytes(&r)?)?;
     let mut retained = Vec::new();
@@ -523,7 +583,14 @@ pub(super) fn uninstall(path: &Path) -> Result<Value, CliError> {
             }
             let dir = root.child(OsStr::new(&name), false)?;
             dir.private()?;
-            let _lease = dir.try_runtime_lock(&i.files.runtime_lock)?;
+            let _lease = if require_idle {
+                leases
+                    .iter_mut()
+                    .find(|(generation, _)| *generation == i.generation)
+                    .and_then(|(_, lease)| lease.take())
+            } else {
+                dir.try_runtime_lock(&i.files.runtime_lock)?
+            };
             let (plugin, hooks) = artifacts(i);
             // Missing files/directories can be a prior interrupted uninstall.
             // Every surviving file is revalidated before the first unlink.

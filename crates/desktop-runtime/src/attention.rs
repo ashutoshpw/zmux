@@ -225,6 +225,10 @@ pub struct Notification {
     pub reply_enabled: bool,
     pub reply_state: NotificationReplyState,
     pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_alert_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_alert_event_key: Option<String>,
     pub timestamp_ms: u64,
     pub read: bool,
     /// Rows lacking a captured owner are never eligible for native effects.
@@ -241,6 +245,8 @@ pub struct NativeNotificationRequest {
     pub subtitle: String,
     pub body: String,
     pub reply_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_alert_kind: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct NativeNotificationSnapshot {
@@ -537,6 +543,10 @@ pub struct Attention {
     authorization: NotificationAuthorization,
     authorization_generation: u64,
 }
+struct AgentAlertMetadata {
+    kind: String,
+    event_key: String,
+}
 impl Default for Attention {
     fn default() -> Self {
         Self {
@@ -688,7 +698,73 @@ impl Attention {
         {
             return Err(AttentionError::ReplyNotAllowed);
         }
-        self.insert(workspace_id, source, content, read, target)
+        self.insert(workspace_id, source, content, read, target, None)
+    }
+
+    /// Admit one Rust-owned visual/inbox item for a lifecycle event already
+    /// accepted by the provider lifecycle owner. The event key is local to the
+    /// lifecycle runtime epoch and prevents duplicate inbox insertion.
+    pub fn notify_agent_event(
+        &mut self,
+        model: &Snapshot,
+        surface_id: SurfaceId,
+        session_id: SessionId,
+        kind: &str,
+        event_key: &str,
+        content: &NotificationContent,
+    ) -> Result<u64, AttentionError> {
+        if event_key.is_empty()
+            || event_key.len() > 128
+            || !matches!(kind, "needs_user" | "completed")
+        {
+            return Err(AttentionError::InvalidOwner);
+        }
+        if let Some(existing) = self
+            .items
+            .iter()
+            .find(|item| item.agent_alert_event_key.as_deref() == Some(event_key))
+        {
+            return Ok(existing.id);
+        }
+        let (workspace_id, surface) = model
+            .workspaces
+            .iter()
+            .find_map(|workspace| {
+                workspace
+                    .root
+                    .panes()
+                    .into_iter()
+                    .flat_map(|pane| &pane.surfaces)
+                    .find(|surface| {
+                        surface.id == surface_id
+                            && surface.session_id == Some(session_id)
+                            && surface.kind == zmux_workspace_core::SurfaceKind::Terminal
+                    })
+                    .map(|surface| (workspace.id, surface))
+            })
+            .ok_or(AttentionError::InvalidOwner)?;
+        let target = NotificationTarget {
+            epoch: self.epoch,
+            identity_namespace: model.identity_namespace,
+            notification_id: 0,
+            destination: NotificationDestination::Surface {
+                surface_id,
+                session_id: Some(session_id),
+            },
+        };
+        let id = self.insert(
+            workspace_id,
+            "agent",
+            content,
+            false,
+            target,
+            Some(AgentAlertMetadata {
+                kind: kind.to_string(),
+                event_key: event_key.to_string(),
+            }),
+        )?;
+        let _ = surface;
+        Ok(id)
     }
     fn insert(
         &mut self,
@@ -697,7 +773,11 @@ impl Attention {
         content: &NotificationContent,
         read: bool,
         mut target: NotificationTarget,
+        agent_alert: Option<AgentAlertMetadata>,
     ) -> Result<u64, AttentionError> {
+        let (agent_alert_kind, agent_alert_event_key) = agent_alert
+            .map(|alert| (Some(alert.kind), Some(alert.event_key)))
+            .unwrap_or((None, None));
         let title = clean(&content.title, MAX_NOTIFICATION_TITLE_CHARS);
         let subtitle = clean(&content.subtitle, MAX_NOTIFICATION_TITLE_CHARS);
         let body = clean(&content.body, MAX_NOTIFICATION_BODY_CHARS);
@@ -724,6 +804,8 @@ impl Attention {
                 && last.body == body
                 && last.desktop == content.desktop
                 && last.reply_enabled == content.reply
+                && last.agent_alert_kind == agent_alert_kind
+                && last.agent_alert_event_key == agent_alert_event_key
                 && matches!(
                     last.reply_state,
                     NotificationReplyState::Disabled | NotificationReplyState::Ready
@@ -771,6 +853,8 @@ impl Attention {
                 NotificationReplyState::Disabled
             },
             source,
+            agent_alert_kind,
+            agent_alert_event_key,
             timestamp_ms,
             read,
             target: Some(target),
@@ -908,6 +992,7 @@ impl Attention {
                         subtitle: item.subtitle.clone(),
                         body: item.body.clone(),
                         reply_enabled: item.reply_enabled,
+                        agent_alert_kind: item.agent_alert_kind.clone(),
                     })
                 })
                 .collect(),

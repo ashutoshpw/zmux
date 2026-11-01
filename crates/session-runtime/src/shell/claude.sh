@@ -13,6 +13,17 @@ claude() {
             return $?
             ;;
     esac
+    if [ "${ZMUX_LOCAL_CLAUDE_LIFECYCLE-}" = 1 ]; then
+        if [ -x "${ZMUX_CLI_PATH-}" ] && [ -n "${ZMUX_SURFACE_ID-}" ]; then
+            "$ZMUX_CLI_PATH" hooks claude auto \
+                --root "$ZMUX_SHELL_INTEGRATION_DIRECTORY" \
+                --surface "$ZMUX_SURFACE_ID" \
+                --notice-plugin "$ZMUX_SHELL_INTEGRATION_DIRECTORY/plugin" \
+                -- "$@"
+            return $?
+        fi
+        printf 'zmux: automatic local Claude lifecycle unavailable; launching with terminal notices only\n' >&2
+    fi
     command \claude --plugin-dir "$ZMUX_SHELL_INTEGRATION_DIRECTORY/plugin" "$@"
 }
 

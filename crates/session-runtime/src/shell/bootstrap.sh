@@ -24,7 +24,34 @@ case "${BASH_VERSION-}" in
         ;;
 esac
 umask 077
-if [ -z "$zmux_private_root" ]; then
+if [ "${ZMUX_REMOTE_LIFECYCLE-}" = 1 ]; then
+    zmux_lifecycle_nonce=${ZMUX_AGENT_LIFECYCLE_NONCE-}
+    case "$zmux_lifecycle_nonce" in
+        ''|*[!0-9a-f]*)
+            printf 'zmux: remote lifecycle integration unavailable: invalid session token\n' >&2
+            exit 70
+            ;;
+    esac
+    [ "${#zmux_lifecycle_nonce}" -eq 32 ] || exit 70
+    [ "$zmux_private_root" = "/tmp/zmux-shell-$zmux_lifecycle_nonce" ] || exit 70
+    # Atomic creation fails closed if this exact nonce-derived path already
+    # exists, including when it is a symlink or belongs to another process.
+    zmux_lifecycle_root_ready=0
+    if mkdir "$zmux_private_root"; then
+        if chmod 700 "$zmux_private_root"; then
+            zmux_lifecycle_root_ready=1
+        else
+            rmdir "$zmux_private_root" 2>/dev/null || :
+        fi
+    fi
+    if [ "$zmux_lifecycle_root_ready" -ne 1 ]; then
+        printf 'zmux: remote lifecycle integration unavailable for this session\n' >&2
+        unset ZMUX_AGENT_LIFECYCLE_NONCE ZMUX_REMOTE_LIFECYCLE
+        zmux_private_root=$(mktemp -d "/tmp/zmux-shell.XXXXXXXX") || {
+            exec "$zmux_shell" "$@"
+        }
+    fi
+elif [ -z "$zmux_private_root" ]; then
     # Keep shell lifecycle storage independent of remote transfer staging.
     # TMPDIR can be scoped to a single upload operation by a managed host.
     zmux_private_root=$(mktemp -d "/tmp/zmux-shell.XXXXXXXX") || exit 70
@@ -33,9 +60,12 @@ ZMUX_SHELL_INTEGRATION_DIRECTORY=$zmux_private_root
 export ZMUX_SHELL_INTEGRATION_DIRECTORY
 zmux_shell_cleanup() {
     rm -f "$zmux_private_root/claude.sh" "$zmux_private_root/claude.zsh" "$zmux_private_root/claude.fish" \
+        "$zmux_private_root/claude-lifecycle-hook.py" "$zmux_private_root/claude-lifecycle-notice.py" \
+        "$zmux_private_root/claude-lifecycle-stream.py" "$zmux_private_root/agent-lifecycle-active.lock" \
         "$zmux_private_root/.zshenv" "$zmux_private_root/.zprofile" \
         "$zmux_private_root/.zshrc" "$zmux_private_root/env" \
-        "$zmux_private_root/attention" \
+        "$zmux_private_root/attention" "$zmux_private_root/agent-events" \
+        "$zmux_private_root/agent-events-loss" \
         "$zmux_private_root/bin/zmux-open-url" "$zmux_private_root/bin/open" \
         "$zmux_private_root/bin/xdg-open" "$zmux_private_root/bin/sensible-browser" \
         "$zmux_private_root/plugin/.claude-plugin/plugin.json" \
@@ -43,11 +73,25 @@ zmux_shell_cleanup() {
     rmdir "$zmux_private_root/bin" "$zmux_private_root/plugin/.claude-plugin" "$zmux_private_root/plugin/hooks" \
         "$zmux_private_root/plugin" "$zmux_private_root" 2>/dev/null || :
 }
-trap 'zmux_shell_cleanup' 0
+zmux_parent_shell_cleanup() {
+    if [ "${ZMUX_LOCAL_CLAUDE_LIFECYCLE-}" = 1 ] && [ -x "${ZMUX_CLI_PATH-}" ]; then
+        if ! "$ZMUX_CLI_PATH" hooks claude cleanup --root "$zmux_private_root" >/dev/null; then
+            printf 'zmux: automatic Claude plugin cleanup remains pending\n' >&2
+        fi
+    fi
+    zmux_shell_cleanup
+}
+trap 'zmux_parent_shell_cleanup' 0
 trap 'exit 129' HUP
 trap 'exit 143' TERM
 mkdir "$zmux_private_root/plugin" "$zmux_private_root/plugin/.claude-plugin" \
     "$zmux_private_root/plugin/hooks" || exit 70
+if [ "${ZMUX_REMOTE_LIFECYCLE-}" = 1 ]; then
+    # Publish the lifecycle reader only after its bounded ingress channels are
+    # ready, so an auxiliary SSH operation cannot observe a partial bootstrap.
+    mkfifo "$zmux_private_root/agent-events" || exit 70
+    mkfifo "$zmux_private_root/agent-events-loss" || exit 70
+fi
 # ZMUX_GENERATED_FILES
 if [ -n "${ZMUX_OPEN_URL_NONCE-}" ]; then
     PATH="$zmux_private_root/bin${PATH:+:$PATH}"

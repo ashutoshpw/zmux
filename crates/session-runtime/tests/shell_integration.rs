@@ -1,8 +1,9 @@
 //! Real interactive startup and hook-byte contract; no Claude account is used.
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{PermissionsExt, symlink},
     path::PathBuf,
+    process::Command,
     sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -33,6 +34,65 @@ impl Drop for Directory {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.0).unwrap();
     }
+}
+
+#[test]
+fn shell_integration_canonicalizes_a_symlinked_temp_directory() {
+    let directory = Directory::new();
+    let real_temp = directory.0.join("real-temp");
+    fs::create_dir(&real_temp).unwrap();
+    fs::set_permissions(&real_temp, fs::Permissions::from_mode(0o700)).unwrap();
+    let temp_alias = directory.0.join("temp-alias");
+    symlink(&real_temp, &temp_alias).unwrap();
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "shell_integration_canonicalizes_a_symlinked_temp_directory_child",
+            "--nocapture",
+        ])
+        .env("TMPDIR", &temp_alias)
+        .env("FIXTURE_REAL_TEMP", &real_temp)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "symlinked temp child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "invoked by the parent test with a private symlinked TMPDIR"]
+fn shell_integration_canonicalizes_a_symlinked_temp_directory_child() {
+    let expected = PathBuf::from(std::env::var_os("FIXTURE_REAL_TEMP").unwrap())
+        .canonicalize()
+        .unwrap();
+    let (launch, lease) = shell_integration::prepare(Launch {
+        program: "/bin/bash".into(),
+        args: vec!["-i".into()],
+        cwd: Some(expected.clone()),
+        size: Size {
+            rows: 12,
+            cols: 100,
+        },
+    })
+    .unwrap();
+    let root = PathBuf::from(&launch.args[3]);
+    assert!(
+        root.starts_with(&expected),
+        "{} not under {}",
+        root.display(),
+        expected.display()
+    );
+    assert_ne!(
+        root,
+        PathBuf::from(std::env::var_os("TMPDIR").unwrap()).join(root.file_name().unwrap())
+    );
+    assert_eq!(root.canonicalize().unwrap(), root);
+    drop(lease);
 }
 
 #[test]
@@ -125,6 +185,216 @@ printf 'PROVIDER_ARGUMENTS_PRESERVED\n'
         wait("VERSION_PASSTHROUGH");
         session.shutdown(Duration::from_secs(3)).unwrap();
     }
+}
+
+#[test]
+fn automatic_local_claude_wrapper_dispatches_once_with_notice_plugin_and_original_args() {
+    let directory = Directory::new();
+    let provider = directory.0.join("claude");
+    fs::write(
+        &provider,
+        "#!/bin/sh\nprintf called > \"$ZMUX_AUTO_PROVIDER_CALLED\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+    let cli = directory.0.join("zmux-test-cli");
+    fs::write(
+        &cli,
+        "#!/bin/sh\ncase \"$3\" in\n auto) printf '<%s>\\n' \"$@\" > \"$ZMUX_AUTO_CLI_REPORT\"; printf 'AUTO_DISPATCH_OK\\n'; exit 37 ;;\n cleanup) exit 0 ;;\n *) exit 91 ;;\nesac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+    let startup = directory.0.join("shrc");
+    fs::write(
+        &startup,
+        format!(
+            "PATH=\"{}:$PATH\"; export PATH; PS1=; printf 'AUTO_SHELL_READY\\n'\n",
+            directory.0.display()
+        ),
+    )
+    .unwrap();
+    let report = directory.0.join("auto-cli-args");
+    let provider_called = directory.0.join("provider-called");
+    let surface = uuid::Uuid::new_v4().to_string();
+    let (launch, lease) = shell_integration::prepare(Launch {
+        program: "/bin/sh".into(),
+        args: vec!["-i".into()],
+        cwd: Some(directory.0.clone()),
+        size: Size {
+            rows: 12,
+            cols: 100,
+        },
+    })
+    .unwrap();
+    let mut session = Session::spawn_with_resource(
+        launch,
+        &[
+            ("HOME".into(), directory.0.to_string_lossy().into_owned()),
+            ("ENV".into(), startup.to_string_lossy().into_owned()),
+            ("ZMUX_LOCAL_CLAUDE_LIFECYCLE".into(), "1".into()),
+            ("ZMUX_CLI_PATH".into(), cli.to_string_lossy().into_owned()),
+            ("ZMUX_SURFACE_ID".into(), surface.clone()),
+            (
+                "ZMUX_AUTO_CLI_REPORT".into(),
+                report.to_string_lossy().into_owned(),
+            ),
+            (
+                "ZMUX_AUTO_PROVIDER_CALLED".into(),
+                provider_called.to_string_lossy().into_owned(),
+            ),
+        ],
+        lease,
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
+        if snapshot.viewport.contents.contains("AUTO_SHELL_READY") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "automatic shell did not start");
+        thread::sleep(Duration::from_millis(5));
+    }
+    session
+        .send_input(b"claude --model sonnet 'literal $HOME ; prompt'\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !report.exists() {
+        assert!(Instant::now() < deadline, "Claude wrapper did not dispatch");
+        thread::sleep(Duration::from_millis(5));
+    }
+    let arguments = fs::read_to_string(report).unwrap();
+    let lines: Vec<_> = arguments.lines().collect();
+    assert_eq!(lines[0], "<hooks>");
+    assert_eq!(lines[1], "<claude>");
+    assert_eq!(lines[2], "<auto>");
+    assert_eq!(lines[3], "<--root>");
+    assert_eq!(lines[5], "<--surface>");
+    assert_eq!(lines[6], format!("<{surface}>"));
+    assert_eq!(lines[7], "<--notice-plugin>");
+    let session_root = lines[4]
+        .strip_prefix('<')
+        .unwrap()
+        .strip_suffix('>')
+        .unwrap();
+    assert_eq!(lines[8], format!("<{session_root}/plugin>"));
+    assert_eq!(lines[9], "<-->");
+    assert_eq!(lines[10], "<--model>");
+    assert_eq!(lines[11], "<sonnet>");
+    assert_eq!(lines[12], "<literal $HOME ; prompt>");
+    assert!(
+        !provider_called.exists(),
+        "failed adapter dispatch was replayed"
+    );
+    let output_deadline = Instant::now() + Duration::from_secs(5);
+    while !session
+        .snapshot()
+        .unwrap()
+        .viewport
+        .contents
+        .contains("AUTO_DISPATCH_OK")
+    {
+        assert!(
+            Instant::now() < output_deadline,
+            "auto CLI status was not displayed"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    session.shutdown(Duration::from_secs(3)).unwrap();
+}
+
+#[test]
+fn automatic_local_claude_fish_wrapper_dispatches_when_fish_is_installed() {
+    if !Command::new("fish")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("fish is not installed; conditional fish wrapper coverage skipped");
+        return;
+    }
+
+    let directory = Directory::new();
+    let provider = directory.0.join("claude");
+    fs::write(&provider, "#!/bin/sh\nexit 99\n").unwrap();
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o700)).unwrap();
+    let cli = directory.0.join("zmux-test-cli");
+    fs::write(
+        &cli,
+        "#!/bin/sh\nprintf '<%s>\\n' \"$@\" > \"$ZMUX_AUTO_CLI_REPORT\"\nprintf 'FISH_AUTO_DISPATCH_OK\\n'\nexit 37\n",
+    )
+    .unwrap();
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+    let report = directory.0.join("fish-auto-cli-args");
+    let provider_called = directory.0.join("fish-provider-called");
+    let surface = uuid::Uuid::new_v4().to_string();
+    let (launch, lease) = shell_integration::prepare(Launch {
+        program: "fish".into(),
+        args: vec!["--interactive".into()],
+        cwd: Some(directory.0.clone()),
+        size: Size {
+            rows: 12,
+            cols: 100,
+        },
+    })
+    .unwrap();
+    let mut session = Session::spawn_with_resource(
+        launch,
+        &[
+            ("HOME".into(), directory.0.to_string_lossy().into_owned()),
+            ("ZMUX_LOCAL_CLAUDE_LIFECYCLE".into(), "1".into()),
+            ("ZMUX_CLI_PATH".into(), cli.to_string_lossy().into_owned()),
+            ("ZMUX_SURFACE_ID".into(), surface.clone()),
+            (
+                "ZMUX_AUTO_CLI_REPORT".into(),
+                report.to_string_lossy().into_owned(),
+            ),
+            (
+                "ZMUX_AUTO_PROVIDER_CALLED".into(),
+                provider_called.to_string_lossy().into_owned(),
+            ),
+        ],
+        lease,
+    )
+    .unwrap();
+    session
+        .send_input(b"claude --model sonnet 'literal $HOME ; prompt'\n")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while !report.exists() {
+        let snapshot = session.snapshot().unwrap();
+        assert_ne!(snapshot.state, State::Failed, "{:?}", snapshot.failure);
+        assert!(
+            Instant::now() < deadline,
+            "fish Claude wrapper did not dispatch"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+    let lines: Vec<_> = fs::read_to_string(&report)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(lines[0], "<hooks>");
+    assert_eq!(lines[1], "<claude>");
+    assert_eq!(lines[2], "<auto>");
+    assert_eq!(lines[3], "<--root>");
+    let session_root = lines[4]
+        .strip_prefix('<')
+        .unwrap()
+        .strip_suffix('>')
+        .unwrap();
+    assert_eq!(lines[5], "<--surface>");
+    assert_eq!(lines[6], format!("<{surface}>"));
+    assert_eq!(lines[7], "<--notice-plugin>");
+    assert_eq!(lines[8], format!("<{session_root}/plugin>"));
+    assert_eq!(lines[9], "<-->");
+    assert_eq!(lines[10], "<--model>");
+    assert_eq!(lines[11], "<sonnet>");
+    assert_eq!(lines[12], "<literal $HOME ; prompt>");
+    assert!(!provider_called.exists(), "failed dispatch replayed Claude");
+    session.shutdown(Duration::from_secs(3)).unwrap();
 }
 
 #[test]

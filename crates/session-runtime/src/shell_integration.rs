@@ -14,11 +14,18 @@ const FILES: &[&str] = &[
     "claude.sh",
     "claude.zsh",
     "claude.fish",
+    "claude-lifecycle-hook.py",
+    "claude-lifecycle-notice.py",
+    "claude-lifecycle-stream.py",
     ".zshenv",
     ".zprofile",
     ".zshrc",
     "env",
     "attention",
+    "agent-events",
+    "agent-events-loss",
+    "claude-auto.lock",
+    "agent-lifecycle-active.lock",
     "plugin/.claude-plugin/plugin.json",
     "plugin/hooks/hooks.json",
     "bin/zmux-open-url",
@@ -51,6 +58,17 @@ impl OpenRequestNonce {
 
     pub(crate) fn adapter_value(self) -> [u8; 16] {
         self.0
+    }
+
+    /// Private deterministic directory used only by the managed SSH bootstrap.
+    /// The token is correlation, not authentication; the transport is the
+    /// existing private OpenSSH ControlMaster.
+    pub fn remote_integration_directory(&self) -> String {
+        format!("/tmp/zmux-shell-{}", self.protocol_value())
+    }
+
+    pub fn remote_lifecycle_token(&self) -> String {
+        self.protocol_value()
     }
 
     pub(crate) fn matches_request(&self, request: &ProgramOpenRequest) -> bool {
@@ -161,9 +179,10 @@ fn prepare_inner(
     {
         return Ok((launch, None));
     }
+    let temporary_directory = std::env::temp_dir().canonicalize()?;
     let mut directory = None;
     for _ in 0..128 {
-        let path = std::env::temp_dir().join(format!(
+        let path = temporary_directory.join(format!(
             "zmux-shell-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
@@ -188,7 +207,7 @@ fn prepare_inner(
         .to_string();
     let mut args = vec![
         "-c".into(),
-        bootstrap_script(install_openers),
+        bootstrap_script(install_openers, false),
         "zmux-shell".into(),
         root,
         launch.program,
@@ -202,14 +221,15 @@ fn prepare_inner(
 /// Original remote shell code, carried in the already authenticated PTY. No
 /// local socket/password is forwarded; OSC notices are bound to that exact PTY.
 pub fn remote_command(nonce: &OpenRequestNonce) -> String {
-    let script = bootstrap_script(true).replace('\'', "'\\''");
+    let script = bootstrap_script(true, true).replace('\'', "'\\''");
+    let token = nonce.remote_lifecycle_token();
+    let root = nonce.remote_integration_directory();
     format!(
-        "ZMUX_OPEN_URL_NONCE={} /bin/sh -c '{script}' zmux-shell '' \"${{SHELL:-/bin/sh}}\" -l",
-        nonce.protocol_value()
+        "ZMUX_OPEN_URL_NONCE={token} ZMUX_AGENT_LIFECYCLE_NONCE={token} ZMUX_REMOTE_LIFECYCLE=1 /bin/sh -c '{script}' zmux-shell '{root}' \"${{SHELL:-/bin/sh}}\" -l",
     )
 }
 
-fn bootstrap_script(install_openers: bool) -> String {
+fn bootstrap_script(install_openers: bool, install_remote_lifecycle: bool) -> String {
     let mut generated = String::new();
     let files = [
         ("claude.sh", include_str!("shell/claude.sh")),
@@ -217,10 +237,6 @@ fn bootstrap_script(install_openers: bool) -> String {
         (
             "plugin/.claude-plugin/plugin.json",
             r#"{"name":"zmux-attention","version":"0.1.0","description":"Terminal-local completion and attention notifications"}"#,
-        ),
-        (
-            "plugin/hooks/hooks.json",
-            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"{ [ -p \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\" ] && printf 'stop\\n' > \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\"; } 2>/dev/null || :","timeout":3}]}],"StopFailure":[{"hooks":[{"type":"command","command":"{ [ -p \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\" ] && printf 'failure\\n' > \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\"; } 2>/dev/null || :","timeout":3}]}],"Notification":[{"matcher":"permission_prompt|elicitation_dialog","hooks":[{"type":"command","command":"{ [ -p \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\" ] && printf 'attention\\n' > \"$ZMUX_SHELL_INTEGRATION_DIRECTORY/attention\"; } 2>/dev/null || :","timeout":3}]}]}}"#,
         ),
         (
             ".zshenv",
@@ -248,19 +264,47 @@ ZDOTDIR=$ZMUX_SHELL_INTEGRATION_DIRECTORY
         ),
         (
             ".zshrc",
-            r#"if [[ "$ZMUX_USER_ZDOTDIR_SET" == x ]]; then ZDOTDIR=$ZMUX_USER_ZDOTDIR; else unset ZDOTDIR; fi
+            r#"source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.zsh"
+if [[ "$ZMUX_USER_ZDOTDIR_SET" == x ]]; then ZDOTDIR=$ZMUX_USER_ZDOTDIR; else unset ZDOTDIR; fi
 if [[ -r "$ZMUX_USER_ZDOTDIR/.zshrc" ]]; then source "$ZMUX_USER_ZDOTDIR/.zshrc"; fi
-source "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.zsh"
 "#,
         ),
         (
             "env",
-            r#"ENV=$ZMUX_USER_ENV
+            r#". "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"
+ENV=$ZMUX_USER_ENV
 if [ -n "$ENV" ] && [ -r "$ENV" ]; then . "$ENV"; fi
-. "$ZMUX_SHELL_INTEGRATION_DIRECTORY/claude.sh"
 "#,
         ),
     ];
+    let hook_config = if install_remote_lifecycle {
+        include_str!("shell/claude-hooks-remote.json")
+    } else {
+        include_str!("shell/claude-hooks-local.json")
+    };
+    generated.push_str(&format!(
+        "cat >\"$zmux_private_root/plugin/hooks/hooks.json\" <<'ZMUX_SHELL_FILE_END'\n{hook_config}\nZMUX_SHELL_FILE_END\n"
+    ));
+    if install_remote_lifecycle {
+        for (name, contents) in [
+            (
+                "claude-lifecycle-hook.py",
+                include_str!("shell/claude-lifecycle-hook.py"),
+            ),
+            (
+                "claude-lifecycle-notice.py",
+                include_str!("shell/claude-lifecycle-notice.py"),
+            ),
+            (
+                "claude-lifecycle-stream.py",
+                include_str!("shell/claude-lifecycle-stream.py"),
+            ),
+        ] {
+            generated.push_str(&format!(
+                "cat >\"$zmux_private_root/{name}\" <<'ZMUX_SHELL_FILE_END'\n{contents}\nZMUX_SHELL_FILE_END\n"
+            ));
+        }
+    }
     if install_openers {
         generated.push_str("mkdir \"$zmux_private_root/bin\" || exit 70\n");
         for name in ["zmux-open-url", "open", "xdg-open", "sensible-browser"] {

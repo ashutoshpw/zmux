@@ -497,6 +497,7 @@ impl Worker {
                 launch_id: job.launch_id,
                 session: None,
                 connection: None,
+                remote_lifecycle: None,
                 cached: None,
                 starting: true,
                 reconnectable: false,

@@ -335,6 +335,27 @@ actor NativeBridge {
         if let focus { action["focus"] = focus }
         try await send(["command": "action", "action": action], acknowledged: acknowledged)
     }
+    /// Selects an agent's terminal only while its full published owner and run generation
+    /// still match. Rust revalidates the record when the acknowledged command executes.
+    func selectAgentTarget(_ target: AgentLifecycleRecord) async throws {
+        let owner: [String: Any] = [
+            "identity_namespace": target.identityNamespace.uuidString.lowercased(),
+            "window_id": target.windowId,
+            "window_uuid": target.windowUuid.uuidString.lowercased(),
+            "workspace_id": target.workspaceId,
+            "workspace_uuid": target.workspaceUuid.uuidString.lowercased(),
+            "pane_id": target.paneId,
+            "pane_uuid": target.paneUuid.uuidString.lowercased(),
+            "surface_id": target.surfaceId,
+            "surface_uuid": target.surfaceUuid.uuidString.lowercased(),
+            "session_id": target.sessionId,
+            "provider": target.provider,
+            "runtime_id": target.runtimeId.uuidString.lowercased(),
+            "generation": target.generation.uuidString.lowercased(),
+            "provider_session_id": target.providerSessionId.uuidString.lowercased()
+        ]
+        try await send(["command": "select_agent_target", "target": owner], acknowledged: true)
+    }
     func browser(_ name: String, surface: UInt64?, pane: UInt64?, url: String, title: String?, profile: UUID? = nil) async throws {
         var action: [String: Any] = ["action": name, "url": url]
         if let surface { action["surface_id"] = surface }

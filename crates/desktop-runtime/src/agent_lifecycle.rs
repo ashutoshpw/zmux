@@ -1,20 +1,21 @@
-//! Bounded, local-only provider lifecycle evidence for native presentation.
+//! Bounded provider lifecycle evidence for native presentation.
 //!
 //! This owner records the latest typed hook-derived state for an exact terminal
-//! session. It does not authenticate a remote provider, infer activity from
-//! terminal output, or promise provider replay semantics. The control request is
-//! authorized by the desktop's same-UID policy; it does not bind provider claims
-//! to an OS process identity.
+//! session. Local hook claims use the desktop's same-UID policy; remote hook
+//! claims arrive through an exact managed SSH channel. Neither path authenticates
+//! the provider process itself or promises provider replay semantics.
 
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
+use zmux_remote_runtime::agent_lifecycle::ClaudeHook;
 use zmux_session_runtime::State as SessionState;
 use zmux_workspace_core::{
     PaneId, SessionId, Snapshot as Model, SurfaceId, WindowId, WorkspaceId, targets::TargetKind,
 };
 
 pub const MAX_RECORDS: usize = 64;
+pub const MAX_ALERT_EVENTS: usize = 128;
 /// Hook events have no provider replay cursor or heartbeat. After this interval,
 /// the published state becomes Unknown instead of assuming it is still current.
 pub const EVIDENCE_FRESHNESS: Duration = Duration::from_secs(30);
@@ -23,6 +24,7 @@ pub const EVIDENCE_FRESHNESS: Duration = Duration::from_secs(30);
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     ClaudeLocal,
+    ClaudeRemote,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +60,59 @@ pub struct Target {
     pub surface_id: SurfaceId,
     pub surface_uuid: Uuid,
     pub session_id: SessionId,
+}
+
+/// Full lifecycle-row identity required by acknowledged native selection.
+/// Activity and connection are deliberately excluded so state refreshes do not
+/// stale a still-current terminal target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionTarget {
+    pub identity_namespace: Uuid,
+    pub window_id: WindowId,
+    pub window_uuid: Uuid,
+    pub workspace_id: WorkspaceId,
+    pub workspace_uuid: Uuid,
+    pub pane_id: PaneId,
+    pub pane_uuid: Uuid,
+    pub surface_id: SurfaceId,
+    pub surface_uuid: Uuid,
+    pub session_id: SessionId,
+    pub provider: Provider,
+    pub runtime_id: Uuid,
+    pub generation: Uuid,
+    pub provider_session_id: Uuid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertKind {
+    NeedsUser,
+    Completed,
+}
+
+/// One admitted live event. Cursor and sequence are adapter-local; they are not
+/// Claude replay cursors or provider event IDs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AlertEvent {
+    pub cursor: u64,
+    pub sequence: u64,
+    pub provider: Provider,
+    pub identity_namespace: Uuid,
+    pub window_id: WindowId,
+    pub window_uuid: Uuid,
+    pub workspace_id: WorkspaceId,
+    pub workspace_uuid: Uuid,
+    pub pane_id: PaneId,
+    pub pane_uuid: Uuid,
+    pub surface_id: SurfaceId,
+    pub surface_uuid: Uuid,
+    pub session_id: SessionId,
+    pub provider_session_id: Uuid,
+    pub runtime_id: Uuid,
+    pub generation: Uuid,
+    pub prompt_id: Uuid,
+    pub kind: AlertKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,6 +486,8 @@ pub struct Agent {
     pub runtime_id: Uuid,
     pub generation: Uuid,
     pub provider_session_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_epoch: Option<Uuid>,
     pub prompt_id: Option<Uuid>,
     pub activity: Activity,
     pub connection: Connection,
@@ -442,19 +499,50 @@ struct Record {
     runtime_id: Uuid,
     generation: Uuid,
     provider_session_id: Uuid,
+    transport_epoch: Option<Uuid>,
     capability: Uuid,
     prompt_id: Option<Uuid>,
     activity: Activity,
     connection: Connection,
     last_sequence: u64,
     last_event: Option<Event>,
-    observed_at: Instant,
+    working_prompt_id: Option<Uuid>,
+    completed_prompt_id: Option<Uuid>,
+    activity_observed_at: Instant,
+    connection_observed_at: Instant,
     terminal: bool,
 }
 
-#[derive(Default)]
 pub struct Runtime {
     records: Vec<Record>,
+    alert_epoch: Uuid,
+    alert_cursor: u64,
+    alert_dropped_through_cursor: u64,
+    alert_events: std::collections::VecDeque<StoredAlertEvent>,
+}
+
+struct StoredAlertEvent {
+    cursor: u64,
+    sequence: u64,
+    target: Target,
+    provider: Provider,
+    runtime_id: Uuid,
+    generation: Uuid,
+    provider_session_id: Uuid,
+    prompt_id: Uuid,
+    kind: AlertKind,
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self {
+            records: Vec::new(),
+            alert_epoch: Uuid::new_v4(),
+            alert_cursor: 0,
+            alert_dropped_through_cursor: 0,
+            alert_events: std::collections::VecDeque::new(),
+        }
+    }
 }
 
 impl Runtime {
@@ -463,6 +551,275 @@ impl Runtime {
             .iter()
             .find(|record| record.capability == capability)
             .map(|record| record.target)
+    }
+
+    pub fn provider_for_capability(&self, capability: Uuid) -> Option<Provider> {
+        self.records
+            .iter()
+            .find(|record| record.capability == capability)
+            .map(|record| record.provider)
+    }
+
+    pub fn matches_selection(&self, target: SelectionTarget, model: &Model) -> bool {
+        let Some(record) = self.records.iter().find(|record| {
+            record.target.identity_namespace == target.identity_namespace
+                && record.target.surface_id == target.surface_id
+                && record.target.surface_uuid == target.surface_uuid
+                && record.target.session_id == target.session_id
+                && record.provider == target.provider
+                && record.runtime_id == target.runtime_id
+                && record.generation == target.generation
+                && record.provider_session_id == target.provider_session_id
+        }) else {
+            return false;
+        };
+        owner(model, record.target, record.provider).is_some_and(|owner| {
+            owner.window == target.window_id
+                && owner.workspace == target.workspace_id
+                && owner.pane == target.pane_id
+                && owner.surface == target.surface_id
+                && model.object_uuid(TargetKind::Window, owner.window.0) == target.window_uuid
+                && model.object_uuid(TargetKind::Workspace, owner.workspace.0)
+                    == target.workspace_uuid
+                && model.object_uuid(TargetKind::Pane, owner.pane.0) == target.pane_uuid
+                && model.object_uuid(TargetKind::Surface, owner.surface.0) == target.surface_uuid
+        })
+    }
+
+    pub fn alert_epoch(&self) -> Uuid {
+        self.alert_epoch
+    }
+
+    pub fn alert_cursor(&self) -> u64 {
+        self.alert_cursor
+    }
+
+    pub fn alert_dropped_through_cursor(&self) -> u64 {
+        self.alert_dropped_through_cursor
+    }
+
+    pub fn alert_events(&self, model: &Model) -> Vec<AlertEvent> {
+        self.alert_events
+            .iter()
+            .filter_map(|event| {
+                let owner = owner(model, event.target, event.provider)?;
+                Some(AlertEvent {
+                    cursor: event.cursor,
+                    sequence: event.sequence,
+                    provider: event.provider,
+                    identity_namespace: event.target.identity_namespace,
+                    window_id: owner.window,
+                    window_uuid: model.object_uuid(TargetKind::Window, owner.window.0),
+                    workspace_id: owner.workspace,
+                    workspace_uuid: model.object_uuid(TargetKind::Workspace, owner.workspace.0),
+                    pane_id: owner.pane,
+                    pane_uuid: model.object_uuid(TargetKind::Pane, owner.pane.0),
+                    surface_id: owner.surface,
+                    surface_uuid: event.target.surface_uuid,
+                    session_id: event.target.session_id,
+                    provider_session_id: event.provider_session_id,
+                    runtime_id: event.runtime_id,
+                    generation: event.generation,
+                    prompt_id: event.prompt_id,
+                    kind: event.kind,
+                })
+            })
+            .collect()
+    }
+
+    /// A heartbeat only proves that the managed SSH lifecycle channel is
+    /// responding. It refreshes connection state, never provider activity.
+    pub fn remote_transport_heartbeat(
+        &mut self,
+        target: Target,
+        runtime_id: Uuid,
+        generation: Uuid,
+        now: Instant,
+    ) -> bool {
+        let Some(record) = self.records.iter_mut().find(|record| {
+            record.target == target
+                && record.provider == Provider::ClaudeRemote
+                && record.runtime_id == runtime_id
+                && record.generation == generation
+                && !record.terminal
+                && record.connection != Connection::Disconnected
+        }) else {
+            return false;
+        };
+        let changed = record.connection != Connection::Connected;
+        record.connection = Connection::Connected;
+        record.connection_observed_at = now;
+        changed
+    }
+
+    /// Lose the remote channel without turning transport loss into a provider
+    /// event or an Idle/Disconnected activity claim.
+    pub fn remote_transport_lost(
+        &mut self,
+        target: Target,
+        runtime_id: Uuid,
+        generation: Uuid,
+    ) -> bool {
+        let Some(record) = self.records.iter_mut().find(|record| {
+            record.target == target
+                && record.provider == Provider::ClaudeRemote
+                && record.runtime_id == runtime_id
+                && record.generation == generation
+                && !record.terminal
+        }) else {
+            return false;
+        };
+        record.activity = Activity::Unknown;
+        record.connection = Connection::Unknown;
+        record.terminal = true;
+        true
+    }
+
+    /// Admit a new nonce/version handshake over the existing managed SSH
+    /// ControlMaster. It fences the old stream generation and clears the old
+    /// prompt/run identity so fresh channel traffic cannot replay a prior alert.
+    pub fn remote_transport_reconnected(
+        &mut self,
+        target: Target,
+        runtime_id: Uuid,
+        previous_generation: Uuid,
+        generation: Uuid,
+        now: Instant,
+    ) -> bool {
+        if generation.is_nil() || generation == previous_generation {
+            return false;
+        }
+        let Some(record) = self.records.iter_mut().find(|record| {
+            record.target == target
+                && record.provider == Provider::ClaudeRemote
+                && record.runtime_id == runtime_id
+                && record.generation == previous_generation
+                && record.terminal
+                && record.connection == Connection::Unknown
+        }) else {
+            return false;
+        };
+        record.generation = generation;
+        record.transport_epoch = Some(generation);
+        record.prompt_id = None;
+        record.working_prompt_id = None;
+        record.completed_prompt_id = None;
+        record.activity = Activity::Unknown;
+        record.connection = Connection::Connected;
+        record.last_sequence = 0;
+        record.last_event = None;
+        record.activity_observed_at = now;
+        record.connection_observed_at = now;
+        record.terminal = false;
+        true
+    }
+
+    /// Admit a sanitized hook from the private managed-SSH stream. Local control
+    /// requests cannot call this path, and the caller must first revalidate the
+    /// exact remote terminal owner and launch generation.
+    pub fn apply_remote_hook(
+        &mut self,
+        target: Target,
+        runtime_id: Uuid,
+        generation: Uuid,
+        sequence: u64,
+        hook: ClaudeHook,
+        now: Instant,
+    ) -> Result<bool, String> {
+        if !hook.main_session {
+            return Ok(false);
+        }
+        if target.identity_namespace.is_nil()
+            || target.surface_uuid.is_nil()
+            || target.surface_id.0 == 0
+            || target.session_id.0 == 0
+            || runtime_id.is_nil()
+            || generation.is_nil()
+            || sequence == 0
+            || hook.session_id.is_nil()
+        {
+            return Err("remote lifecycle event identity is incomplete".into());
+        }
+
+        let event = remote_hook_lifecycle_event(&hook);
+        if hook.name != "SessionStart" && event.is_none() {
+            return Ok(false);
+        }
+        let provider_session_id = hook.session_id;
+        let request_id = Uuid::new_v4();
+        let existing = self.records.iter().find(|record| {
+            record.target == target
+                && record.provider == Provider::ClaudeRemote
+                && record.runtime_id == runtime_id
+                && record.generation == generation
+                && record.provider_session_id == provider_session_id
+        });
+        if existing.is_some_and(|record| record.terminal) {
+            return Ok(false);
+        }
+        if matches!(
+            event.as_ref(),
+            Some(
+                Event::WaitingUnconfirmed
+                    | Event::NeedsUser
+                    | Event::Resumed
+                    | Event::TurnStopped { .. }
+            )
+        ) && existing.is_none_or(|record| record.prompt_id.is_none())
+        {
+            // A session notification without the current prompt/run identity
+            // remains Unknown and cannot produce an alert.
+            return Ok(false);
+        }
+        let capability = match existing.map(|record| record.capability) {
+            Some(capability) => {
+                self.remote_transport_heartbeat(target, runtime_id, generation, now);
+                capability
+            }
+            None => self
+                .apply(
+                    Request {
+                        request_id,
+                        action: Action::Register {
+                            target,
+                            provider: Provider::ClaudeRemote,
+                            runtime_id,
+                            generation,
+                            provider_session_id,
+                        },
+                    },
+                    now,
+                )?
+                .capability
+                .ok_or_else(|| "remote lifecycle registration returned no capability".to_owned())?,
+        };
+        if let Some(record) = self.records.iter_mut().find(|record| {
+            record.capability == capability
+                && record.runtime_id == runtime_id
+                && record.generation == generation
+                && record.provider == Provider::ClaudeRemote
+        }) {
+            // This method is reached only after the stream reader has accepted
+            // its first nonce/version handshake. Heartbeats never change epoch.
+            record.transport_epoch.get_or_insert(generation);
+        }
+        let Some(event) = event else {
+            return Ok(true);
+        };
+        self.apply(
+            Request {
+                request_id: Uuid::new_v4(),
+                action: Action::Event {
+                    capability,
+                    runtime_id,
+                    generation,
+                    sequence,
+                    event,
+                },
+            },
+            now,
+        )?;
+        Ok(true)
     }
 
     pub fn apply(&mut self, request: Request, now: Instant) -> Result<Receipt, String> {
@@ -515,7 +872,7 @@ impl Runtime {
                         && record.runtime_id == runtime_id
                         && record.generation == generation
                 }) {
-                    existing.observed_at = now;
+                    existing.connection_observed_at = now;
                     existing.connection = Connection::Connected;
                     return Ok(Receipt {
                         request_id: request.request_id,
@@ -538,13 +895,17 @@ impl Runtime {
                     runtime_id,
                     generation,
                     provider_session_id,
+                    transport_epoch: None,
                     capability,
                     prompt_id: None,
                     activity: Activity::Unknown,
                     connection: Connection::Connected,
                     last_sequence: 0,
                     last_event: None,
-                    observed_at: now,
+                    working_prompt_id: None,
+                    completed_prompt_id: None,
+                    activity_observed_at: now,
+                    connection_observed_at: now,
                     terminal: false,
                 });
                 Ok(Receipt {
@@ -567,83 +928,131 @@ impl Runtime {
                 {
                     return Err("lifecycle event identity is incomplete".into());
                 }
-                let Some(record) = self
+                let Some(record_index) = self
                     .records
-                    .iter_mut()
-                    .find(|record| record.capability == capability)
+                    .iter()
+                    .position(|record| record.capability == capability)
                 else {
                     return Err("lifecycle capability is stale or unknown".into());
                 };
-                if record.runtime_id != runtime_id || record.generation != generation {
-                    return Err("lifecycle generation is stale".into());
-                }
-                if sequence == record.last_sequence && record.last_event.as_ref() == Some(&event) {
-                    return Ok(Receipt {
-                        request_id: request.request_id,
-                        accepted: true,
-                        capability: Some(capability),
-                    });
-                }
-                if sequence <= record.last_sequence {
-                    return Err("lifecycle event sequence is stale".into());
-                }
-                if record.terminal || record.connection == Connection::Disconnected {
-                    return Err("lifecycle capability is terminal or disconnected".into());
-                }
+                let alert = {
+                    let record = &mut self.records[record_index];
+                    if record.runtime_id != runtime_id || record.generation != generation {
+                        return Err("lifecycle generation is stale".into());
+                    }
+                    if sequence == record.last_sequence
+                        && record.last_event.as_ref() == Some(&event)
+                    {
+                        return Ok(Receipt {
+                            request_id: request.request_id,
+                            accepted: true,
+                            capability: Some(capability),
+                        });
+                    }
+                    if sequence <= record.last_sequence {
+                        return Err("lifecycle event sequence is stale".into());
+                    }
+                    if record.terminal || record.connection == Connection::Disconnected {
+                        return Err("lifecycle capability is terminal or disconnected".into());
+                    }
 
-                match &event {
-                    Event::PromptSubmitted { prompt_id } => {
-                        if prompt_id.is_nil() {
-                            return Err("provider prompt id cannot be nil".into());
+                    let previous_activity = record.activity;
+                    match &event {
+                        Event::PromptSubmitted { prompt_id } => {
+                            if prompt_id.is_nil() {
+                                return Err("provider prompt id cannot be nil".into());
+                            }
+                            record.prompt_id = Some(*prompt_id);
+                            record.completed_prompt_id = None;
+                            record.working_prompt_id = Some(*prompt_id);
+                            record.activity = Activity::Working;
                         }
-                        record.prompt_id = Some(*prompt_id);
-                        record.activity = Activity::Working;
-                    }
-                    Event::WaitingUnconfirmed => {
-                        if record.prompt_id.is_none() {
-                            return Err("waiting evidence has no current provider run".into());
+                        Event::WaitingUnconfirmed => {
+                            if record.prompt_id.is_none() {
+                                return Err("waiting evidence has no current provider run".into());
+                            }
+                            record.activity = Activity::Unknown;
                         }
-                        record.activity = Activity::Unknown;
-                    }
-                    Event::NeedsUser => {
-                        if record.prompt_id.is_none() {
-                            return Err("needs-user event has no current provider run".into());
+                        Event::NeedsUser => {
+                            if record.prompt_id.is_none() {
+                                return Err("needs-user event has no current provider run".into());
+                            }
+                            record.activity = Activity::Waiting;
                         }
-                        record.activity = Activity::Waiting;
-                    }
-                    Event::Resumed => {
-                        if record.prompt_id.is_none() {
-                            return Err("resumption evidence has no current provider run".into());
+                        Event::Resumed => {
+                            if record.prompt_id.is_none() {
+                                return Err(
+                                    "resumption evidence has no current provider run".into()
+                                );
+                            }
+                            record.working_prompt_id = record.prompt_id;
+                            record.activity = Activity::Working;
                         }
-                        record.activity = Activity::Working;
-                    }
-                    Event::TurnStopped { state } => {
-                        if record.prompt_id.is_none() {
-                            return Err("stopped-turn evidence has no current provider run".into());
+                        Event::TurnStopped { state } => {
+                            if record.prompt_id.is_none() {
+                                return Err(
+                                    "stopped-turn evidence has no current provider run".into()
+                                );
+                            }
+                            record.activity = match state {
+                                TurnStopState::Unknown => Activity::Unknown,
+                                TurnStopState::Working => Activity::Working,
+                                TurnStopState::Idle => Activity::Idle,
+                            };
                         }
-                        record.activity = match state {
-                            TurnStopState::Unknown => Activity::Unknown,
-                            TurnStopState::Working => Activity::Working,
-                            TurnStopState::Idle => Activity::Idle,
-                        };
+                        Event::SessionEnded => {
+                            record.activity = Activity::Unknown;
+                            record.connection = Connection::Disconnected;
+                        }
+                        Event::EvidenceLost => {
+                            record.activity = Activity::Unknown;
+                            record.connection = Connection::Unknown;
+                        }
                     }
-                    Event::SessionEnded => {
-                        record.activity = Activity::Unknown;
-                        record.connection = Connection::Disconnected;
+                    if !matches!(&event, Event::SessionEnded | Event::EvidenceLost) {
+                        record.connection = Connection::Connected;
+                    } else {
+                        record.terminal = true;
                     }
-                    Event::EvidenceLost => {
-                        record.activity = Activity::Unknown;
-                        record.connection = Connection::Unknown;
+                    record.last_sequence = sequence;
+                    record.last_event = Some(event.clone());
+                    record.activity_observed_at = now;
+                    record.connection_observed_at = now;
+                    match (&event, previous_activity, record.prompt_id) {
+                        (Event::NeedsUser, prior, Some(prompt_id))
+                            if prior != Activity::Waiting =>
+                        {
+                            Some((prompt_id, AlertKind::NeedsUser))
+                        }
+                        (
+                            Event::TurnStopped {
+                                state: TurnStopState::Idle,
+                            },
+                            _,
+                            Some(prompt_id),
+                        ) if record.working_prompt_id == Some(prompt_id)
+                            && record.completed_prompt_id != Some(prompt_id) =>
+                        {
+                            record.completed_prompt_id = Some(prompt_id);
+                            Some((prompt_id, AlertKind::Completed))
+                        }
+                        _ => None,
                     }
+                    .map(|(prompt_id, kind)| StoredAlertEvent {
+                        cursor: 0,
+                        sequence,
+                        target: record.target,
+                        provider: record.provider,
+                        runtime_id: record.runtime_id,
+                        generation: record.generation,
+                        provider_session_id: record.provider_session_id,
+                        prompt_id,
+                        kind,
+                    })
+                };
+                if let Some(alert) = alert {
+                    self.append_alert(alert);
                 }
-                if !matches!(&event, Event::SessionEnded | Event::EvidenceLost) {
-                    record.connection = Connection::Connected;
-                } else {
-                    record.terminal = true;
-                }
-                record.last_sequence = sequence;
-                record.last_event = Some(event);
-                record.observed_at = now;
                 Ok(Receipt {
                     request_id: request.request_id,
                     accepted: true,
@@ -662,7 +1071,7 @@ impl Runtime {
         now: Instant,
     ) {
         self.records.retain_mut(|record| {
-            if owner(model, record.target).is_none() {
+            if owner(model, record.target, record.provider).is_none() {
                 return false;
             }
             match session_states
@@ -671,10 +1080,16 @@ impl Runtime {
                 .flatten()
             {
                 Some(SessionState::Running) => {
-                    if record.connection == Connection::Connected
-                        && now.saturating_duration_since(record.observed_at) >= EVIDENCE_FRESHNESS
+                    if record.activity != Activity::Unknown
+                        && now.saturating_duration_since(record.activity_observed_at)
+                            >= EVIDENCE_FRESHNESS
                     {
                         record.activity = Activity::Unknown;
+                    }
+                    if record.connection == Connection::Connected
+                        && now.saturating_duration_since(record.connection_observed_at)
+                            >= EVIDENCE_FRESHNESS
+                    {
                         record.connection = Connection::Unknown;
                     }
                 }
@@ -699,10 +1114,16 @@ impl Runtime {
         let mut changed = false;
         for record in &mut self.records {
             if record.connection == Connection::Connected
-                && now.saturating_duration_since(record.observed_at) >= EVIDENCE_FRESHNESS
+                && now.saturating_duration_since(record.connection_observed_at)
+                    >= EVIDENCE_FRESHNESS
+            {
+                record.connection = Connection::Unknown;
+                changed = true;
+            }
+            if record.activity != Activity::Unknown
+                && now.saturating_duration_since(record.activity_observed_at) >= EVIDENCE_FRESHNESS
             {
                 record.activity = Activity::Unknown;
-                record.connection = Connection::Unknown;
                 changed = true;
             }
         }
@@ -713,7 +1134,7 @@ impl Runtime {
         self.records
             .iter()
             .filter_map(|record| {
-                let owner = owner(model, record.target)?;
+                let owner = owner(model, record.target, record.provider)?;
                 Some(Agent {
                     provider: record.provider,
                     identity_namespace: record.target.identity_namespace,
@@ -729,12 +1150,64 @@ impl Runtime {
                     runtime_id: record.runtime_id,
                     generation: record.generation,
                     provider_session_id: record.provider_session_id,
+                    transport_epoch: record.transport_epoch,
                     prompt_id: record.prompt_id,
                     activity: record.activity,
                     connection: record.connection,
                 })
             })
             .collect()
+    }
+
+    fn append_alert(&mut self, mut event: StoredAlertEvent) {
+        self.alert_cursor = self.alert_cursor.saturating_add(1);
+        event.cursor = self.alert_cursor;
+        self.alert_events.push_back(event);
+        if self.alert_events.len() > MAX_ALERT_EVENTS
+            && let Some(dropped) = self.alert_events.pop_front()
+        {
+            self.alert_dropped_through_cursor = dropped.cursor;
+        }
+    }
+}
+
+fn remote_hook_lifecycle_event(hook: &ClaudeHook) -> Option<Event> {
+    match hook.name.as_str() {
+        "UserPromptSubmit" => hook
+            .prompt_id
+            .map(|prompt_id| Event::PromptSubmitted { prompt_id }),
+        "PermissionRequest" | "Elicitation" => Some(Event::WaitingUnconfirmed),
+        "Notification" => match hook.notification_type.as_deref()? {
+            "permission_prompt" | "elicitation_dialog" | "elicitation_url_dialog" => {
+                Some(Event::NeedsUser)
+            }
+            "idle_prompt" => Some(Event::TurnStopped {
+                state: TurnStopState::Idle,
+            }),
+            "elicitation_complete" | "elicitation_response" => Some(Event::Resumed),
+            "agent_needs_input" => Some(Event::WaitingUnconfirmed),
+            // A background session notification does not identify this main run.
+            "agent_completed" => None,
+            _ => None,
+        },
+        "ElicitationResult" | "PostToolUse" | "PostToolUseFailure" => Some(Event::Resumed),
+        "PreToolUse" if hook.tool_name.as_deref() == Some("AskUserQuestion") => {
+            Some(Event::NeedsUser)
+        }
+        "PreToolUse" => Some(Event::Resumed),
+        "Stop" if hook.stop_hook_active == Some(true) => Some(Event::Resumed),
+        "Stop" if hook.has_background_tasks => Some(Event::TurnStopped {
+            state: TurnStopState::Working,
+        }),
+        "Stop" | "StopFailure" => Some(Event::TurnStopped {
+            state: TurnStopState::Unknown,
+        }),
+        "SessionEnd" if matches!(hook.reason.as_deref(), Some("logout" | "prompt_input_exit")) => {
+            Some(Event::SessionEnded)
+        }
+        "SessionEnd" => Some(Event::EvidenceLost),
+        "SessionStart" => None,
+        _ => None,
     }
 }
 
@@ -745,7 +1218,7 @@ struct Owner {
     surface: SurfaceId,
 }
 
-fn owner(model: &Model, target: Target) -> Option<Owner> {
+fn owner(model: &Model, target: Target, provider: Provider) -> Option<Owner> {
     if model.identity_namespace != target.identity_namespace {
         return None;
     }
@@ -759,7 +1232,10 @@ fn owner(model: &Model, target: Target) -> Option<Owner> {
                 for surface in &pane.surfaces {
                     if surface.id != target.surface_id
                         || surface.kind != zmux_workspace_core::SurfaceKind::Terminal
-                        || surface.remote.is_some()
+                        || match provider {
+                            Provider::ClaudeLocal => surface.remote.is_some(),
+                            Provider::ClaudeRemote => surface.remote.is_none(),
+                        }
                         || surface.local_tmux.is_some()
                         || surface.session_id != Some(target.session_id)
                         || model.object_uuid(TargetKind::Surface, surface.id.0)
@@ -781,7 +1257,11 @@ fn owner(model: &Model, target: Target) -> Option<Owner> {
 }
 
 pub fn has_local_owner(model: &Model, target: Target) -> bool {
-    owner(model, target).is_some()
+    owner(model, target, Provider::ClaudeLocal).is_some()
+}
+
+pub fn has_remote_owner(model: &Model, target: Target) -> bool {
+    owner(model, target, Provider::ClaudeRemote).is_some()
 }
 
 #[cfg(test)]
@@ -1058,5 +1538,494 @@ mod tests {
             stale_at + EVIDENCE_FRESHNESS + Duration::from_secs(3),
         );
         assert!(retry.is_err());
+    }
+
+    #[test]
+    fn explicit_idle_completes_a_tracked_prompt_after_unknown_and_not_on_startup() {
+        struct PromptSubmission {
+            sequence: u64,
+            prompt_id: Uuid,
+            now: Instant,
+        }
+
+        fn setup() -> (Runtime, Model, Target, Uuid, Uuid, Uuid, Instant) {
+            let namespace = Uuid::new_v4();
+            let mut store = WorkspaceStore::with_identity_namespace(namespace);
+            store
+                .apply(WorkspaceAction::CreateWindow { focus: true })
+                .unwrap();
+            let model = store.snapshot();
+            let surface = model.workspaces[0].root.panes()[0].selected();
+            let target = Target {
+                identity_namespace: namespace,
+                surface_id: surface.id,
+                surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+                session_id: surface.session_id.unwrap(),
+            };
+            let provider_session_id = Uuid::new_v4();
+            let runtime_id = Uuid::new_v4();
+            let generation = Uuid::new_v4();
+            let started_at = Instant::now();
+            let mut runtime = Runtime::default();
+            runtime
+                .apply(
+                    Request {
+                        request_id: Uuid::new_v4(),
+                        action: Action::Register {
+                            target,
+                            provider: Provider::ClaudeLocal,
+                            runtime_id,
+                            generation,
+                            provider_session_id,
+                        },
+                    },
+                    started_at,
+                )
+                .unwrap();
+            (
+                runtime,
+                model,
+                target,
+                provider_session_id,
+                runtime_id,
+                generation,
+                started_at,
+            )
+        }
+
+        fn submit(
+            runtime: &mut Runtime,
+            target: Target,
+            provider_session_id: Uuid,
+            runtime_id: Uuid,
+            generation: Uuid,
+            submission: PromptSubmission,
+        ) {
+            let capability = runtime
+                .records
+                .iter()
+                .find(|record| {
+                    record.target == target
+                        && record.provider_session_id == provider_session_id
+                        && record.runtime_id == runtime_id
+                        && record.generation == generation
+                })
+                .unwrap()
+                .capability;
+            runtime
+                .apply(
+                    Request {
+                        request_id: Uuid::new_v4(),
+                        action: Action::Event {
+                            capability,
+                            runtime_id,
+                            generation,
+                            sequence: submission.sequence,
+                            event: Event::PromptSubmitted {
+                                prompt_id: submission.prompt_id,
+                            },
+                        },
+                    },
+                    submission.now,
+                )
+                .unwrap();
+        }
+
+        fn idle(
+            runtime: &mut Runtime,
+            target: Target,
+            provider_session_id: Uuid,
+            runtime_id: Uuid,
+            generation: Uuid,
+            sequence: u64,
+            now: Instant,
+        ) {
+            let capability = runtime
+                .records
+                .iter()
+                .find(|record| {
+                    record.target == target
+                        && record.provider_session_id == provider_session_id
+                        && record.runtime_id == runtime_id
+                        && record.generation == generation
+                })
+                .unwrap()
+                .capability;
+            runtime
+                .apply(
+                    Request {
+                        request_id: Uuid::new_v4(),
+                        action: Action::Event {
+                            capability,
+                            runtime_id,
+                            generation,
+                            sequence,
+                            event: Event::TurnStopped {
+                                state: TurnStopState::Idle,
+                            },
+                        },
+                    },
+                    now,
+                )
+                .unwrap();
+        }
+
+        // An explicit idle signal with no admitted user prompt cannot create a
+        // completion alert. Once a prompt is accepted, that same signal can.
+        let (mut runtime, model, target, provider_session_id, runtime_id, generation, t0) = setup();
+        let capability = runtime.records[0].capability;
+        assert!(
+            runtime
+                .apply(
+                    Request {
+                        request_id: Uuid::new_v4(),
+                        action: Action::Event {
+                            capability,
+                            runtime_id,
+                            generation,
+                            sequence: 1,
+                            event: Event::TurnStopped {
+                                state: TurnStopState::Idle,
+                            },
+                        },
+                    },
+                    t0,
+                )
+                .is_err()
+        );
+        assert_eq!(runtime.alert_cursor(), 0);
+        let prompt_id = Uuid::new_v4();
+        submit(
+            &mut runtime,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            PromptSubmission {
+                sequence: 1,
+                prompt_id,
+                now: t0,
+            },
+        );
+        idle(
+            &mut runtime,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            2,
+            t0 + Duration::from_millis(1),
+        );
+        assert_eq!(runtime.alert_events(&model).len(), 1);
+
+        // Stop does not establish completion. A later idle_prompt does, even
+        // though the Stop transition deliberately made activity Unknown.
+        let (mut after_stop, model, target, provider_session_id, runtime_id, generation, t0) =
+            setup();
+        let prompt_id = Uuid::new_v4();
+        submit(
+            &mut after_stop,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            PromptSubmission {
+                sequence: 1,
+                prompt_id,
+                now: t0,
+            },
+        );
+        let capability = after_stop.records[0].capability;
+        after_stop
+            .apply(
+                Request {
+                    request_id: Uuid::new_v4(),
+                    action: Action::Event {
+                        capability,
+                        runtime_id,
+                        generation,
+                        sequence: 2,
+                        event: Event::TurnStopped {
+                            state: TurnStopState::Unknown,
+                        },
+                    },
+                },
+                t0 + Duration::from_millis(1),
+            )
+            .unwrap();
+        idle(
+            &mut after_stop,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            3,
+            t0 + Duration::from_millis(2),
+        );
+        idle(
+            &mut after_stop,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            4,
+            t0 + Duration::from_millis(3),
+        );
+        let alerts = after_stop.alert_events(&model);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].kind, AlertKind::Completed);
+
+        // Freshness expiry also changes only presentation to Unknown; it does
+        // not erase the admitted working run needed to accept explicit idle.
+        let (mut after_expiry, model, target, provider_session_id, runtime_id, generation, t0) =
+            setup();
+        let prompt_id = Uuid::new_v4();
+        submit(
+            &mut after_expiry,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            PromptSubmission {
+                sequence: 1,
+                prompt_id,
+                now: t0,
+            },
+        );
+        let expired_at = t0 + EVIDENCE_FRESHNESS + Duration::from_secs(1);
+        assert!(after_expiry.poll_freshness(expired_at));
+        assert_eq!(after_expiry.snapshot(&model)[0].activity, Activity::Unknown);
+        idle(
+            &mut after_expiry,
+            target,
+            provider_session_id,
+            runtime_id,
+            generation,
+            2,
+            expired_at + Duration::from_millis(1),
+        );
+        assert_eq!(after_expiry.alert_events(&model).len(), 1);
+    }
+
+    #[test]
+    fn remote_reconnect_changes_transport_epoch_and_requires_a_fresh_prompt() {
+        let namespace = Uuid::new_v4();
+        let mut store = WorkspaceStore::with_identity_namespace(namespace);
+        store
+            .apply(WorkspaceAction::CreateWindow { focus: true })
+            .unwrap();
+        let model = store.snapshot();
+        let surface = model.workspaces[0].root.panes()[0].selected();
+        let target = Target {
+            identity_namespace: namespace,
+            surface_id: surface.id,
+            surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+            session_id: surface.session_id.unwrap(),
+        };
+        let mut runtime = Runtime::default();
+        let runtime_id = Uuid::new_v4();
+        let old_generation = Uuid::new_v4();
+        let provider_session_id = Uuid::new_v4();
+        let capability = runtime
+            .apply(
+                Request {
+                    request_id: Uuid::new_v4(),
+                    action: Action::Register {
+                        target,
+                        provider: Provider::ClaudeRemote,
+                        runtime_id,
+                        generation: old_generation,
+                        provider_session_id,
+                    },
+                },
+                Instant::now(),
+            )
+            .unwrap()
+            .capability
+            .unwrap();
+        let prompt_id = Uuid::new_v4();
+        runtime
+            .apply(
+                Request {
+                    request_id: Uuid::new_v4(),
+                    action: Action::Event {
+                        capability,
+                        runtime_id,
+                        generation: old_generation,
+                        sequence: 1,
+                        event: Event::PromptSubmitted { prompt_id },
+                    },
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        let new_generation = Uuid::new_v4();
+        let third_generation = Uuid::new_v4();
+        let nonce = Uuid::new_v4();
+        let old_binding = crate::remote_agent_lifecycle::Binding {
+            target,
+            launch_id: 7,
+            runtime_id,
+            generation: old_generation,
+            nonce,
+        };
+        let new_binding = crate::remote_agent_lifecycle::Binding {
+            generation: new_generation,
+            ..old_binding
+        };
+        let third_binding = crate::remote_agent_lifecycle::Binding {
+            generation: third_generation,
+            ..old_binding
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(6);
+        let heartbeat = |binding, sequence| crate::remote_agent_lifecycle::Message::Frame {
+            binding,
+            frame: zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat {
+                version: zmux_remote_runtime::agent_lifecycle::AGENT_LIFECYCLE_PROTOCOL_VERSION,
+                nonce,
+                sequence,
+            },
+        };
+        sender
+            .try_send(crate::remote_agent_lifecycle::Message::Lost {
+                binding: old_binding,
+            })
+            .unwrap();
+        sender
+            .try_send(crate::remote_agent_lifecycle::Message::Connected {
+                binding: new_binding,
+                previous_generation: Some(old_generation),
+            })
+            .unwrap();
+        sender.try_send(heartbeat(new_binding, 1)).unwrap();
+        sender
+            .try_send(crate::remote_agent_lifecycle::Message::Lost {
+                binding: new_binding,
+            })
+            .unwrap();
+        sender
+            .try_send(crate::remote_agent_lifecycle::Message::Connected {
+                binding: third_binding,
+                previous_generation: Some(new_generation),
+            })
+            .unwrap();
+        sender.try_send(heartbeat(third_binding, 1)).unwrap();
+
+        // The supervisor has already advanced its shared binding to G3, but
+        // the worker has not drained any of the six ordered messages yet.
+        let latest_binding = third_binding;
+        let messages: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(messages.len(), 6);
+        for message in messages {
+            match message {
+                crate::remote_agent_lifecycle::Message::Lost { binding } => {
+                    assert!(latest_binding.same_owner(binding));
+                    assert!(runtime.remote_transport_lost(
+                        binding.target,
+                        binding.runtime_id,
+                        binding.generation
+                    ))
+                }
+                crate::remote_agent_lifecycle::Message::Connected {
+                    binding,
+                    previous_generation: Some(previous_generation),
+                } => {
+                    assert!(latest_binding.same_owner(binding));
+                    assert!(
+                        binding.generation == new_generation
+                            || binding.generation == latest_binding.generation
+                    );
+                    assert!(runtime.remote_transport_reconnected(
+                        binding.target,
+                        binding.runtime_id,
+                        previous_generation,
+                        binding.generation,
+                        Instant::now(),
+                    ));
+                }
+                crate::remote_agent_lifecycle::Message::Frame { binding, frame } => {
+                    if !latest_binding.is_current_generation(binding) {
+                        assert_eq!(binding, new_binding);
+                        assert!(matches!(
+                            frame,
+                            zmux_remote_runtime::agent_lifecycle::Frame::Heartbeat { .. }
+                        ));
+                        continue;
+                    }
+                    assert_eq!(binding, third_binding);
+                    runtime.remote_transport_heartbeat(
+                        binding.target,
+                        binding.runtime_id,
+                        binding.generation,
+                        Instant::now(),
+                    );
+                }
+                _ => panic!("unexpected lifecycle transition in reconnect interleaving"),
+            }
+        }
+        let record = &runtime.records[0];
+        assert_eq!(record.generation, third_generation);
+        assert_eq!(record.transport_epoch, Some(third_generation));
+        assert_eq!(record.activity, Activity::Unknown);
+        assert_eq!(record.connection, Connection::Connected);
+        assert_eq!(record.prompt_id, None);
+        assert_eq!(record.working_prompt_id, None);
+        assert_eq!(record.last_sequence, 0);
+        assert_eq!(runtime.alert_cursor(), 0);
+
+        let idle = runtime.apply(
+            Request {
+                request_id: Uuid::new_v4(),
+                action: Action::Event {
+                    capability,
+                    runtime_id,
+                    generation: new_generation,
+                    sequence: 1,
+                    event: Event::TurnStopped {
+                        state: TurnStopState::Idle,
+                    },
+                },
+            },
+            Instant::now(),
+        );
+        assert!(idle.is_err());
+        assert_eq!(runtime.alert_cursor(), 0);
+
+        let fresh_prompt_id = Uuid::new_v4();
+        runtime
+            .apply(
+                Request {
+                    request_id: Uuid::new_v4(),
+                    action: Action::Event {
+                        capability,
+                        runtime_id,
+                        generation: third_generation,
+                        sequence: 1,
+                        event: Event::PromptSubmitted {
+                            prompt_id: fresh_prompt_id,
+                        },
+                    },
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        runtime
+            .apply(
+                Request {
+                    request_id: Uuid::new_v4(),
+                    action: Action::Event {
+                        capability,
+                        runtime_id,
+                        generation: third_generation,
+                        sequence: 2,
+                        event: Event::TurnStopped {
+                            state: TurnStopState::Idle,
+                        },
+                    },
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(runtime.alert_cursor(), 1);
     }
 }

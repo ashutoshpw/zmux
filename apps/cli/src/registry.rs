@@ -45,8 +45,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         "agents",
         false,
         false,
-        "hooks claude install --directory DIR --provider PATH | status|uninstall --directory DIR | run --directory DIR --surface UUID -- [PROVIDER_ARGS]",
-        "Opt-in session-only local Claude Code2.1.301 plugin. Install writes only private zmux-owned artifacts and never edits provider settings. Run requires the exact Desktop terminal process/session and an interactive terminal. A synchronous root UserPromptSubmit may prepare one bounded context; unknown submission stays queued and never authorizes Ack/ReadTurn. Permission/question/plan holds persist until a fresh explicit launch. No idle wake, Codex, headless, resume or actual-provider acceptance claim. A local hook process binding is not provider authentication. Uninstall disables admissions and retains changed or active artifacts."
+        "hooks claude install --directory DIR --provider PATH | status|uninstall --directory DIR | run --directory DIR --surface UUID [--notice-plugin DIR] -- [PROVIDER_ARGS] | auto --root SESSION_DIR --surface UUID --notice-plugin DIR -- [PROVIDER_ARGS] | cleanup --root SESSION_DIR",
+        "Session-only local Claude Code2.1.301 lifecycle plugin. Local interactive launches use auto through the bundled CLI, with the exact Desktop terminal surface, preflight compatibility fallback, and the existing session notice plugin. Install writes only private zmux-owned artifacts and never edits provider settings. Run requires the exact Desktop terminal process/session and an interactive terminal. A synchronous root UserPromptSubmit may prepare one bounded context; unknown submission stays queued and never authorizes Ack/ReadTurn. Permission/question/plan holds persist until a fresh explicit launch. No idle wake, Codex, headless, resume or actual-provider acceptance claim. A local hook process binding is not provider authentication. Uninstall disables admissions and retains changed or active artifacts."
     ),
     command!(
         "agent",

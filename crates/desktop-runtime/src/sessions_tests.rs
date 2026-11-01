@@ -83,6 +83,7 @@ fn worker(directory: &Directory) -> Worker {
     };
     let terminal_engine = None;
     let (completion_tx, completion_rx) = mpsc::sync_channel(MAX_TERMINALS);
+    let (remote_lifecycle_tx, remote_lifecycle_rx) = mpsc::sync_channel(16);
     let files = Arc::new(crate::files::FileService::start(Default::default()).unwrap());
     let worker_shared = Arc::new(Shared {
         files: Arc::clone(&files),
@@ -127,6 +128,10 @@ fn worker(directory: &Directory) -> Worker {
             pending_launches: 0,
             cleanup_error: None,
             agent_lifecycle: Vec::new(),
+            agent_alert_epoch: uuid::Uuid::new_v4(),
+            agent_alert_cursor: 0,
+            agent_alert_dropped_through_cursor: 0,
+            agent_alert_events: Vec::new(),
             control_frames: Vec::new(),
         })),
     });
@@ -174,6 +179,8 @@ fn worker(directory: &Directory) -> Worker {
         shared: worker_shared,
         completion_tx,
         completion_rx,
+        remote_lifecycle_tx,
+        remote_lifecycle_rx,
         pending_launches: 0,
         launch_workers: Vec::new(),
         next_launch_id: 1,
@@ -319,6 +326,7 @@ fn install_ssh_surface(worker: &mut Worker) -> (Uuid, SurfaceId, SessionId) {
             launch_id: 1,
             session: None,
             connection: None,
+            remote_lifecycle: None,
             cached: None,
             starting: true,
             reconnectable: false,
@@ -723,6 +731,7 @@ fn ssh_reconnect_at_terminal_cap_replaces_exited_process_and_reaps_retired_worke
                 launch_id: index as u64 + 2,
                 session: None,
                 connection: None,
+                remote_lifecycle: None,
                 cached: None,
                 starting: true,
                 reconnectable: false,

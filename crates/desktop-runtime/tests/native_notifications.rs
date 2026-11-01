@@ -278,13 +278,50 @@ impl Drop for Fixture {
 }
 fn wait(desktop: &Desktop, predicate: impl Fn(&Snapshot) -> bool) -> Arc<Snapshot> {
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut latest = String::new();
     loop {
         match desktop.snapshot() {
             Ok(snapshot) if predicate(&snapshot) => return snapshot,
-            Ok(_) | Err(DesktopError::Busy) => {}
+            Ok(snapshot) => {
+                let notifications: Vec<_> = snapshot
+                    .notifications
+                    .iter()
+                    .map(|notification| {
+                        (
+                            &notification.title,
+                            &notification.body,
+                            &notification.source,
+                        )
+                    })
+                    .collect();
+                let frames: Vec<_> = snapshot
+                    .frames
+                    .iter()
+                    .map(|frame| {
+                        (
+                            frame.session_id,
+                            frame.snapshot.as_ref().map(|terminal| {
+                                (
+                                    terminal.state,
+                                    terminal.viewport.contents.clone(),
+                                    terminal.viewport.notices.len(),
+                                )
+                            }),
+                        )
+                    })
+                    .collect();
+                latest = format!(
+                    "request={}, notifications={notifications:?}, frames={frames:?}, error={:?}",
+                    snapshot.last_request_id, snapshot.last_error
+                );
+            }
+            Err(DesktopError::Busy) => {}
             Err(error) => panic!("desktop snapshot failed: {error}"),
         }
-        assert!(Instant::now() < deadline, "desktop state did not settle");
+        assert!(
+            Instant::now() < deadline,
+            "desktop state did not settle: {latest}"
+        );
         thread::sleep(Duration::from_millis(5));
     }
 }

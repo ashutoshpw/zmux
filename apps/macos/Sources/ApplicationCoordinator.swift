@@ -57,6 +57,8 @@ enum FileCommand: Sendable {
 @MainActor
 final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, FilePanelOwner {
     private(set) var snapshot: DesktopSnapshot?
+    private var agentAlertReconciliationPending = true
+    private var agentAlertConnectionTracker = AgentAlertConnectionTracker()
     private(set) var mainWindowHosts: [MainWindowIdentity: MainWindowHost] = [:]
     private lazy var initialWindowHost = MainWindowHost(coordinator: self)
     private var initialHostClaimed = false
@@ -312,6 +314,9 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
                     break
                 } catch {
                     guard !Task.isCancelled, self.shutdownTask == nil else { break }
+                    // On recovery, reconcile the event ring's current head silently before
+                    // accepting later events. The local provider adapter has no replay cursor.
+                    self.agentAlertReconciliationPending = true
                     self.reportError(error.localizedDescription)
                     do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
                 }
@@ -780,6 +785,16 @@ final class ApplicationCoordinator: BrowserCommandOwner, BrowserDownloadOwner, F
         }
         imagePastes.update(snapshot)
         notificationDelivery.update(snapshot.nativeNotifications)
+        let transportReconnected = agentAlertConnectionTracker.observe(snapshot.agentLifecycle ?? [])
+        if let alertSnapshot = snapshot.nativeAgentAlertSnapshot {
+            let mode: AgentAlertSnapshotMode = agentAlertReconciliationPending || transportReconnected ? .reconcile : .live
+            let currentAlerts = Set((snapshot.agentLifecycle ?? []).compactMap { AgentAlertIdentity(current: $0) })
+            let accepted = notificationDelivery.updateAgentAlerts(alertSnapshot, current: currentAlerts, mode: mode)
+            if accepted { agentAlertReconciliationPending = false }
+        } else {
+            // Older or incomplete snapshot shapes cannot prove which ring entries are new.
+            agentAlertReconciliationPending = true
+        }
         // Detach every changed old hierarchy before attaching any new hierarchy.
         // A shared surface/session view can belong to at most one native parent.
         for (identity, host) in mainWindowHosts {

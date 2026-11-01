@@ -44,6 +44,10 @@ pub enum ConnectionError {
     InvalidOperationCommand,
     #[error("SSH operation command exceeds {MAX_COMMAND_BYTES} bytes")]
     OperationCommandTooLarge,
+    #[error("managed SSH shell integration is unavailable for this connection")]
+    ShellIntegrationUnavailable,
+    #[error("OpenSSH could not resolve the control-master route for this connection")]
+    ControlRouteUnavailable,
     #[error("failed to remove SSH control socket {path:?}: {source}")]
     RemoveSocket { path: PathBuf, source: io::Error },
     #[error("failed to remove private SSH control directory {path:?}: {source}")]
@@ -62,8 +66,16 @@ pub enum ConnectionError {
 pub struct ManagedConnection {
     descriptor: SshDescriptor,
     integrate_shell: bool,
+    route: Option<ControlRoute>,
     root: PathBuf,
     control_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct ControlRoute {
+    host: String,
+    user: String,
+    port: u16,
 }
 
 impl ManagedConnection {
@@ -80,12 +92,13 @@ impl ManagedConnection {
         #[cfg(unix)]
         {
             cleanup_sender().map_err(ConnectionError::CleanupWorker)?;
-            let integrate_shell = shell_integration_enabled(&descriptor);
+            let (integrate_shell, route) = inspect_connection(&descriptor);
             let root = create_private_root()?;
             let control_path = root.join(SOCKET_NAME);
             Ok(Self {
                 descriptor,
                 integrate_shell,
+                route,
                 root,
                 control_path,
             })
@@ -135,11 +148,16 @@ impl ManagedConnection {
 
     /// Build an auxiliary remote command that can only use the live master.
     ///
-    /// No endpoint transport arguments are copied. Ignoring SSH configuration
-    /// and fixing `ProxyCommand` to `/usr/bin/false` makes a missing master fail
-    /// instead of authenticating again or opening a direct/proxied connection.
+    /// Authentication, proxy, forwarding, and command settings are not copied.
+    /// Only the resolved host/user/port are carried so OpenSSH addresses the
+    /// same master socket. Ignoring configuration and fixing `ProxyCommand` to
+    /// `/usr/bin/false` makes a missing master fail instead of reconnecting.
     pub fn operation_spec(&self, command: &str) -> Result<ProcessSpec, ConnectionError> {
         validate_operation_command(command)?;
+        let route = self
+            .route
+            .as_ref()
+            .ok_or(ConnectionError::ControlRouteUnavailable)?;
         Ok(ProcessSpec {
             program: SSH_PROGRAM.into(),
             args: vec![
@@ -158,11 +176,33 @@ impl ManagedConnection {
                 "-o".into(),
                 "PermitLocalCommand=no".into(),
                 "-T".into(),
+                "-p".into(),
+                route.port.to_string(),
+                "-l".into(),
+                route.user.clone(),
                 "--".into(),
-                self.descriptor.endpoint().destination().to_string(),
+                route.host.clone(),
                 command.into(),
             ],
         })
+    }
+
+    /// Build the lifecycle reader on this connection's existing ControlMaster.
+    /// The nonce-derived path and token contain only fixed ASCII hex and are
+    /// scoped to the matching managed terminal bootstrap. A descriptor with a
+    /// configured remote command cannot provide this adapter and fails closed.
+    pub fn agent_lifecycle_spec(
+        &self,
+        nonce: &zmux_session_runtime::shell_integration::OpenRequestNonce,
+    ) -> Result<ProcessSpec, ConnectionError> {
+        if !self.integrate_shell {
+            return Err(ConnectionError::ShellIntegrationUnavailable);
+        }
+        let root = nonce.remote_integration_directory();
+        let token = nonce.remote_lifecycle_token();
+        self.operation_spec(&format!(
+            "ZMUX_SHELL_INTEGRATION_DIRECTORY={root} python3 {root}/claude-lifecycle-stream.py {token}"
+        ))
     }
 
     /// Remove only this owner's known socket and then its now-empty directory.
@@ -203,35 +243,70 @@ impl ManagedConnection {
 /// Resolve only whether OpenSSH already owns the remote command. This bounded
 /// probe runs on the launch worker; terminal_spec remains pure. In particular,
 /// never override a configured RemoteCommand or append a conflicting command.
-fn shell_integration_enabled(descriptor: &SshDescriptor) -> bool {
-    if descriptor.command().is_some()
-        || std::env::var_os("ZMUX_SHELL_INTEGRATION_DISABLED").as_deref()
-            == Some(std::ffi::OsStr::new("1"))
-    {
-        return false;
-    }
+fn inspect_connection(descriptor: &SshDescriptor) -> (bool, Option<ControlRoute>) {
     let mut command = Command::new("/usr/bin/ssh");
     command
         .arg("-G")
-        .args(descriptor.process_spec().args)
+        .args(descriptor.endpoint().transport_args())
+        .arg("--")
+        .arg(descriptor.endpoint().destination().to_string())
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     match crate::bounded_command::run(command, None) {
-        Ok(output) if output.success => !output.stdout.lines().any(|line| {
-            line.split_once(' ')
-                .is_some_and(|(key, value)| key == "remotecommand" && value != "none")
-        }),
+        Ok(output) if output.success => {
+            let route = parse_control_route(&output.stdout);
+            let remote_command = output.stdout.lines().any(|line| {
+                line.split_once(' ')
+                    .is_some_and(|(key, value)| key == "remotecommand" && value != "none")
+            });
+            let disabled = std::env::var_os("ZMUX_SHELL_INTEGRATION_DISABLED").as_deref()
+                == Some(std::ffi::OsStr::new("1"));
+            let integrate_shell =
+                route.is_some() && descriptor.command().is_none() && !disabled && !remote_command;
+            (integrate_shell, route)
+        }
         _ => {
             // Keep the ordinary SSH launch and its own config diagnostics when
-            // config cannot be resolved. Do not guess or print config secrets.
+            // config cannot be resolved. Auxiliary commands fail closed because
+            // they cannot prove the exact target identity. Do not print config.
             eprintln!(
-                "zmux: SSH config probe unavailable; automatic shell integration disabled for this connection"
+                "zmux: SSH config probe unavailable; managed shell and operation integration disabled for this connection"
             );
-            false
+            (false, None)
         }
     }
+}
+
+fn parse_control_route(output: &str) -> Option<ControlRoute> {
+    let mut host = None;
+    let mut user = None;
+    let mut port = None;
+    for line in output.lines() {
+        let Some((key, value)) = line.split_once(' ') else {
+            continue;
+        };
+        match key {
+            "hostname" => host = Some(value.to_owned()),
+            "user" => user = Some(value.to_owned()),
+            "port" => port = value.parse::<u16>().ok(),
+            _ => {}
+        }
+    }
+    let host = host?;
+    let user = user?;
+    let port = port?;
+    if host.is_empty()
+        || host.len() > 255
+        || user.is_empty()
+        || user.len() > 255
+        || host.chars().any(char::is_control)
+        || user.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(ControlRoute { host, user, port })
 }
 
 impl Drop for ManagedConnection {

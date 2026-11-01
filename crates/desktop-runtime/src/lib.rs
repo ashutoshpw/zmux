@@ -18,6 +18,7 @@ pub mod persistence;
 pub mod profile_leases;
 pub mod profile_native;
 pub mod profiles;
+pub mod remote_agent_lifecycle;
 mod replies;
 pub mod schedule;
 mod schedule_bundle;
@@ -77,6 +78,16 @@ const MAX_COMMANDS: usize = 32;
 const MAX_AUTOMATIC_OPENS_PER_ORIGIN: usize = 4;
 const AUTOMATIC_OPEN_WINDOW: Duration = Duration::from_secs(10);
 const MAX_AUTOMATIC_OPEN_HISTORY: usize = MAX_TERMINALS * MAX_AUTOMATIC_OPENS_PER_ORIGIN;
+
+fn bundled_cli_path() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let contents = executable.parent()?.parent()?;
+    let cli = contents.join("Resources/bin/zmux");
+    std::fs::symlink_metadata(&cli)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|_| cli)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct TerminalOpenOrigin {
@@ -283,6 +294,9 @@ pub enum Command {
     #[serde(skip)]
     AgentLifecycle {
         request: agent_lifecycle::Request,
+    },
+    SelectAgentTarget {
+        target: agent_lifecycle::SelectionTarget,
     },
     SurfaceOrder {
         request: surface_order::OrderRequest,
@@ -528,10 +542,14 @@ pub struct Snapshot {
     pub closed: bool,
     pub pending_launches: usize,
     pub cleanup_error: Option<String>,
-    /// Latest provider lifecycle evidence, bound to exact local terminal owners.
-    /// Omitted while empty to preserve older native decoders.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Latest provider lifecycle evidence, bound to exact terminal owners.
     pub agent_lifecycle: Vec<agent_lifecycle::Agent>,
+    /// Runtime epoch and bounded live-only alert ring. These are always present
+    /// so a native consumer can distinguish an empty ring from an absent update.
+    pub agent_alert_epoch: uuid::Uuid,
+    pub agent_alert_cursor: u64,
+    pub agent_alert_dropped_through_cursor: u64,
+    pub agent_alert_events: Vec<agent_lifecycle::AlertEvent>,
     /// All live terminal frames for local inspection. Native rendering receives only `frames`.
     #[serde(skip)]
     pub control_frames: Vec<Frame>,
@@ -702,6 +720,7 @@ impl Desktop {
         let downloads = downloads::DownloadRuntime::default();
         let windows = windows::WindowRuntime::default();
         let agent_messages = agent_messages::Runtime::start(profile_directory.clone())?;
+        let agent_lifecycle = agent_lifecycle::Runtime::default();
         let profiles = profiles::ProfileRuntime::start(profile_directory, profile_native.clone())?;
         let local_tmux = local_tmux::Runtime::new(tmux_profile);
         let local_zellij = zellij_coordinator::Runtime::new(zellij_configuration);
@@ -753,11 +772,16 @@ impl Desktop {
                 pending_launches: 0,
                 cleanup_error: None,
                 agent_lifecycle: Vec::new(),
+                agent_alert_epoch: agent_lifecycle.alert_epoch(),
+                agent_alert_cursor: agent_lifecycle.alert_cursor(),
+                agent_alert_dropped_through_cursor: agent_lifecycle.alert_dropped_through_cursor(),
+                agent_alert_events: Vec::new(),
                 control_frames: Vec::new(),
             })),
         });
         let (sender, receiver) = mpsc::sync_channel(MAX_COMMANDS);
         let (completion_tx, completion_rx) = mpsc::sync_channel(MAX_TERMINALS);
+        let (remote_lifecycle_tx, remote_lifecycle_rx) = mpsc::sync_channel(256);
         let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
             .name("zmux-workspaces".into())
@@ -765,7 +789,7 @@ impl Desktop {
                 let mut worker = Worker {
                     agent_messages,
                     agent_message_result: None,
-                    agent_lifecycle: agent_lifecycle::Runtime::default(),
+                    agent_lifecycle,
                     agent_lifecycle_result: None,
                     local_tmux,
                     local_zellij,
@@ -806,6 +830,8 @@ impl Desktop {
                     shared: worker_shared,
                     completion_tx,
                     completion_rx,
+                    remote_lifecycle_tx,
+                    remote_lifecycle_rx,
                     pending_launches: 0,
                     launch_workers: Vec::new(),
                     next_launch_id: 1,
@@ -1072,7 +1098,7 @@ impl Desktop {
         }
         if !matches!(
             &request.payload,
-            Command::Action { .. } | Command::Windows { .. }
+            Command::Action { .. } | Command::Windows { .. } | Command::SelectAgentTarget { .. }
         ) {
             return Err(refused(DesktopError::Failure(
                 "acknowledged dispatch accepts only action and windows commands".into(),
@@ -1579,6 +1605,7 @@ struct Slot {
     launch_id: u64,
     session: Option<Session>,
     connection: Option<Arc<ManagedConnection>>,
+    remote_lifecycle: Option<remote_agent_lifecycle::Stream>,
     cached: Option<Arc<TerminalSnapshot>>,
     starting: bool,
     reconnectable: bool,
@@ -1659,6 +1686,7 @@ struct Completion {
     id: SessionId,
     result: Result<Session, SessionError>,
     connection: Option<Arc<ManagedConnection>>,
+    remote_lifecycle: Option<remote_agent_lifecycle::Stream>,
     cleanup: Option<Session>,
 }
 fn notification_filter(
@@ -1771,6 +1799,8 @@ struct Worker {
     shared: Arc<Shared>,
     completion_tx: SyncSender<Completion>,
     completion_rx: Receiver<Completion>,
+    remote_lifecycle_tx: SyncSender<remote_agent_lifecycle::Message>,
+    remote_lifecycle_rx: Receiver<remote_agent_lifecycle::Message>,
     pending_launches: usize,
     launch_workers: Vec<JoinHandle<()>>,
     next_launch_id: u64,
@@ -1907,6 +1937,7 @@ impl Worker {
                 self.complete(completion);
                 dirty = true;
             }
+            dirty |= self.poll_remote_agent_lifecycle();
             let mut notices = Vec::new();
             let mut open_requests = Vec::new();
             for (id, slot) in &mut self.slots {
@@ -1932,6 +1963,15 @@ impl Worker {
                     }
                     match session.snapshot() {
                         Ok(snapshot) => {
+                            if snapshot.state != zmux_session_runtime::State::Running
+                                && slot.remote_lifecycle.is_some()
+                            {
+                                // The SSH terminal owns the only permitted
+                                // ControlMaster lifetime. Do not retry its
+                                // lifecycle channel after that session exits.
+                                slot.remote_lifecycle.take();
+                                dirty = true;
+                            }
                             for notice in &snapshot.viewport.notices {
                                 if notice.sequence > slot.last_notice {
                                     self.attention.dropped = self.attention.dropped.saturating_add(
@@ -2027,6 +2067,158 @@ impl Worker {
             }
         }
         self.run_shutdown(receiver);
+    }
+
+    fn poll_remote_agent_lifecycle(&mut self) -> bool {
+        use zmux_remote_runtime::agent_lifecycle::Frame;
+
+        let mut dirty = false;
+        while let Ok(message) = self.remote_lifecycle_rx.try_recv() {
+            match message {
+                remote_agent_lifecycle::Message::Connected {
+                    binding,
+                    previous_generation,
+                } => {
+                    // Connected/Lost are ordered control transitions from one
+                    // supervisor. Allow an earlier queued generation to advance
+                    // the record before later queued flaps are applied.
+                    if !self.remote_stream_owner_current(binding) {
+                        continue;
+                    }
+                    if let Some(previous_generation) = previous_generation {
+                        dirty |= self.agent_lifecycle.remote_transport_reconnected(
+                            binding.target,
+                            binding.runtime_id,
+                            previous_generation,
+                            binding.generation,
+                            Instant::now(),
+                        );
+                    }
+                }
+                remote_agent_lifecycle::Message::Frame { binding, frame } => {
+                    if !self.remote_stream_current(binding) {
+                        continue;
+                    }
+                    match frame {
+                        Frame::Heartbeat { .. } => {
+                            dirty |= self.agent_lifecycle.remote_transport_heartbeat(
+                                binding.target,
+                                binding.runtime_id,
+                                binding.generation,
+                                Instant::now(),
+                            );
+                        }
+                        Frame::Hook {
+                            sequence, event, ..
+                        } => {
+                            let previous_cursor = self.agent_lifecycle.alert_cursor();
+                            match self.agent_lifecycle.apply_remote_hook(
+                                binding.target,
+                                binding.runtime_id,
+                                binding.generation,
+                                sequence,
+                                event,
+                                Instant::now(),
+                            ) {
+                                Ok(true) => {
+                                    dirty = true;
+                                    if let Err(error) =
+                                        self.admit_agent_alerts_since(previous_cursor)
+                                    {
+                                        self.last_error = Some(error.to_string());
+                                    }
+                                }
+                                Ok(false) => {}
+                                Err(error) => {
+                                    eprintln!("zmux remote agent lifecycle event ignored: {error}");
+                                }
+                            }
+                        }
+                        Frame::Hello { .. } | Frame::Active { .. } => {
+                            // The reader consumes the handshake before it admits
+                            // any frame to the desktop event queue.
+                        }
+                        Frame::Gap { .. } => {
+                            // The supervisor consumes this frame as a reconnect
+                            // trigger. If it reaches the owner queue, fence the
+                            // current evidence rather than admitting later hooks.
+                            dirty |= self.agent_lifecycle.remote_transport_lost(
+                                binding.target,
+                                binding.runtime_id,
+                                binding.generation,
+                            );
+                        }
+                    }
+                }
+                remote_agent_lifecycle::Message::Lost { binding } => {
+                    if self.remote_stream_owner_current(binding) {
+                        dirty |= self.agent_lifecycle.remote_transport_lost(
+                            binding.target,
+                            binding.runtime_id,
+                            binding.generation,
+                        );
+                    }
+                }
+            }
+        }
+        dirty
+    }
+
+    /// Recheck the exact remote terminal, launch, adapter token and live SSH
+    /// session for every frame before it can affect the lifecycle registry.
+    fn remote_stream_current(&self, binding: remote_agent_lifecycle::Binding) -> bool {
+        self.remote_stream_owner_current(binding)
+            && self
+                .slots
+                .get(&binding.target.session_id)
+                .and_then(|slot| slot.remote_lifecycle.as_ref())
+                .is_some_and(|stream| stream.binding().is_current_generation(binding))
+    }
+
+    /// Verify the stream owner without requiring its generation to remain
+    /// current. This lets a queued loss for the previous generation mark only
+    /// that old record Unknown after a successful reconnect has already moved
+    /// the live stream to its next generation.
+    fn remote_stream_owner_current(&self, binding: remote_agent_lifecycle::Binding) -> bool {
+        let Some(slot) = self.slots.get(&binding.target.session_id) else {
+            return false;
+        };
+        if slot.launch_id != binding.launch_id
+            || !slot
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.shell_integration_enabled())
+        {
+            return false;
+        }
+        let Some(stream) = slot.remote_lifecycle.as_ref() else {
+            return false;
+        };
+        let current_binding = stream.binding();
+        if !current_binding.same_owner(binding) {
+            return false;
+        }
+        let Some(session) = slot.session.as_ref() else {
+            return false;
+        };
+        let registration_matches =
+            session
+                .open_request_registration()
+                .is_some_and(|registration| {
+                    registration.source()
+                        == zmux_session_runtime::shell_integration::OpenRequestSource::ManagedSsh
+                        && uuid::Uuid::parse_str(&registration.nonce().remote_lifecycle_token())
+                            .ok()
+                            == Some(binding.nonce)
+                });
+        let running = session
+            .snapshot()
+            .ok()
+            .map(|snapshot| snapshot.state)
+            .or_else(|| slot.cached.as_ref().map(|snapshot| snapshot.state))
+            == Some(zmux_session_runtime::State::Running);
+        let model = self.model.snapshot();
+        registration_matches && running && agent_lifecycle::has_remote_owner(&model, binding.target)
     }
 
     fn poll_terminal_open_requests(
@@ -2407,6 +2599,7 @@ impl Worker {
         }
         match command {
             Command::AgentLifecycle { request } => self.agent_lifecycle_request(request),
+            Command::SelectAgentTarget { target } => self.select_agent_target(target),
             Command::AgentMessages { .. } | Command::AgentMessagesStatus { .. } => Err(
                 DesktopError::Failure("message commands require their admission envelope".into()),
             ),
@@ -2651,6 +2844,20 @@ impl Worker {
             }
         }
         .ok_or_else(|| DesktopError::Failure("lifecycle capability is stale or unknown".into()))?;
+        let provider = match &request.action {
+            agent_lifecycle::Action::Register { provider, .. } => *provider,
+            agent_lifecycle::Action::Event { capability, .. } => self
+                .agent_lifecycle
+                .provider_for_capability(*capability)
+                .ok_or_else(|| {
+                    DesktopError::Failure("lifecycle capability is stale or unknown".into())
+                })?,
+        };
+        if provider != agent_lifecycle::Provider::ClaudeLocal {
+            return Err(DesktopError::Failure(
+                "remote lifecycle claims require the managed SSH adapter".into(),
+            ));
+        }
         let model = self.model.snapshot();
         if !agent_lifecycle::has_local_owner(&model, target) {
             return Err(DesktopError::Failure(
@@ -2670,12 +2877,68 @@ impl Worker {
                 "lifecycle target session is not currently running".into(),
             ));
         }
+        let previous_alert_cursor = self.agent_lifecycle.alert_cursor();
         self.agent_lifecycle_result = Some(
             self.agent_lifecycle
                 .apply(request, Instant::now())
                 .map_err(DesktopError::Failure)?,
         );
+        self.admit_agent_alerts_since(previous_alert_cursor)?;
         Ok(())
+    }
+
+    fn admit_agent_alerts_since(&mut self, previous_cursor: u64) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        let alert_epoch = self.agent_lifecycle.alert_epoch();
+        let events: Vec<_> = self
+            .agent_lifecycle
+            .alert_events(&model)
+            .into_iter()
+            .filter(|event| event.cursor > previous_cursor)
+            .collect();
+        for event in events {
+            let (kind, title, body) = match event.kind {
+                agent_lifecycle::AlertKind::NeedsUser => (
+                    "needs_user",
+                    "Claude Code needs you",
+                    "Claude Code is waiting for your input.",
+                ),
+                agent_lifecycle::AlertKind::Completed => (
+                    "completed",
+                    "Claude Code finished",
+                    "Claude Code finished a turn.",
+                ),
+            };
+            self.attention.notify_agent_event(
+                &model,
+                event.surface_id,
+                event.session_id,
+                kind,
+                &format!("{alert_epoch}:{}", event.cursor),
+                &NotificationContent {
+                    title: title.into(),
+                    subtitle: "Agent".into(),
+                    body: body.into(),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn select_agent_target(
+        &mut self,
+        target: agent_lifecycle::SelectionTarget,
+    ) -> Result<(), DesktopError> {
+        let model = self.model.snapshot();
+        if !self.agent_lifecycle.matches_selection(target, &model) {
+            return Err(DesktopError::Failure(
+                "stale agent target or terminal session is no longer available".into(),
+            ));
+        }
+        self.action(Action::SelectSurface {
+            surface_id: target.surface_id,
+        })
     }
 
     fn writable_session(&self, id: SessionId) -> Result<&Session, DesktopError> {
@@ -3596,6 +3859,7 @@ impl Worker {
                             launch_id,
                             session: None,
                             connection: None,
+                            remote_lifecycle: None,
                             cached: None,
                             starting: true,
                             reconnectable: false,
@@ -3605,6 +3869,7 @@ impl Worker {
                         },
                     );
                     let sender = self.completion_tx.clone();
+                    let remote_lifecycle_sender = self.remote_lifecycle_tx.clone();
                     let mut shell = self.shell.clone();
                     if let Some(cwd) = cwd.filter(|_| remote.is_none() && local_tmux.is_none()) {
                         shell.cwd = Some(PathBuf::from(cwd));
@@ -3618,7 +3883,7 @@ impl Worker {
                             .set_session_cwd(session_id, cwd.to_string_lossy().into_owned());
                     }
                     let model = self.launch_model().snapshot();
-                    let context = model.workspaces.iter().find_map(|w| {
+                    let mut context = model.workspaces.iter().find_map(|w| {
                         w.root.panes().into_iter().find_map(|p| {
                             p.surfaces.iter().find(|s| s.session_id == Some(session_id)).map(|s| vec![
                                 ("ZMUX_WORKSPACE_ID".into(), model.object_uuid(zmux_workspace_core::targets::TargetKind::Workspace, w.id.0).to_string()),
@@ -3627,6 +3892,16 @@ impl Worker {
                             ])
                         })
                     }).expect("live terminal has an owning surface");
+                    if remote.is_none()
+                        && local_tmux.is_none()
+                        && let Some(cli_path) = bundled_cli_path()
+                    {
+                        context.push(("ZMUX_LOCAL_CLAUDE_LIFECYCLE".into(), "1".into()));
+                        context.push((
+                            "ZMUX_CLI_PATH".into(),
+                            cli_path.to_string_lossy().into_owned(),
+                        ));
+                    }
                     let tmux_profile = self.local_tmux.profile.clone();
                     let terminal_engine = self.terminal_engine;
                     let binding = model
@@ -3651,6 +3926,25 @@ impl Worker {
                             })
                         })
                         .expect("live terminal has binding");
+                    let agent_target = model
+                        .workspaces
+                        .iter()
+                        .flat_map(|workspace| workspace.root.panes())
+                        .flat_map(|pane| &pane.surfaces)
+                        .find(|surface| {
+                            surface.session_id == Some(session_id)
+                                && surface.kind == zmux_workspace_core::SurfaceKind::Terminal
+                                && surface.remote.is_some()
+                        })
+                        .map(|surface| agent_lifecycle::Target {
+                            identity_namespace: model.identity_namespace,
+                            surface_id: surface.id,
+                            surface_uuid: model.object_uuid(
+                                zmux_workspace_core::targets::TargetKind::Surface,
+                                surface.id.0,
+                            ),
+                            session_id,
+                        });
                     let certificate = zellij_coordinator::LaunchCertificate {
                         namespace: model.identity_namespace,
                         surface: binding.surface,
@@ -3669,6 +3963,7 @@ impl Worker {
                         .name(format!("zmux-launch-{}", session_id.0))
                         .spawn(move || {
                             let mut failed_client = None;
+                            let mut remote_lifecycle = None;
                             let result = (|| {
                                 if let Some(identity) = local_tmux {
                                     if remote.is_some() {
@@ -3732,6 +4027,15 @@ impl Worker {
                                     "TMUX_PANE",
                                     "ZMUX_LOCAL_TMUX",
                                     "ZMUX_LOCAL_TMUX_PROFILE",
+                                    "ZMUX_LOCAL_CLAUDE_LIFECYCLE",
+                                    "ZMUX_CLI_PATH",
+                                    "ZMUX_SURFACE_ID",
+                                    "ZMUX_TAB_ID",
+                                    "ZMUX_WORKSPACE_ID",
+                                    "ZMUX_SHELL_INTEGRATION_DIRECTORY",
+                                    "ZMUX_CLAUDE_EVENT_SOCKET",
+                                    "ZMUX_REMOTE_LIFECYCLE",
+                                    "ZMUX_AGENT_LIFECYCLE_NONCE",
                                 ]
                                 .map(std::ffi::OsString::from);
                                 let session = terminal_engine::spawn_with_open_requests(
@@ -3748,6 +4052,31 @@ impl Worker {
                                     open_source,
                                     connection.clone(),
                                 )?;
+                                if let (
+                                    Some(connection),
+                                    Some(target),
+                                    Some(registration),
+                                ) = (
+                                    connection.as_ref(),
+                                    agent_target,
+                                    session.open_request_registration(),
+                                ) && connection.shell_integration_enabled()
+                                    && registration.source()
+                                        == zmux_session_runtime::shell_integration::OpenRequestSource::ManagedSsh
+                                {
+                                    match remote_agent_lifecycle::Stream::start(
+                                        Arc::clone(connection),
+                                        registration.nonce(),
+                                        target,
+                                        launch_id,
+                                        remote_lifecycle_sender,
+                                    ) {
+                                        Ok(stream) => remote_lifecycle = Some(stream),
+                                        Err(error) => eprintln!(
+                                            "zmux remote agent lifecycle reader unavailable: {error}"
+                                        ),
+                                    }
+                                }
                                 Ok((session, connection))
                             })();
                             let (result, connection) = match result {
@@ -3761,6 +4090,7 @@ impl Worker {
                                 id: session_id,
                                 result,
                                 connection,
+                                remote_lifecycle,
                                 cleanup: failed_client,
                             }) {
                                 drop(error.0);
@@ -3812,6 +4142,7 @@ impl Worker {
                 if let Ok(session) = completion.result {
                     slot.session = Some(session);
                     slot.connection = completion.connection;
+                    slot.remote_lifecycle = completion.remote_lifecycle.take();
                 }
             } else if let Ok(session) = completion.result {
                 self.retire_owned(session, completion.id, completion.launch_id);
@@ -3829,6 +4160,7 @@ impl Worker {
                 Ok(session) => {
                     slot.session = Some(session);
                     slot.connection = completion.connection;
+                    slot.remote_lifecycle = completion.remote_lifecycle.take();
                 }
                 Err(error) => {
                     let message = format!("terminal launch failed: {error}");
@@ -3940,6 +4272,7 @@ impl Worker {
             .collect();
         let workspace_metadata = self.metadata.snapshot(&model);
         let agent_lifecycle = self.agent_lifecycle.snapshot(&model);
+        let agent_alert_events = self.agent_lifecycle.alert_events(&model);
         let published = Arc::new(Snapshot {
             revision: self.revision,
             workspace_identities,
@@ -3980,6 +4313,10 @@ impl Worker {
             pending_launches: self.pending_launches,
             cleanup_error: self.cleanup_error.clone(),
             agent_lifecycle,
+            agent_alert_epoch: self.agent_lifecycle.alert_epoch(),
+            agent_alert_cursor: self.agent_lifecycle.alert_cursor(),
+            agent_alert_dropped_through_cursor: self.agent_lifecycle.alert_dropped_through_cursor(),
+            agent_alert_events,
             control_frames,
         });
         match self.shared.snapshot.lock() {

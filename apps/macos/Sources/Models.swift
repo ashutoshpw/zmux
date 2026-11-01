@@ -421,6 +421,41 @@ struct BrowserProfileState: Decodable, Sendable {
 }
 struct WorkspaceIdentity: Decodable, Sendable { let workspaceId: UInt64; let uuid: UUID }
 struct SshRouteStatus: Decodable, Sendable { let surfaceId: UInt64; let sessionId: UInt64; let connected: Bool }
+/// Provider lifecycle evidence published by the Rust owner for one exact terminal.
+/// The UI carries every owner and generation field back when requesting selection.
+struct AgentLifecycleRecord: Decodable, Sendable, Hashable {
+    let provider: String
+    let identityNamespace: UUID
+    let windowId: UInt64
+    let windowUuid: UUID
+    let workspaceId: UInt64
+    let workspaceUuid: UUID
+    let paneId: UInt64
+    let paneUuid: UUID
+    let surfaceId: UInt64
+    let surfaceUuid: UUID
+    let sessionId: UInt64
+    let runtimeId: UUID
+    let generation: UUID
+    let providerSessionId: UUID
+    /// Changes only after a validated remote transport reconnect, not on evidence expiry.
+    let transportEpoch: UUID?
+    let promptId: UUID?
+    let activity: String
+    let connection: String
+
+    func matchesSelectionTarget(_ other: Self) -> Bool {
+        provider == other.provider
+            && identityNamespace == other.identityNamespace
+            && windowId == other.windowId && windowUuid == other.windowUuid
+            && workspaceId == other.workspaceId && workspaceUuid == other.workspaceUuid
+            && paneId == other.paneId && paneUuid == other.paneUuid
+            && surfaceId == other.surfaceId && surfaceUuid == other.surfaceUuid
+            && sessionId == other.sessionId
+            && runtimeId == other.runtimeId && generation == other.generation
+            && providerSessionId == other.providerSessionId
+    }
+}
 struct DesktopSnapshot: Decodable, Sendable {
     let sshRoutes: [SshRouteStatus]
     let workspaceIdentities: [WorkspaceIdentity]
@@ -436,11 +471,24 @@ struct DesktopSnapshot: Decodable, Sendable {
     let browserEpoch: UUID
     let browserPendingRequests: Int
     let persistence: SessionPersistence?
+    /// Missing only when reading older snapshots that did not publish lifecycle state.
+    let agentLifecycle: [AgentLifecycleRecord]?
     let cleanupError: String?
     let uploads: [UploadProgress]
     let workspaceMetadata: [WorkspaceMetadata]?
+    let agentAlertEpoch: UUID?
+    let agentAlertCursor: UInt64?
+    let agentAlertEvents: [NativeAgentAlertEvent]?
+    let agentAlertDroppedThroughCursor: UInt64?
     let notifications: [AttentionNotification]; let notificationsDropped: UInt64
     let revision: UInt64; var model: Model; var frames: [Frame]
     let lastRequestId: UInt64; let lastError: String?; let closed: Bool
     var workspace: Workspace? { model.workspaces.first { $0.id == model.focusedWorkspace } }
+    var nativeAgentAlertSnapshot: NativeAgentAlertSnapshot? {
+        guard let agentAlertEpoch, let agentAlertCursor, let agentAlertEvents,
+              let agentAlertDroppedThroughCursor else { return nil }
+        return NativeAgentAlertSnapshot(epoch: agentAlertEpoch, cursor: agentAlertCursor,
+                                        droppedThroughCursor: agentAlertDroppedThroughCursor,
+                                        events: agentAlertEvents)
+    }
 }

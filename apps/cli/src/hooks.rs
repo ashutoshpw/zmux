@@ -3,12 +3,14 @@ use super::*;
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
+    ffi::OsStr,
     fs,
+    io::Write,
     os::{
         fd::AsRawFd,
         unix::{
             ffi::OsStrExt,
-            fs::{DirBuilderExt, MetadataExt, PermissionsExt},
+            fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
             net::UnixListener,
         },
     },
@@ -43,7 +45,20 @@ pub(super) enum Invocation {
     Run {
         directory: PathBuf,
         surface: Uuid,
+        notice_plugin: Option<PathBuf>,
         args: Vec<OsString>,
+    },
+    Auto {
+        root: PathBuf,
+        surface: Uuid,
+        notice_plugin: PathBuf,
+        args: Vec<OsString>,
+    },
+    Notice {
+        event: String,
+    },
+    Cleanup {
+        root: PathBuf,
     },
     Event {
         event: String,
@@ -53,8 +68,16 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     if help_requested(tail) {
         return Ok(Parsed::Offline(Offline::Help(Some("hooks".into()))));
     }
-    let args = utf8_args(tail)?;
+    let separator = tail.iter().position(|argument| argument == "--");
+    let prefix = &tail[..separator.unwrap_or(tail.len())];
+    let args = utf8_args(prefix)?;
     if args.first().map(String::as_str) != Some("claude") {
+        if args.first().map(String::as_str) == Some("codex") {
+            return Err(CliError(
+                "Codex provider lifecycle hooks are unsupported; no Codex hooks were installed"
+                    .into(),
+            ));
+        }
         return Err(CliError("hooks currently supports claude only".into()));
     }
     if args.get(1).map(String::as_str) == Some("event") {
@@ -67,16 +90,35 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
             _ => Err(CliError("unsupported internal Claude hook event".into())),
         };
     }
+    if args.get(1).map(String::as_str) == Some("notice") {
+        return match args.as_slice() {
+            [_, _, event] if matches!(event.as_str(), "Notification" | "Stop") => {
+                Ok(Parsed::Hooks(Invocation::Notice {
+                    event: event.clone(),
+                }))
+            }
+            _ => Err(CliError("unsupported internal Claude notice event".into())),
+        };
+    }
     let verb = args.get(1).map(String::as_str).ok_or_else(|| {
-        CliError("hooks claude requires install, status, uninstall or run".into())
+        CliError("hooks claude requires install, status, uninstall, run, auto or cleanup".into())
     })?;
-    let (mut directory, mut provider, mut surface) = (None, None, None);
+    let (mut directory, mut provider, mut surface, mut root, mut notice_plugin) =
+        (None, None, None, None, None);
     let mut cursor = 2;
-    while cursor < args.len() && args[cursor] != "--" {
-        let slot=match args[cursor].as_str() {
-            "--directory"=>&mut directory,"--provider" if verb=="install"=>&mut provider,
-            "--surface" if verb=="run"=>&mut surface,
-            _=>return Err(CliError("hooks requires explicit --directory, install --provider, or run --surface; provider arguments follow --".into())),
+    while cursor < args.len() {
+        let slot = match args[cursor].as_str() {
+            "--directory" if matches!(verb, "install" | "status" | "uninstall" | "run") => {
+                &mut directory
+            }
+            "--provider" if verb == "install" => &mut provider,
+            "--surface" if matches!(verb, "run" | "auto") => &mut surface,
+            "--root" if matches!(verb, "auto" | "cleanup") => &mut root,
+            "--notice-plugin" if matches!(verb, "run" | "auto") => &mut notice_plugin,
+            _ => return Err(CliError(
+                "hooks requires explicit command-specific options; provider arguments follow --"
+                    .into(),
+            )),
         };
         if slot.is_some() {
             return Err(CliError("repeated hook option".into()));
@@ -89,40 +131,84 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
         );
         cursor += 2;
     }
-    let directory = PathBuf::from(directory.ok_or_else(|| {
-        CliError("hooks requires --directory pointing to private zmux-owned plugin storage".into())
-    })?);
-    let invocation = match verb {
-        "install" if cursor == args.len() => Invocation::Install {
-            directory,
-            provider: PathBuf::from(provider.ok_or_else(|| {
-                CliError("install requires absolute --provider executable".into())
-            })?),
-        },
-        "status" if cursor == args.len() => Invocation::Status { directory },
-        "uninstall" if cursor == args.len() => Invocation::Uninstall { directory },
-        "run" => {
-            let surface = surface
-                .ok_or_else(|| CliError("run requires exact --surface UUID".into()))?
-                .parse::<Uuid>()
-                .map_err(|_| CliError("run surface must be a canonical UUID".into()))?;
-            if surface.is_nil() {
-                return Err(CliError("run surface cannot be nil".into()));
+    let invocation =
+        match verb {
+            "install" if cursor == args.len() && separator.is_none() => Invocation::Install {
+                directory: PathBuf::from(directory.ok_or_else(|| {
+                    CliError(
+                        "hooks requires --directory pointing to private zmux-owned plugin storage"
+                            .into(),
+                    )
+                })?),
+                provider: PathBuf::from(provider.ok_or_else(|| {
+                    CliError("install requires absolute --provider executable".into())
+                })?),
+            },
+            "status" if cursor == args.len() && separator.is_none() => Invocation::Status {
+                directory: PathBuf::from(directory.ok_or_else(|| {
+                    CliError(
+                        "hooks requires --directory pointing to private zmux-owned plugin storage"
+                            .into(),
+                    )
+                })?),
+            },
+            "uninstall" if cursor == args.len() && separator.is_none() => Invocation::Uninstall {
+                directory: PathBuf::from(directory.ok_or_else(|| {
+                    CliError(
+                        "hooks requires --directory pointing to private zmux-owned plugin storage"
+                            .into(),
+                    )
+                })?),
+            },
+            "run" => {
+                let surface = surface
+                    .ok_or_else(|| CliError("run requires exact --surface UUID".into()))?
+                    .parse::<Uuid>()
+                    .map_err(|_| CliError("run surface must be a canonical UUID".into()))?;
+                if surface.is_nil() {
+                    return Err(CliError("run surface cannot be nil".into()));
+                }
+                let provider_args = separator
+                    .map(|index| tail[index + 1..].to_vec())
+                    .unwrap_or_default();
+                interactive_args(&provider_args)?;
+                Invocation::Run {
+                    directory: PathBuf::from(directory.ok_or_else(|| {
+                        CliError("run requires private zmux-owned --directory".into())
+                    })?),
+                    surface,
+                    notice_plugin: notice_plugin.map(PathBuf::from),
+                    args: provider_args,
+                }
             }
-            let provider_args = if cursor < tail.len() {
-                tail[cursor + 1..].to_vec()
-            } else {
-                vec![]
-            };
-            interactive_args(&provider_args)?;
-            Invocation::Run {
-                directory,
-                surface,
-                args: provider_args,
+            "auto" if separator.is_some() && cursor == args.len() => {
+                let surface = surface
+                    .ok_or_else(|| CliError("auto requires exact --surface UUID".into()))?
+                    .parse::<Uuid>()
+                    .map_err(|_| CliError("auto surface must be a canonical UUID".into()))?;
+                if surface.is_nil() {
+                    return Err(CliError("auto surface cannot be nil".into()));
+                }
+                Invocation::Auto {
+                    root: PathBuf::from(root.ok_or_else(|| {
+                        CliError("auto requires the private session --root".into())
+                    })?),
+                    surface,
+                    notice_plugin: PathBuf::from(notice_plugin.ok_or_else(|| {
+                        CliError("auto requires the existing session --notice-plugin".into())
+                    })?),
+                    args: separator
+                        .map(|index| tail[index + 1..].to_vec())
+                        .unwrap_or_default(),
+                }
             }
-        }
-        _ => return Err(CliError("invalid hooks claude command".into())),
-    };
+            "cleanup" if cursor == args.len() && separator.is_none() => Invocation::Cleanup {
+                root: PathBuf::from(root.ok_or_else(|| {
+                    CliError("cleanup requires the private session --root".into())
+                })?),
+            },
+            _ => return Err(CliError("invalid hooks claude command".into())),
+        };
     Ok(Parsed::Hooks(invocation))
 }
 fn events() -> [&'static str; 12] {
@@ -171,6 +257,30 @@ fn interactive_args(args: &[OsString]) -> Result<bool, CliError> {
     }
     Ok(plan)
 }
+
+fn supported_provider(path: &Path) -> Result<plugin::Binary, CliError> {
+    if !path.is_absolute() {
+        return Err(CliError("provider path must be absolute".into()));
+    }
+    let expected = plugin::binary(path)?;
+    let cancellation = bounded_command::Cancellation::new()?;
+    let output = bounded_command::capture(
+        Command::new(&expected.path).arg("--version"),
+        Instant::now() + DEFAULT_TIMEOUT,
+        &cancellation,
+    )?;
+    if output.status != zmux_session_runtime::child::ExitObservation::Exited(0)
+        || output.stdout.trim() != format!("{} (Claude Code)", plugin::SUPPORTED_VERSION)
+        || plugin::binary(&expected.path)? != expected
+    {
+        return Err(CliError(format!(
+            "only the unchanged Claude Code {} executable is supported",
+            plugin::SUPPORTED_VERSION
+        )));
+    }
+    Ok(expected)
+}
+
 pub(super) fn run(
     invocation: Invocation,
     socket: Option<PathBuf>,
@@ -186,26 +296,15 @@ pub(super) fn run(
             }
             Ok(0)
         }
+        Invocation::Notice { event } => {
+            notice_event(&event)?;
+            Ok(0)
+        }
         Invocation::Install {
             directory,
             provider,
         } => {
-            if !provider.is_absolute() {
-                return Err(CliError("provider path must be absolute".into()).into());
-            }
-            let expected = plugin::binary(&provider)?;
-            let cancellation = bounded_command::Cancellation::new()?;
-            let output = bounded_command::capture(
-                Command::new(&expected.path).arg("--version"),
-                Instant::now() + DEFAULT_TIMEOUT,
-                &cancellation,
-            )?;
-            if output.status != zmux_session_runtime::child::ExitObservation::Exited(0)
-                || output.stdout.trim() != format!("{} (Claude Code)", plugin::SUPPORTED_VERSION)
-                || plugin::binary(&expected.path)? != expected
-            {
-                return Err(CliError("only the unchanged Claude Code 2.1.301 executable is supported; no plugin published".into()).into());
-            }
+            let expected = supported_provider(&provider)?;
             println!("{}", plugin::install(&directory, expected)?);
             Ok(0)
         }
@@ -220,13 +319,340 @@ pub(super) fn run(
         Invocation::Run {
             directory,
             surface,
+            notice_plugin,
             args,
         } => {
             let options = client_options(socket, timeout.min(EVENT_BUDGET), password)?;
-            launch(&options, &directory, surface, args).map_err(Into::into)
+            let held = interactive_args(&args)?;
+            launch(
+                &options,
+                &directory,
+                surface,
+                notice_plugin.as_deref(),
+                args,
+                held,
+            )
+            .map_err(Into::into)
+        }
+        Invocation::Auto {
+            root,
+            surface,
+            notice_plugin,
+            args,
+        } => automatic_launch(
+            socket,
+            timeout,
+            password,
+            &root,
+            surface,
+            &notice_plugin,
+            args,
+        ),
+        Invocation::Cleanup { root } => {
+            println!("{}", cleanup_auto_plugins(&root)?);
+            Ok(0)
         }
     }
 }
+
+fn find_provider() -> Result<PathBuf, CliError> {
+    let search_path = env::var_os("PATH").ok_or_else(|| CliError("PATH is unavailable".into()))?;
+    for directory in env::split_paths(&search_path) {
+        let candidate = directory.join("claude");
+        let Ok(metadata) = fs::metadata(&candidate) else {
+            continue;
+        };
+        if metadata.is_file() && metadata.mode() & 0o111 != 0 {
+            return candidate.canonicalize().map_err(Into::into);
+        }
+    }
+    Err(CliError("Claude executable was not found on PATH".into()))
+}
+
+fn launch_plain(
+    provider: &Path,
+    notice_plugin: &Path,
+    args: Vec<OsString>,
+) -> Result<u8, CliError> {
+    let mut command = Command::new(provider);
+    command.env_remove("ZMUX_CLAUDE_LIFECYCLE_ALERTS_ACTIVE");
+    if notice_plugin.is_absolute()
+        && fs::metadata(notice_plugin).is_ok_and(|metadata| metadata.is_dir())
+    {
+        command.arg("--plugin-dir").arg(notice_plugin);
+    }
+    let status = command
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()?;
+    Ok(exit_code(status))
+}
+
+fn auto_fallback(
+    provider: &Path,
+    notice_plugin: &Path,
+    args: Vec<OsString>,
+    reason: &str,
+) -> Result<u8, Box<dyn Error>> {
+    eprintln!(
+        "zmux: automatic Claude lifecycle unavailable ({reason}); launching this request once with the session notice plugin"
+    );
+    launch_plain(provider, notice_plugin, args).map_err(Into::into)
+}
+
+fn create_auto_plugin_directory(root: &Path) -> Result<PathBuf, CliError> {
+    if !root.is_absolute() {
+        return Err(CliError(
+            "automatic Claude session root must be absolute".into(),
+        ));
+    }
+    plugin::Directory::open(root, false)?;
+    for _ in 0..8 {
+        let path = root.join(format!("claude-auto-{}", Uuid::new_v4().simple()));
+        match fs::DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(CliError(
+        "cannot allocate a unique automatic Claude plugin directory".into(),
+    ))
+}
+
+fn cleanup_auto_directory(root: &Path, directory: &Path) -> Result<bool, CliError> {
+    let _lock = plugin::auto_lock(root)?;
+    clear_launch_marker(directory)?;
+    let result = plugin::uninstall(directory)?;
+    if result["cleanup_pending"] == true {
+        return Ok(false);
+    }
+    plugin::remove_empty_auto_directory(directory)?;
+    Ok(true)
+}
+
+fn create_launch_marker(directory: &Path) -> Result<(), CliError> {
+    let path = directory.join("launch-unknown");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(b"provider spawn outcome pending\n")?;
+    file.sync_all()?;
+    fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+fn clear_launch_marker(directory: &Path) -> Result<(), CliError> {
+    let path = directory.join("launch-unknown");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o600
+    {
+        return Err(CliError(
+            "automatic Claude launch marker changed; retained".into(),
+        ));
+    }
+    fs::remove_file(path)?;
+    fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+fn cleanup_auto_plugins(root: &Path) -> Result<Value, CliError> {
+    let _lock = plugin::auto_lock(root)?;
+    let mut removed = 0usize;
+    let mut retained = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(identifier) = name.strip_prefix("claude-auto-") else {
+            continue;
+        };
+        if Uuid::parse_str(identifier).is_err() {
+            continue;
+        }
+        let directory = entry.path();
+        if !fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir()) {
+            retained.push(name.to_owned());
+            continue;
+        }
+        if fs::symlink_metadata(directory.join("launch-unknown")).is_ok() {
+            retained.push(name.to_owned());
+            continue;
+        }
+        match plugin::uninstall_if_idle(&directory) {
+            Ok(result) if result["cleanup_pending"] != true => {
+                if plugin::remove_empty_auto_directory(&directory).is_ok() {
+                    removed += 1;
+                } else {
+                    retained.push(name.to_owned());
+                }
+            }
+            _ => retained.push(name.to_owned()),
+        }
+    }
+    if !retained.is_empty() {
+        eprintln!(
+            "zmux: automatic Claude plugin directories retained for review: {}",
+            retained.join(", ")
+        );
+    }
+    Ok(json!({"removed":removed,"retained":retained}))
+}
+
+fn automatic_launch(
+    socket: Option<PathBuf>,
+    timeout: Duration,
+    password: Option<SocketPassword>,
+    root: &Path,
+    surface: Uuid,
+    notice_plugin: &Path,
+    args: Vec<OsString>,
+) -> Result<u8, Box<dyn Error>> {
+    use std::io::IsTerminal;
+    let provider = find_provider()?;
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return auto_fallback(
+            &provider,
+            notice_plugin,
+            args,
+            "this invocation has no interactive terminal",
+        );
+    }
+    let held = match interactive_args(&args) {
+        Ok(held) => held,
+        Err(_) => {
+            return auto_fallback(
+                &provider,
+                notice_plugin,
+                args,
+                "this Claude invocation uses unsupported adapter options",
+            );
+        }
+    };
+    let expected = match supported_provider(&provider) {
+        Ok(provider) => provider,
+        Err(_) => {
+            return auto_fallback(
+                &provider,
+                notice_plugin,
+                args,
+                "this Claude version is outside the supported adapter range",
+            );
+        }
+    };
+    let options = match client_options(socket, timeout.min(EVENT_BUDGET), password) {
+        Ok(options) => options,
+        Err(_) => {
+            return auto_fallback(
+                &provider,
+                notice_plugin,
+                args,
+                "the exact Desktop lifecycle route is unavailable",
+            );
+        }
+    };
+    let route = match route(&options, surface, Instant::now() + options.timeout).and_then(|route| {
+        check_terminal_ancestor(&route)?;
+        Ok(route)
+    }) {
+        Ok(route) => route,
+        Err(_) => {
+            return auto_fallback(
+                &provider,
+                notice_plugin,
+                args,
+                "the exact Desktop terminal could not be verified",
+            );
+        }
+    };
+
+    let mut auto_directory = None;
+    let setup = (|| -> Result<PreparedPlugin, CliError> {
+        let _lock = plugin::auto_lock(root)?;
+        let directory = create_auto_plugin_directory(root)?;
+        auto_directory = Some(directory.clone());
+        if let Err(error) = plugin::install(&directory, expected) {
+            let _ = plugin::uninstall(&directory);
+            let _ = plugin::remove_empty_auto_directory(&directory);
+            return Err(CliError(format!(
+                "session-only lifecycle plugin installation failed: {error}"
+            )));
+        }
+        let prepared = prepare_plugin(&directory)
+            .map_err(|error| CliError(format!("prepare installed lifecycle plugin: {error}")))?;
+        clear_launch_marker(&directory)
+            .map_err(|error| CliError(format!("clear stale launch marker: {error}")))?;
+        create_launch_marker(&directory)
+            .map_err(|error| CliError(format!("create launch uncertainty marker: {error}")))?;
+        Ok(prepared)
+    })();
+    let prepared = match setup {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("zmux: automatic Claude lifecycle setup failed ({error})");
+            if let Some(directory) = &auto_directory {
+                let _ = cleanup_auto_directory(root, directory);
+            }
+            return auto_fallback(
+                &provider,
+                notice_plugin,
+                args,
+                "the session-only lifecycle plugin could not be prepared",
+            );
+        }
+    };
+    let directory = auto_directory.expect("successful setup created a private plugin directory");
+
+    // Once this call reaches provider spawn, failures never start a second copy.
+    let result = launch_prepared(LaunchRequest {
+        options: &options,
+        directory: &directory,
+        route,
+        prepared,
+        notice_plugin: Some(notice_plugin),
+        args: args.clone(),
+        held,
+        inbox_enabled: false,
+        automatic_root: Some(root),
+    });
+    match result {
+        Ok(code) => {
+            match cleanup_auto_directory(root, &directory) {
+                Ok(true) => {}
+                Ok(false) | Err(_) => {
+                    eprintln!("zmux: automatic Claude plugin cleanup remains pending")
+                }
+            }
+            Ok(code)
+        }
+        Err(LaunchFailure::BeforeStart(_)) => {
+            let _ = cleanup_auto_directory(root, &directory);
+            auto_fallback(
+                &provider,
+                notice_plugin,
+                args,
+                "adapter setup failed before the provider was started",
+            )
+        }
+        Err(LaunchFailure::AfterStart(error)) => {
+            eprintln!("zmux: provider launch outcome is uncertain; adapter files retained");
+            Err(error.into())
+        }
+    }
+}
+
 fn monotonic_ms() -> u64 {
     let t = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
     (t.tv_sec as u64).saturating_mul(1000) + (t.tv_nsec as u64) / 1_000_000
@@ -353,6 +779,77 @@ fn event_client(event: &str) -> Result<(), CliError> {
     }
     Ok(())
 }
+
+fn notice_event(event_name: &str) -> Result<(), CliError> {
+    if env::var_os("ZMUX_CLAUDE_LIFECYCLE_ALERTS_ACTIVE").as_deref() != Some(OsStr::new("1")) {
+        return Err(CliError("lifecycle notice routing is not active".into()));
+    }
+    let mut input = Vec::new();
+    io::stdin()
+        .take((FRAME_LIMIT + 1) as u64)
+        .read_to_end(&mut input)?;
+    if input.len() > FRAME_LIMIT {
+        return Err(CliError("oversized notice hook input".into()));
+    }
+    let value: Value = serde_json::from_slice(&input)
+        .map_err(|_| CliError("malformed notice hook input".into()))?;
+    let event: ClaudeHookEvent = serde_json::from_value(value)
+        .map_err(|_| CliError("invalid typed notice hook input".into()))?;
+    if event.name() != event_name {
+        return Err(CliError(
+            "notice event name does not match its input".into(),
+        ));
+    }
+    let notice = match &event {
+        ClaudeHookEvent::Notification {
+            notification_type, ..
+        } if matches!(
+            notification_type.as_str(),
+            "permission_prompt" | "elicitation_dialog"
+        ) =>
+        {
+            Some("attention")
+        }
+        ClaudeHookEvent::Stop { .. } => Some("stop"),
+        _ => None,
+    };
+    if let Some(notice) = notice {
+        let root = env::var_os("ZMUX_SHELL_INTEGRATION_DIRECTORY")
+            .map(PathBuf::from)
+            .ok_or_else(|| CliError("session notice root is unavailable".into()))?;
+        write_notice_event(&root, notice)?;
+    }
+    Ok(())
+}
+
+fn write_notice_event(root: &Path, event: &str) -> Result<(), CliError> {
+    let directory = plugin::Directory::open(root, false)?;
+    let fifo = std::fs::File::from(
+        rustix::fs::openat(
+            &directory.0,
+            "attention",
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(io::Error::from)?,
+    );
+    let metadata = fifo.metadata()?;
+    if !metadata.file_type().is_fifo()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o600
+        || metadata.nlink() != 1
+    {
+        return Err(CliError("unsafe session notice FIFO".into()));
+    }
+    let mut fifo = fifo;
+    fifo.write_all(event.as_bytes())?;
+    fifo.write_all(b"\n")?;
+    Ok(())
+}
+
 fn operation(
     options: &ClientOptions,
     deadline: Instant,
@@ -394,6 +891,65 @@ struct Route {
     session: u64,
     terminal: ProcessIdentity,
 }
+
+struct PreparedPlugin {
+    installation: plugin::Installation,
+    _lease: fs::File,
+}
+
+struct LaunchRequest<'a> {
+    options: &'a ClientOptions,
+    directory: &'a Path,
+    route: Route,
+    prepared: PreparedPlugin,
+    notice_plugin: Option<&'a Path>,
+    args: Vec<OsString>,
+    held: bool,
+    inbox_enabled: bool,
+    automatic_root: Option<&'a Path>,
+}
+
+fn prepare_plugin(directory: &Path) -> Result<PreparedPlugin, CliError> {
+    let installation = plugin::active(directory)?;
+    if plugin::binary(&installation.provider.path)? != installation.provider
+        || plugin::binary(&env::current_exe()?)? != installation.adapter
+    {
+        return Err(CliError(
+            "provider or adapter executable changed; install a fresh owned generation".into(),
+        ));
+    }
+    let lease = plugin::lease(directory, &installation)?;
+    Ok(PreparedPlugin {
+        installation,
+        _lease: lease,
+    })
+}
+
+enum LaunchFailure {
+    BeforeStart(CliError),
+    AfterStart(CliError),
+}
+
+impl LaunchFailure {
+    fn into_error(self) -> CliError {
+        match self {
+            Self::BeforeStart(error) | Self::AfterStart(error) => error,
+        }
+    }
+}
+
+impl From<CliError> for LaunchFailure {
+    fn from(error: CliError) -> Self {
+        Self::AfterStart(error)
+    }
+}
+
+impl From<io::Error> for LaunchFailure {
+    fn from(error: io::Error) -> Self {
+        Self::AfterStart(error.into())
+    }
+}
+
 fn route(options: &ClientOptions, surface: Uuid, deadline: Instant) -> Result<Route, CliError> {
     let budget = ClientOptions {
         socket: options.socket.clone(),
@@ -480,7 +1036,9 @@ struct Adapter<'a> {
     cleanup_deadline: Option<Instant>,
     held: bool,
     disabled: bool,
+    startup_warning_emitted: bool,
     prompts: HashSet<String>,
+    inbox_enabled: bool,
 }
 struct LifecycleCapability {
     token: Uuid,
@@ -553,6 +1111,14 @@ impl Adapter<'_> {
             && plugin::metadata_matches(&self.installation.adapter)
             && plugin::active(self.directory)
                 .is_ok_and(|i| i.generation == self.installation.generation)
+    }
+
+    fn warn_startup_rejection(&mut self, reason: &str) {
+        if self.startup_warning_emitted {
+            return;
+        }
+        self.startup_warning_emitted = true;
+        eprintln!("zmux: local Claude lifecycle SessionStart ignored: {reason}");
     }
 
     fn register_lifecycle(&mut self, deadline: Instant) -> Result<(), CliError> {
@@ -665,9 +1231,13 @@ impl Adapter<'_> {
             }
         };
         if let Err(error) = result {
-            eprintln!(
-                "zmux: local Claude lifecycle evidence unavailable; status may be unknown: {error}"
-            );
+            if matches!(event, ClaudeHookEvent::SessionStart { .. }) {
+                self.warn_startup_rejection(&format!("lifecycle admission failed: {error}"));
+            } else {
+                eprintln!(
+                    "zmux: local Claude lifecycle evidence unavailable; status may be unknown: {error}"
+                );
+            }
         }
     }
 
@@ -677,20 +1247,41 @@ impl Adapter<'_> {
         deadline: Instant,
     ) -> Result<(Value, Option<Uuid>), CliError> {
         let noop = || (json!({}), None);
-        if self.disabled
-            || !self.current()
-            || event.session_id() != self.root_session
-            || !event.is_main_session()
-        {
+        let startup = matches!(event, ClaudeHookEvent::SessionStart { .. });
+        if self.disabled {
+            if startup && event.is_main_session() {
+                self.warn_startup_rejection("adapter is disabled");
+            }
+            return Ok(noop());
+        }
+        if !self.current() {
+            if startup && event.is_main_session() {
+                self.warn_startup_rejection("owned plugin generation is no longer current");
+            }
+            return Ok(noop());
+        }
+        if event.session_id() != self.root_session {
+            if startup && event.is_main_session() {
+                self.warn_startup_rejection("provider session does not match this adapter run");
+            }
+            return Ok(noop());
+        }
+        if !event.is_main_session() {
             return Ok(noop());
         }
         if route(self.options, self.route.surface, deadline)? != self.route {
+            if startup {
+                self.warn_startup_rejection("exact terminal route changed during startup");
+            }
             self.retire(deadline)?;
             return Ok(noop());
         }
         self.try_lifecycle_event(event, deadline);
         match event {
             ClaudeHookEvent::SessionStart { source, .. } => {
+                if !self.inbox_enabled {
+                    return Ok(noop());
+                }
                 if source != "startup" || self.registration.is_some() {
                     return Ok(noop());
                 }
@@ -748,6 +1339,9 @@ impl Adapter<'_> {
                 permission_mode,
                 ..
             } => {
+                if !self.inbox_enabled {
+                    return Ok(noop());
+                }
                 if permission_mode == "plan" {
                     self.held = true;
                     self.hold(deadline)?;
@@ -990,7 +1584,9 @@ fn launch(
     options: &ClientOptions,
     directory: &Path,
     surface: Uuid,
+    notice_plugin: Option<&Path>,
     args: Vec<OsString>,
+    held: bool,
 ) -> Result<u8, CliError> {
     use std::io::IsTerminal;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -998,48 +1594,105 @@ fn launch(
             "Claude adapter run requires an interactive terminal; headless is unsupported".into(),
         ));
     }
-    let held = interactive_args(&args)?;
-    let installed = plugin::active(directory)?;
-    if plugin::binary(&installed.provider.path)? != installed.provider
-        || plugin::binary(&env::current_exe()?)? != installed.adapter
-    {
-        return Err(CliError(
-            "provider or adapter executable changed; install a fresh owned generation".into(),
-        ));
-    }
-    let _lease = plugin::lease(directory, &installed)?;
     let route = route(options, surface, Instant::now() + options.timeout)?;
+    check_terminal_ancestor(&route)?;
+    let prepared = prepare_plugin(directory)?;
+    launch_prepared(LaunchRequest {
+        options,
+        directory,
+        route,
+        prepared,
+        notice_plugin,
+        args,
+        held,
+        inbox_enabled: true,
+        automatic_root: None,
+    })
+    .map_err(LaunchFailure::into_error)
+}
+
+fn check_terminal_ancestor(route: &Route) -> Result<(), CliError> {
     let mut ancestor = process_identity(std::process::id())?;
-    let mut bound = false;
     for _ in 0..32 {
         if ancestor == route.terminal {
-            bound = true;
-            break;
+            return Ok(());
         }
         if ancestor.parent_pid <= 1 {
             break;
         }
         ancestor = process_identity(ancestor.parent_pid)?;
     }
-    if !bound {
-        return Err(CliError(
-            "wrapper is not running inside the exact Desktop terminal process lifetime".into(),
-        ));
+    Err(CliError(
+        "wrapper is not running inside the exact Desktop terminal process lifetime".into(),
+    ))
+}
+
+fn provider_arguments(
+    lifecycle_plugin: &Path,
+    notice_plugin: Option<&Path>,
+    root_session: &str,
+    user_arguments: Vec<OsString>,
+) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("--plugin-dir"),
+        lifecycle_plugin.as_os_str().to_owned(),
+    ];
+    if let Some(notice_plugin) = notice_plugin {
+        arguments.extend([
+            OsString::from("--plugin-dir"),
+            notice_plugin.as_os_str().to_owned(),
+        ]);
     }
+    arguments.extend([OsString::from("--session-id"), OsString::from(root_session)]);
+    arguments.extend(user_arguments);
+    arguments
+}
+
+fn launch_prepared(request: LaunchRequest<'_>) -> Result<u8, LaunchFailure> {
+    let LaunchRequest {
+        options,
+        directory,
+        route,
+        prepared,
+        notice_plugin,
+        args,
+        held,
+        inbox_enabled,
+        automatic_root,
+    } = request;
+    check_terminal_ancestor(&route).map_err(LaunchFailure::BeforeStart)?;
+    if let Some(root) = automatic_root {
+        let expected_notice_plugin = root.join("plugin");
+        if notice_plugin != Some(expected_notice_plugin.as_path()) {
+            return Err(LaunchFailure::BeforeStart(CliError(
+                "automatic launch notice plugin is outside its exact session root".into(),
+            )));
+        }
+        plugin::Directory::open(root, false).map_err(LaunchFailure::BeforeStart)?;
+        plugin::Directory::open(&expected_notice_plugin, false)
+            .map_err(LaunchFailure::BeforeStart)?;
+    }
+    let PreparedPlugin {
+        installation: installed,
+        _lease,
+    } = prepared;
     let root_session = Uuid::new_v4().to_string();
     let runtime = Uuid::new_v4();
     // Darwin permits at most 103 pathname bytes. TMPDIR commonly lives under
     // a long per-user /var/folders path; choose a bounded path before creating
     // anything. The random directory remains private even in shared /tmp.
     let name = format!("zmux-hook-{}", runtime.simple());
-    let mut path = env::temp_dir().canonicalize()?.join(&name);
+    let mut path = env::temp_dir()
+        .canonicalize()
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?
+        .join(&name);
     if path.join("event.sock").as_os_str().as_bytes().len() > 103 {
         path = Path::new("/tmp").canonicalize()?.join(&name);
     }
     if path.join("event.sock").as_os_str().as_bytes().len() > 103 {
-        return Err(CliError(
+        return Err(LaunchFailure::BeforeStart(CliError(
             "hook socket path exceeds the Unix pathname limit".into(),
-        ));
+        )));
     }
     let parent = std::fs::File::from(
         rustix::fs::open(
@@ -1051,10 +1704,15 @@ fn launch(
                 | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )
-        .map_err(io::Error::from)?,
+        .map_err(io::Error::from)
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?,
     );
-    fs::DirBuilder::new().mode(0o700).create(&path)?;
-    let owned_directory = plugin::Directory::open(&path, false)?;
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&path)
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?;
+    let owned_directory =
+        plugin::Directory::open(&path, false).map_err(LaunchFailure::BeforeStart)?;
     let socket_path = path.join("event.sock");
     let mut socket_dir = SocketDirectory {
         path,
@@ -1062,34 +1720,48 @@ fn launch(
         parent,
         socket: None,
     };
-    let listener = UnixListener::bind(&socket_path)?;
-    let metadata = fs::symlink_metadata(&socket_path)?;
+    let listener = UnixListener::bind(&socket_path)
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?;
+    let metadata = fs::symlink_metadata(&socket_path)
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?;
     socket_dir.socket = Some((metadata.dev(), metadata.ino()));
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
-    let signals = Signals::new()?;
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?;
+    let signals = Signals::new().map_err(LaunchFailure::BeforeStart)?;
     let mut command = Command::new(&installed.provider.path);
-    command
-        .args([
-            OsString::from("--plugin-dir"),
-            directory
-                .join(installed.generation.to_string())
-                .into_os_string(),
-            OsString::from("--session-id"),
-            root_session.clone().into(),
-        ])
-        .args(args);
+    let notice_plugin = notice_plugin.filter(|path| {
+        path.is_absolute() && fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+    });
+    command.args(provider_arguments(
+        &directory.join(installed.generation.to_string()),
+        notice_plugin,
+        &root_session,
+        args,
+    ));
     for (name, _) in env::vars_os() {
         if name.to_string_lossy().starts_with("ZMUX_") {
             command.env_remove(name);
         }
     }
+    command.env(ROUTE_ENV, &socket_path);
+    if let Some(root) = automatic_root {
+        // The session-owned OSC notice plugin keeps attention and completion
+        // visible even when lifecycle transport cannot admit a particular event.
+        // Restore no caller identity, credential, or unrelated ZMUX variables.
+        command.env("ZMUX_SHELL_INTEGRATION_DIRECTORY", root);
+        command.env("ZMUX_CLI_PATH", &installed.adapter.path);
+        command.env("ZMUX_CLAUDE_LIFECYCLE_ALERTS_ACTIVE", "1");
+    }
     command
-        .env(ROUTE_ENV, &socket_path)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    let mut child: Child = command.spawn()?;
+    let mut child: Child = command
+        .spawn()
+        .map_err(|error| LaunchFailure::BeforeStart(error.into()))?;
     let identity_deadline = Instant::now() + Duration::from_secs(1);
     let provider = loop {
         match process_identity(child.id()) {
@@ -1110,6 +1782,12 @@ fn launch(
             }
         }
     };
+    // The spawn outcome is now known and the runtime lease is still held.
+    // Clear the uncertainty marker so concurrent session cleanup can prove
+    // retention through the generation lease instead of retaining forever.
+    if automatic_root.is_some() {
+        clear_launch_marker(directory).map_err(LaunchFailure::AfterStart)?;
+    }
     let mut adapter = Adapter {
         options,
         directory,
@@ -1125,7 +1803,9 @@ fn launch(
         cleanup_deadline: None,
         held,
         disabled: false,
+        startup_warning_emitted: false,
         prompts: HashSet::new(),
+        inbox_enabled,
     };
     let mut next_idle_check = Instant::now();
     let status = loop {

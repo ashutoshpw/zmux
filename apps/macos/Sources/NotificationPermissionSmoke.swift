@@ -4,6 +4,7 @@ import Foundation
 /// observations only: this fixture never requests OS permission or schedules a banner.
 enum NotificationPermissionSmoke {
     static func validate() async throws {
+        try await AgentAlertSmoke.validate()
         let bridge = NativeBridge()
         try await bridge.start(storage: .transient)
         do {

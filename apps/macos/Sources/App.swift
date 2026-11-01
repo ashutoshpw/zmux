@@ -109,7 +109,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private var sidebarPanelWidth: NSLayoutConstraint?
     private var sidebarCollapsed = UserDefaults.standard.bool(forKey: "sidebarCollapsed")
     private var sidebarScroll: NSScrollView?
-    private var sidebarDocumentConstraints: [NSLayoutConstraint] = []
+    private var notificationScroll: NSScrollView?
+    private var sidebarDocumentConstraints: [ObjectIdentifier: [NSLayoutConstraint]] = [:]
+    private let sidebarSections = BackgroundView(color: ZmuxPalette.sidebar)
     private var showingNotifications = false
     private var sidebarPrimaryButtons: [IconButton] = []
     private lazy var sidebarToggleButton = IconButton(symbol: "sidebar.left", label: "Toggle sidebar (⌘B)", target: self, action: #selector(toggleSidebar))
@@ -118,9 +120,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     private lazy var jumpToUnreadButton = IconButton(symbol: "arrow.up.forward.circle", label: "Jump to latest unread (⌘⇧U)", target: self, action: #selector(jumpToUnread))
     private var notificationList: NSStackView?
     private var notificationKey = ""
+    private var agentAlertSettingsWindow: AgentAlertSettingsWindowController?
     private lazy var notificationButton = IconButton(symbol: "bell", label: "Notifications", target: self, action: #selector(toggleNotifications))
     private let canvas = BackgroundView(color: ZmuxPalette.terminal)
     private let workspaceList = WorkspaceSidebarList(frame: .zero)
+    private let agentSidebarList = AgentSidebarList(frame: .zero)
     private let mainHeader = MainHeaderView()
     private lazy var cancelUploadButton = IconButton(symbol: "xmark.circle", label: "Cancel active upload", target: self, action: #selector(cancelActiveUpload))
     private var statusMessage = "Starting shell…"
@@ -159,6 +163,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             guard let self else { return false }
             return self.coordinator.enqueue(.workspaceOrder(target.workspace, target.window, index, target.revision))
         }
+        agentSidebarList.onSelect = { [weak self] target in self?.selectAgentTarget(target) }
         window.delegate = self
         window.onWorkspaceNumber = { [weak self] digit in self?.selectWorkspaceNumber(digit) }
         window.onTabNavigation = { [weak self] previous in
@@ -316,7 +321,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         let newWorkspaceButton = makeIconButton(symbol: "plus", label: "New workspace (⌘N)", action: #selector(newWorkspace))
         let optionsButton = makeIconButton(symbol: "chevron.down", label: "Workspace and group options", action: #selector(showWorkspaceOptions(_:)))
         sidebarPrimaryButtons = [newWorkspaceButton, optionsButton]
-        let sidebarActions = NSStackView(views: [sidebarToggleButton, notificationButton, newWorkspaceButton, optionsButton, jumpToUnreadButton, clearNotificationsButton])
+        let sidebarActions = NSStackView(views: [sidebarToggleButton, notificationButton, optionsButton, jumpToUnreadButton, clearNotificationsButton])
         sidebarActions.orientation = .horizontal
         sidebarActions.spacing = 1
         sidebarActions.setAccessibilityLabel("Sidebar controls")
@@ -335,6 +340,27 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         workspaceList.spacing = 2
         workspaceList.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 8, right: 8)
 
+        let spacesHeader = SidebarSectionHeaderView(title: "Spaces", trailingView: newWorkspaceButton)
+        let agentsHeader = SidebarSectionHeaderView(title: "Agents")
+        let agentScroll = NSScrollView()
+        agentScroll.drawsBackground = false
+        agentScroll.borderType = .noBorder
+        agentScroll.hasVerticalScroller = true
+        agentScroll.hasHorizontalScroller = false
+        agentScroll.autohidesScrollers = true
+        agentScroll.documentView = agentSidebarList
+        agentSidebarList.translatesAutoresizingMaskIntoConstraints = false
+        agentSidebarList.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 10, right: 8)
+
+        let inboxScroll = NSScrollView()
+        notificationScroll = inboxScroll
+        inboxScroll.drawsBackground = false
+        inboxScroll.borderType = .noBorder
+        inboxScroll.hasVerticalScroller = true
+        inboxScroll.hasHorizontalScroller = false
+        inboxScroll.autohidesScrollers = true
+        inboxScroll.isHidden = true
+
         let splitRightButton = makeIconButton(symbol: "rectangle.split.2x1", label: "Split right", action: #selector(splitRight))
         let splitDownButton = makeIconButton(symbol: "rectangle.split.1x2", label: "Split down", action: #selector(splitDown))
         let browserButton = makeIconButton(symbol: "globe", label: "New browser tab", action: #selector(newBrowser))
@@ -344,7 +370,9 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             mainHeader.actions.addArrangedSubview(button)
         }
 
-        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, sidebarActions, scroll, cloudFooter, mainHeader, canvas, sidebarDivider] {
+        for view in [sidebarContainer, sidebarPanel, sidebarChrome, sidebarSeparator, rightSeparator, sidebarActions,
+                     sidebarSections, spacesHeader, scroll, agentsHeader, agentScroll, inboxScroll,
+                     cloudFooter, mainHeader, canvas, sidebarDivider] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
         content.addSubview(sidebarContainer)
@@ -352,7 +380,12 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         sidebarContainer.layer?.masksToBounds = true
         sidebarPanel.addSubview(sidebarChrome)
         sidebarPanel.addSubview(sidebarActions)
-        sidebarPanel.addSubview(scroll)
+        sidebarPanel.addSubview(sidebarSections)
+        sidebarSections.addSubview(spacesHeader)
+        sidebarSections.addSubview(scroll)
+        sidebarSections.addSubview(agentsHeader)
+        sidebarSections.addSubview(agentScroll)
+        sidebarPanel.addSubview(inboxScroll)
         sidebarPanel.addSubview(cloudFooter)
         sidebarPanel.addSubview(rightSeparator)
         sidebarChrome.addSubview(sidebarSeparator)
@@ -402,10 +435,29 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             sidebarActions.trailingAnchor.constraint(lessThanOrEqualTo: sidebarChrome.trailingAnchor, constant: -6),
             sidebarActions.centerYAnchor.constraint(equalTo: sidebarChrome.centerYAnchor),
 
-            scroll.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 4),
-            scroll.bottomAnchor.constraint(equalTo: cloudFooter.topAnchor),
+            sidebarSections.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
+            sidebarSections.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
+            sidebarSections.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 4),
+            sidebarSections.bottomAnchor.constraint(equalTo: cloudFooter.topAnchor),
+            spacesHeader.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
+            spacesHeader.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
+            spacesHeader.topAnchor.constraint(equalTo: sidebarSections.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: spacesHeader.bottomAnchor),
+            scroll.bottomAnchor.constraint(equalTo: agentsHeader.topAnchor),
+            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 56),
+            agentsHeader.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
+            agentsHeader.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
+            agentScroll.leadingAnchor.constraint(equalTo: sidebarSections.leadingAnchor),
+            agentScroll.trailingAnchor.constraint(equalTo: sidebarSections.trailingAnchor),
+            agentScroll.topAnchor.constraint(equalTo: agentsHeader.bottomAnchor),
+            agentScroll.bottomAnchor.constraint(equalTo: sidebarSections.bottomAnchor),
+            agentScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
+            inboxScroll.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
+            inboxScroll.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
+            inboxScroll.topAnchor.constraint(equalTo: sidebarChrome.bottomAnchor, constant: 4),
+            inboxScroll.bottomAnchor.constraint(equalTo: cloudFooter.topAnchor),
 
             cloudFooter.leadingAnchor.constraint(equalTo: sidebarPanel.leadingAnchor),
             cloudFooter.trailingAnchor.constraint(equalTo: sidebarPanel.trailingAnchor),
@@ -425,6 +477,14 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             canvas.topAnchor.constraint(equalTo: mainHeader.bottomAnchor),
             canvas.bottomAnchor.constraint(equalTo: content.bottomAnchor)
         ])
+        NSLayoutConstraint.activate([
+            agentSidebarList.leadingAnchor.constraint(equalTo: agentScroll.contentView.leadingAnchor),
+            agentSidebarList.topAnchor.constraint(equalTo: agentScroll.contentView.topAnchor),
+            agentSidebarList.widthAnchor.constraint(equalTo: agentScroll.contentView.widthAnchor)
+        ])
+        let proportionalAgentHeight = agentScroll.heightAnchor.constraint(equalTo: sidebarSections.heightAnchor, multiplier: 0.55)
+        proportionalAgentHeight.priority = .defaultLow
+        proportionalAgentHeight.isActive = true
         sidebarPanelWidth = sidebarPanel.widthAnchor.constraint(equalToConstant: 224)
         sidebarPanelWidth?.isActive = true
         sidebarWidth = sidebarContainer.widthAnchor.constraint(equalToConstant: 0)
@@ -473,6 +533,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
 
     /// Exercises production controls and the Rust owner; never fabricates a model.
     func sidebarGroupingSmoke(report: URL) async throws {
+        var agentAcceptance: [String: Any] = [:]
         if sidebarCollapsed { toggleSidebar() }
         showWorkspaces()
         window.setContentSize(NSSize(width: 900, height: 600))
@@ -486,7 +547,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         try TerminalDamageSmoke.validate(view: terminal, frame: frame)
         guard let content = window.contentView else { throw BridgeFailure(message: "Sidebar fixture has no content view") }
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { descendants($0) } }
-        func click(_ view: NSView) throws {
+        func click(_ view: NSView, at pointInView: NSPoint? = nil) throws {
             let beforeLayoutFrame = view.frame
             content.layoutSubtreeIfNeeded()
             if let header = view as? WorkspaceGroupRowView {
@@ -496,7 +557,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 let action = header.action.map { NSStringFromSelector($0) } ?? "nil"
                 FileHandle.standardError.write(Data("Sidebar pointer: beforeLayoutFrame=\(beforeLayoutFrame), frame=\(header.frame), bounds=\(header.bounds), visible=\(header.visibleRect), hit=\(String(describing: hit)), target=\(String(describing: header.target)), action=\(action), cell=\(String(describing: header.cell)), key=\(window.isKeyWindow), sheet=\(window.attachedSheet != nil)\n".utf8))
             }
-            let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            let point = view.convert(pointInView ?? NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
             func event(_ type: NSEvent.EventType) -> NSEvent? {
                 NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                     windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)
@@ -536,7 +597,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             content.layoutSubtreeIfNeeded()
             let top = content.bounds.maxY
             let sidebarTop = sidebarContainer.convert(sidebarContainer.bounds, to: content).maxY
-            let listTop = sidebarScroll.map { $0.convert($0.bounds, to: content).maxY } ?? 0
+            let listTop = sidebarSections.convert(sidebarSections.bounds, to: content).maxY
             guard abs(sidebarTop - top) < 1, top - listTop <= 38,
                   abs(mainHeader.bounds.height - 32) < 1 else { throw BridgeFailure(message: "Chrome geometry: top=\(top), listTop=\(listTop), sidebarTop=\(sidebarTop), headerHeight=\(mainHeader.bounds.height)") }
             let toggle = sidebarToggleButton.convert(sidebarToggleButton.bounds, to: content)
@@ -625,6 +686,178 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         _ = try await nativeCLI(["close-window", "--window", String(otherWindow.id)], externalCaller: true)
         try await waitUntil { _ in self.coordinator.snapshot?.model.windows.count == 1 && self.snapshot?.frames.count == pids.count }
         try unchanged()
+
+        // Seed one real Rust-owned lifecycle record through the same-UID control
+        // socket. The Python driver submits the registration and event after this
+        // manifest appears; no UI model or FFI snapshot is fabricated here.
+        guard let fixtureSnapshot = snapshot,
+              let exactWindowID = identity?.windowId,
+              fixtureSnapshot.model.focusedWindow == exactWindowID,
+              fixtureSnapshot.model.focusedWorkspace == selected,
+              let targetWorkspace = fixtureSnapshot.model.workspaces.first(where: { $0.id == selected }),
+              let targetPane = targetWorkspace.root.panes.first(where: { $0.id == targetWorkspace.focusedPane }),
+              let targetSurface = targetPane.surfaces.first(where: { $0.id == targetPane.selectedSurface }),
+              targetSurface.kind == "terminal", let targetSession = targetSurface.sessionId else {
+            throw BridgeFailure(message: "Agent sidebar fixture has no exact selected terminal owner")
+        }
+        let currentData = try await nativeCLI(["current", "--limit", "200"], externalCaller: true)
+        guard let current = try JSONSerialization.jsonObject(with: currentData) as? [String: Any],
+              current["identity_namespace"] as? String == fixtureSnapshot.model.identityNamespace.uuidString.lowercased(),
+              let currentItems = current["items"] as? [[String: Any]] else {
+            throw BridgeFailure(message: "Cached current report did not confirm the selected running local terminal")
+        }
+        func currentRowMatches(_ item: [String: Any]) -> Bool {
+            guard let window = item["window"] as? [String: Any],
+                  let workspace = item["workspace"] as? [String: Any],
+                  let pane = item["pane"] as? [String: Any],
+                  let surface = item["surface"] as? [String: Any],
+                  let session = item["session"] as? [String: Any],
+                  let windowID = (window["id"] as? NSNumber)?.uint64Value,
+                  let workspaceID = (workspace["id"] as? NSNumber)?.uint64Value,
+                  let paneID = (pane["id"] as? NSNumber)?.uint64Value,
+                  let surfaceID = (surface["id"] as? NSNumber)?.uint64Value,
+                  let sessionID = (item["session_id"] as? NSNumber)?.uint64Value else { return false }
+            return item["logical_focus"] as? Bool == true
+                && item["kind"] as? String == "terminal"
+                && windowID == exactWindowID && workspaceID == selected && paneID == targetPane.id
+                && surfaceID == targetSurface.id && sessionID == targetSession
+                && session["scope"] as? String == "local_session_child"
+                && session["state"] as? String == "running"
+        }
+        guard let targetItem = currentItems.first(where: currentRowMatches),
+              let surfaceIdentity = targetItem["surface"] as? [String: Any],
+              let surfaceUUIDString = surfaceIdentity["uuid"] as? String,
+              let surfaceUUID = UUID(uuidString: surfaceUUIDString),
+              let windowIdentity = targetItem["window"] as? [String: Any],
+              let windowID = (windowIdentity["id"] as? NSNumber)?.uint64Value,
+              let windowUUIDString = windowIdentity["uuid"] as? String,
+              let windowUUID = UUID(uuidString: windowUUIDString),
+              let workspaceIdentity = targetItem["workspace"] as? [String: Any],
+              let workspaceID = (workspaceIdentity["id"] as? NSNumber)?.uint64Value,
+              let workspaceUUIDString = workspaceIdentity["uuid"] as? String,
+              let workspaceUUID = UUID(uuidString: workspaceUUIDString),
+              let paneIdentity = targetItem["pane"] as? [String: Any],
+              let paneID = (paneIdentity["id"] as? NSNumber)?.uint64Value,
+              let paneUUIDString = paneIdentity["uuid"] as? String,
+              let paneUUID = UUID(uuidString: paneUUIDString) else {
+            throw BridgeFailure(message: "Cached current report did not confirm the selected running local terminal")
+        }
+        let agentTargetManifest = report.deletingLastPathComponent().appendingPathComponent("sidebar-agent-target.tmp.json")
+        let agentTarget: [String: Any] = [
+            "identity_namespace": fixtureSnapshot.model.identityNamespace.uuidString.lowercased(),
+            "surface_id": targetSurface.id,
+            "surface_uuid": surfaceUUID.uuidString.lowercased(),
+            "session_id": targetSession
+        ]
+        let expectedOwner: [String: Any] = [
+            "provider": "claude_local",
+            "identity_namespace": fixtureSnapshot.model.identityNamespace.uuidString.lowercased(),
+            "window_id": windowID,
+            "window_uuid": windowUUID.uuidString.lowercased(),
+            "workspace_id": workspaceID,
+            "workspace_uuid": workspaceUUID.uuidString.lowercased(),
+            "pane_id": paneID,
+            "pane_uuid": paneUUID.uuidString.lowercased(),
+            "surface_id": targetSurface.id,
+            "surface_uuid": surfaceUUID.uuidString.lowercased(),
+            "session_id": targetSession
+        ]
+        let agentManifest: [String: Any] = ["target": agentTarget, "expected_owner": expectedOwner]
+        try JSONSerialization.data(withJSONObject: agentManifest, options: [.sortedKeys]).write(to: agentTargetManifest, options: .atomic)
+        try await waitUntil { value in
+            guard let records = value.agentLifecycle, records.count == 1,
+                  let record = records.first else { return false }
+            return record.identityNamespace == fixtureSnapshot.model.identityNamespace
+                && record.surfaceId == targetSurface.id && record.surfaceUuid == surfaceUUID
+                && record.sessionId == targetSession && record.windowId == windowID && record.windowUuid == windowUUID
+                && record.workspaceId == workspaceID && record.workspaceUuid == workspaceUUID
+                && record.paneId == paneID && record.paneUuid == paneUUID && record.connection == "connected"
+                && record.activity == "working" && record.promptId != nil
+        }
+        guard let record = snapshot?.agentLifecycle?.first(where: {
+            $0.identityNamespace == fixtureSnapshot.model.identityNamespace
+                && $0.surfaceId == targetSurface.id && $0.surfaceUuid == surfaceUUID
+                && $0.sessionId == targetSession && $0.windowId == windowID && $0.windowUuid == windowUUID
+                && $0.workspaceId == workspaceID && $0.workspaceUuid == workspaceUUID
+                && $0.paneId == paneID && $0.paneUuid == paneUUID
+        }), record.connection == "connected", record.activity == "working", record.promptId != nil,
+              agentSidebarList.arrangedSubviews.count == 2,
+              let agentRow = agentSidebarList.arrangedSubviews.last else {
+            throw BridgeFailure(message: "Rust lifecycle record did not produce one visible Working agent row")
+        }
+        agentRow.scrollToVisible(agentRow.bounds)
+        content.layoutSubtreeIfNeeded()
+        let agentRowVisible = !agentRow.isHiddenOrHasHiddenAncestor && agentRow.visibleRect.width > 0 && agentRow.visibleRect.height > 0
+        guard agentRowVisible else { throw BridgeFailure(message: "Populated Agents row is outside its visible scroll viewport") }
+
+        guard let owner = fixtureSnapshot.model.windows.first(where: { $0.id == record.windowId }),
+              let otherWorkspaceID = owner.workspaceIds.first(where: { $0 != record.workspaceId }),
+              let otherWorkspaceRow = workspaceRows.first(where: { $0.value == otherWorkspaceID })?.key else {
+            throw BridgeFailure(message: "Agent selection fixture has no different workspace to focus first")
+        }
+        guard let selectionBaseline = snapshot else { throw BridgeFailure(message: "Agent selection fixture lost its sidebar snapshot") }
+        let selectionSurfaceIDs = Set(selectionBaseline.model.workspaces.flatMap { $0.root.panes.flatMap(\.surfaces) }.map(\.id))
+        let selectionFrames = Dictionary(uniqueKeysWithValues: selectionBaseline.frames.map { ($0.sessionId, $0.processId ?? 0) })
+        try click(otherWorkspaceRow)
+        try await waitUntil { $0.model.focusedWindow == record.windowId && $0.model.focusedWorkspace == otherWorkspaceID }
+        guard snapshot?.model.focusedWorkspace == otherWorkspaceID else {
+            throw BridgeFailure(message: "Could not move focus away from the agent terminal before selecting its row")
+        }
+        try click(agentRow, at: NSPoint(x: 3, y: agentRow.bounds.midY))
+        try await waitUntil { value in
+            guard value.model.focusedWindow == record.windowId,
+                  let workspace = value.model.workspaces.first(where: { $0.id == record.workspaceId }),
+                  workspace.focusedPane == record.paneId,
+                  let pane = workspace.root.panes.first(where: { $0.id == record.paneId }),
+                  pane.selectedSurface == record.surfaceId,
+                  let surface = pane.surfaces.first(where: { $0.id == record.surfaceId }) else { return false }
+            return surface.kind == "terminal" && surface.sessionId == record.sessionId
+        }
+        guard let selectedSnapshot = snapshot,
+              selectedSnapshot.agentLifecycle?.contains(where: { $0.matchesSelectionTarget(record) }) == true,
+              selectedSnapshot.model.focusedWindow == record.windowId,
+              let selectedWorkspace = selectedSnapshot.model.workspaces.first(where: { $0.id == record.workspaceId }),
+              selectedWorkspace.focusedPane == record.paneId,
+              let selectedPane = selectedWorkspace.root.panes.first(where: { $0.id == record.paneId }),
+              selectedPane.selectedSurface == record.surfaceId,
+              let selectedSurface = selectedPane.surfaces.first(where: { $0.id == record.surfaceId }),
+              selectedSurface.kind == "terminal", selectedSurface.sessionId == record.sessionId else {
+            throw BridgeFailure(message: "Agent row did not focus its exact current window/workspace/pane/surface/session")
+        }
+        let afterSurfaceIDs = Set(selectedSnapshot.model.workspaces.flatMap { $0.root.panes.flatMap(\.surfaces) }.map(\.id))
+        let afterFrames = Dictionary(uniqueKeysWithValues: selectedSnapshot.frames.map { ($0.sessionId, $0.processId ?? 0) })
+        let noReplacement = afterSurfaceIDs == selectionSurfaceIDs && afterFrames == selectionFrames
+        guard noReplacement else { throw BridgeFailure(message: "Agent row selection created or replaced a terminal surface/session") }
+        let agentIdentity: [String: Any] = [
+            "provider": record.provider,
+            "identity_namespace": record.identityNamespace.uuidString.lowercased(),
+            "window_id": record.windowId,
+            "window_uuid": record.windowUuid.uuidString.lowercased(),
+            "workspace_id": record.workspaceId,
+            "workspace_uuid": record.workspaceUuid.uuidString.lowercased(),
+            "pane_id": record.paneId,
+            "pane_uuid": record.paneUuid.uuidString.lowercased(),
+            "surface_id": record.surfaceId,
+            "surface_uuid": record.surfaceUuid.uuidString.lowercased(),
+            "session_id": record.sessionId,
+            "runtime_id": record.runtimeId.uuidString.lowercased(),
+            "generation": record.generation.uuidString.lowercased(),
+            "provider_session_id": record.providerSessionId.uuidString.lowercased(),
+            "activity": record.activity,
+            "connection": record.connection,
+            "prompt_id_present": record.promptId != nil
+        ]
+        agentAcceptance = [
+            "agent_lifecycle_connected_working": true,
+            "agent_row_visible": agentRowVisible,
+            "agent_selection_started_in_other_workspace": true,
+            "agent_selection_exact_identity": true,
+            "agent_no_new_surface_or_session": noReplacement,
+            "agent_identity": agentIdentity
+        ]
+        try captureSidebarImage(report.deletingLastPathComponent().appendingPathComponent("zmux-sidebar-agents.png"))
+        try unchanged()
+
         try click(notificationButton)
         guard showingNotifications else { throw BridgeFailure(message: "Bell did not open inbox") }
         try click(notificationButton)
@@ -644,9 +877,10 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 guard let workspace = self.snapshot?.model.workspaces.first(where: { $0.id == id }) else { return nil }
                 return self.workspaceMenu(for: workspace)
             }, cli: { try await self.nativeCLI($0, externalCaller: true) })
-        let receipt: [String: Bool] = ["compact_toolbar": true, "visible_toggle": true, "groups": true, "group_menus": true,
+        var receipt: [String: Any] = ["compact_toolbar": true, "visible_toggle": true, "groups": true, "group_menus": true,
             "collapse_preserves_terminal": true, "focus_preserved": true, "sidebar_restored": true, "notification_toggle": true,
             "window_scoping": windowScopingVerified, "native_terminal_damage": true]
+        receipt.merge(agentAcceptance) { _, new in new }
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]).write(to: report, options: .atomic)
     }
     fileprivate func captureSidebarImage(_ url: URL) throws {
@@ -716,6 +950,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             ("Focus Browser Address", #selector(focusBrowserAddress), "l"),
             ("Toggle Sidebar", #selector(toggleSidebar), "b"),
             ("Notifications", #selector(showNotifications), ""),
+            ("Agent Alerts…", #selector(showAgentAlertSettings(_:)), ""),
             ("Jump to Latest Unread", #selector(jumpToUnread), "U"),
             ("Enable Desktop Notifications…", #selector(enableDesktopNotifications), ""),
             ("Split Right", #selector(splitRight), "d"),
@@ -835,6 +1070,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         statusMessage = snapshot.lastError ?? "Ready"
         rebuildWorkspaceRowsIfNeeded(snapshot)
         updateWorkspaceRows(snapshot)
+        updateAgentSidebar(snapshot)
         updateHeader(snapshot)
         updateNotifications(snapshot)
         updateTerminalLayoutIfNeeded(snapshot)
@@ -997,6 +1233,89 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                 return
             }
             inspector.update(snapshot.workspaceMetadata?.first { $0.workspaceId == inspector.workspaceID } ?? .empty(inspector.workspaceID), name: workspace.name)
+        }
+    }
+
+    private func updateAgentSidebar(_ snapshot: DesktopSnapshot) {
+        guard let lifecycle = snapshot.agentLifecycle else {
+            agentSidebarList.update(nil, statusAvailable: false)
+            return
+        }
+        guard let identity, identity.namespace == snapshot.model.identityNamespace,
+              let owner = snapshot.model.windows.first(where: { $0.id == identity.windowId }),
+              let windowUUID else {
+            agentSidebarList.update(nil, statusAvailable: false)
+            return
+        }
+
+        let workspaceUUIDs = Dictionary(snapshot.workspaceIdentities.map { ($0.workspaceId, $0.uuid) }, uniquingKeysWith: { first, _ in first })
+        let workspaceNameCounts = Dictionary(
+            grouping: snapshot.model.workspaces.filter { owner.workspaceIds.contains($0.id) },
+            by: \.name
+        ).mapValues { $0.count }
+        var presentations: [AgentSidebarPresentation] = []
+        for record in lifecycle {
+            guard record.identityNamespace == identity.namespace,
+                  record.windowId == identity.windowId,
+                  record.windowUuid == windowUUID,
+                  owner.workspaceIds.contains(record.workspaceId),
+                  workspaceUUIDs[record.workspaceId] == record.workspaceUuid,
+                  let workspace = snapshot.model.workspaces.first(where: { $0.id == record.workspaceId }),
+                  let pane = workspace.root.panes.first(where: { $0.id == record.paneId }),
+                  let surface = pane.surfaces.first(where: { $0.id == record.surfaceId }),
+                  surface.kind == "terminal", surface.sessionId == record.sessionId else { continue }
+            let isSelected = snapshot.model.focusedWindow == identity.windowId
+                && owner.selectedWorkspace == workspace.id
+                && workspace.focusedPane == pane.id
+                && pane.selectedSurface == surface.id
+            let paneNumber = (workspace.root.panes.firstIndex(where: { $0.id == pane.id }) ?? 0) + 1
+            let tabNumber = (pane.surfaces.firstIndex(where: { $0.id == surface.id }) ?? 0) + 1
+            let workspaceContext: String
+            if workspaceNameCounts[workspace.name, default: 0] > 1,
+               let workspaceOrdinal = owner.workspaceIds.firstIndex(of: workspace.id) {
+                workspaceContext = "Workspace \(workspaceOrdinal + 1) · "
+            } else {
+                workspaceContext = ""
+            }
+            let surfaceContext = "\(workspaceContext)Pane \(paneNumber) · Tab \(tabNumber)"
+            presentations.append(AgentSidebarPresentation(record: record, workspaceName: workspace.name,
+                surfaceTitle: surface.title, surfaceContext: surfaceContext, isSelected: isSelected))
+        }
+        presentations.sort {
+            let order = AgentSidebarSection.displayOrder
+            let left = order.firstIndex(of: $0.section) ?? order.endIndex
+            let right = order.firstIndex(of: $1.section) ?? order.endIndex
+            if left != right { return left < right }
+            if $0.workspaceName != $1.workspaceName { return $0.workspaceName.localizedStandardCompare($1.workspaceName) == .orderedAscending }
+            if $0.title != $1.title { return $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            return $0.record.surfaceId < $1.record.surfaceId
+        }
+        agentSidebarList.update(presentations, statusAvailable: true)
+    }
+
+    private func selectAgentTarget(_ target: AgentLifecycleRecord) {
+        guard let identity, let snapshot = coordinator.snapshot, let windowUUID,
+              identity.namespace == snapshot.model.identityNamespace,
+              snapshot.agentLifecycle?.contains(where: { $0.matchesSelectionTarget(target) }) == true,
+              target.identityNamespace == identity.namespace,
+              target.windowId == identity.windowId,
+              target.windowUuid == windowUUID,
+              let owner = snapshot.model.windows.first(where: { $0.id == identity.windowId }),
+              owner.workspaceIds.contains(target.workspaceId),
+              snapshot.workspaceIdentities.contains(where: { $0.workspaceId == target.workspaceId && $0.uuid == target.workspaceUuid }),
+              let workspace = snapshot.model.workspaces.first(where: { $0.id == target.workspaceId }),
+              let pane = workspace.root.panes.first(where: { $0.id == target.paneId }),
+              let surface = pane.surfaces.first(where: { $0.id == target.surfaceId }),
+              surface.kind == "terminal", surface.sessionId == target.sessionId else {
+            showError("Agent target is no longer available")
+            return
+        }
+        Task { [weak self, bridge = self.bridge] in
+            do {
+                try await bridge.selectAgentTarget(target)
+            } catch {
+                self?.showError(error.localizedDescription)
+            }
         }
     }
 
@@ -1858,19 +2177,23 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     private func setSidebarDocument(_ view: NSView) {
-        guard let scroll = sidebarScroll else { return }
-        NSLayoutConstraint.deactivate(sidebarDocumentConstraints)
+        guard let scroll = showingNotifications ? notificationScroll : sidebarScroll else { return }
+        let key = ObjectIdentifier(scroll)
+        NSLayoutConstraint.deactivate(sidebarDocumentConstraints[key] ?? [])
         view.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = view
-        sidebarDocumentConstraints = [view.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+        let constraints = [view.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             view.topAnchor.constraint(equalTo: scroll.contentView.topAnchor), view.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)]
-        NSLayoutConstraint.activate(sidebarDocumentConstraints)
+        sidebarDocumentConstraints[key] = constraints
+        NSLayoutConstraint.activate(constraints)
     }
     @objc private func toggleNotifications() {
         if showingNotifications { showWorkspaces() } else { showNotifications() }
     }
     private func showWorkspaces() {
         showingNotifications = false
+        sidebarSections.isHidden = false
+        notificationScroll?.isHidden = true
         setNotificationActionsVisible(false)
         setSidebarDocument(workspaceList)
         notificationButton.setAccessibilityValue("Workspaces")
@@ -1878,6 +2201,8 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     @objc func showNotifications() {
         if sidebarCollapsed { toggleSidebar() }
         showingNotifications = true
+        sidebarSections.isHidden = true
+        notificationScroll?.isHidden = false
         notificationButton.setAccessibilityValue("Notifications")
         setNotificationActionsVisible(true)
         if notificationList == nil {
@@ -1941,6 +2266,13 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
         jumpToUnreadButton.isHidden = !visible
     }
     @objc private func enableDesktopNotifications() { notificationDelivery.enable() }
+    @objc private func showAgentAlertSettings(_ sender: Any?) {
+        if agentAlertSettingsWindow == nil {
+            agentAlertSettingsWindow = AgentAlertSettingsWindowController(delivery: coordinator.notificationDelivery)
+        }
+        agentAlertSettingsWindow?.showWindow(sender)
+        NSApp.activate()
+    }
     func readNotification(_ id: UInt64) { enqueue(.attention("read", id, nil, nil)) }
     func dismissNotification(_ id: UInt64) { enqueue(.attention("dismiss", id, nil, nil)) }
     @objc private func clearNotifications() {
