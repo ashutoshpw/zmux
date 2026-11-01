@@ -96,6 +96,9 @@ fn production_supervisor_rejects_changed_starter_and_unauthorized_spawn() {
                 Err(error) => panic!("bootstrap listener: {error}"),
             }
         };
+        // Darwin can inherit the listener's nonblocking mode on accepted
+        // sockets; this fixture reads the bounded bootstrap frame below.
+        peer.set_nonblocking(false).unwrap();
         if !changed_starter {
             peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut length = [0; 4];

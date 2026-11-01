@@ -500,3 +500,19 @@ These are local Linux source checks; no hosted rerun or commit was started for t
 - Reviewed the rest of the new inventory block: its bindings are consumed by exact owner, UUID, model, duplicate, completeness, identity, or diagnostic checks.
 - The full `RUST_TEST_THREADS=2 scripts/check` r38 passed locally on Linux after the `processID != nil` correction; log: `/tmp/zmux-agent-sidebar-check-r38.log`. `git diff --check -- apps/macos/Sources/App.swift` passed.
 - Workflow 41356715298 stopped at Swift warnings-as-errors before building or running the native app. This Linux host cannot run the native typecheck; a hosted rerun remains pending. No commit or workflow rerun was started for this correction.
+
+## Darwin accepted-socket mode in provider-hook fixture — 2026-11-01
+
+Hosted workflow [41357406209](https://github.com/ashutoshpw/zmux/actions/runs/41357406209) failed `apps/cli/tests/provider_hooks.rs::local_hook_ipc_sends_only_minimal_lifecycle_fields` at `read_event_frame` with `WouldBlock`. The fixture's `UnixListener` was nonblocking, while the accepted stream went directly to `read_exact`; on Darwin, accepted Unix sockets can inherit the listener's nonblocking mode.
+
+The provider-hook fixture now switches each accepted stream to blocking mode and sets a three-second read timeout before reading the bounded frame. All existing privacy assertions remain unchanged, including omission of prompt/tool/private unknown fields and the expected redacted agent ID. Audit found the same missing mode switch in the negative local-supervisor fixture; that accepted stream now switches to blocking mode before its existing two-second bounded frame read. Neither change touches production code or authorization behavior.
+
+Unix-stream accept audit: the other nonblocking-listener test readers already set accepted streams blocking with read timeouts (`execution_admission`, `browser`, `windows`, and `open`), or deliberately retain nonblocking mode with deadline-based `WouldBlock` loops (`local_zellij_owner/observer`). Production control and supervisor listeners configure accepted sockets explicitly; Claude hook serving, scheduler, broker, completion-control, and local-zellij worker paths use explicit nonblocking I/O or readiness/deadline loops.
+
+Focused Linux verification:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux --test provider_hooks local_hook_ipc_sends_only_minimal_lifecycle_fields -- --nocapture` passed.
+- `RUST_TEST_THREADS=2 cargo test -p zmux --test provider_hooks -- --nocapture` passed: 10 passed, 1 ignored.
+- `RUST_TEST_THREADS=2 cargo test -p zmux --test local_zellij -- --nocapture` passed: 3 passed.
+- Full `RUST_TEST_THREADS=2 scripts/check` r39 passed locally on Linux; log: `/tmp/zmux-agent-sidebar-check-r39.log`.
+- `cargo fmt --all -- --check` and `git diff --check` passed. A hosted Darwin rerun remains pending; no commit was made.

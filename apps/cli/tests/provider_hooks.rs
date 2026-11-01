@@ -537,6 +537,12 @@ fn local_hook_ipc_sends_only_minimal_lifecycle_fields() {
                     Err(error) => panic!("accept local hook: {error}"),
                 }
             };
+            // Darwin can inherit the listener's nonblocking mode on accepted
+            // sockets. This fixture reads complete bounded frames below.
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
             let request = read_event_frame(&mut stream);
             assert_eq!(request["event"], expected_event);
             assert!(request["hook_id"].as_str().is_some());
