@@ -1,4 +1,5 @@
 //! Rust-owned desktop coordinator. Swift submits commands and observes immutable revisions.
+pub mod agent_lifecycle;
 pub mod agent_messages;
 pub mod attention;
 pub mod browser;
@@ -278,6 +279,11 @@ pub enum Command {
     AgentMessagesStatus {
         request_id: uuid::Uuid,
     },
+    /// Lifecycle hooks enter only through the local control adapter, never native JSON.
+    #[serde(skip)]
+    AgentLifecycle {
+        request: agent_lifecycle::Request,
+    },
     SurfaceOrder {
         request: surface_order::OrderRequest,
     },
@@ -522,6 +528,10 @@ pub struct Snapshot {
     pub closed: bool,
     pub pending_launches: usize,
     pub cleanup_error: Option<String>,
+    /// Latest provider lifecycle evidence, bound to exact local terminal owners.
+    /// Omitted while empty to preserve older native decoders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_lifecycle: Vec<agent_lifecycle::Agent>,
     /// All live terminal frames for local inspection. Native rendering receives only `frames`.
     #[serde(skip)]
     pub control_frames: Vec<Frame>,
@@ -551,6 +561,7 @@ struct Envelope {
 
 pub(crate) struct Execution {
     pub agent_message_result: Option<agent_messages::OperationReceipt>,
+    pub agent_lifecycle_result: Option<agent_lifecycle::Receipt>,
     pub result: Result<(), DesktopError>,
     pub snapshot: Arc<Snapshot>,
     pub created_workspaces: Vec<zmux_workspace_core::WorkspaceId>,
@@ -741,6 +752,7 @@ impl Desktop {
                 closed: false,
                 pending_launches: 0,
                 cleanup_error: None,
+                agent_lifecycle: Vec::new(),
                 control_frames: Vec::new(),
             })),
         });
@@ -753,6 +765,8 @@ impl Desktop {
                 let mut worker = Worker {
                     agent_messages,
                     agent_message_result: None,
+                    agent_lifecycle: agent_lifecycle::Runtime::default(),
+                    agent_lifecycle_result: None,
                     local_tmux,
                     local_zellij,
                     launch_certificates: HashMap::new(),
@@ -1716,6 +1730,8 @@ fn notification_filter(
 struct Worker {
     agent_messages: agent_messages::Runtime,
     agent_message_result: Option<agent_messages::OperationReceipt>,
+    agent_lifecycle: agent_lifecycle::Runtime,
+    agent_lifecycle_result: Option<agent_lifecycle::Receipt>,
     local_zellij: zellij_coordinator::Runtime,
     launch_certificates: HashMap<(SessionId, u64), zellij_coordinator::LaunchCertificate>,
     local_tmux: local_tmux::Runtime,
@@ -2005,6 +2021,7 @@ impl Worker {
             dirty |= self.poll_transfers();
             dirty |= self.poll_replies();
             dirty |= self.poll_retired_sessions();
+            dirty |= self.agent_lifecycle.poll_freshness(Instant::now());
             if dirty {
                 self.publish(false);
             }
@@ -2151,6 +2168,7 @@ impl Worker {
         let request = envelope.request;
         let shared_terminal = envelope.shared_terminal;
         self.agent_message_result = None;
+        self.agent_lifecycle_result = None;
         let message_previous = self.model.snapshot();
         self.agent_messages
             .observe(message_previous.clone(), Vec::new());
@@ -2296,6 +2314,7 @@ impl Worker {
         if let Some(sender) = acknowledgement {
             let _ = sender.try_send(Execution {
                 agent_message_result: self.agent_message_result.take(),
+                agent_lifecycle_result: self.agent_lifecycle_result.take(),
                 result,
                 profile_operation_id: self.profile_operation_id,
                 tmux_operation_id: self.tmux_operation_id,
@@ -2387,6 +2406,7 @@ impl Worker {
             ));
         }
         match command {
+            Command::AgentLifecycle { request } => self.agent_lifecycle_request(request),
             Command::AgentMessages { .. } | Command::AgentMessagesStatus { .. } => Err(
                 DesktopError::Failure("message commands require their admission envelope".into()),
             ),
@@ -2619,6 +2639,45 @@ impl Worker {
             },
         }
     }
+
+    fn agent_lifecycle_request(
+        &mut self,
+        request: agent_lifecycle::Request,
+    ) -> Result<(), DesktopError> {
+        let target = match &request.action {
+            agent_lifecycle::Action::Register { target, .. } => Some(*target),
+            agent_lifecycle::Action::Event { capability, .. } => {
+                self.agent_lifecycle.target_for_capability(*capability)
+            }
+        }
+        .ok_or_else(|| DesktopError::Failure("lifecycle capability is stale or unknown".into()))?;
+        let model = self.model.snapshot();
+        if !agent_lifecycle::has_local_owner(&model, target) {
+            return Err(DesktopError::Failure(
+                "lifecycle target is not the exact current local terminal session".into(),
+            ));
+        }
+        let running = self.slots.get(&target.session_id).is_some_and(|slot| {
+            !slot.starting
+                && slot.session.is_some()
+                && slot
+                    .cached
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.state == zmux_session_runtime::State::Running)
+        });
+        if !running {
+            return Err(DesktopError::Failure(
+                "lifecycle target session is not currently running".into(),
+            ));
+        }
+        self.agent_lifecycle_result = Some(
+            self.agent_lifecycle
+                .apply(request, Instant::now())
+                .map_err(DesktopError::Failure)?,
+        );
+        Ok(())
+    }
+
     fn writable_session(&self, id: SessionId) -> Result<&Session, DesktopError> {
         if self.zellij_input_fenced(id) {
             return Err(DesktopError::Failure(
@@ -3793,6 +3852,22 @@ impl Worker {
         }
         self.revision += 1;
         let model = self.model.snapshot();
+        let session_states: HashMap<_, _> = self
+            .slots
+            .iter()
+            .map(|(session_id, slot)| {
+                (
+                    *session_id,
+                    if slot.starting {
+                        None
+                    } else {
+                        slot.cached.as_ref().map(|snapshot| snapshot.state)
+                    },
+                )
+            })
+            .collect();
+        self.agent_lifecycle
+            .reconcile(&model, &session_states, Instant::now());
         self.attention.reconcile(&model);
         self.metadata.reconcile(&model);
         let control_frames: Vec<_> = model
@@ -3864,6 +3939,7 @@ impl Worker {
             .filter(|identity| identity.kind == zmux_workspace_core::targets::TargetKind::Workspace)
             .collect();
         let workspace_metadata = self.metadata.snapshot(&model);
+        let agent_lifecycle = self.agent_lifecycle.snapshot(&model);
         let published = Arc::new(Snapshot {
             revision: self.revision,
             workspace_identities,
@@ -3903,6 +3979,7 @@ impl Worker {
             closed,
             pending_launches: self.pending_launches,
             cleanup_error: self.cleanup_error.clone(),
+            agent_lifecycle,
             control_frames,
         });
         match self.shared.snapshot.lock() {

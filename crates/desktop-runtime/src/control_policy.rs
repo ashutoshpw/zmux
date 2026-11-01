@@ -281,6 +281,7 @@ pub(crate) fn is_read(command: &ControlCommand) -> bool {
             ) || matches!(&request.operation, TargetOperation::Metadata { action } if action.is_read())
         }
         ControlCommand::LocalTmux { .. }
+        | ControlCommand::AgentLifecycle { .. }
         | ControlCommand::BrowserProfiles { .. }
         | ControlCommand::BrowserProfileReconcile { .. }
         | ControlCommand::Session { .. }

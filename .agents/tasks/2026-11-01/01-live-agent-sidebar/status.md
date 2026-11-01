@@ -25,7 +25,8 @@ The approximate hex values are rounded display equivalents; the source `NSColor`
 ## Review and verification
 
 - Independent review confirmed that explicit ANSI black is retained by design; this palette update changes native surfaces and selection styling, not explicit terminal ANSI colors.
-- `scripts/check` passed on Linux; hosted smoke checks passed.
+- Independent local lifecycle review found no blockers; the P3 safe visibility limitation below remains documented.
+- Hosted smoke checks passed. The full `scripts/check` retry passed on Linux after the clippy fix.
 - Packaged-app screenshots were inspected. The screenshot compositor was unavailable, accessibility save was skipped, and no physical Mac verification was performed.
 
 ## Dark slice artifact
@@ -37,9 +38,27 @@ The approximate hex values are rounded display equivalents; the source `NSColor`
 - Target: universal macOS 14, arm64 and x86_64.
 - Signing: ad hoc. Notarization: none.
 
+## Implemented slice: local lifecycle evidence
+
+Rust now owns a bounded registry for typed local Claude hook evidence, bound to the exact desktop namespace, terminal surface/session, provider session, adapter runtime, and generation. Hook capabilities stay out of snapshots. Same-UID desktop control can submit these claims; this is not provider-process authentication, remote-provider authentication, or provider replay evidence.
+
+The opt-in Claude adapter reports prompt submission, ambiguous attention candidates, confirmed permission/elicitation waits, tool-driven resumption, stopped turns, and session loss. A Stop hook does not establish Idle because parallel Stop hooks may still continue the turn; only a later `idle_prompt` notification is used for Idle. The worker polls freshness even without other snapshot changes. Stale evidence becomes Unknown, later accepted current-generation evidence restores Connected, and disconnected or terminal capabilities cannot be revived. Exact terminal/session replacement and stale event fencing remain in Rust.
+
+`SessionEnd` reasons `clear` and `resume` become Unknown/evidence-lost rather than Disconnected. The existing adapter shutdown and inbox-retirement behavior remains in place, so lifecycle tracking does not resume after those in-session transitions on the same wrapper run.
+
+## Lifecycle verification
+
+- `cargo fmt --all` passed.
+- `cargo test -p zmux-desktop-runtime agent_lifecycle` passed the typed hook normalization and controlled-clock freshness/recovery/disconnect test.
+- `cargo test -p zmux-desktop-runtime --test agent_lifecycle` passed the control-socket test for exact owner checks, generation/sequence fencing, terminal registration rejection, and evidence-loss replacement.
+- `cargo test -p zmux --test provider_hooks` passed all 6 tests, including plugin lifecycle and nonblocking hook ingress.
+- These are local Linux source checks. The full `scripts/check` retry passed after the clippy fix. The dark-slice artifact above does not verify the lifecycle changes: no native build or real Claude provider execution has been verified. The native sidebar, SSH lifecycle, alerts/sounds, and physical-Mac evidence are also pending.
+
+Independent lifecycle review recorded a **P3 safe visibility limitation**: when Claude self-starts a turn without a `prompt_id`, the lifecycle remains Unknown. Later tool events do not carry enough identity to establish which run they belong to, so they cannot safely create or promote that run. This can under-report activity, but avoids asserting a lifecycle state without run evidence.
+
 ## Pending
 
 - The dark appearance slice has an artifact and hosted verification record, but compositor capture, accessibility save, and physical-Mac proof are unavailable as noted above.
-- Implement and verify the provider lifecycle contract and ingestion, truthful local/SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
+- Verify the local lifecycle against a real Claude provider and a native build; implement and verify the native sidebar, truthful SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
 
 The larger live-agent feature remains in progress; agent lifecycle, SSH integration, and alerts/sound behavior remain open.

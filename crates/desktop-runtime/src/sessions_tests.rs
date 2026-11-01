@@ -126,12 +126,15 @@ fn worker(directory: &Directory) -> Worker {
             closed: false,
             pending_launches: 0,
             cleanup_error: None,
+            agent_lifecycle: Vec::new(),
             control_frames: Vec::new(),
         })),
     });
     Worker {
         agent_messages: agent_messages::Runtime::start(None).unwrap(),
         agent_message_result: None,
+        agent_lifecycle: agent_lifecycle::Runtime::default(),
+        agent_lifecycle_result: None,
         local_tmux,
         local_zellij,
         launch_certificates: HashMap::new(),

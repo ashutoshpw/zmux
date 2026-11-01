@@ -58,6 +58,9 @@ pub enum ControlCommand {
     AgentMessagesStatus {
         request_id: uuid::Uuid,
     },
+    AgentLifecycle {
+        request: crate::agent_lifecycle::Request,
+    },
     SurfaceOrder {
         request: crate::surface_order::OrderRequest,
     },
@@ -611,6 +614,16 @@ fn dispatch(
     admission: &ControlAdmission,
 ) -> Result<Value, (&'static str, String)> {
     match request.command {
+        ControlCommand::AgentLifecycle {
+            request: lifecycle_request,
+        } => mutate(
+            desktop,
+            admission,
+            request.request_id,
+            Command::AgentLifecycle {
+                request: lifecycle_request,
+            },
+        ),
         ControlCommand::AgentMessages {
             request: message_request,
         } => mutate(
@@ -937,6 +950,14 @@ fn dispatch(
                 "consumer_identity":"local_capability_not_authenticated_provider",
                 "provider_hooks":false,"wake":false,"native_inbox":false,
             },
+            "agent_lifecycle": {
+                "local_claude_hooks": true,
+                "max_records": crate::agent_lifecycle::MAX_RECORDS,
+                "evidence_freshness_ms": crate::agent_lifecycle::EVIDENCE_FRESHNESS.as_millis(),
+                "provider_replay_cursor": false,
+                "remote_adapters": false,
+                "notifications": false,
+            },
             "file_panel": {
                 "max_file_surfaces": crate::MAX_FILE_SURFACES,
                 "max_open_items": crate::files::MAX_OPEN_ITEMS,
@@ -1186,6 +1207,9 @@ fn mutate(
         other => ("command_rejected", other.to_string()),
     })?;
     if let Some(receipt) = execution.agent_message_result {
+        return Ok(serde_json::json!(receipt));
+    }
+    if let Some(receipt) = execution.agent_lifecycle_result {
         return Ok(serde_json::json!(receipt));
     }
     if let Some(order) = execution.surface_order_result {

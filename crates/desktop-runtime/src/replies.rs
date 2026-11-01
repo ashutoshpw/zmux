@@ -244,6 +244,7 @@ fn reply_execution(
 ) -> Execution {
     Execution {
         agent_message_result: None,
+        agent_lifecycle_result: None,
         metadata_result: None,
         result,
         snapshot,

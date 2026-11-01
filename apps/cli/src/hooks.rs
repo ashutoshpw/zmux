@@ -16,10 +16,16 @@ use std::{
     process::{Child, Command, Stdio},
 };
 use uuid::Uuid;
+use zmux_desktop_runtime::agent_lifecycle::{
+    Action as LifecycleAction, ClaudeHookEvent, Event as LifecycleEvent,
+    Provider as LifecycleProvider, Request as LifecycleRequest, Target as LifecycleTarget,
+};
 use zmux_desktop_runtime::agent_messages::{MessageAction, MessageRequest, ProviderExposure};
 use zmux_session_runtime::child::{ProcessIdentity, process_identity};
+use zmux_workspace_core::{SessionId, SurfaceId};
 mod plugin;
 const EVENT_BUDGET: Duration = Duration::from_millis(2700);
+const LIFECYCLE_BUDGET: Duration = Duration::from_millis(150);
 const FRAME_LIMIT: usize = 65536;
 const ROUTE_ENV: &str = "ZMUX_CLAUDE_EVENT_SOCKET";
 
@@ -119,14 +125,19 @@ pub(super) fn parse(tail: &[OsString]) -> Result<Parsed, CliError> {
     };
     Ok(Parsed::Hooks(invocation))
 }
-fn events() -> [&'static str; 7] {
+fn events() -> [&'static str; 12] {
     [
         "SessionStart",
         "UserPromptSubmit",
         "PermissionRequest",
         "Elicitation",
+        "ElicitationResult",
+        "Notification",
         "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
         "Stop",
+        "StopFailure",
         "SessionEnd",
     ]
 }
@@ -357,10 +368,29 @@ fn operation(
         },
     )
 }
+fn lifecycle_operation(
+    options: &ClientOptions,
+    deadline: Instant,
+    lifecycle_request: LifecycleRequest,
+) -> Result<Value, CliError> {
+    let deadline = deadline.min(Instant::now() + LIFECYCLE_BUDGET);
+    let budget = ClientOptions {
+        socket: options.socket.clone(),
+        password: options.password.clone(),
+        timeout: socket_budget(deadline)?,
+    };
+    response_result(request(
+        &budget,
+        ControlCommand::AgentLifecycle {
+            request: lifecycle_request,
+        },
+    )?)
+}
 #[derive(Clone, PartialEq, Eq)]
 struct Route {
     namespace: Uuid,
     surface: Uuid,
+    surface_id: SurfaceId,
     session: u64,
     terminal: ProcessIdentity,
 }
@@ -395,6 +425,11 @@ fn route(options: &ClientOptions, surface: Uuid, deadline: Instant) -> Result<Ro
         .as_u64()
         .filter(|n| *n > 0)
         .ok_or_else(|| CliError("missing exact SessionId".into()))?;
+    let surface_id = item["surface"]["id"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .map(SurfaceId)
+        .ok_or_else(|| CliError("missing exact surface identity".into()))?;
     let terminal_pid = item["session"]["published_local_child_pid"]
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())
@@ -403,6 +438,7 @@ fn route(options: &ClientOptions, surface: Uuid, deadline: Instant) -> Result<Ro
     Ok(Route {
         namespace,
         surface,
+        surface_id,
         session,
         terminal,
     })
@@ -440,14 +476,39 @@ struct Adapter<'a> {
     provider: ProcessIdentity,
     registration: Option<(Uuid, String)>,
     retirement: Option<MessageRequest>,
+    lifecycle: Option<LifecycleCapability>,
     cleanup_deadline: Option<Instant>,
     held: bool,
     disabled: bool,
     prompts: HashSet<String>,
 }
+struct LifecycleCapability {
+    token: Uuid,
+    sequence: u64,
+    terminal: Option<(u64, LifecycleEvent)>,
+}
 impl Adapter<'_> {
     fn retire(&mut self, deadline: Instant) -> Result<(), CliError> {
         self.disabled = true;
+        let lifecycle_result = self.lifecycle_event(LifecycleEvent::EvidenceLost, deadline);
+        let mut first_error = lifecycle_result.err();
+        self.retire_inbox(deadline, &mut first_error);
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn retire_for_session_end(
+        &mut self,
+        event: LifecycleEvent,
+        deadline: Instant,
+    ) -> Result<(), CliError> {
+        self.disabled = true;
+        let lifecycle_result = self.lifecycle_event(event, deadline);
+        let mut first_error = lifecycle_result.err();
+        self.retire_inbox(deadline, &mut first_error);
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn retire_inbox(&mut self, deadline: Instant, first_error: &mut Option<CliError>) {
         if let Some((consumer, token)) = &self.registration {
             // Keep exactly the original capability and request UUID after an
             // uncertain result. Context admissions stay disabled. Only standalone
@@ -464,17 +525,28 @@ impl Adapter<'_> {
                     },
                 })
                 .clone();
-            agent_messages::completed(self.options, deadline, request)?;
-            self.registration = None;
-            self.retirement = None;
+            match agent_messages::completed(self.options, deadline, request) {
+                Ok(_) => {
+                    self.registration = None;
+                    self.retirement = None;
+                }
+                Err(error) if first_error.is_none() => *first_error = Some(error),
+                Err(_) => (),
+            }
         }
-        Ok(())
     }
-    fn cleanup(&mut self) -> Result<(), CliError> {
+    fn cleanup(&mut self, provider_exited: bool) -> Result<(), CliError> {
         let deadline = *self
             .cleanup_deadline
             .get_or_insert_with(|| Instant::now() + Duration::from_secs(2));
-        self.retire(deadline)
+        if !provider_exited {
+            return self.retire(deadline);
+        }
+        self.disabled = true;
+        let lifecycle_result = self.lifecycle_event(LifecycleEvent::SessionEnded, deadline);
+        let mut first_error = lifecycle_result.err();
+        self.retire_inbox(deadline, &mut first_error);
+        first_error.map_or(Ok(()), Err)
     }
     fn current(&self) -> bool {
         plugin::metadata_matches(&self.installation.provider)
@@ -482,19 +554,133 @@ impl Adapter<'_> {
             && plugin::active(self.directory)
                 .is_ok_and(|i| i.generation == self.installation.generation)
     }
+
+    fn register_lifecycle(&mut self, deadline: Instant) -> Result<(), CliError> {
+        if self.lifecycle.is_some() {
+            return Ok(());
+        }
+        let provider_session_id = self
+            .root_session
+            .parse::<Uuid>()
+            .map_err(|_| CliError("invalid provider session identity".into()))?;
+        let request = LifecycleRequest {
+            request_id: Uuid::new_v4(),
+            action: LifecycleAction::Register {
+                target: LifecycleTarget {
+                    identity_namespace: self.route.namespace,
+                    surface_id: self.route.surface_id,
+                    surface_uuid: self.route.surface,
+                    session_id: SessionId(self.route.session),
+                },
+                provider: LifecycleProvider::ClaudeLocal,
+                runtime_id: self.runtime,
+                generation: self.generation,
+                provider_session_id,
+            },
+        };
+        let result = lifecycle_operation(self.options, deadline, request)?;
+        if result["accepted"] != true {
+            return Err(CliError(
+                "desktop did not accept provider lifecycle registration".into(),
+            ));
+        }
+        let token = result["capability"]
+            .as_str()
+            .and_then(|value| value.parse::<Uuid>().ok())
+            .filter(|value| !value.is_nil())
+            .ok_or_else(|| CliError("desktop returned no lifecycle capability".into()))?;
+        self.lifecycle = Some(LifecycleCapability {
+            token,
+            sequence: 0,
+            terminal: None,
+        });
+        Ok(())
+    }
+
+    fn lifecycle_event(
+        &mut self,
+        event: LifecycleEvent,
+        deadline: Instant,
+    ) -> Result<(), CliError> {
+        let Some(capability) = self.lifecycle.as_mut() else {
+            return Ok(());
+        };
+        let is_terminal = matches!(
+            &event,
+            LifecycleEvent::SessionEnded | LifecycleEvent::EvidenceLost
+        );
+        let (sequence, event) = if let Some((sequence, terminal_event)) = &capability.terminal {
+            if !is_terminal {
+                return Err(CliError("lifecycle capability is already terminal".into()));
+            }
+            (*sequence, terminal_event.clone())
+        } else if is_terminal {
+            capability.sequence = capability
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| CliError("lifecycle event sequence exhausted".into()))?;
+            let terminal = (capability.sequence, event);
+            capability.terminal = Some(terminal.clone());
+            terminal
+        } else {
+            capability.sequence = capability
+                .sequence
+                .checked_add(1)
+                .ok_or_else(|| CliError("lifecycle event sequence exhausted".into()))?;
+            (capability.sequence, event)
+        };
+        let request = LifecycleRequest {
+            request_id: Uuid::new_v4(),
+            action: LifecycleAction::Event {
+                capability: capability.token,
+                runtime_id: self.runtime,
+                generation: self.generation,
+                sequence,
+                event,
+            },
+        };
+        let result = lifecycle_operation(self.options, deadline, request)?;
+        if result["accepted"] != true {
+            return Err(CliError(
+                "desktop did not accept provider lifecycle event".into(),
+            ));
+        }
+        if is_terminal {
+            self.lifecycle = None;
+        }
+        Ok(())
+    }
+
+    fn try_lifecycle_event(&mut self, event: &ClaudeHookEvent, deadline: Instant) {
+        let result = match event {
+            ClaudeHookEvent::SessionEnd { .. } => Ok(()),
+            _ => {
+                // Register is exact-identity idempotent. If the bounded startup
+                // request timed out, a later matching hook can recover the cap.
+                self.register_lifecycle(deadline).and_then(|()| {
+                    event
+                        .lifecycle_event()
+                        .map_or(Ok(()), |event| self.lifecycle_event(event, deadline))
+                })
+            }
+        };
+        if let Err(error) = result {
+            eprintln!(
+                "zmux: local Claude lifecycle evidence unavailable; status may be unknown: {error}"
+            );
+        }
+    }
+
     fn hook(
         &mut self,
-        event: &str,
-        input: &Value,
+        event: &ClaudeHookEvent,
         deadline: Instant,
     ) -> Result<(Value, Option<Uuid>), CliError> {
         let noop = || (json!({}), None);
         if self.disabled
             || !self.current()
-            || input["hook_event_name"] != event
-            || input["session_id"] != self.root_session
-            || input.get("agent_id").is_some_and(|v| !v.is_null())
-            || input.get("agent_type").is_some_and(|v| !v.is_null())
+            || event.session_id() != self.root_session
+            || !event.is_main_session()
         {
             return Ok(noop());
         }
@@ -502,9 +688,10 @@ impl Adapter<'_> {
             self.retire(deadline)?;
             return Ok(noop());
         }
+        self.try_lifecycle_event(event, deadline);
         match event {
-            "SessionStart" => {
-                if input["source"] != "startup" || self.registration.is_some() {
+            ClaudeHookEvent::SessionStart { source, .. } => {
+                if source != "startup" || self.registration.is_some() {
                     return Ok(noop());
                 }
                 let value = operation(
@@ -537,44 +724,39 @@ impl Adapter<'_> {
                 }
                 Ok(noop())
             }
-            "SessionEnd" => {
-                self.retire(deadline)?;
+            ClaudeHookEvent::SessionEnd { .. } => {
+                let terminal = event
+                    .lifecycle_event()
+                    .unwrap_or(LifecycleEvent::EvidenceLost);
+                self.retire_for_session_end(terminal, deadline)?;
                 Ok(noop())
             }
-            "PermissionRequest" | "Elicitation" => {
+            ClaudeHookEvent::PermissionRequest { .. } | ClaudeHookEvent::Elicitation { .. } => {
                 self.held = true;
                 self.hold(deadline)?;
                 Ok(noop())
             }
-            "PreToolUse"
-                if ["AskUserQuestion", "EnterPlanMode"]
-                    .iter()
-                    .any(|n| input["tool_name"] == *n) =>
+            ClaudeHookEvent::PreToolUse { tool_name, .. }
+                if matches!(tool_name.as_str(), "AskUserQuestion" | "EnterPlanMode") =>
             {
                 self.held = true;
                 self.hold(deadline)?;
                 Ok(noop())
             }
-            "UserPromptSubmit" => {
-                if input["permission_mode"] == "plan" {
+            ClaudeHookEvent::UserPromptSubmit {
+                prompt_id,
+                permission_mode,
+                ..
+            } => {
+                if permission_mode == "plan" {
                     self.held = true;
                     self.hold(deadline)?;
                 }
-                if self.held
-                    || !["default", "acceptEdits"]
-                        .iter()
-                        .any(|mode| input["permission_mode"] == *mode)
-                {
+                if self.held || !matches!(permission_mode.as_str(), "default" | "acceptEdits") {
                     return Ok(noop());
                 }
-                let Some(prompt) = input["prompt_id"].as_str().filter(|s| {
-                    !s.is_empty()
-                        && s.len() <= 128
-                        && !s.chars().any(char::is_control)
-                        && s.parse::<Uuid>().is_ok_and(|id| !id.is_nil())
-                }) else {
-                    return Ok(noop());
-                };
+                let prompt = prompt_id.to_string();
+                let prompt = prompt.as_str();
                 if self.prompts.contains(prompt) {
                     return Ok(noop());
                 }
@@ -624,8 +806,9 @@ impl Adapter<'_> {
                     Some(attempt),
                 ))
             }
-            // Stop does not claim, continue, Ack or ReadTurn. Generic lifecycle
-            // completion cannot prove that any context was accepted.
+            // Stop updates provider lifecycle state separately. It does not claim,
+            // continue, Ack or ReadTurn, and is not proof that context was accepted.
+            ClaudeHookEvent::Stop { .. } => Ok(noop()),
             _ => Ok(noop()),
         }
     }
@@ -667,16 +850,28 @@ impl Adapter<'_> {
             return Err(CliError("hook expired before admission".into()));
         }
         let deadline = initial.min(Instant::now() + Duration::from_millis(remaining));
-        let event = frame["event"]
+        let event_name = frame["event"]
             .as_str()
             .filter(|e| events().contains(e))
             .ok_or_else(|| CliError("unknown hook event".into()))?;
+        let input = frame
+            .get("input")
+            .filter(|value| value.is_object())
+            .cloned()
+            .ok_or_else(|| CliError("invalid hook input".into()))?;
+        let event: ClaudeHookEvent = serde_json::from_value(input.clone())
+            .map_err(|_| CliError("invalid typed Claude hook input".into()))?;
+        if event.name() != event_name {
+            return Err(CliError(
+                "hook event name does not match its typed input".into(),
+            ));
+        }
         if process_identity(client.pid)? != client
             || process_identity(self.provider.pid)? != self.provider
         {
             return Err(CliError("hook process changed before admission".into()));
         }
-        let (output, attempt) = self.hook(event, &frame["input"], deadline)?;
+        let (output, attempt) = self.hook(&event, deadline)?;
         if process_identity(client.pid)? != client
             || process_identity(self.provider.pid)? != self.provider
         {
@@ -785,8 +980,8 @@ impl Drop for Signals {
 }
 impl Drop for Adapter<'_> {
     fn drop(&mut self) {
-        if self.cleanup().is_err() {
-            eprintln!("zmux: adapter cleanup could not confirm exact capability retirement");
+        if self.cleanup(false).is_err() {
+            eprintln!("zmux: adapter cleanup could not confirm lifecycle or inbox retirement");
         }
     }
 }
@@ -926,6 +1121,7 @@ fn launch(
         provider,
         registration: None,
         retirement: None,
+        lifecycle: None,
         cleanup_deadline: None,
         held,
         disabled: false,
@@ -940,7 +1136,7 @@ fn launch(
             if !adapter.disabled
                 && (!plugin::publication_matches(directory, adapter.installation.generation)
                     || signals.stop.load(std::sync::atomic::Ordering::Acquire))
-                && adapter.cleanup().is_err()
+                && adapter.cleanup(false).is_err()
             {
                 eprintln!("zmux: adapter disabled; exact retirement unconfirmed");
             }
@@ -960,7 +1156,7 @@ fn launch(
                 match poll(&mut descriptors, timeout) {
                     Ok(_) | Err(nix::errno::Errno::EINTR) => (),
                     Err(error) => {
-                        if adapter.cleanup().is_err() {
+                        if adapter.cleanup(false).is_err() {
                             eprintln!("zmux: hook poll retirement unconfirmed");
                         }
                         eprintln!("zmux: hook listener poll failed; provider retained: {error}");
@@ -969,7 +1165,7 @@ fn launch(
                 }
             }
             Err(e) => {
-                if adapter.cleanup().is_err() {
+                if adapter.cleanup(false).is_err() {
                     eprintln!("zmux: listener failure retirement unconfirmed");
                 }
                 eprintln!(
@@ -980,7 +1176,7 @@ fn launch(
             }
         }
     };
-    if adapter.cleanup().is_err() {
+    if adapter.cleanup(true).is_err() {
         eprintln!("zmux: provider exited; exact adapter retirement unconfirmed");
     }
     Ok(exit_code(status))

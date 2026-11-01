@@ -359,8 +359,13 @@ fn artifacts(i: &Installation) -> (Value, Value) {
         "UserPromptSubmit",
         "PermissionRequest",
         "Elicitation",
+        "ElicitationResult",
+        "Notification",
         "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
         "Stop",
+        "StopFailure",
         "SessionEnd",
     ] {
         let mut hook = json!({"type":"command","command":i.adapter.path,
