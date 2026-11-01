@@ -442,3 +442,16 @@ The fixture now preloads `input from stdin` into a file and passes that file as 
 - The fixed test passed 200 repetitions pinned to one CPU. `cargo fmt --all -- --check` and `git diff --check` passed.
 - The full `scripts/check` was not rerun for this test-fixture-only change. The prior full local check passed all 13 CLI tests before the fixture edit. No hosted rerun or commit was started.
 - `scripts/check-changed.mjs` and an automated `autoreview` tool are unavailable in this checkout/session; focused package verification and source review were used.
+
+## Workspace activity popover smoke setup correction — 2026-11-01
+
+- Packaged workflow [41344894097](https://github.com/ashutoshpw/zmux/actions/runs/41344894097), source SHA `71759b3a8294deaa0d65e7f7e1c6542fafdf689c`, failed only `popover_shown`. The recorded details, status/log fields, plain-text/read-only settings, and vertical scroller all passed. Diagnostics: `/tmp/zmux-41344894097-diagnostics/native-smoke.json.stages.json` and `native-stderr.log`.
+- Source review found the smoke had hidden `sidebarSections` through `showNotifications()` and only swapped the scroll document when restoring Spaces. That left the workspace row under a hidden ancestor: the activity controller and text existed, but AppKit could not show a popover anchored to that hidden row.
+- The metadata smoke now uses `showWorkspaces()` and verifies responder identity is unchanged, scrolls the target activity button into the Spaces clip view, and verifies the whole button is visible before its synthetic click. The `popover_shown` and all content/focus acceptance checks remain intact.
+- `git diff --check -- apps/macos/Sources/App.swift` passed. This Linux host has no `swiftc` or `swift-format`; packaged AppKit confirmation remains pending.
+
+## Workspace activity smoke visibility setup verification — 2026-11-01
+
+- The full `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r35). Log: `/tmp/zmux-agent-sidebar-check-r35.log`.
+- Hosted workflow [41344894097](https://github.com/ashutoshpw/zmux/actions/runs/41344894097) passed app/core/selection checks, then failed only `popover_shown` in native smoke; all diagnostic content checks passed. The source smoke had left the Spaces section under a hidden ancestor. It now restores the real workspace view and ensures the button is visible before clicking. Independent review covered the smoke setup and preserved assertions.
+- A hosted macOS rerun is pending. The local Linux check does not establish packaged AppKit acceptance.

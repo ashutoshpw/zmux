@@ -2962,6 +2962,11 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
     }
 
     private func smokeWorkspaceMetadata(workspaceID: UInt64, foregroundWorkspace: UInt64) async throws {
+        let workspaceSwitchResponder = window.firstResponder
+        showWorkspaces()
+        guard window.firstResponder === workspaceSwitchResponder else {
+            throw BridgeFailure(message: "Returning from notifications to the workspace sidebar changed input focus")
+        }
         guard let before = snapshot, before.model.focusedWorkspace == foregroundWorkspace else {
             throw BridgeFailure(message: "Workspace metadata fixture requires a background target")
         }
@@ -2986,6 +2991,19 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
               window.firstResponder === responder,
               let button = row.subviews.compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel()?.hasPrefix("Show workspace activity") == true }) else {
             throw BridgeFailure(message: "CLI metadata did not reach the bounded native status/progress preview or changed input focus")
+        }
+        guard let sidebarScroll, sidebarScroll.documentView === workspaceList,
+              !row.isHiddenOrHasHiddenAncestor else {
+            throw BridgeFailure(message: "Workspace activity target is not in the visible Spaces sidebar")
+        }
+        _ = workspaceList.scrollToVisible(button.convert(button.bounds, to: workspaceList))
+        sidebarScroll.reflectScrolledClipView(sidebarScroll.contentView)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let visibleButtonRect = button.convert(button.bounds, to: sidebarScroll.contentView)
+        guard !button.isHiddenOrHasHiddenAncestor,
+              sidebarScroll.contentView.bounds.contains(visibleButtonRect),
+              window.firstResponder === responder else {
+            throw BridgeFailure(message: "Workspace activity button was not fully visible in Spaces before the synthetic click or changed input focus")
         }
         button.performClick(nil)
         let inspector = metadataInspector
