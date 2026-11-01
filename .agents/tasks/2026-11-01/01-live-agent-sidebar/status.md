@@ -27,7 +27,7 @@ The approximate hex values are rounded display equivalents; the source `NSColor`
 - Independent review confirmed that explicit ANSI black is retained by design; this palette update changes native surfaces and selection styling, not explicit terminal ANSI colors.
 - Independent local lifecycle review found no blockers; the P3 safe visibility limitation below remains documented.
 - Dark-slice hosted smoke checks passed. The full `scripts/check` retry passed on Linux after the lifecycle fixture change; log: `/tmp/zmux-lifecycle-check-r3.log`.
-- Packaged-app screenshots were inspected. The screenshot compositor was unavailable, accessibility save was skipped, and no physical Mac verification was performed.
+- Packaged-app screenshots for the dark and lifecycle slices were inspected. The screenshot compositor was unavailable, accessibility save was skipped, and no physical Mac verification was performed.
 
 ## Dark slice artifact
 
@@ -52,15 +52,26 @@ The opt-in Claude adapter reports prompt submission, ambiguous attention candida
 - `cargo test -p zmux-desktop-runtime agent_lifecycle` passed the typed hook normalization and controlled-clock freshness/recovery/disconnect test.
 - `cargo test -p zmux-desktop-runtime --test agent_lifecycle` passed the control-socket test for exact owner checks, generation/sequence fencing, terminal registration rejection, and evidence-loss replacement.
 - `cargo test -p zmux --test provider_hooks` passed all 6 tests, including plugin lifecycle and nonblocking hook ingress.
-- These are local Linux source checks. The full `scripts/check` retry passed after the latest fixture change; output is recorded at `/tmp/zmux-lifecycle-check-r3.log`. The dark-slice artifact above does not verify the lifecycle changes: no successful hosted lifecycle build, native build, or real Claude provider execution has been verified. The native sidebar, SSH lifecycle, alerts/sounds, and physical-Mac evidence are also pending.
+- These are local Linux source checks. The full `scripts/check` retry passed after the latest fixture change; output is recorded at `/tmp/zmux-lifecycle-check-r3.log`. The dark-slice artifact above does not verify the lifecycle changes; see the separate lifecycle artifact below. Real Claude provider execution remains unverified. The native sidebar, SSH lifecycle, alerts/sounds, and physical-Mac evidence are also pending.
 
 Independent lifecycle review recorded a **P3 safe visibility limitation**: when Claude self-starts a turn without a `prompt_id`, the lifecycle remains Unknown. Later tool events do not carry enough identity to establish which run they belong to, so they cannot safely create or promote that run. This can under-report activity, but avoids asserting a lifecycle state without run evidence.
 
-## Latest lifecycle hosted attempt
+## Failed lifecycle hosted attempt (superseded)
 
 - Workflow [41285971536](https://github.com/ashutoshpw/zmux/actions/runs/41285971536) failed on macOS because a new control-socket test placed its Unix-domain socket under the long macOS `TMPDIR`, triggering the socket path / `SUN_LEN` limitation.
 - The test fixture was moved to a short path under `/tmp`; the focused test passed after that change.
-- The full local `scripts/check` retry passed; output is recorded at `/tmp/zmux-lifecycle-check-r3.log`. A fresh hosted lifecycle workflow is still needed, and no successful hosted lifecycle build is recorded yet.
+- The full local `scripts/check` retry passed; output is recorded at `/tmp/zmux-lifecycle-check-r3.log`. This failed hosted attempt was superseded by the successful lifecycle workflow recorded below.
+
+## Lifecycle artifact
+
+- Source commit: `37eaf32e578cae1e6893dfb0715cfb7fe9f89674`.
+- Workflow run: [41286844041](https://github.com/ashutoshpw/zmux/actions/runs/41286844041).
+- Download: [workflow artifact 13075709288](https://github.com/ashutoshpw/zmux/actions/runs/41286844041/artifacts/13075709288).
+- Inner ZIP SHA-256: `bcda46cc70e2698b9aaafd2114288e666822915b6176cebca80c209cf2ec3feb`.
+- Target: universal macOS, minimum macOS 14, arm64 and x86_64.
+- Signing: ad hoc. Notarization: none.
+- Local and hosted checks and packaged smoke passed; packaged screenshot was inspected. Compositor capture was unavailable and accessibility save was skipped.
+- Real Claude provider execution and physical Mac verification remain unverified.
 
 ## Next implementation hazards — open
 
@@ -76,6 +87,6 @@ These are constraints for the remaining work; they are not implemented or verifi
 ## Pending
 
 - The dark appearance slice has an artifact and hosted verification record, but compositor capture, accessibility save, and physical-Mac proof are unavailable as noted above.
-- Run a fresh hosted lifecycle workflow and verify the lifecycle against a real Claude provider and a native build; implement and verify the native sidebar, truthful SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
+- Verify the lifecycle against a real Claude provider and on a physical Mac; implement and verify the native sidebar, truthful SSH status, exact existing-surface selection, and Alerts preferences, notifications, sounds, and deduplication described in `plan.md`.
 
 The larger live-agent feature remains in progress; agent lifecycle, SSH integration, and alerts/sound behavior remain open.
