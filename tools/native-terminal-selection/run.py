@@ -21,15 +21,21 @@ import zipfile
 REPO = Path(__file__).resolve().parents[2]
 OWN_INPUTS = ('tools/native-terminal-selection/run.py', '.github/workflows/macos-development.yml',
               'tools/native-terminal-selection/CopyMetadataContract.swift')
-# Compile the complete real model dependency closure, including the native alert
-# event model used by Models and the bridge owner used by NotificationDelivery;
-# never substitute test definitions for app types.
+# Compile the complete real model dependency closure: Models references the
+# native event snapshot, NotificationDelivery uses the real alert event,
+# preferences and audio owners, and bridge/profile/file paths use production
+# owners. Never substitute test definitions for app types.
 METADATA_INPUTS = tuple('apps/macos/Sources/' + name + '.swift' for name in (
-    'Models', 'AgentAlertPreferences', 'AgentAlertDelivery',
+    'Models', 'AgentAlertPreferences', 'AgentAlertDelivery', 'AgentAlertAudio',
     'WindowModels', 'BrowserDownloadModels', 'BrowserAutomation',
     'NotificationDelivery', 'FileLoadGate', 'FileHostClient', 'NativeBridge',
     'NativeStoragePath', 'TerminalKeyEncoder', 'BrowserProfileLeases', 'BrowserProfileOperations')) + (
     'crates/native-bridge/include/zmux.h', 'tools/native-terminal-selection/CopyMetadataContract.swift')
+METADATA_FRAMEWORK_ARGS = tuple(
+    argument
+    for framework in ('AppKit', 'CoreAudio', 'WebKit', 'UserNotifications')
+    for argument in ('-framework', framework)
+)
 CHILD = '''#!/usr/bin/env python3
 import fcntl,json,os,pathlib,select,struct,termios,time,tty
 root=pathlib.Path(os.environ['ZMUX_SELECTION_ROOT'])
@@ -374,7 +380,7 @@ def main():
                     '-import-objc-header', str(REPO / 'crates/native-bridge/include/zmux.h'),
                     *[str(REPO / name) for name in METADATA_INPUTS if name.endswith('.swift')],
                     '-L', str(frameworks), '-lzmux_native_bridge',
-                    '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'UserNotifications',
+                    *METADATA_FRAMEWORK_ARGS,
                     '-Xlinker', '-rpath', '-Xlinker', str(frameworks), '-o', str(decoder_probe)],
                    'metadata-compile', root, receipt['phases'], timeout=60, cwd=REPO, env=environment)
         runner.run([str(decoder_probe)], 'metadata-contract', root, receipt['phases'],
