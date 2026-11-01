@@ -796,8 +796,64 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
             throw BridgeFailure(message: "Agent selection fixture has no different workspace to focus first")
         }
         guard let selectionBaseline = snapshot else { throw BridgeFailure(message: "Agent selection fixture lost its sidebar snapshot") }
-        let selectionSurfaceIDs = Set(selectionBaseline.model.workspaces.flatMap { $0.root.panes.flatMap(\.surfaces) }.map(\.id))
-        let selectionFrames = Dictionary(uniqueKeysWithValues: selectionBaseline.frames.map { ($0.sessionId, $0.processId ?? 0) })
+        func surfacePTYInventory(_ state: DesktopSnapshot) async throws -> (surfaces: [UInt64: String], processIDs: [UInt64: UInt32]) {
+            var surfacesByID: [UInt64: String] = [:]
+            var processIDsBySurface: [UInt64: UInt32] = [:]
+            for workspace in state.model.workspaces {
+                guard let owner = state.model.windows.first(where: { $0.workspaceIds.contains(workspace.id) }) else {
+                    throw BridgeFailure(message: "Agent selection inventory found a workspace without a window owner")
+                }
+                for pane in workspace.root.panes {
+                    let data = try await nativeCLI(["list-pane-surfaces", "--pane", String(pane.id)], externalCaller: true)
+                    guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          (result["window_id"] as? NSNumber)?.uint64Value == owner.id,
+                          let rawWindowUUID = result["window_uuid"] as? String,
+                          let windowUUID = UUID(uuidString: rawWindowUUID),
+                          (result["workspace_id"] as? NSNumber)?.uint64Value == workspace.id,
+                          (result["pane_id"] as? NSNumber)?.uint64Value == pane.id,
+                          let rows = result["surfaces"] as? [[String: Any]] else {
+                        throw BridgeFailure(message: "Targeted pane surface read did not preserve its exact workspace owner")
+                    }
+                    var observedIDs: [UInt64] = []
+                    for row in rows {
+                        guard let surfaceID = (row["surface_id"] as? NSNumber)?.uint64Value,
+                              let rawUUID = row["surface_uuid"] as? String,
+                              let surfaceUUID = UUID(uuidString: rawUUID),
+                              (row["window_id"] as? NSNumber)?.uint64Value == owner.id,
+                              (row["workspace_id"] as? NSNumber)?.uint64Value == workspace.id,
+                              (row["pane_id"] as? NSNumber)?.uint64Value == pane.id,
+                              let kind = row["kind"] as? String,
+                              let modelSurface = pane.surfaces.first(where: { $0.id == surfaceID }) else {
+                            throw BridgeFailure(message: "Targeted pane surface read returned an unknown surface identity")
+                        }
+                        guard surfacesByID[surfaceID] == nil else {
+                            throw BridgeFailure(message: "Targeted pane surface inventory duplicated a surface ID")
+                        }
+                        let sessionID = (row["session_id"] as? NSNumber)?.uint64Value
+                        let processID = (row["process_id"] as? NSNumber)?.uint32Value
+                        let stateName = row["state"] as? String ?? "nil"
+                        guard modelSurface.kind == kind, modelSurface.sessionId == sessionID else {
+                            throw BridgeFailure(message: "Targeted pane surface read disagreed with the complete workspace model")
+                        }
+                        if surfaceID == targetSurface.id {
+                            guard windowUUID == record.windowUuid, surfaceUUID == record.surfaceUuid,
+                                  sessionID == targetSession, stateName == "running", let processID else {
+                                throw BridgeFailure(message: "Target terminal targeted read did not confirm its running PTY process")
+                            }
+                        }
+                        if let processID { processIDsBySurface[surfaceID] = processID }
+                        surfacesByID[surfaceID] = "window=\(owner.id),window_uuid=\(windowUUID.uuidString.lowercased()),workspace=\(workspace.id),pane=\(pane.id),uuid=\(surfaceUUID.uuidString.lowercased()),kind=\(kind),session=\(sessionID.map(String.init) ?? "nil"),process=\(processID.map(String.init) ?? "nil")"
+                        observedIDs.append(surfaceID)
+                    }
+                    guard observedIDs.count == pane.surfaces.count,
+                          Set(observedIDs) == Set(pane.surfaces.map(\.id)) else {
+                        throw BridgeFailure(message: "Targeted pane surface read omitted or duplicated a tab")
+                    }
+                }
+            }
+            return (surfacesByID, processIDsBySurface)
+        }
+        let selectionInventory = try await surfacePTYInventory(selectionBaseline)
         try click(otherWorkspaceRow)
         try await waitUntil { $0.model.focusedWindow == record.windowId && $0.model.focusedWorkspace == otherWorkspaceID }
         guard snapshot?.model.focusedWorkspace == otherWorkspaceID else {
@@ -824,10 +880,18 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
               selectedSurface.kind == "terminal", selectedSurface.sessionId == record.sessionId else {
             throw BridgeFailure(message: "Agent row did not focus its exact current window/workspace/pane/surface/session")
         }
-        let afterSurfaceIDs = Set(selectedSnapshot.model.workspaces.flatMap { $0.root.panes.flatMap(\.surfaces) }.map(\.id))
-        let afterFrames = Dictionary(uniqueKeysWithValues: selectedSnapshot.frames.map { ($0.sessionId, $0.processId ?? 0) })
-        let noReplacement = afterSurfaceIDs == selectionSurfaceIDs && afterFrames == selectionFrames
-        guard noReplacement else { throw BridgeFailure(message: "Agent row selection created or replaced a terminal surface/session") }
+        let afterInventory = try await surfacePTYInventory(selectedSnapshot)
+        let changedSurfaceIDs = Set(selectionInventory.surfaces.keys).union(afterInventory.surfaces.keys)
+            .filter { selectionInventory.surfaces[$0] != afterInventory.surfaces[$0] }.sorted()
+        let targetPTYUnchanged = selectionInventory.processIDs[targetSurface.id] != nil
+            && selectionInventory.processIDs[targetSurface.id] == afterInventory.processIDs[targetSurface.id]
+        let noReplacement = changedSurfaceIDs.isEmpty && targetPTYUnchanged
+        guard noReplacement else {
+            let changes = changedSurfaceIDs.prefix(8).map { id in
+                "\(id):before=\(selectionInventory.surfaces[id] ?? "absent"),after=\(afterInventory.surfaces[id] ?? "absent")"
+            }.joined(separator: ";")
+            throw BridgeFailure(message: "Agent row selection changed surface/session/PTY inventory; target_pid_before=\(String(describing: selectionInventory.processIDs[targetSurface.id])),target_pid_after=\(String(describing: afterInventory.processIDs[targetSurface.id])),changes=[\(changes)]")
+        }
         let agentIdentity: [String: Any] = [
             "provider": record.provider,
             "identity_namespace": record.identityNamespace.uuidString.lowercased(),

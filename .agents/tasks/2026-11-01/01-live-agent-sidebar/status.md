@@ -479,3 +479,17 @@ Focused Linux verification:
 - `cargo fmt --all -- --check` and `git diff --check` passed.
 
 These are local Linux source checks; no hosted rerun or commit was started for this test-only follow-up.
+
+## Agent selection PTY inventory assertion correction — 2026-11-01
+
+- Hosted workflow [41352950592](https://github.com/ashutoshpw/zmux/actions/runs/41352950592), source SHA `84fe780c42df9c0add8fe1412232b74c92258ed2`, passed native rendering and workspace drag, then failed the agent-selection no-replacement assertion. The exact target workspace/pane/surface/session selection checks had already passed. Screenshot: `/tmp/zmux-41352950592-diagnostics/zmux-sidebar-failure.png`.
+- Source review confirmed `DesktopSnapshot.frames` is filtered to workspaces selected by their owning windows, while `Snapshot.control_frames` contains all live terminal sessions. Comparing the visible frame dictionary across a focus change was therefore not a complete PTY inventory.
+- The smoke now reads `list-pane-surfaces --pane` for every pane before and after selection. These production targeted reads use `control_frames`; the smoke compares exact owner, surface UUID, kind, session ID and process ID across every surface, and requires the target PTY to remain running with its original PID. The no-extra/no-replacement checks remain strict.
+- `git diff --check -- apps/macos/Sources/App.swift` passed. This Linux host has no Swift/AppKit compiler; hosted macOS verification is pending. No commit was made.
+
+## Agent selection inventory review and local verification — 2026-11-01
+
+- Static review found that the acceptance receipt still referenced the removed `noReplacement` variable. It now derives from the complete before/after surface inventory comparison and the target PTY PID equality, and the same value gates the smoke and appears in its receipt.
+- Each targeted pane response now validates row-level window/workspace/pane ownership, rejects duplicate surface IDs, records the owner window UUID, and binds the target window/surface UUIDs to the lifecycle record.
+- `list-pane-surfaces` and `DesktopSnapshot` expose the same global snapshot revision, which can advance for unrelated runtime changes; the per-pane reads are not atomic. The smoke therefore checks each response against that pane in its associated model and compares full stable identities before/after selection, without requiring unrelated global revisions to match.
+- `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 after the inventory update. `git diff --check -- apps/macos/Sources/App.swift` passed. This host has no Swift/AppKit toolchain; hosted macOS typecheck and packaged acceptance remain pending.
