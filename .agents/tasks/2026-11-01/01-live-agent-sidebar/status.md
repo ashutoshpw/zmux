@@ -493,3 +493,10 @@ These are local Linux source checks; no hosted rerun or commit was started for t
 - Each targeted pane response now validates row-level window/workspace/pane ownership, rejects duplicate surface IDs, records the owner window UUID, and binds the target window/surface UUIDs to the lifecycle record.
 - `list-pane-surfaces` and `DesktopSnapshot` expose the same global snapshot revision, which can advance for unrelated runtime changes; the per-pane reads are not atomic. The smoke therefore checks each response against that pane in its associated model and compares full stable identities before/after selection, without requiring unrelated global revisions to match.
 - `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 after the inventory update. `git diff --check -- apps/macos/Sources/App.swift` passed. This host has no Swift/AppKit toolchain; hosted macOS typecheck and packaged acceptance remain pending.
+
+## Hosted Swift warning correction — 2026-11-01
+
+- Workflow [41356715298](https://github.com/ashutoshpw/zmux/actions/runs/41356715298) stopped at native Swift typechecking because the target guard bound `processID` without using the bound value. The guard now checks `processID != nil`, preserving the requirement that the selected target has a process ID while keeping the optional value available for inventory comparison.
+- Reviewed the rest of the new inventory block: its bindings are consumed by exact owner, UUID, model, duplicate, completeness, identity, or diagnostic checks.
+- The full `RUST_TEST_THREADS=2 scripts/check` r38 passed locally on Linux after the `processID != nil` correction; log: `/tmp/zmux-agent-sidebar-check-r38.log`. `git diff --check -- apps/macos/Sources/App.swift` passed.
+- Workflow 41356715298 stopped at Swift warnings-as-errors before building or running the native app. This Linux host cannot run the native typecheck; a hosted rerun remains pending. No commit or workflow rerun was started for this correction.

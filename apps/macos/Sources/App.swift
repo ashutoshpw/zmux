@@ -837,7 +837,7 @@ final class MainWindowHost: NSObject, NSMenuDelegate, NSMenuItemValidation, NSWi
                         }
                         if surfaceID == targetSurface.id {
                             guard windowUUID == record.windowUuid, surfaceUUID == record.surfaceUuid,
-                                  sessionID == targetSession, stateName == "running", let processID else {
+                                  sessionID == targetSession, stateName == "running", processID != nil else {
                                 throw BridgeFailure(message: "Target terminal targeted read did not confirm its running PTY process")
                             }
                         }
