@@ -1679,14 +1679,15 @@ except BrokenPipeError:
         }
     }
 
-    // The stalled peer emits a Heartbeat every 100 ms; require four full
-    // periods of observed no-admission/rejection progress before confirming pressure.
+    // The stalled peer emits a Heartbeat every 100 ms. Pressure requires a
+    // 400 ms producer-side rejection epoch plus a stable joined snapshot.
     const MIN_SUSTAINED_BACKPRESSURE: Duration = Duration::from_millis(400);
 
     struct HeartbeatBackpressure {
         last_sequence: u64,
         last_accepted: usize,
         last_rejected: usize,
+        last_observed_rejection_since: Option<Instant>,
         sustained_since: Option<Instant>,
         sustained_rejection_since: Option<Instant>,
     }
@@ -1698,6 +1699,7 @@ except BrokenPipeError:
                 last_sequence: 0,
                 last_accepted,
                 last_rejected,
+                last_observed_rejection_since: None,
                 sustained_since: None,
                 sustained_rejection_since: None,
             }
@@ -1714,6 +1716,11 @@ except BrokenPipeError:
             let (accepted, rejected) = pump.stats();
             let observed_at = Instant::now();
             let no_progress_since = pump.no_progress_since();
+            self.last_observed_rejection_since = if accepted == self.last_accepted {
+                no_progress_since
+            } else {
+                None
+            };
             if accepted == self.last_accepted
                 && rejected > self.last_rejected
                 && no_progress_since.is_some_and(|started| {
@@ -1731,14 +1738,19 @@ except BrokenPipeError:
             (accepted, rejected)
         }
 
-        fn confirms_snapshot(&self, snapshot: ReceiptPumpSnapshot, observed_at: Instant) -> bool {
-            self.sustained_since.is_some()
+        fn confirmed_pressure_at(
+            &self,
+            snapshot: ReceiptPumpSnapshot,
+            observed_at: Instant,
+        ) -> Option<Instant> {
+            let rejection_started = self.last_observed_rejection_since?;
+            let pressure_confirmed_at = rejection_started + MIN_SUSTAINED_BACKPRESSURE;
+            (self.last_sequence > 0
                 && snapshot.accepted == self.last_accepted
-                && snapshot.rejected >= self.last_rejected
-                && snapshot.no_progress_since == self.sustained_rejection_since
-                && snapshot.no_progress_since.is_some_and(|started| {
-                    observed_at.saturating_duration_since(started) >= MIN_SUSTAINED_BACKPRESSURE
-                })
+                && snapshot.rejected > self.last_rejected
+                && snapshot.no_progress_since == Some(rejection_started)
+                && observed_at >= pressure_confirmed_at)
+                .then_some(pressure_confirmed_at)
         }
     }
 
@@ -1846,7 +1858,7 @@ except BrokenPipeError:
         let stalled_started = Instant::now();
         let loss_deadline = stalled_started + HANDSHAKE_TIMEOUT;
         let mut pressure = HeartbeatBackpressure::new(&pump);
-        let (lost, lost_at, loss_snapshot) = loop {
+        let (lost, lost_at, loss_snapshot, sustained_pressure_at) = loop {
             let remaining = loss_deadline.saturating_duration_since(Instant::now());
             assert!(
                 !remaining.is_zero(),
@@ -1880,15 +1892,22 @@ except BrokenPipeError:
                     assert_eq!(lost_binding, binding);
                     pump.stop();
                     let snapshot = pump.snapshot_after_stop();
-                    assert!(
-                        pressure.confirms_snapshot(snapshot, lost_at),
-                        "managed SSH reported loss before sustained receipt backpressure in the same rejection epoch; snapshot={snapshot:?}, observed accepted={}, rejected={}, pressure_epoch={:?}, required={MIN_SUSTAINED_BACKPRESSURE:?}, last heartbeat={}",
-                        pressure.last_accepted,
-                        pressure.last_rejected,
-                        pressure.sustained_rejection_since,
-                        pressure.last_sequence
-                    );
-                    break (lost_binding, lost_at, snapshot);
+                    let sustained_pressure_at = pressure
+                        .confirmed_pressure_at(snapshot, lost_at)
+                        .unwrap_or_else(|| {
+                            let rejection_age = snapshot.no_progress_since.map(|started| {
+                                lost_at.saturating_duration_since(started)
+                            });
+                            panic!(
+                                "managed SSH reported loss before the joined receipt snapshot proved sustained pressure; snapshot={snapshot:?}, observed accepted={}, rejected={}, observed rejection epoch={:?}, sustained heartbeat epoch={:?}, rejection age={rejection_age:?}, required={MIN_SUSTAINED_BACKPRESSURE:?}, last heartbeat={}",
+                                pressure.last_accepted,
+                                pressure.last_rejected,
+                                pressure.last_observed_rejection_since,
+                                pressure.sustained_rejection_since,
+                                pressure.last_sequence
+                            )
+                        });
+                    break (lost_binding, lost_at, snapshot, sustained_pressure_at);
                 }
                 Message::Connected { .. } => {
                     panic!("unexpected reconnect after stalled stdin")
@@ -1902,9 +1921,6 @@ except BrokenPipeError:
         let ReceiptPumpSnapshot {
             accepted, rejected, ..
         } = loss_snapshot;
-        let sustained_pressure_at = pressure
-            .sustained_since
-            .expect("loss followed sustained receipt backpressure");
         assert!(
             accepted > MAX_PENDING_RECEIPTS,
             "only {accepted} receipts were admitted before managed SSH loss"

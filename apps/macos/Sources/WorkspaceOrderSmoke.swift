@@ -308,6 +308,16 @@ enum WorkspaceOrderSmoke {
                     throw BridgeFailure(message: "Sidebar drag changed selection, key/responder, a live process or browser identity")
                 }
             }
+            @MainActor func revealSidebarDropPoint(_ point: NSPoint) throws {
+                let dropRect = NSRect(origin: point, size: NSSize(width: 1, height: 1))
+                _ = sidebar.scrollToVisible(dropRect)
+                scrollView.reflectScrolledClipView(clipView)
+                layoutSidebar()
+                guard sidebar.visibleRect.contains(point) else {
+                    throw BridgeFailure(message: "Workspace drag drop point \(point) stayed outside the sidebar viewport \(sidebar.visibleRect) after scrolling")
+                }
+                try unchangedDrag()
+            }
             @MainActor func settledDrag(_ expected: [UInt64]) async throws {
                 try await wait("Sidebar drag did not reconcile canonical and rendered workspace order") {
                     snapshot()?.model.windows.first(where: { $0.id == windowID })?.workspaceIds == expected &&
@@ -384,10 +394,15 @@ enum WorkspaceOrderSmoke {
             } else {
                 afterGroupPoint = NSPoint(x: lastMember.frame.midX, y: lastMember.frame.maxY + 1)
             }
-            guard sidebar.visibleRect.contains(afterGroupPoint) else {
-                throw BridgeFailure(message: "Workspace drag after-group drop point is outside the visible sidebar viewport")
-            }
             let (secondSource, secondTarget) = try beginDrag(fixtureID)
+            if !sidebar.visibleRect.contains(afterGroupPoint) {
+                // Keep the row source active while the real Spaces scroll view
+                // reveals the destination, then use the normal drop callbacks.
+                try revealSidebarDropPoint(afterGroupPoint)
+            }
+            guard sidebar.visibleRect.contains(afterGroupPoint) else {
+                throw BridgeFailure(message: "Workspace drag after-group destination never entered the visible sidebar viewport")
+            }
             let afterGroupInfo = try dragInfo(source: secondSource, target: secondTarget, sidebar: sidebar, point: afterGroupPoint)
             guard sidebar.draggingEntered(afterGroupInfo).contains(.move), sidebar.prepareForDragOperation(afterGroupInfo),
                   sidebar.performDragOperation(afterGroupInfo) else {

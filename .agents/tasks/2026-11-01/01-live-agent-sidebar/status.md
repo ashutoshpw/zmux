@@ -455,3 +455,27 @@ The fixture now preloads `input from stdin` into a file and passes that file as 
 - The full `RUST_TEST_THREADS=2 scripts/check` passed locally on Linux with exit status 0 (r35). Log: `/tmp/zmux-agent-sidebar-check-r35.log`.
 - Hosted workflow [41344894097](https://github.com/ashutoshpw/zmux/actions/runs/41344894097) passed app/core/selection checks, then failed only `popover_shown` in native smoke; all diagnostic content checks passed. The source smoke had left the Spaces section under a hidden ancestor. It now restores the real workspace view and ensures the button is visible before clicking. Independent review covered the smoke setup and preserved assertions.
 - A hosted macOS rerun is pending. The local Linux check does not establish packaged AppKit acceptance.
+
+## Workspace drag destination visibility smoke correction — 2026-11-01
+
+- Packaged workflow [41348156262](https://github.com/ashutoshpw/zmux/actions/runs/41348156262), source SHA `03ca1a1de30bee81f24056703f0f07cf8181aaf1`, passed the prior workspace activity popover smoke and then failed `WorkspaceOrderSmoke` because its after-group destination was outside the visible sidebar viewport. Diagnostics: `/tmp/zmux-41348156262-diagnostics/native-smoke.json.stages.json` and `zmux-workspace-drag.png`.
+- The smoke intentionally shrinks the window to exercise the independently scrolling Spaces list. Moving the fixture ahead of its group leaves the next insertion point below the current clip view; the assertion previously stopped before scrolling to that destination.
+- The drag smoke now starts the source row first, reveals the destination through the actual sidebar document view's `scrollToVisible` and enclosing `NSScrollView`, verifies the drop point is visible and selection/focus/content remain unchanged, then runs the same real `WorkspaceSidebarList` insertion and drop callbacks. No ordering or callback acceptance check was removed.
+- Production drag destination code was not changed. The hosted fixture uses direct AppKit callbacks rather than an OS drag session, so this change does not prove native edge auto-scroll behavior. `git diff --check` passed; this Linux host has no `swiftc` or `swift-format`. Hosted macOS rerun remains pending.
+
+## Stalled SSH pressure snapshot fallback — 2026-11-01
+
+Foundation retry r36 failed because `Lost` arrived before a Heartbeat had observed the full 400 ms pressure interval. The joined producer snapshot showed 10,187 accepted and 3,057,414 rejected receipts, while the latest valid Heartbeat (sequence 19) had the same accepted count and 2,742,959 rejections; the sustained Heartbeat marker was therefore still unset even though the producer-side rejection epoch had started earlier.
+
+The test now retains the producer rejection epoch observed by the latest valid Heartbeat and evaluates pressure against the stopped, joined pump snapshot on `Lost`. It requires at least one valid Heartbeat, unchanged accepted count, strictly increased rejected count, an unchanged rejection epoch, and at least 400 ms elapsed from that producer epoch. The pressure marker is the rejection epoch start plus 400 ms. This keeps the evidence tied to a valid sequenced peer frame and a stable producer snapshot without requiring a later Heartbeat to arrive before loss.
+
+The 30-second absolute loss deadline, 2.45-second pressure-relative loss bound, strict binding and sequence checks, and cancellation/disconnect phase remain in place. No sleeps or production changes were added.
+
+Focused Linux verification:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::real_managed_ssh_stalled_stdin_has_bounded_loss_and_cancellation -- --nocapture` passed. The pressure marker was 653 ms after production began; `Lost` followed 1.610 seconds later, within the 2.45-second bound. Cancellation disconnected the sender 110 ms after stream drop.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime --lib` passed all 115 tests. Log: `/tmp/zmux-stalled-snapshot-fallback-r1.log`.
+- `RUST_TEST_THREADS=2 scripts/check` passed with exit status 0. Log: `/tmp/zmux-stalled-snapshot-fallback-r2.log`.
+- `cargo fmt --all -- --check` and `git diff --check` passed.
+
+These are local Linux source checks; no hosted rerun or commit was started for this test-only follow-up.
