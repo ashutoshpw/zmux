@@ -1623,13 +1623,15 @@ except BrokenPipeError:
         }
     }
 
-    const STALLED_HEARTBEAT_INTERVALS: usize = 4;
+    // The stalled peer emits a Heartbeat every 100 ms; require four full
+    // periods of observed no-admission/rejection progress before confirming pressure.
+    const MIN_SUSTAINED_BACKPRESSURE: Duration = Duration::from_millis(400);
 
     struct HeartbeatBackpressure {
         last_sequence: u64,
         last_accepted: usize,
         last_rejected: usize,
-        no_progress_intervals: usize,
+        no_progress_since: Option<Instant>,
         sustained_since: Option<Instant>,
     }
 
@@ -1640,7 +1642,7 @@ except BrokenPipeError:
                 last_sequence: 0,
                 last_accepted,
                 last_rejected,
-                no_progress_intervals: 0,
+                no_progress_since: None,
                 sustained_since: None,
             }
         }
@@ -1654,13 +1656,16 @@ except BrokenPipeError:
             self.last_sequence = sequence;
 
             let (accepted, rejected) = pump.stats();
+            let observed_at = Instant::now();
             if accepted == self.last_accepted && rejected > self.last_rejected {
-                self.no_progress_intervals += 1;
-                if self.no_progress_intervals >= STALLED_HEARTBEAT_INTERVALS {
-                    self.sustained_since.get_or_insert_with(Instant::now);
+                let no_progress_since = *self.no_progress_since.get_or_insert(observed_at);
+                if observed_at.saturating_duration_since(no_progress_since)
+                    >= MIN_SUSTAINED_BACKPRESSURE
+                {
+                    self.sustained_since.get_or_insert(observed_at);
                 }
             } else {
-                self.no_progress_intervals = 0;
+                self.no_progress_since = None;
                 self.sustained_since = None;
             }
             self.last_accepted = accepted;
@@ -1767,7 +1772,7 @@ except BrokenPipeError:
         let stalled_started = Instant::now();
         let loss_deadline = stalled_started + HANDSHAKE_TIMEOUT;
         let mut pressure = HeartbeatBackpressure::new(&pump);
-        let lost = loop {
+        let (lost, lost_at) = loop {
             let remaining = loss_deadline.saturating_duration_since(Instant::now());
             assert!(
                 !remaining.is_zero(),
@@ -1797,6 +1802,7 @@ except BrokenPipeError:
                 Message::Lost {
                     binding: lost_binding,
                 } => {
+                    let lost_at = Instant::now();
                     assert_eq!(lost_binding, binding);
                     assert!(
                         pressure.sustained_since.is_some(),
@@ -1805,7 +1811,7 @@ except BrokenPipeError:
                         pump.stats().1,
                         pressure.last_sequence
                     );
-                    break lost_binding;
+                    break (lost_binding, lost_at);
                 }
                 Message::Connected { .. } => {
                     panic!("unexpected reconnect after stalled stdin")
@@ -1817,7 +1823,7 @@ except BrokenPipeError:
         };
         pump.stop();
         let (accepted, rejected) = pump.stats();
-        let pressure_started = pressure
+        let sustained_pressure_at = pressure
             .sustained_since
             .expect("loss followed sustained receipt backpressure");
         assert!(
@@ -1828,18 +1834,22 @@ except BrokenPipeError:
             rejected > 0,
             "receipt admission never observed backpressure"
         );
+        assert_eq!(lost, binding);
+        let loss_after_start = lost_at.saturating_duration_since(stalled_started);
+        let loss_after_sustained_pressure =
+            lost_at.saturating_duration_since(sustained_pressure_at);
+        let scheduling_allowance = POLL_INTERVAL + POLL_INTERVAL;
+        let bounded_loss_allowance =
+            CLIENT_FRAME_WRITE_TIMEOUT + CHILD_REAP_SYNC_TIMEOUT + scheduling_allowance;
         eprintln!(
-            "managed lifecycle stalled stdin: accepted={accepted}, rejected={rejected}, backpressure_for={:?}, loss_after={:?}, last_heartbeat={}",
-            stalled_started
-                .elapsed()
-                .saturating_sub(pressure_started.elapsed()),
-            stalled_started.elapsed(),
+            "managed lifecycle stalled stdin: accepted={accepted}, rejected={rejected}, sustained_pressure_after={:?}, loss_after_start={loss_after_start:?}, loss_after_pressure={loss_after_sustained_pressure:?}, allowance={bounded_loss_allowance:?}, last_heartbeat={}",
+            sustained_pressure_at.saturating_duration_since(stalled_started),
             pressure.last_sequence
         );
-        assert_eq!(lost, binding);
         assert!(
-            stalled_started.elapsed() < Duration::from_secs(10),
-            "stalled SSH stdin did not reach bounded loss promptly: accepted={accepted}, rejected={rejected}, last heartbeat={}",
+            loss_after_sustained_pressure < bounded_loss_allowance,
+            "stalled SSH stdin loss exceeded the frame deadline and bounded cleanup allowance: elapsed={loss_after_sustained_pressure:?}, frame_timeout={CLIENT_FRAME_WRITE_TIMEOUT:?}, cleanup_timeout={CHILD_REAP_SYNC_TIMEOUT:?}, scheduling_allowance={:?}, accepted={accepted}, rejected={rejected}, last heartbeat={}",
+            scheduling_allowance,
             pressure.last_sequence
         );
         drop(stream);

@@ -325,3 +325,36 @@ Focused Linux loopback verification:
 - The regression now uses a continuous receipt pump while the stalled peer sends valid Heartbeats every 100 ms. It requires four heartbeat intervals with no new admissions and increasing rejection counts before classifying pressure as sustained, then waits for `Lost` under one absolute `HANDSHAKE_TIMEOUT`. Focused and concurrent local Linux lifecycle tests passed; detailed commands and measurements are recorded above.
 - Independent review found two coverage limits: the producer yields while retrying rejected receipts but does not bound CPU use (observed test runs reached roughly 3.6 million rejections in about 2.3 seconds), and the cancellation phase verifies prompt stream shutdown/sender disconnection but does not itself assert integration-child reap completion. A separate `ChildOwner` test covers process-group termination, leader reaping, stdout closure, and no signaling after reap. The loopback test skips when Python or SSH prerequisites are unavailable.
 - A hosted macOS rerun remains pending. This failed run produced no packaged app, sidebar smoke evidence, or downloadable artifact; no hosted acceptance or delivered build is claimed.
+
+## Hosted stalled-stdin deadline-bound correction — 2026-11-01
+
+Hosted workflow [41329593839](https://github.com/ashutoshpw/zmux/actions/runs/41329593839) failed only the test's `<10s` total-from-start assertion. It reported 10,539 accepted receipts, 18,540,147 rejected calls, sustained pressure at 14.640 seconds, `Lost` at 15.887 seconds, and Heartbeats through sequence 89. The 1.246-second interval from the sustained-pressure marker to `Lost` is consistent with the existing two-second per-frame write deadline; the longer macOS time is the time to reach sustained backpressure. This is not evidence of a production write-timeout regression.
+
+The test now captures the `Lost` receive time and bounds it relative to the sustained-pressure confirmation using the existing `CLIENT_FRAME_WRITE_TIMEOUT` (2 seconds), `CHILD_REAP_SYNC_TIMEOUT` (250 ms), and an explicit two-poll scheduling allowance (200 ms). The single 30-second `HANDSHAKE_TIMEOUT` remains absolute from receipt production start. Production timeout values and heartbeat, owner-binding, sequence, admission, and unexpected-message checks are unchanged.
+
+Focused Linux verification:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::real_managed_ssh_stalled_stdin_has_bounded_loss_and_cancellation -- --nocapture` passed. `Lost` arrived 1.240 seconds after sustained pressure, within the derived 2.45-second bound; total time from production start was 2.297 seconds.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed all 5 tests with both loopback SSH tests running concurrently. `Lost` followed sustained pressure by 1.109 seconds; cancellation disconnected the sender 110 ms after stream drop.
+- `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed. Independent read-only review found no blockers.
+- The hosted rerun, workspace `scripts/check`, macOS build, and downloadable artifact remain pending. The local checks are Linux loopback evidence and do not establish hosted macOS acceptance.
+
+## Monotonic stalled-pressure confirmation follow-up — 2026-11-01
+
+Review identified that counting four Heartbeat samples alone did not prove four elapsed intervals: buffered frames can be drained back-to-back. The test tracker now records a monotonic `no_progress_since` timestamp and confirms sustained pressure only after at least 400 ms of unchanged accepted receipts and increasing rejections, observed across valid Heartbeats with the existing strict sequence and binding checks. This waits on protocol frames and uses no test sleep. The 30-second absolute deadline and 2.45-second pressure-relative loss bound remain unchanged; production code and timeout values are unchanged.
+
+Focused Linux verification after the elapsed-time change:
+
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests::real_managed_ssh_stalled_stdin_has_bounded_loss_and_cancellation -- --nocapture` passed. Sustained pressure was confirmed 1.322 seconds after receipt production started; `Lost` followed 977 ms later, within the 2.45-second derived bound.
+- `RUST_TEST_THREADS=2 cargo test -p zmux-desktop-runtime remote_agent_lifecycle::tests:: -- --nocapture` passed all 5 tests with both loopback SSH tests running concurrently. `Lost` followed sustained pressure by 1.101 seconds; cancellation disconnected the sender 110 ms after stream drop.
+- `cargo clippy -p zmux-desktop-runtime --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- Fresh independent read-only review found no blockers: buffered Heartbeats cannot satisfy the 400 ms monotonic interval back-to-back, any admission progress or non-increasing rejection sample resets the observation, and both deadlines remain anchored as intended.
+- The parent stopped the workspace `scripts/check`; no hosted rerun was started. These results are local Linux evidence only.
+
+## Latest verification update — 2026-11-01
+
+- The full `RUST_TEST_THREADS=2 scripts/check` retry r28 passed on Linux with exit status 0. Log: `/tmp/zmux-agent-sidebar-check-r28.log`.
+- Hosted workflow [41329593839](https://github.com/ashutoshpw/zmux/actions/runs/41329593839) failed the earlier total-from-start `<10s` assertion: 10,539 receipts were accepted, sustained pressure was confirmed at 14.640 seconds, and `Lost` arrived at 15.887 seconds (1.246 seconds after pressure). This reflects the time needed to reach actual backpressure on macOS, not a production write-timeout regression.
+- The test now bounds `Lost` relative to sustained-pressure confirmation by the existing two-second client write deadline plus 250 ms child-reap and 200 ms scheduling allowances, while retaining the absolute 30-second deadline from receipt-pump start. Sustained pressure also requires 400 ms of monotonic no-admission progress and increasing rejection counts across valid, sequenced Heartbeats; buffered Heartbeats alone cannot meet the interval. Production timeout values are unchanged.
+- Focused and concurrent Linux lifecycle tests passed after these changes. Independent read-only review found no blockers: admission progress or non-increasing rejection counts reset the pressure interval, and the absolute and pressure-relative deadlines remain anchored correctly. Detailed commands and timing evidence are recorded above.
+- A hosted macOS rerun is pending. Workflow 41329593839 did not establish packaged app, sidebar smoke, or downloadable-artifact acceptance.
