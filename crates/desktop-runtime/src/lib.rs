@@ -2151,6 +2151,39 @@ impl Worker {
                                 }
                             }
                         }
+                        Frame::ProviderState {
+                            sequence,
+                            observation,
+                            ..
+                        } => {
+                            let previous_cursor = self.agent_lifecycle.alert_cursor();
+                            let model = self.model.snapshot();
+                            match self.agent_lifecycle.apply_remote_provider_observation(
+                                &model,
+                                agent_lifecycle::ProviderObservationInput {
+                                    target: binding.target,
+                                    runtime_id: binding.runtime_id,
+                                    generation: binding.generation,
+                                    sequence,
+                                    observation: *observation,
+                                },
+                                Instant::now(),
+                            ) {
+                                Ok(()) => {
+                                    dirty = true;
+                                    if let Err(error) =
+                                        self.admit_agent_alerts_since(previous_cursor)
+                                    {
+                                        self.last_error = Some(error.to_string());
+                                    }
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "zmux remote provider lifecycle observation ignored: {error}"
+                                    );
+                                }
+                            }
+                        }
                         Frame::Hello { .. } | Frame::Active { .. } => {
                             // The reader consumes the handshake before it admits
                             // any frame to the desktop event queue.
@@ -2882,6 +2915,9 @@ impl Worker {
             agent_lifecycle::Action::Event { capability, .. } => {
                 self.agent_lifecycle.target_for_capability(*capability)
             }
+            agent_lifecycle::Action::ProviderObservation { target, .. }
+            | agent_lifecycle::Action::ProviderEvidenceLost { target, .. }
+            | agent_lifecycle::Action::ProviderSessionEnded { target, .. } => Some(*target),
         }
         .ok_or_else(|| DesktopError::Failure("lifecycle capability is stale or unknown".into()))?;
         let provider = match &request.action {
@@ -2892,14 +2928,42 @@ impl Worker {
                 .ok_or_else(|| {
                     DesktopError::Failure("lifecycle capability is stale or unknown".into())
                 })?,
+            agent_lifecycle::Action::ProviderObservation { observation, .. } => {
+                agent_lifecycle::Provider::for_transport(observation.provider, false)
+            }
+            agent_lifecycle::Action::ProviderEvidenceLost { provider, .. }
+            | agent_lifecycle::Action::ProviderSessionEnded { provider, .. } => {
+                agent_lifecycle::Provider::for_transport(*provider, false)
+            }
         };
-        if provider != agent_lifecycle::Provider::ClaudeLocal {
+        let normalized_action = matches!(
+            &request.action,
+            agent_lifecycle::Action::ProviderObservation { .. }
+                | agent_lifecycle::Action::ProviderEvidenceLost { .. }
+                | agent_lifecycle::Action::ProviderSessionEnded { .. }
+        );
+        if normalized_action
+            && !matches!(
+                provider,
+                agent_lifecycle::Provider::CodexLocal | agent_lifecycle::Provider::OpenCodeLocal
+            )
+        {
             return Err(DesktopError::Failure(
-                "remote lifecycle claims require the managed SSH adapter".into(),
+                "provider observation must identify a supported local provider".into(),
+            ));
+        }
+        if !normalized_action && provider != agent_lifecycle::Provider::ClaudeLocal {
+            return Err(DesktopError::Failure(
+                "remote and generic provider claims require their owner-specific adapter".into(),
             ));
         }
         let model = self.model.snapshot();
-        if !agent_lifecycle::has_local_owner(&model, target) {
+        let has_owner = if normalized_action {
+            agent_lifecycle::has_local_provider_owner(&model, target, provider)
+        } else {
+            agent_lifecycle::has_local_owner(&model, target)
+        };
+        if !has_owner {
             return Err(DesktopError::Failure(
                 "lifecycle target is not the exact current local terminal session".into(),
             ));
@@ -2917,12 +2981,107 @@ impl Worker {
                 "lifecycle target session is not currently running".into(),
             ));
         }
+        if request.request_id.is_nil() {
+            return Err(DesktopError::Failure(
+                "lifecycle request id cannot be nil".into(),
+            ));
+        }
         let previous_alert_cursor = self.agent_lifecycle.alert_cursor();
-        self.agent_lifecycle_result = Some(
-            self.agent_lifecycle
-                .apply(request, Instant::now())
+        let request_id = request.request_id;
+        let now = Instant::now();
+        let receipt = match request.action {
+            action @ (agent_lifecycle::Action::Register { .. }
+            | agent_lifecycle::Action::Event { .. }) => self
+                .agent_lifecycle
+                .apply(agent_lifecycle::Request { request_id, action }, now)
                 .map_err(DesktopError::Failure)?,
-        );
+            agent_lifecycle::Action::ProviderObservation {
+                target,
+                runtime_id,
+                generation,
+                sequence,
+                observation,
+            } => {
+                self.agent_lifecycle
+                    .apply_local_provider_observation(
+                        &model,
+                        agent_lifecycle::ProviderObservationInput {
+                            target,
+                            runtime_id,
+                            generation,
+                            sequence,
+                            observation,
+                        },
+                        now,
+                    )
+                    .map_err(DesktopError::Failure)?;
+                agent_lifecycle::Receipt {
+                    request_id,
+                    accepted: true,
+                    hook_disposition: agent_lifecycle::HookDisposition::NotHandled,
+                    capability: None,
+                }
+            }
+            agent_lifecycle::Action::ProviderEvidenceLost {
+                target,
+                provider,
+                session_id,
+                runtime_id,
+                generation,
+                sequence,
+            } => {
+                self.agent_lifecycle
+                    .apply_local_provider_evidence_lost(
+                        &model,
+                        agent_lifecycle::ProviderSessionEnd {
+                            target,
+                            provider,
+                            session_id,
+                            runtime_id,
+                            generation,
+                            sequence,
+                        },
+                        now,
+                    )
+                    .map_err(DesktopError::Failure)?;
+                agent_lifecycle::Receipt {
+                    request_id,
+                    accepted: true,
+                    hook_disposition: agent_lifecycle::HookDisposition::NotHandled,
+                    capability: None,
+                }
+            }
+            agent_lifecycle::Action::ProviderSessionEnded {
+                target,
+                provider,
+                session_id,
+                runtime_id,
+                generation,
+                sequence,
+            } => {
+                self.agent_lifecycle
+                    .apply_local_provider_session_ended(
+                        &model,
+                        agent_lifecycle::ProviderSessionEnd {
+                            target,
+                            provider,
+                            session_id,
+                            runtime_id,
+                            generation,
+                            sequence,
+                        },
+                        now,
+                    )
+                    .map_err(DesktopError::Failure)?;
+                agent_lifecycle::Receipt {
+                    request_id,
+                    accepted: true,
+                    hook_disposition: agent_lifecycle::HookDisposition::NotHandled,
+                    capability: None,
+                }
+            }
+        };
+        self.agent_lifecycle_result = Some(receipt);
         self.admit_agent_alerts_since(previous_alert_cursor)?;
         Ok(())
     }
@@ -2937,16 +3096,17 @@ impl Worker {
             .filter(|event| event.cursor > previous_cursor)
             .collect();
         for event in events {
+            let provider_name = event.provider.display_name();
             let (kind, title, body) = match event.kind {
                 agent_lifecycle::AlertKind::NeedsUser => (
                     "needs_user",
-                    "Claude Code needs you",
-                    "Claude Code is waiting for your input.",
+                    format!("{provider_name} needs you"),
+                    format!("{provider_name} is waiting for your input."),
                 ),
                 agent_lifecycle::AlertKind::Completed => (
                     "completed",
-                    "Claude Code finished",
-                    "Claude Code finished a turn.",
+                    format!("{provider_name} finished"),
+                    format!("{provider_name} finished a turn."),
                 ),
             };
             self.attention.notify_agent_event(
@@ -2956,9 +3116,9 @@ impl Worker {
                 kind,
                 &format!("{alert_epoch}:{}", event.cursor),
                 &NotificationContent {
-                    title: title.into(),
+                    title,
                     subtitle: "Agent".into(),
-                    body: body.into(),
+                    body,
                     ..Default::default()
                 },
             )?;

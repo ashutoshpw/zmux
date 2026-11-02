@@ -1,4 +1,4 @@
-//! Bounded reader for the Claude lifecycle stream carried by a managed SSH master.
+//! Bounded reader for provider lifecycle frames carried by a managed SSH master.
 //!
 //! Frames are treated as unauthenticated provider claims from the selected SSH
 //! account. The nonce correlates the exact terminal bootstrap; it is not provider
@@ -644,7 +644,7 @@ fn run_attempt(
                     output_pending.extend_from_slice(&bytes[..length]);
                     while let Some(newline) = output_pending.iter().position(|byte| *byte == b'\n')
                     {
-                        if newline > MAX_PARTIAL_FRAME_BYTES {
+                        if newline + 1 > MAX_PARTIAL_FRAME_BYTES {
                             return Err(
                                 "managed SSH lifecycle frame exceeded its byte bound".into()
                             );
@@ -727,9 +727,14 @@ fn run_attempt(
                                         .into(),
                                 );
                             }
-                            Frame::Heartbeat { sequence, .. } | Frame::Hook { sequence, .. } => {
-                                if !active_seen || *sequence == 0 || *sequence <= last_sequence {
-                                    return Err("managed SSH lifecycle sequence is stale or precedes handshake".into());
+                            Frame::Heartbeat { sequence, .. }
+                            | Frame::Hook { sequence, .. }
+                            | Frame::ProviderState { sequence, .. } => {
+                                if !active_seen
+                                    || *sequence == 0
+                                    || last_sequence.checked_add(1) != Some(*sequence)
+                                {
+                                    return Err("managed SSH lifecycle sequence is stale, gapped, or precedes handshake".into());
                                 }
                                 last_sequence = *sequence;
                                 if sender
@@ -869,6 +874,7 @@ mod tests {
         sync::mpsc::TryRecvError,
     };
     use zmux_remote_runtime::SshDescriptor;
+    use zmux_remote_runtime::agent_lifecycle::ProviderKind;
     use zmux_session_runtime::{
         Launch, Session, ShutdownPolicy,
         shell_integration::{OpenRequestNonce, OpenRequestRegistration, OpenRequestSource},
@@ -924,6 +930,44 @@ try:
         time.sleep(0.1)
 except BrokenPipeError:
     pass
+"#;
+
+    const PROVIDER_SEQUENCE_GAP_PEER: &str = r#"
+import json
+import sys
+import uuid
+
+nonce = uuid.UUID(sys.argv[1]).hex
+nonce_text = str(uuid.UUID(hex=nonce))
+def send(frame):
+    sys.stdout.write(json.dumps(frame, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+send({"kind": "hello", "version": 3, "nonce": nonce_text})
+activation = json.loads(sys.stdin.buffer.readline(4097))
+if activation.get("kind") != "activate" or activation.get("version") != 3 or uuid.UUID(activation.get("nonce", "")).hex != nonce:
+    sys.exit(70)
+generation = activation["generation"]
+send({"kind": "active", "version": 3, "nonce": nonce_text, "generation": generation})
+
+observation = {
+    "provider": "codex",
+    "scope": "root",
+    "session_id": "thread_transport_7",
+    "turn_id": "turn_transport_8",
+    "state": "working",
+    "transition": "state_changed",
+    "marker": "live",
+}
+for sequence in (1, 3):
+    send({
+        "kind": "provider_state",
+        "version": 3,
+        "nonce": nonce_text,
+        "generation": generation,
+        "sequence": sequence,
+        "observation": observation,
+    })
 "#;
 
     const INSTALLED_LIFECYCLE_SCRIPT: &str =
@@ -1574,6 +1618,134 @@ except BrokenPipeError:
             }
             Err(error) => panic!("managed lifecycle Active handshake failed: {error}"),
         }
+    }
+
+    #[test]
+    fn managed_ssh_forwards_provider_state_and_loses_gapped_streams() {
+        if !private_ssh_prerequisites_available() {
+            eprintln!(
+                "skipping provider frame transport test: private SSH prerequisites unavailable"
+            );
+            return;
+        }
+
+        let fixture = SshFixture::start();
+        let connection = fixture.connection();
+        let nonce = OpenRequestNonce::generate();
+        let target = Target {
+            identity_namespace: Uuid::new_v4(),
+            surface_id: SurfaceId(17),
+            surface_uuid: Uuid::new_v4(),
+            session_id: SessionId(23),
+        };
+        let registration = OpenRequestRegistration::new(nonce, OpenRequestSource::ManagedSsh);
+        let terminal = connection.terminal_spec(&nonce);
+        let session = Session::spawn_with_open_requests(
+            Launch {
+                program: terminal.program,
+                args: terminal.args,
+                cwd: None,
+                size: zmux_session_runtime::default_size(),
+            },
+            &[],
+            &[],
+            ShutdownPolicy::Kill,
+            None,
+            Some(registration),
+            Arc::clone(&connection),
+        )
+        .expect("spawn exact managed SSH terminal for provider frame test");
+
+        let bootstrap_started = fixture.remote_root.join(".bootstrap-started");
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(10);
+        while !bootstrap_started.exists() {
+            let snapshot = session_snapshot_before(
+                &session,
+                bootstrap_deadline,
+                "inspect provider frame SSH bootstrap",
+            );
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH bootstrap failed before provider frame setup: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < bootstrap_deadline,
+                "managed SSH terminal did not enter its provider frame bootstrap gate"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(fixture.remote_root.join(".release-bootstrap"), b"go")
+            .expect("release the provider frame test bootstrap");
+
+        let integration_root = PathBuf::from(nonce.remote_integration_directory());
+        let lifecycle_script = integration_root.join("claude-lifecycle-stream.py");
+        let expected_script = format!("{INSTALLED_LIFECYCLE_SCRIPT}\n");
+        let install_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if fs::read_to_string(&lifecycle_script).ok().as_deref()
+                == Some(expected_script.as_str())
+            {
+                break;
+            }
+            let snapshot = session_snapshot_before(
+                &session,
+                install_deadline,
+                "inspect provider frame lifecycle helper install",
+            );
+            assert_ne!(
+                snapshot.state,
+                zmux_session_runtime::State::Failed,
+                "managed SSH bootstrap failed before provider frame helper install: {:?}",
+                snapshot.failure
+            );
+            assert!(
+                Instant::now() < install_deadline,
+                "managed SSH bootstrap did not install the provider frame lifecycle helper"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        fs::write(&lifecycle_script, PROVIDER_SEQUENCE_GAP_PEER)
+            .expect("install protocol peer that emits provider state then a skipped sequence");
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let stream = Stream::start(Arc::clone(&connection), nonce, target, 1, sender)
+            .expect("start managed provider lifecycle stream through loopback SSH");
+        let binding = wait_stream_connected(&receiver);
+        let first = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("valid provider_state frame should reach the stream receiver");
+        match first {
+            Message::Frame {
+                binding: frame_binding,
+                frame:
+                    zmux_remote_runtime::agent_lifecycle::Frame::ProviderState {
+                        sequence,
+                        observation,
+                        ..
+                    },
+            } => {
+                assert_eq!(frame_binding, binding);
+                assert_eq!(sequence, 1);
+                assert_eq!(observation.provider, ProviderKind::Codex);
+                assert_eq!(observation.session_id, "thread_transport_7");
+                assert_eq!(observation.turn_id.as_deref(), Some("turn_transport_8"));
+            }
+            _ => panic!("expected the sanitized provider_state frame"),
+        }
+
+        match receiver.recv_timeout(Duration::from_secs(5)) {
+            Ok(Message::Lost {
+                binding: lost_binding,
+            }) => assert_eq!(lost_binding, binding),
+            Ok(_) => panic!("expected skipped provider sequence to lose stream"),
+            Err(error) => panic!("skipped provider sequence did not lose stream: {error}"),
+        }
+
+        drop(stream);
+        drop(session);
+        drop(fixture);
     }
 
     struct ReceiptPump {

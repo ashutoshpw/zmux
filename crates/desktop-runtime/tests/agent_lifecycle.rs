@@ -11,8 +11,12 @@ use std::{
 use uuid::Uuid;
 use zmux_desktop_runtime::{
     Desktop, Shell,
-    agent_lifecycle::{Action, Activity, Connection, Event, Provider, Request, Target},
+    agent_lifecycle::{Action, Activity, AlertKind, Connection, Event, Provider, Request, Target},
     control::{CONTROL_VERSION, ControlCommand, ControlRequest, ControlResponse, ControlServer},
+};
+use zmux_remote_runtime::agent_lifecycle::{
+    ProviderKind, ProviderLifecycleObservation, ProviderMarker, ProviderScope, ProviderState,
+    ProviderTransition,
 };
 use zmux_workspace_core::targets::TargetKind;
 
@@ -147,6 +151,59 @@ fn register(
         runtime_id,
         generation,
         provider_session_id,
+    }
+}
+
+fn provider_observation(
+    provider: ProviderKind,
+    session_id: &str,
+    turn_id: Option<&str>,
+    state: ProviderState,
+    transition: ProviderTransition,
+    marker: ProviderMarker,
+) -> ProviderLifecycleObservation {
+    ProviderLifecycleObservation {
+        provider,
+        scope: ProviderScope::Root,
+        session_id: session_id.into(),
+        turn_id: turn_id.map(str::to_owned),
+        state,
+        transition,
+        marker,
+    }
+}
+
+fn provider_observation_action(
+    target: Target,
+    runtime_id: Uuid,
+    generation: Uuid,
+    sequence: u64,
+    observation: ProviderLifecycleObservation,
+) -> Action {
+    Action::ProviderObservation {
+        target,
+        runtime_id,
+        generation,
+        sequence,
+        observation,
+    }
+}
+
+fn provider_evidence_lost_action(
+    target: Target,
+    provider: ProviderKind,
+    session_id: &str,
+    runtime_id: Uuid,
+    generation: Uuid,
+    sequence: u64,
+) -> Action {
+    Action::ProviderEvidenceLost {
+        target,
+        provider,
+        session_id: session_id.into(),
+        runtime_id,
+        generation,
+        sequence,
     }
 }
 
@@ -649,4 +706,585 @@ fn exact_hook_receipts_cover_new_and_same_run_alerts_and_reject_reuse() {
 
     server.shutdown(Duration::from_secs(2)).unwrap();
     desktop.shutdown(Duration::from_secs(5)).unwrap();
+}
+
+#[test]
+fn generic_provider_observations_are_local_control_actions_with_explicit_ends() {
+    let directory = Directory::new();
+    let socket = directory.0.join("control.sock");
+    let desktop = Arc::new(desktop());
+    let server = ControlServer::start(&socket, Arc::clone(&desktop)).unwrap();
+    let initial = live_snapshot(&desktop);
+    let model = &initial.model;
+    let surface = model.workspaces[0].root.panes()[0].selected();
+    let target = Target {
+        identity_namespace: model.identity_namespace,
+        surface_id: surface.id,
+        surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+        session_id: surface.session_id.unwrap(),
+    };
+
+    let codex_runtime = Uuid::new_v4();
+    let codex_generation = Uuid::new_v4();
+    let codex_session = "codex_session_7";
+    let observation = ProviderLifecycleObservation {
+        provider: ProviderKind::Codex,
+        scope: ProviderScope::Root,
+        session_id: codex_session.into(),
+        turn_id: Some("codex_turn_8".into()),
+        state: ProviderState::Working,
+        transition: ProviderTransition::StateChanged,
+        marker: ProviderMarker::Live,
+    };
+    let receipt = result(send_action(
+        &socket,
+        1,
+        Action::ProviderObservation {
+            target,
+            runtime_id: codex_runtime,
+            generation: codex_generation,
+            sequence: 1,
+            observation,
+        },
+    ));
+    assert!(receipt.get("capability").is_none());
+    let codex = live_snapshot(&desktop)
+        .agent_lifecycle
+        .iter()
+        .find(|agent| agent.provider == Provider::CodexLocal)
+        .cloned()
+        .expect("the control action creates the local Codex snapshot");
+    assert_eq!(codex.activity, Activity::Working);
+
+    result(send_action(
+        &socket,
+        2,
+        Action::ProviderEvidenceLost {
+            target,
+            provider: ProviderKind::Codex,
+            session_id: codex_session.into(),
+            runtime_id: codex_runtime,
+            generation: codex_generation,
+            sequence: 2,
+        },
+    ));
+    let codex = desktop
+        .snapshot()
+        .unwrap()
+        .agent_lifecycle
+        .iter()
+        .find(|agent| agent.provider == Provider::CodexLocal)
+        .cloned()
+        .expect("evidence loss leaves a visible Unknown record");
+    assert_eq!(codex.activity, Activity::Unknown);
+    assert_eq!(codex.connection, Connection::Unknown);
+
+    let codex_recovery_runtime = Uuid::new_v4();
+    let codex_recovery_generation = Uuid::new_v4();
+    result(send_action(
+        &socket,
+        3,
+        Action::ProviderObservation {
+            target,
+            runtime_id: codex_recovery_runtime,
+            generation: codex_recovery_generation,
+            sequence: 1,
+            observation: ProviderLifecycleObservation {
+                provider: ProviderKind::Codex,
+                scope: ProviderScope::Root,
+                session_id: codex_session.into(),
+                turn_id: Some("codex_turn_8".into()),
+                state: ProviderState::Working,
+                transition: ProviderTransition::Snapshot,
+                marker: ProviderMarker::Recovery,
+            },
+        },
+    ));
+    let codex = desktop
+        .snapshot()
+        .unwrap()
+        .agent_lifecycle
+        .iter()
+        .find(|agent| agent.provider == Provider::CodexLocal)
+        .cloned()
+        .expect("recovered provider retains the exact session row");
+    assert_eq!(codex.activity, Activity::Working);
+    assert_eq!(codex.connection, Connection::Connected);
+
+    let opencode_runtime = Uuid::new_v4();
+    let opencode_generation = Uuid::new_v4();
+    let opencode_session = "sess_opencode_9";
+    result(send_action(
+        &socket,
+        4,
+        Action::ProviderObservation {
+            target,
+            runtime_id: opencode_runtime,
+            generation: opencode_generation,
+            sequence: 1,
+            observation: ProviderLifecycleObservation {
+                provider: ProviderKind::OpenCode,
+                scope: ProviderScope::Root,
+                session_id: opencode_session.into(),
+                turn_id: Some("turn_opencode_10".into()),
+                state: ProviderState::Working,
+                transition: ProviderTransition::StateChanged,
+                marker: ProviderMarker::Live,
+            },
+        },
+    ));
+    result(send_action(
+        &socket,
+        5,
+        Action::ProviderSessionEnded {
+            target,
+            provider: ProviderKind::OpenCode,
+            session_id: opencode_session.into(),
+            runtime_id: opencode_runtime,
+            generation: opencode_generation,
+            sequence: 2,
+        },
+    ));
+    let opencode = desktop
+        .snapshot()
+        .unwrap()
+        .agent_lifecycle
+        .iter()
+        .find(|agent| agent.provider == Provider::OpenCodeLocal)
+        .cloned()
+        .expect("provider exit leaves a visible disconnected record");
+    assert_eq!(opencode.activity, Activity::Unknown);
+    assert_eq!(opencode.connection, Connection::Disconnected);
+
+    let resumed_runtime = Uuid::new_v4();
+    let resumed_generation = Uuid::new_v4();
+    result(send_action(
+        &socket,
+        51,
+        provider_observation_action(
+            target,
+            resumed_runtime,
+            resumed_generation,
+            1,
+            provider_observation(
+                ProviderKind::OpenCode,
+                opencode_session,
+                Some("turn_resumed"),
+                ProviderState::Working,
+                ProviderTransition::Snapshot,
+                ProviderMarker::Recovery,
+            ),
+        ),
+    ));
+    let resumed = live_snapshot(&desktop)
+        .agent_lifecycle
+        .iter()
+        .find(|agent| agent.provider == Provider::OpenCodeLocal)
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (resumed.runtime_id, resumed.generation),
+        (resumed_runtime, resumed_generation)
+    );
+    assert_eq!(
+        (resumed.activity, resumed.connection),
+        (Activity::Working, Connection::Connected)
+    );
+    let stale = send_action(
+        &socket,
+        52,
+        provider_observation_action(
+            target,
+            opencode_runtime,
+            opencode_generation,
+            3,
+            provider_observation(
+                ProviderKind::OpenCode,
+                opencode_session,
+                Some("turn_opencode_10"),
+                ProviderState::Working,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    );
+    assert!(
+        !stale.ok,
+        "the normally ended generation cannot displace its resumed owner"
+    );
+
+    let generic_register = send_action(
+        &socket,
+        6,
+        Action::Register {
+            target,
+            provider: Provider::CodexLocal,
+            runtime_id: Uuid::new_v4(),
+            generation: Uuid::new_v4(),
+            provider_session_id: Uuid::new_v4(),
+        },
+    );
+    assert!(!generic_register.ok);
+
+    // A delayed same-generation baseline must not displace a live turn or
+    // clear the completion eligibility established by its live Working event.
+    let mut lifecycle_findings = Vec::new();
+    result(send_action(
+        &socket,
+        7,
+        provider_observation_action(
+            target,
+            codex_recovery_runtime,
+            codex_recovery_generation,
+            2,
+            provider_observation(
+                ProviderKind::Codex,
+                codex_session,
+                Some("turn_live_a"),
+                ProviderState::Working,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        8,
+        provider_observation_action(
+            target,
+            codex_recovery_runtime,
+            codex_recovery_generation,
+            3,
+            provider_observation(
+                ProviderKind::Codex,
+                codex_session,
+                Some("turn_delayed_b"),
+                ProviderState::Working,
+                ProviderTransition::Snapshot,
+                ProviderMarker::Baseline,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        9,
+        provider_observation_action(
+            target,
+            codex_recovery_runtime,
+            codex_recovery_generation,
+            4,
+            provider_observation(
+                ProviderKind::Codex,
+                codex_session,
+                Some("turn_live_a"),
+                ProviderState::Idle,
+                ProviderTransition::TurnCompleted,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    let completion_snapshot = desktop.snapshot().unwrap();
+    let codex_completed: Vec<_> = completion_snapshot
+        .agent_alert_events
+        .iter()
+        .filter(|alert| {
+            alert.provider == Provider::CodexLocal && alert.kind == AlertKind::Completed
+        })
+        .collect();
+    let recovered_codex = completion_snapshot.agent_lifecycle.iter().find(|agent| {
+        agent.provider == Provider::CodexLocal && agent.runtime_id == codex_recovery_runtime
+    });
+    if codex_completed.len() != 1
+        || recovered_codex.is_none_or(|agent| {
+            agent.activity != Activity::Idle
+                || agent.prompt_id != codex_completed.first().map(|alert| alert.prompt_id)
+        })
+    {
+        lifecycle_findings.push(format!(
+            "delayed baseline suppressed or displaced live completion: alerts={}, agent={recovered_codex:?}",
+            codex_completed.len()
+        ));
+    }
+
+    // A recovery snapshot that already reports Waiting records that turn as
+    // observed, so a later live duplicate does not raise another attention alert.
+    let snapshot_wait_session = "codex_snapshot_wait";
+    let snapshot_wait_runtime = Uuid::new_v4();
+    let snapshot_wait_generation = Uuid::new_v4();
+    let attention_count_before_snapshot = desktop
+        .snapshot()
+        .unwrap()
+        .agent_alert_events
+        .iter()
+        .filter(|alert| alert.kind == AlertKind::NeedsUser)
+        .count();
+    result(send_action(
+        &socket,
+        10,
+        provider_observation_action(
+            target,
+            snapshot_wait_runtime,
+            snapshot_wait_generation,
+            1,
+            provider_observation(
+                ProviderKind::Codex,
+                snapshot_wait_session,
+                Some("turn_snapshot_wait"),
+                ProviderState::Waiting,
+                ProviderTransition::Snapshot,
+                ProviderMarker::Recovery,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        11,
+        provider_observation_action(
+            target,
+            snapshot_wait_runtime,
+            snapshot_wait_generation,
+            2,
+            provider_observation(
+                ProviderKind::Codex,
+                snapshot_wait_session,
+                Some("turn_snapshot_wait"),
+                ProviderState::Waiting,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    let attention_count_after_snapshot = desktop
+        .snapshot()
+        .unwrap()
+        .agent_alert_events
+        .iter()
+        .filter(|alert| alert.kind == AlertKind::NeedsUser)
+        .count();
+    if attention_count_after_snapshot != attention_count_before_snapshot {
+        lifecycle_findings.push(format!(
+            "recovery Waiting snapshot was not deduplicated: before={attention_count_before_snapshot}, after={attention_count_after_snapshot}"
+        ));
+    }
+
+    // A locally lost adapter generation retains the bounded per-session turn
+    // outcomes. Recovery Working clears eligibility, while the already-alerted
+    // Waiting turn stays deduplicated across the generation replacement.
+    let loss_session = "codex_loss_history";
+    let loss_runtime = Uuid::new_v4();
+    let loss_generation = Uuid::new_v4();
+    let attention_count_before_loss = desktop
+        .snapshot()
+        .unwrap()
+        .agent_alert_events
+        .iter()
+        .filter(|alert| alert.kind == AlertKind::NeedsUser)
+        .count();
+    result(send_action(
+        &socket,
+        12,
+        provider_observation_action(
+            target,
+            loss_runtime,
+            loss_generation,
+            1,
+            provider_observation(
+                ProviderKind::Codex,
+                loss_session,
+                Some("turn_lost_waiting"),
+                ProviderState::Working,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        13,
+        provider_observation_action(
+            target,
+            loss_runtime,
+            loss_generation,
+            2,
+            provider_observation(
+                ProviderKind::Codex,
+                loss_session,
+                Some("turn_lost_waiting"),
+                ProviderState::Waiting,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        14,
+        provider_evidence_lost_action(
+            target,
+            ProviderKind::Codex,
+            loss_session,
+            loss_runtime,
+            loss_generation,
+            3,
+        ),
+    ));
+    let loss_recovery_runtime = Uuid::new_v4();
+    let loss_recovery_generation = Uuid::new_v4();
+    result(send_action(
+        &socket,
+        15,
+        provider_observation_action(
+            target,
+            loss_recovery_runtime,
+            loss_recovery_generation,
+            1,
+            provider_observation(
+                ProviderKind::Codex,
+                loss_session,
+                Some("turn_lost_waiting"),
+                ProviderState::Working,
+                ProviderTransition::Snapshot,
+                ProviderMarker::Recovery,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        16,
+        provider_observation_action(
+            target,
+            loss_recovery_runtime,
+            loss_recovery_generation,
+            2,
+            provider_observation(
+                ProviderKind::Codex,
+                loss_session,
+                Some("turn_lost_waiting"),
+                ProviderState::Waiting,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    let attention_count_after_loss = desktop
+        .snapshot()
+        .unwrap()
+        .agent_alert_events
+        .iter()
+        .filter(|alert| alert.kind == AlertKind::NeedsUser)
+        .count();
+    if attention_count_after_loss != attention_count_before_loss + 1 {
+        lifecycle_findings.push(format!(
+            "recoverable local loss replayed a Waiting alert: before={attention_count_before_loss}, after={attention_count_after_loss}"
+        ));
+    }
+
+    // Multiple local losses must not let an older retired runtime/generation
+    // become current again after a newer generation was itself lost.
+    let fence_session = "codex_retired_generation";
+    let fence_runtime_a = Uuid::new_v4();
+    let fence_generation_a = Uuid::new_v4();
+    result(send_action(
+        &socket,
+        17,
+        provider_observation_action(
+            target,
+            fence_runtime_a,
+            fence_generation_a,
+            1,
+            provider_observation(
+                ProviderKind::Codex,
+                fence_session,
+                Some("turn_fence"),
+                ProviderState::Working,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        18,
+        provider_evidence_lost_action(
+            target,
+            ProviderKind::Codex,
+            fence_session,
+            fence_runtime_a,
+            fence_generation_a,
+            2,
+        ),
+    ));
+    let fence_runtime_b = Uuid::new_v4();
+    let fence_generation_b = Uuid::new_v4();
+    result(send_action(
+        &socket,
+        19,
+        provider_observation_action(
+            target,
+            fence_runtime_b,
+            fence_generation_b,
+            1,
+            provider_observation(
+                ProviderKind::Codex,
+                fence_session,
+                Some("turn_fence"),
+                ProviderState::Working,
+                ProviderTransition::Snapshot,
+                ProviderMarker::Recovery,
+            ),
+        ),
+    ));
+    result(send_action(
+        &socket,
+        20,
+        provider_evidence_lost_action(
+            target,
+            ProviderKind::Codex,
+            fence_session,
+            fence_runtime_b,
+            fence_generation_b,
+            2,
+        ),
+    ));
+    let delayed_old_generation = send_action(
+        &socket,
+        21,
+        provider_observation_action(
+            target,
+            fence_runtime_a,
+            fence_generation_a,
+            1,
+            provider_observation(
+                ProviderKind::Codex,
+                fence_session,
+                Some("turn_fence"),
+                ProviderState::Working,
+                ProviderTransition::Snapshot,
+                ProviderMarker::Recovery,
+            ),
+        ),
+    );
+    let fence_snapshot = desktop.snapshot().unwrap();
+    let current_fenced_agent = fence_snapshot.agent_lifecycle.iter().find(|agent| {
+        agent.provider == Provider::CodexLocal
+            && agent.runtime_id == fence_runtime_b
+            && agent.generation == fence_generation_b
+    });
+    if delayed_old_generation.ok
+        || current_fenced_agent.is_none_or(|agent| {
+            agent.activity != Activity::Unknown || agent.connection != Connection::Unknown
+        })
+    {
+        lifecycle_findings.push(format!(
+            "retired generation was re-admitted after repeated loss: accepted={}, current={current_fenced_agent:?}",
+            delayed_old_generation.ok
+        ));
+    }
+
+    assert!(
+        lifecycle_findings.is_empty(),
+        "provider lifecycle regressions: {}",
+        lifecycle_findings.join("; ")
+    );
+    drop(server);
 }

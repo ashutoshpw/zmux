@@ -8,8 +8,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use zmux_remote_runtime::agent_lifecycle::ClaudeHook;
 pub use zmux_remote_runtime::agent_lifecycle::HookDisposition;
+use zmux_remote_runtime::agent_lifecycle::{
+    ClaudeHook, MAX_PROVIDER_ID_BYTES, ProviderKind, ProviderLifecycleObservation, ProviderMarker,
+    ProviderState, ProviderTransition,
+};
 use zmux_session_runtime::State as SessionState;
 use zmux_workspace_core::{
     PaneId, SessionId, Snapshot as Model, SurfaceId, WindowId, WorkspaceId, targets::TargetKind,
@@ -18,6 +21,8 @@ use zmux_workspace_core::{
 pub const MAX_RECORDS: usize = 64;
 pub const MAX_ALERT_EVENTS: usize = 128;
 const MAX_HOOK_RECEIPTS: usize = 256;
+const MAX_PROVIDER_TURN_MARKS: usize = 128;
+const MAX_PROVIDER_RETIRED_IDENTITIES: usize = 128;
 /// Hook events have no provider replay cursor or heartbeat. After this interval,
 /// the published state becomes Unknown instead of assuming it is still current.
 pub const EVIDENCE_FRESHNESS: Duration = Duration::from_secs(30);
@@ -27,6 +32,42 @@ pub const EVIDENCE_FRESHNESS: Duration = Duration::from_secs(30);
 pub enum Provider {
     ClaudeLocal,
     ClaudeRemote,
+    CodexLocal,
+    CodexRemote,
+    #[serde(rename = "opencode_local")]
+    OpenCodeLocal,
+    #[serde(rename = "opencode_remote")]
+    OpenCodeRemote,
+}
+
+impl Provider {
+    fn is_remote(self) -> bool {
+        matches!(
+            self,
+            Self::ClaudeRemote | Self::CodexRemote | Self::OpenCodeRemote
+        )
+    }
+
+    fn is_normalized(self) -> bool {
+        !matches!(self, Self::ClaudeLocal | Self::ClaudeRemote)
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::ClaudeLocal | Self::ClaudeRemote => "Claude Code",
+            Self::CodexLocal | Self::CodexRemote => "Codex",
+            Self::OpenCodeLocal | Self::OpenCodeRemote => "OpenCode",
+        }
+    }
+
+    pub(crate) fn for_transport(provider: ProviderKind, remote: bool) -> Self {
+        match (provider, remote) {
+            (ProviderKind::Codex, false) => Self::CodexLocal,
+            (ProviderKind::Codex, true) => Self::CodexRemote,
+            (ProviderKind::OpenCode, false) => Self::OpenCodeLocal,
+            (ProviderKind::OpenCode, true) => Self::OpenCodeRemote,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +103,27 @@ pub struct Target {
     pub surface_id: SurfaceId,
     pub surface_uuid: Uuid,
     pub session_id: SessionId,
+}
+
+/// One provider-normalized observation bound to an exact Zmux terminal runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderObservationInput {
+    pub target: Target,
+    pub runtime_id: Uuid,
+    pub generation: Uuid,
+    pub sequence: u64,
+    pub observation: ProviderLifecycleObservation,
+}
+
+/// Exact local provider session identity for an evidence-loss or exit action.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderSessionEnd {
+    pub target: Target,
+    pub provider: ProviderKind,
+    pub session_id: String,
+    pub runtime_id: Uuid,
+    pub generation: Uuid,
+    pub sequence: u64,
 }
 
 /// Adapter-local sequence and Zmux-generated ID for one admitted remote hook.
@@ -152,6 +214,33 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hook_id: Option<Uuid>,
         event: Event,
+    },
+    /// Normalized Codex/OpenCode evidence from the exact current local owner.
+    /// This action has no Claude capability and cannot cross to SSH admission.
+    ProviderObservation {
+        target: Target,
+        runtime_id: Uuid,
+        generation: Uuid,
+        sequence: u64,
+        observation: ProviderLifecycleObservation,
+    },
+    /// Invalidate local provider evidence after adapter/daemon loss.
+    ProviderEvidenceLost {
+        target: Target,
+        provider: ProviderKind,
+        session_id: String,
+        runtime_id: Uuid,
+        generation: Uuid,
+        sequence: u64,
+    },
+    /// Retire local provider state after the exact provider session exits.
+    ProviderSessionEnded {
+        target: Target,
+        provider: ProviderKind,
+        session_id: String,
+        runtime_id: Uuid,
+        generation: Uuid,
+        sequence: u64,
     },
 }
 
@@ -524,9 +613,21 @@ struct Record {
     last_event: Option<Event>,
     working_prompt_id: Option<Uuid>,
     completed_prompt_id: Option<Uuid>,
+    provider_live_turn_id: Option<Uuid>,
+    provider_eligible_turn_id: Option<Uuid>,
+    provider_waiting_turn_ids: std::collections::VecDeque<Uuid>,
+    provider_completed_turn_ids: std::collections::VecDeque<Uuid>,
+    provider_noncompletable_turn_ids: std::collections::VecDeque<Uuid>,
+    retired_provider_identities: std::collections::VecDeque<ProviderRuntimeGeneration>,
     activity_observed_at: Instant,
     connection_observed_at: Instant,
     terminal: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProviderRuntimeGeneration {
+    runtime_id: Uuid,
+    generation: Uuid,
 }
 
 pub struct Runtime {
@@ -678,19 +779,20 @@ impl Runtime {
         generation: Uuid,
         now: Instant,
     ) -> bool {
-        let Some(record) = self.records.iter_mut().find(|record| {
-            record.target == target
-                && record.provider == Provider::ClaudeRemote
+        let mut changed = false;
+        for record in &mut self.records {
+            if record.target == target
+                && record.provider.is_remote()
                 && record.runtime_id == runtime_id
                 && record.generation == generation
                 && !record.terminal
                 && record.connection != Connection::Disconnected
-        }) else {
-            return false;
-        };
-        let changed = record.connection != Connection::Connected;
-        record.connection = Connection::Connected;
-        record.connection_observed_at = now;
+            {
+                changed |= record.connection != Connection::Connected;
+                record.connection = Connection::Connected;
+                record.connection_observed_at = now;
+            }
+        }
         changed
     }
 
@@ -702,19 +804,22 @@ impl Runtime {
         runtime_id: Uuid,
         generation: Uuid,
     ) -> bool {
-        let Some(record) = self.records.iter_mut().find(|record| {
-            record.target == target
-                && record.provider == Provider::ClaudeRemote
+        let mut changed = false;
+        for record in &mut self.records {
+            if record.target == target
+                && record.provider.is_remote()
                 && record.runtime_id == runtime_id
                 && record.generation == generation
                 && !record.terminal
-        }) else {
-            return false;
-        };
-        record.activity = Activity::Unknown;
-        record.connection = Connection::Unknown;
-        record.terminal = true;
-        true
+            {
+                record.activity = Activity::Unknown;
+                record.connection = Connection::Unknown;
+                record.terminal = true;
+                record.provider_eligible_turn_id = None;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Admit a new nonce/version handshake over the existing managed SSH
@@ -731,29 +836,433 @@ impl Runtime {
         if generation.is_nil() || generation == previous_generation {
             return false;
         }
-        let Some(record) = self.records.iter_mut().find(|record| {
-            record.target == target
-                && record.provider == Provider::ClaudeRemote
+        let mut changed = false;
+        for record in &mut self.records {
+            if record.target == target
+                && record.provider.is_remote()
                 && record.runtime_id == runtime_id
                 && record.generation == previous_generation
                 && record.terminal
                 && record.connection == Connection::Unknown
+            {
+                record.generation = generation;
+                record.transport_epoch = Some(generation);
+                record.prompt_id = None;
+                record.working_prompt_id = None;
+                record.completed_prompt_id = None;
+                record.provider_live_turn_id = None;
+                record.provider_eligible_turn_id = None;
+                record.activity = Activity::Unknown;
+                record.connection = Connection::Connected;
+                record.last_sequence = 0;
+                record.last_event = None;
+                record.activity_observed_at = now;
+                record.connection_observed_at = now;
+                record.terminal = false;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Normalize one provider observation for the exact current local terminal.
+    /// The provider's opaque session and turn IDs are deterministically mapped
+    /// to UUIDv5 values before they enter the public UUID-shaped snapshot.
+    pub fn apply_local_provider_observation(
+        &mut self,
+        model: &Model,
+        input: ProviderObservationInput,
+        now: Instant,
+    ) -> Result<(), String> {
+        let provider = Provider::for_transport(input.observation.provider, false);
+        if owner(model, input.target, provider).is_none() {
+            return Err("provider lifecycle target is not the exact current local terminal".into());
+        }
+        self.apply_provider_observation(input, provider, now)
+    }
+
+    /// Admit one sanitized provider frame from the exact managed SSH stream.
+    /// Callers must first validate the current binding, launch, nonce, and SSH
+    /// session; this method then uses the same owner state machine as local input.
+    pub fn apply_remote_provider_observation(
+        &mut self,
+        model: &Model,
+        input: ProviderObservationInput,
+        now: Instant,
+    ) -> Result<(), String> {
+        let provider = Provider::for_transport(input.observation.provider, true);
+        if owner(model, input.target, provider).is_none() {
+            return Err(
+                "provider lifecycle target is not the exact current remote terminal".into(),
+            );
+        }
+        let target = input.target;
+        let runtime_id = input.runtime_id;
+        let generation = input.generation;
+        self.apply_provider_observation(input, provider, now)?;
+        self.remote_transport_heartbeat(target, runtime_id, generation, now);
+        Ok(())
+    }
+
+    /// Fence one exact local provider session after its adapter or background
+    /// evidence source fails. Activity and connection become `Unknown`.
+    pub fn apply_local_provider_evidence_lost(
+        &mut self,
+        model: &Model,
+        end: ProviderSessionEnd,
+        now: Instant,
+    ) -> Result<(), String> {
+        self.apply_local_provider_end(model, end, Connection::Unknown, now)
+    }
+
+    /// Retire one exact local provider session after the provider reports its
+    /// exit. Activity becomes `Unknown` and connection becomes `Disconnected`.
+    pub fn apply_local_provider_session_ended(
+        &mut self,
+        model: &Model,
+        end: ProviderSessionEnd,
+        now: Instant,
+    ) -> Result<(), String> {
+        self.apply_local_provider_end(model, end, Connection::Disconnected, now)
+    }
+
+    fn apply_local_provider_end(
+        &mut self,
+        model: &Model,
+        end: ProviderSessionEnd,
+        connection: Connection,
+        now: Instant,
+    ) -> Result<(), String> {
+        validate_provider_id(&end.session_id)?;
+        let provider = Provider::for_transport(end.provider, false);
+        if owner(model, end.target, provider).is_none() {
+            return Err("provider lifecycle target is not the exact current local terminal".into());
+        }
+        if end.runtime_id.is_nil() || end.generation.is_nil() || end.sequence == 0 {
+            return Err("provider lifecycle end identity is incomplete".into());
+        }
+        let provider_session_id = provider_session_uuid(end.provider, &end.session_id);
+        let Some(record) = self.records.iter_mut().find(|record| {
+            record.target == end.target
+                && record.provider == provider
+                && record.runtime_id == end.runtime_id
+                && record.generation == end.generation
+                && record.provider_session_id == provider_session_id
+                && !record.terminal
         }) else {
-            return false;
+            return Err("provider lifecycle session is stale or unknown".into());
         };
-        record.generation = generation;
-        record.transport_epoch = Some(generation);
-        record.prompt_id = None;
-        record.working_prompt_id = None;
-        record.completed_prompt_id = None;
-        record.activity = Activity::Unknown;
-        record.connection = Connection::Connected;
-        record.last_sequence = 0;
+        if end.sequence <= record.last_sequence
+            || end.sequence != record.last_sequence.saturating_add(1)
+        {
+            record.activity = Activity::Unknown;
+            record.connection = Connection::Unknown;
+            record.provider_eligible_turn_id = None;
+            record.terminal = true;
+            record.activity_observed_at = now;
+            record.connection_observed_at = now;
+            return Err("provider lifecycle end sequence is stale or gapped".into());
+        }
+        record.last_sequence = end.sequence;
         record.last_event = None;
+        record.activity = Activity::Unknown;
+        record.connection = connection;
+        record.provider_eligible_turn_id = None;
+        record.terminal = true;
         record.activity_observed_at = now;
         record.connection_observed_at = now;
-        record.terminal = false;
-        true
+        Ok(())
+    }
+
+    fn apply_provider_observation(
+        &mut self,
+        input: ProviderObservationInput,
+        provider: Provider,
+        now: Instant,
+    ) -> Result<(), String> {
+        let ProviderObservationInput {
+            target,
+            runtime_id,
+            generation,
+            sequence,
+            observation,
+        } = input;
+        observation.validate().map_err(|error| error.to_owned())?;
+        if target.identity_namespace.is_nil()
+            || target.surface_uuid.is_nil()
+            || target.surface_id.0 == 0
+            || target.session_id.0 == 0
+            || runtime_id.is_nil()
+            || generation.is_nil()
+            || sequence == 0
+        {
+            return Err("provider lifecycle observation identity is incomplete".into());
+        }
+
+        let provider_session_id =
+            provider_session_uuid(observation.provider, &observation.session_id);
+        let provider_turn_id = observation.turn_id.as_deref().map(|turn_id| {
+            provider_turn_uuid(observation.provider, &observation.session_id, turn_id)
+        });
+        let exact_index = self.records.iter().position(|record| {
+            record.target == target
+                && record.provider == provider
+                && record.runtime_id == runtime_id
+                && record.generation == generation
+                && record.provider_session_id == provider_session_id
+        });
+
+        let matching_session_indices: Vec<usize> = self
+            .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (record.target == target
+                    && record.provider == provider
+                    && record.provider_session_id == provider_session_id)
+                    .then_some(index)
+            })
+            .collect();
+        let record_index = if let Some(index) = exact_index {
+            index
+        } else if !matching_session_indices.is_empty() {
+            let requested_identity = ProviderRuntimeGeneration {
+                runtime_id,
+                generation,
+            };
+            if matching_session_indices.iter().any(|index| {
+                self.records[*index]
+                    .retired_provider_identities
+                    .contains(&requested_identity)
+            }) {
+                return Err("provider lifecycle runtime or generation was retired".into());
+            }
+            let replaceable_local_loss = !provider.is_remote()
+                && matching_session_indices.iter().all(|index| {
+                    let record = &self.records[*index];
+                    record.terminal
+                        && matches!(
+                            record.connection,
+                            Connection::Unknown | Connection::Disconnected
+                        )
+                });
+            if !replaceable_local_loss {
+                return Err("provider lifecycle session has a stale runtime or generation".into());
+            }
+            if matching_session_indices.len() != 1 {
+                return Err("provider lifecycle session has duplicate retained records".into());
+            }
+
+            // Reuse the session record so its bounded outcome history and
+            // retired-generation fence survive recoverable adapter loss.
+            let index = matching_session_indices[0];
+            let record = &mut self.records[index];
+            push_bounded_provider_identity(
+                &mut record.retired_provider_identities,
+                ProviderRuntimeGeneration {
+                    runtime_id: record.runtime_id,
+                    generation: record.generation,
+                },
+            );
+            record.runtime_id = runtime_id;
+            record.generation = generation;
+            record.transport_epoch = provider.is_remote().then_some(generation);
+            record.capability = Uuid::new_v4();
+            record.prompt_id = None;
+            record.activity = Activity::Unknown;
+            record.connection = Connection::Connected;
+            record.last_sequence = 0;
+            record.last_event = None;
+            record.working_prompt_id = None;
+            record.completed_prompt_id = None;
+            record.provider_live_turn_id = None;
+            record.provider_eligible_turn_id = None;
+            record.activity_observed_at = now;
+            record.connection_observed_at = now;
+            record.terminal = false;
+            index
+        } else {
+            if self.records.len() >= MAX_RECORDS {
+                return Err("live agent lifecycle capacity is full".into());
+            }
+            let index = self.records.len();
+            self.records.push(Record {
+                target,
+                provider,
+                runtime_id,
+                generation,
+                provider_session_id,
+                transport_epoch: provider.is_remote().then_some(generation),
+                capability: Uuid::new_v4(),
+                prompt_id: None,
+                activity: Activity::Unknown,
+                connection: Connection::Connected,
+                last_sequence: 0,
+                last_event: None,
+                working_prompt_id: None,
+                completed_prompt_id: None,
+                provider_live_turn_id: None,
+                provider_eligible_turn_id: None,
+                provider_waiting_turn_ids: std::collections::VecDeque::new(),
+                provider_completed_turn_ids: std::collections::VecDeque::new(),
+                provider_noncompletable_turn_ids: std::collections::VecDeque::new(),
+                retired_provider_identities: std::collections::VecDeque::new(),
+                activity_observed_at: now,
+                connection_observed_at: now,
+                terminal: false,
+            });
+            index
+        };
+
+        if self.records[record_index].terminal
+            || self.records[record_index].connection == Connection::Disconnected
+        {
+            return Err("provider lifecycle record is terminal".into());
+        }
+        let prior_sequence = self.records[record_index].last_sequence;
+        let sequence_gap = !provider.is_remote() && sequence != prior_sequence.saturating_add(1);
+        let sequence_stale = sequence <= prior_sequence;
+        if sequence_stale || sequence_gap {
+            let record = &mut self.records[record_index];
+            record.activity = Activity::Unknown;
+            record.connection = Connection::Unknown;
+            record.provider_eligible_turn_id = None;
+            record.terminal = true;
+            record.activity_observed_at = now;
+            record.connection_observed_at = now;
+            return Err(if sequence_stale {
+                "provider lifecycle sequence is stale".into()
+            } else {
+                "provider lifecycle sequence has a gap".into()
+            });
+        }
+
+        let mut alert = None;
+        {
+            let record = &mut self.records[record_index];
+            record.connection = Connection::Connected;
+            record.connection_observed_at = now;
+            record.last_sequence = sequence;
+            record.last_event = None;
+
+            let live = observation.marker == ProviderMarker::Live;
+            let superseded_snapshot = !live && record.provider_live_turn_id.is_some();
+            if !superseded_snapshot {
+                record.activity_observed_at = now;
+                match observation.state {
+                    ProviderState::Working | ProviderState::Waiting => {
+                        let turn_id =
+                            provider_turn_id.expect("validated active state has a turn ID");
+                        let newly_waiting = if observation.state == ProviderState::Waiting {
+                            let unseen = !record.provider_waiting_turn_ids.contains(&turn_id);
+                            push_bounded(&mut record.provider_waiting_turn_ids, turn_id);
+                            unseen
+                        } else {
+                            false
+                        };
+                        if record.prompt_id != Some(turn_id) {
+                            record.prompt_id = Some(turn_id);
+                            record.provider_eligible_turn_id = None;
+                            record.working_prompt_id = None;
+                            record.completed_prompt_id = None;
+                        }
+                        record.activity = match observation.state {
+                            ProviderState::Working => Activity::Working,
+                            ProviderState::Waiting => Activity::Waiting,
+                            ProviderState::Idle => unreachable!(),
+                        };
+                        if live && observation.transition == ProviderTransition::StateChanged {
+                            record.provider_live_turn_id = Some(turn_id);
+                        }
+                        match (observation.transition, observation.state, live) {
+                            (ProviderTransition::StateChanged, ProviderState::Working, true)
+                                if !record.provider_noncompletable_turn_ids.contains(&turn_id)
+                                    && !record.provider_completed_turn_ids.contains(&turn_id) =>
+                            {
+                                record.provider_eligible_turn_id = Some(turn_id);
+                            }
+                            (ProviderTransition::StateChanged, ProviderState::Waiting, true)
+                                if newly_waiting =>
+                            {
+                                alert = Some((turn_id, AlertKind::NeedsUser));
+                            }
+                            _ => {}
+                        }
+                    }
+                    ProviderState::Idle => {
+                        let turn_id = provider_turn_id;
+                        if let Some(turn_id) = turn_id
+                            && record.prompt_id.is_none_or(|current| current == turn_id)
+                        {
+                            record.prompt_id = Some(turn_id);
+                        }
+                        let same_current_turn =
+                            turn_id.is_some_and(|turn_id| record.prompt_id == Some(turn_id));
+                        let was_current = turn_id.is_none() || same_current_turn;
+                        if was_current {
+                            record.activity = Activity::Idle;
+                        }
+                        match observation.transition {
+                            ProviderTransition::TurnCompleted => {
+                                if let Some(turn_id) = turn_id {
+                                    let newly_completed =
+                                        !record.provider_completed_turn_ids.contains(&turn_id);
+                                    let confirmed_new_run = record.provider_eligible_turn_id
+                                        == Some(turn_id)
+                                        && !record
+                                            .provider_noncompletable_turn_ids
+                                            .contains(&turn_id);
+                                    if newly_completed {
+                                        push_bounded(
+                                            &mut record.provider_completed_turn_ids,
+                                            turn_id,
+                                        );
+                                        if live && confirmed_new_run {
+                                            record.completed_prompt_id = Some(turn_id);
+                                            alert = Some((turn_id, AlertKind::Completed));
+                                        }
+                                    }
+                                    if record.provider_eligible_turn_id == Some(turn_id) {
+                                        record.provider_eligible_turn_id = None;
+                                    }
+                                }
+                            }
+                            ProviderTransition::TurnFailed
+                            | ProviderTransition::TurnInterrupted => {
+                                if let Some(turn_id) = turn_id {
+                                    push_bounded(
+                                        &mut record.provider_noncompletable_turn_ids,
+                                        turn_id,
+                                    );
+                                    if record.provider_eligible_turn_id == Some(turn_id) {
+                                        record.provider_eligible_turn_id = None;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        if was_current {
+                            record.activity = Activity::Idle;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((prompt_id, kind)) = alert {
+            self.append_alert(StoredAlertEvent {
+                cursor: 0,
+                sequence,
+                target,
+                provider,
+                runtime_id,
+                generation,
+                provider_session_id,
+                prompt_id,
+                kind,
+            });
+        }
+        Ok(())
     }
 
     /// Admit a sanitized hook from the private managed-SSH stream. Local control
@@ -981,6 +1490,11 @@ impl Runtime {
                 generation,
                 provider_session_id,
             } => {
+                if provider.is_normalized() {
+                    return Err(
+                        "Codex and OpenCode require provider-tagged lifecycle observations".into(),
+                    );
+                }
                 if target.identity_namespace.is_nil()
                     || target.surface_uuid.is_nil()
                     || target.surface_id.0 == 0
@@ -1052,6 +1566,12 @@ impl Runtime {
                     last_event: None,
                     working_prompt_id: None,
                     completed_prompt_id: None,
+                    provider_live_turn_id: None,
+                    provider_eligible_turn_id: None,
+                    provider_waiting_turn_ids: std::collections::VecDeque::new(),
+                    provider_completed_turn_ids: std::collections::VecDeque::new(),
+                    provider_noncompletable_turn_ids: std::collections::VecDeque::new(),
+                    retired_provider_identities: std::collections::VecDeque::new(),
                     activity_observed_at: now,
                     connection_observed_at: now,
                     terminal: false,
@@ -1359,6 +1879,11 @@ impl Runtime {
                     capability: Some(capability),
                 })
             }
+            Action::ProviderObservation { .. }
+            | Action::ProviderEvidenceLost { .. }
+            | Action::ProviderSessionEnded { .. } => Err(
+                "provider actions require exact local admission through the desktop owner".into(),
+            ),
         }
     }
 
@@ -1518,6 +2043,62 @@ fn alert_coverage_for(record: &Record, event: &Event) -> Option<AlertCoverage> {
     })
 }
 
+/// Stable UUIDv5 namespace for opaque provider identity projection. The exact
+/// provider ID bytes are embedded after NUL separators; IDs are validated to
+/// exclude controls and are never interpreted as UUIDs or paths.
+fn provider_session_uuid(provider: ProviderKind, session_id: &str) -> Uuid {
+    let mut name = Vec::with_capacity(session_id.len() + 40);
+    name.extend_from_slice(b"zmux-agent-provider-v1\0");
+    name.extend_from_slice(provider.wire_name().as_bytes());
+    name.extend_from_slice(b"\0session\0");
+    name.extend_from_slice(session_id.as_bytes());
+    Uuid::new_v5(&Uuid::NAMESPACE_URL, &name)
+}
+
+fn validate_provider_id(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > MAX_PROVIDER_ID_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err("provider session ID is invalid".into());
+    }
+    Ok(())
+}
+
+fn provider_turn_uuid(provider: ProviderKind, session_id: &str, turn_id: &str) -> Uuid {
+    let mut name = Vec::with_capacity(session_id.len() + turn_id.len() + 40);
+    name.extend_from_slice(b"zmux-agent-provider-v1\0");
+    name.extend_from_slice(provider.wire_name().as_bytes());
+    name.extend_from_slice(b"\0session\0");
+    name.extend_from_slice(session_id.as_bytes());
+    name.extend_from_slice(b"\0turn\0");
+    name.extend_from_slice(turn_id.as_bytes());
+    Uuid::new_v5(&Uuid::NAMESPACE_URL, &name)
+}
+
+fn push_bounded(queue: &mut std::collections::VecDeque<Uuid>, value: Uuid) {
+    if queue.contains(&value) {
+        return;
+    }
+    queue.push_back(value);
+    while queue.len() > MAX_PROVIDER_TURN_MARKS {
+        queue.pop_front();
+    }
+}
+
+fn push_bounded_provider_identity(
+    queue: &mut std::collections::VecDeque<ProviderRuntimeGeneration>,
+    value: ProviderRuntimeGeneration,
+) {
+    if queue.contains(&value) {
+        return;
+    }
+    queue.push_back(value);
+    while queue.len() > MAX_PROVIDER_RETIRED_IDENTITIES {
+        queue.pop_front();
+    }
+}
+
 fn defers_completion_alert(event: &Event) -> bool {
     matches!(
         event,
@@ -1591,8 +2172,12 @@ fn owner(model: &Model, target: Target, provider: Provider) -> Option<Owner> {
                     if surface.id != target.surface_id
                         || surface.kind != zmux_workspace_core::SurfaceKind::Terminal
                         || match provider {
-                            Provider::ClaudeLocal => surface.remote.is_some(),
-                            Provider::ClaudeRemote => surface.remote.is_none(),
+                            Provider::ClaudeLocal
+                            | Provider::CodexLocal
+                            | Provider::OpenCodeLocal => surface.remote.is_some(),
+                            Provider::ClaudeRemote
+                            | Provider::CodexRemote
+                            | Provider::OpenCodeRemote => surface.remote.is_none(),
                         }
                         || surface.local_tmux.is_some()
                         || surface.session_id != Some(target.session_id)
@@ -1622,11 +2207,583 @@ pub fn has_remote_owner(model: &Model, target: Target) -> bool {
     owner(model, target, Provider::ClaudeRemote).is_some()
 }
 
+pub fn has_local_provider_owner(model: &Model, target: Target, provider: Provider) -> bool {
+    !provider.is_remote() && provider.is_normalized() && owner(model, target, provider).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     use zmux_workspace_core::{Action as WorkspaceAction, WorkspaceStore};
+
+    fn provider_fixture() -> (Model, Target, Target) {
+        let namespace = Uuid::new_v4();
+        let mut store = WorkspaceStore::with_identity_namespace(namespace);
+        store
+            .apply(WorkspaceAction::CreateWindow { focus: true })
+            .unwrap();
+        store
+            .apply(WorkspaceAction::CreateSshWorkspace {
+                name: "managed SSH provider".into(),
+                connection: zmux_remote_runtime::SshConnectionConfig {
+                    destination: "fixture@example.test".into(),
+                    config_file: None,
+                    port: None,
+                    identity: None,
+                    forward_agent: None,
+                    ssh_options: Vec::new(),
+                    jump_hosts: Vec::new(),
+                    command: None,
+                },
+                focus: false,
+            })
+            .unwrap();
+        let model = store.snapshot();
+        let target = |surface: &zmux_workspace_core::Surface| Target {
+            identity_namespace: namespace,
+            surface_id: surface.id,
+            surface_uuid: model.object_uuid(TargetKind::Surface, surface.id.0),
+            session_id: surface.session_id.unwrap(),
+        };
+        let local = model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .find(|surface| surface.remote.is_none())
+            .unwrap();
+        let remote = model
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.root.panes())
+            .flat_map(|pane| &pane.surfaces)
+            .find(|surface| surface.remote.is_some())
+            .unwrap();
+        let local_target = target(local);
+        let remote_target = target(remote);
+        (model, local_target, remote_target)
+    }
+
+    fn provider_observation(
+        provider: ProviderKind,
+        session_id: &str,
+        turn_id: Option<&str>,
+        state: ProviderState,
+        transition: ProviderTransition,
+        marker: ProviderMarker,
+    ) -> ProviderLifecycleObservation {
+        ProviderLifecycleObservation {
+            provider,
+            scope: zmux_remote_runtime::agent_lifecycle::ProviderScope::Root,
+            session_id: session_id.into(),
+            turn_id: turn_id.map(str::to_owned),
+            state,
+            transition,
+            marker,
+        }
+    }
+
+    #[test]
+    fn provider_ids_are_opaque_namespaced_and_transport_owners_are_exact() {
+        let (model, local_target, remote_target) = provider_fixture();
+        let raw_session = "sess_root_d41d8cd98f00";
+        let codex_session = provider_session_uuid(ProviderKind::Codex, raw_session);
+        let opencode_session = provider_session_uuid(ProviderKind::OpenCode, raw_session);
+        assert_eq!(
+            codex_session,
+            Uuid::parse_str("56da7807-16be-565d-926b-316ca9782f87").unwrap()
+        );
+        assert_ne!(codex_session, opencode_session);
+        assert_ne!(
+            codex_session,
+            provider_session_uuid(ProviderKind::Codex, "sess_root_d41d8cd98f00:other")
+        );
+        assert_ne!(
+            provider_turn_uuid(ProviderKind::OpenCode, "sess-a", "turn-a"),
+            provider_turn_uuid(ProviderKind::OpenCode, "sess-b", "turn-a")
+        );
+        assert_eq!(
+            provider_turn_uuid(ProviderKind::Codex, raw_session, "turn_1"),
+            Uuid::parse_str("98a4ca54-2915-5a99-b867-ba6dfb1d5401").unwrap()
+        );
+        assert!(Uuid::parse_str(raw_session).is_err());
+
+        assert!(has_local_provider_owner(
+            &model,
+            local_target,
+            Provider::CodexLocal
+        ));
+        assert!(!has_local_provider_owner(
+            &model,
+            remote_target,
+            Provider::CodexLocal
+        ));
+        assert!(owner(&model, remote_target, Provider::OpenCodeRemote).is_some());
+        assert!(owner(&model, local_target, Provider::OpenCodeRemote).is_none());
+
+        let mut runtime = Runtime::default();
+        let now = Instant::now();
+        let runtime_id = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        assert!(
+            runtime
+                .apply_local_provider_observation(
+                    &model,
+                    ProviderObservationInput {
+                        target: remote_target,
+                        runtime_id,
+                        generation,
+                        sequence: 1,
+                        observation: provider_observation(
+                            ProviderKind::Codex,
+                            raw_session,
+                            Some("turn_1"),
+                            ProviderState::Working,
+                            ProviderTransition::StateChanged,
+                            ProviderMarker::Live,
+                        ),
+                    },
+                    now,
+                )
+                .is_err()
+        );
+        assert!(
+            runtime
+                .apply_remote_provider_observation(
+                    &model,
+                    ProviderObservationInput {
+                        target: local_target,
+                        runtime_id,
+                        generation,
+                        sequence: 1,
+                        observation: provider_observation(
+                            ProviderKind::Codex,
+                            raw_session,
+                            Some("turn_1"),
+                            ProviderState::Working,
+                            ProviderTransition::StateChanged,
+                            ProviderMarker::Live,
+                        ),
+                    },
+                    now,
+                )
+                .is_err()
+        );
+        assert!(
+            runtime
+                .apply(
+                    Request {
+                        request_id: Uuid::new_v4(),
+                        action: Action::Register {
+                            target: local_target,
+                            provider: Provider::CodexLocal,
+                            runtime_id,
+                            generation,
+                            provider_session_id: codex_session,
+                        },
+                    },
+                    now,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn generic_provider_baselines_are_silent_and_confirmed_run_alerts_are_exact_once() {
+        let (model, target, _) = provider_fixture();
+        let provider = ProviderKind::OpenCode;
+        let session_id = "sess/root:7";
+        let runtime_id = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let mut runtime = Runtime::default();
+        let mut sequence = 0;
+        let mut apply = |observation| {
+            sequence += 1;
+            runtime
+                .apply_local_provider_observation(
+                    &model,
+                    ProviderObservationInput {
+                        target,
+                        runtime_id,
+                        generation,
+                        sequence,
+                        observation,
+                    },
+                    Instant::now(),
+                )
+                .unwrap();
+        };
+
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn/old"),
+            ProviderState::Working,
+            ProviderTransition::Snapshot,
+            ProviderMarker::Baseline,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn/old"),
+            ProviderState::Idle,
+            ProviderTransition::TurnCompleted,
+            ProviderMarker::Live,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn:new:1"),
+            ProviderState::Working,
+            ProviderTransition::StateChanged,
+            ProviderMarker::Live,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn:new:1"),
+            ProviderState::Idle,
+            ProviderTransition::TurnCompleted,
+            ProviderMarker::Live,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn:new:1"),
+            ProviderState::Idle,
+            ProviderTransition::TurnCompleted,
+            ProviderMarker::Live,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn:needs-user"),
+            ProviderState::Waiting,
+            ProviderTransition::StateChanged,
+            ProviderMarker::Live,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn:needs-user"),
+            ProviderState::Working,
+            ProviderTransition::StateChanged,
+            ProviderMarker::Live,
+        ));
+        apply(provider_observation(
+            provider,
+            session_id,
+            Some("turn:needs-user"),
+            ProviderState::Waiting,
+            ProviderTransition::StateChanged,
+            ProviderMarker::Live,
+        ));
+
+        for (turn_id, outcome) in [
+            ("turn:failed", ProviderTransition::TurnFailed),
+            ("turn:interrupted", ProviderTransition::TurnInterrupted),
+        ] {
+            apply(provider_observation(
+                provider,
+                session_id,
+                Some(turn_id),
+                ProviderState::Working,
+                ProviderTransition::StateChanged,
+                ProviderMarker::Live,
+            ));
+            apply(provider_observation(
+                provider,
+                session_id,
+                Some(turn_id),
+                ProviderState::Idle,
+                outcome,
+                ProviderMarker::Live,
+            ));
+            apply(provider_observation(
+                provider,
+                session_id,
+                Some(turn_id),
+                ProviderState::Idle,
+                ProviderTransition::TurnCompleted,
+                ProviderMarker::Live,
+            ));
+        }
+
+        let alerts = runtime.alert_events(&model);
+        assert_eq!(alerts.len(), 2);
+        assert_eq!(alerts[0].kind, AlertKind::Completed);
+        assert_eq!(
+            alerts[0].prompt_id,
+            provider_turn_uuid(provider, session_id, "turn:new:1")
+        );
+        assert_eq!(alerts[1].kind, AlertKind::NeedsUser);
+        assert_eq!(
+            alerts[1].prompt_id,
+            provider_turn_uuid(provider, session_id, "turn:needs-user")
+        );
+    }
+
+    #[test]
+    fn stale_local_provider_sequence_fences_activity_without_alerting() {
+        let (model, target, _) = provider_fixture();
+        let runtime_id = Uuid::new_v4();
+        let generation = Uuid::new_v4();
+        let observation = provider_observation(
+            ProviderKind::Codex,
+            "session-current",
+            Some("turn-current"),
+            ProviderState::Working,
+            ProviderTransition::StateChanged,
+            ProviderMarker::Live,
+        );
+        let now = Instant::now();
+        for invalid_sequence in [1, 3] {
+            let mut runtime = Runtime::default();
+            runtime
+                .apply_local_provider_observation(
+                    &model,
+                    ProviderObservationInput {
+                        target,
+                        runtime_id,
+                        generation,
+                        sequence: 1,
+                        observation: observation.clone(),
+                    },
+                    now,
+                )
+                .unwrap();
+            assert!(
+                runtime
+                    .apply_local_provider_observation(
+                        &model,
+                        ProviderObservationInput {
+                            target,
+                            runtime_id,
+                            generation,
+                            sequence: invalid_sequence,
+                            observation: observation.clone(),
+                        },
+                        now,
+                    )
+                    .is_err()
+            );
+            let agent = runtime.snapshot(&model).remove(0);
+            assert_eq!(agent.activity, Activity::Unknown);
+            assert_eq!(agent.connection, Connection::Unknown);
+            assert!(runtime.alert_events(&model).is_empty());
+        }
+    }
+
+    #[test]
+    fn remote_loss_and_reconnect_update_every_provider_session_and_recover_silently() {
+        let (model, _, target) = provider_fixture();
+        let mut runtime = Runtime::default();
+        let runtime_id = Uuid::new_v4();
+        let old_generation = Uuid::new_v4();
+        let new_generation = Uuid::new_v4();
+        let now = Instant::now();
+        runtime
+            .apply(
+                Request {
+                    request_id: Uuid::new_v4(),
+                    action: Action::Register {
+                        target,
+                        provider: Provider::ClaudeRemote,
+                        runtime_id,
+                        generation: old_generation,
+                        provider_session_id: Uuid::new_v4(),
+                    },
+                },
+                now,
+            )
+            .unwrap();
+        for (provider, session) in [
+            (ProviderKind::Codex, "codex/session/1"),
+            (ProviderKind::Codex, "codex/session/2"),
+            (ProviderKind::OpenCode, "opencode/session/3"),
+        ] {
+            runtime
+                .apply_remote_provider_observation(
+                    &model,
+                    ProviderObservationInput {
+                        target,
+                        runtime_id,
+                        generation: old_generation,
+                        sequence: 1,
+                        observation: provider_observation(
+                            provider,
+                            session,
+                            Some("turn/baseline"),
+                            ProviderState::Working,
+                            ProviderTransition::Snapshot,
+                            ProviderMarker::Baseline,
+                        ),
+                    },
+                    now,
+                )
+                .unwrap();
+        }
+        assert_eq!(runtime.snapshot(&model).len(), 4);
+        assert!(runtime.remote_transport_lost(target, runtime_id, old_generation));
+        assert!(runtime.snapshot(&model).iter().all(|agent| {
+            agent.activity == Activity::Unknown && agent.connection == Connection::Unknown
+        }));
+        assert!(runtime.remote_transport_reconnected(
+            target,
+            runtime_id,
+            old_generation,
+            new_generation,
+            now + Duration::from_millis(1),
+        ));
+        let recovered = runtime.snapshot(&model);
+        assert_eq!(recovered.len(), 4);
+        assert!(recovered.iter().all(|agent| {
+            agent.activity == Activity::Unknown
+                && agent.connection == Connection::Connected
+                && agent.generation == new_generation
+        }));
+        assert!(!runtime.remote_transport_lost(target, runtime_id, old_generation));
+        let freshness_at = now + EVIDENCE_FRESHNESS + Duration::from_secs(1);
+        assert!(runtime.poll_freshness(freshness_at));
+        assert!(runtime.remote_transport_heartbeat(
+            target,
+            runtime_id,
+            new_generation,
+            freshness_at + Duration::from_millis(1),
+        ));
+        assert!(runtime.snapshot(&model).iter().all(|agent| {
+            agent.activity == Activity::Unknown && agent.connection == Connection::Connected
+        }));
+
+        let codex_session = "codex/session/1";
+        runtime
+            .apply_remote_provider_observation(
+                &model,
+                ProviderObservationInput {
+                    target,
+                    runtime_id,
+                    generation: new_generation,
+                    sequence: 2,
+                    observation: provider_observation(
+                        ProviderKind::Codex,
+                        codex_session,
+                        Some("turn/baseline"),
+                        ProviderState::Working,
+                        ProviderTransition::Snapshot,
+                        ProviderMarker::Recovery,
+                    ),
+                },
+                freshness_at + Duration::from_secs(1),
+            )
+            .unwrap();
+        runtime
+            .apply_remote_provider_observation(
+                &model,
+                ProviderObservationInput {
+                    target,
+                    runtime_id,
+                    generation: new_generation,
+                    sequence: 3,
+                    observation: provider_observation(
+                        ProviderKind::Codex,
+                        codex_session,
+                        Some("turn/baseline"),
+                        ProviderState::Idle,
+                        ProviderTransition::TurnCompleted,
+                        ProviderMarker::Live,
+                    ),
+                },
+                freshness_at + Duration::from_secs(2),
+            )
+            .unwrap();
+        assert!(runtime.alert_events(&model).is_empty());
+        runtime
+            .apply_remote_provider_observation(
+                &model,
+                ProviderObservationInput {
+                    target,
+                    runtime_id,
+                    generation: new_generation,
+                    sequence: 4,
+                    observation: provider_observation(
+                        ProviderKind::Codex,
+                        codex_session,
+                        Some("turn/live-after-heartbeat"),
+                        ProviderState::Working,
+                        ProviderTransition::StateChanged,
+                        ProviderMarker::Live,
+                    ),
+                },
+                freshness_at + Duration::from_secs(3),
+            )
+            .unwrap();
+        let _ = runtime.remote_transport_heartbeat(
+            target,
+            runtime_id,
+            new_generation,
+            freshness_at + Duration::from_secs(4),
+        );
+        // A delayed provider baseline can refresh the same turn's state, but
+        // cannot clear completion eligibility established by live evidence.
+        runtime
+            .apply_remote_provider_observation(
+                &model,
+                ProviderObservationInput {
+                    target,
+                    runtime_id,
+                    generation: new_generation,
+                    sequence: 6,
+                    observation: provider_observation(
+                        ProviderKind::Codex,
+                        codex_session,
+                        Some("turn/live-after-heartbeat"),
+                        ProviderState::Working,
+                        ProviderTransition::Snapshot,
+                        ProviderMarker::Baseline,
+                    ),
+                },
+                freshness_at + Duration::from_millis(4500),
+            )
+            .unwrap();
+        let _ = runtime.remote_transport_heartbeat(
+            target,
+            runtime_id,
+            new_generation,
+            freshness_at + Duration::from_millis(4750),
+        );
+        runtime
+            .apply_remote_provider_observation(
+                &model,
+                ProviderObservationInput {
+                    target,
+                    runtime_id,
+                    generation: new_generation,
+                    sequence: 8,
+                    observation: provider_observation(
+                        ProviderKind::Codex,
+                        codex_session,
+                        Some("turn/live-after-heartbeat"),
+                        ProviderState::Idle,
+                        ProviderTransition::TurnCompleted,
+                        ProviderMarker::Live,
+                    ),
+                },
+                freshness_at + Duration::from_secs(5),
+            )
+            .unwrap();
+        let alerts = runtime.alert_events(&model);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].kind, AlertKind::Completed);
+        assert_eq!(
+            alerts[0].prompt_id,
+            provider_turn_uuid(
+                ProviderKind::Codex,
+                codex_session,
+                "turn/live-after-heartbeat"
+            )
+        );
+    }
 
     #[test]
     fn claude_hook_payloads_normalize_only_explicit_lifecycle_events() {

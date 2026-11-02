@@ -65,6 +65,8 @@ struct AgentSidebarPresentation: Sendable, Hashable {
     var providerName: String {
         switch record.provider {
         case "claude_local", "claude_remote": return "Claude Code"
+        case "codex_local", "codex_remote": return "Codex"
+        case "opencode_local", "opencode_remote": return "OpenCode"
         default: return record.provider.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
