@@ -2,9 +2,28 @@
 
 **Updated:** 2026-11-02
 
-**Source:** `96bd32c0370c4b78c95b5172e271f26c2812d0d9`
+**Source:** `3a910c54df082003f875e7d1fbe5d7faa1fa5913`
 
-## Latest exact-source result: 96bd32c
+## Latest exact-source result: 3a910c5
+
+**PASS: all required exact-source hosted gates passed, and the final universal macOS artifact was uploaded.** The automatic push runs for this full SHA were not duplicated or retried. Foundation passed on Ubuntu and macOS. The full development workflow passed Rust checks, universal compilation, terminal selection/browser links, packaged rendering, sidebar selection, and the system status menu; it uploaded the final artifact and build receipt.
+
+- [Foundation checks run 41476139156](https://github.com/ashutoshpw/zmux/actions/runs/41476139156), source SHA `3a910c54df082003f875e7d1fbe5d7faa1fa5913`.
+  - Ubuntu job [125382099344](https://github.com/ashutoshpw/zmux/actions/runs/41476139156/job/125382099344) passed `scripts/check` and the browser locator/readiness DOM check.
+  - macOS job [125382098656](https://github.com/ashutoshpw/zmux/actions/runs/41476139156/job/125382098656) passed `scripts/check`.
+- [macOS development build run 41476138936](https://github.com/ashutoshpw/zmux/actions/runs/41476138936), exact source SHA, hosted runner image `macos-15-arm64`.
+  - Scheduler jobs [125382087799](https://github.com/ashutoshpw/zmux/actions/runs/41476138936/job/125382087799) (Linux x86_64) and [125382088161](https://github.com/ashutoshpw/zmux/actions/runs/41476138936/job/125382088161) (Linux aarch64) passed; [Swift typecheck job 125382088095](https://github.com/ashutoshpw/zmux/actions/runs/41476138936/job/125382088095) passed.
+  - Development job [125384406843](https://github.com/ashutoshpw/zmux/actions/runs/41476138936/job/125384406843) passed `scripts/check`, universal app build, terminal-selection/browser-link acceptance, packaged app/native rendering, native sidebar selection, status-menu acceptance, final artifact upload, and build receipt. The workflow explicitly skipped save-dialog accessibility tests; `native-smoke.json` records `native_save_dialog_accessibility: skipped_user_deferred`.
+- [Final artifact `zmux-macos-dev-universal-3a910c54df082003f875e7d1fbe5d7faa1fa5913`](https://github.com/ashutoshpw/zmux/actions/runs/41476138936/artifacts/13159742344) (artifact ID `13159742344`). Downloaded and inspected under `/tmp/zmux-provider-build-41476138936/`.
+  - Inner app archive: `zmux-dev-universal-3a910c5.zip`. Its SHA-256 is `789eb0df92b448f045f29ca6962e4e6863957948fc9c471b35d01c0de9c1361b`, matching the included `.sha256` sidecar.
+  - Both artifact and bundled `Contents/Resources/build-info.json` report source SHA `3a910c54df082003f875e7d1fbe5d7faa1fa5913`, universal `arm64`/`x86_64`, minimum macOS `14.0`, signing `ad-hoc`, and `notarized: false`. `Info.plist` reports bundle ID `app.w3dev.zmux.dev` and `LSMinimumSystemVersion` `14.0`.
+  - Independent Mach-O inspection confirmed `arm64` and `x86_64` slices with `LC_BUILD_VERSION` minimum `14.0.0` in `zmux-app`, `Resources/bin/zmux`, and `libzmux_native_bridge.dylib`. Each slice's CodeDirectory has the ad-hoc flag (`0x2`). The hosted macOS build log reports the packaged app as `valid on disk` and `satisfies its Designated Requirement`; notarization is not claimed.
+  - The ZIP preserves executable mode for the app executable, CLI, and native bridge library. The downloaded build log is `/tmp/zmux-provider-development-3a910c54.log`.
+- Packaged provider/sidebar evidence is in `native-sidebar.json`, `native-sidebar-agent-fixture.json`, `native-sidebar-process.json`, and `native-status-menu.json` within the downloaded artifact. The receipt shows synthetic Claude Code Working, Codex Waiting for you under Needs attention, and OpenCode Idle rows. All three cross-workspace row selections verified the exact existing owner and complete unchanged terminal/session/PID inventory; no new surface/session was created. The status-menu receipt reports all its checks successful. Process and owned socket cleanup completed.
+  - These provider inputs were synthetic same-UID control-socket observations: no provider process or authenticated model turn was invoked, and audio playback was not covered. The hosted Mac runner was arm64; this does not establish Intel runtime behavior, physical-Mac behavior, or live provider/audio acceptance.
+- The actual populated packaged screenshot is `/tmp/zmux-provider-build-41476138936/zmux-sidebar-agents.png` (900×684). It was inspected; flat surfaces sample as sidebar `(17, 18, 20)`, terminal `(23, 24, 27)`, and chrome `(20, 21, 23)`, matching the intended sRGB palette values.
+
+## Previous exact-source result: 96bd32c
 
 **BLOCKED: no accepted universal macOS development app exists for this source.** Both Foundation jobs passed. The development workflow passed both Linux scheduler builds and Swift typecheck, then failed `scripts/check` in `Validate Rust core and foreign ABI` before universal app compilation, packaged native acceptance, or app artifact upload. The development runner image was `macos-15-arm64`. No same-source retry was started.
 
@@ -22,8 +41,6 @@
 No AppKit package was built, so this source has no packaged screenshot, palette rendering result, sidebar receipt, or system-status-menu receipt. This hosted attempt also establishes no physical-Mac/audio behavior, authenticated provider turns, or Intel runtime behavior. The Foundation results and Linux scheduler artifacts do not clear the failed development gate.
 
 ## Previous exact-source result: c787b1b
-
-## Latest exact-source result
 
 **BLOCKED: no accepted universal macOS app artifact exists for this source.** Foundation Ubuntu passed, but Foundation macOS failed in the synthetic Codex foreign-thread notification check after its exact local terminal had attached and published a connected Idle baseline. The independent full macOS development workflow passed `scripts/check`, universal compilation, terminal-selection/browser-link acceptance and packaged native rendering, then failed the sidebar smoke before the provider-row selection loop. Only the candidate and failure-diagnostics artifacts were uploaded; final app upload was skipped. No same-source retry was started.
 
@@ -69,3 +86,7 @@ The sidebar smoke failed before testing any provider-row selection. At `apps/mac
 - Source `8523529549da19776947d8124b03eda27aaf3a21`: Foundation run [41445123588](https://github.com/ashutoshpw/zmux/actions/runs/41445123588) failed when a Darwin Unix-socket fixture path exceeded `SUN_LEN`; development run [41445123728](https://github.com/ashutoshpw/zmux/actions/runs/41445123728) produced no accepted universal app. The short private `/tmp` fixture path was added afterward.
 - Source `b1e302b47004a3d39596e426650f9248aa1e3115`: Ubuntu Foundation passed; macOS Foundation [41447789115](https://github.com/ashutoshpw/zmux/actions/runs/41447789115) and development [41447789186](https://github.com/ashutoshpw/zmux/actions/runs/41447789186) failed while the synthetic daemon cold-start consumed the bounded status-probe interval. The fixture was changed to start the daemon explicitly before adapter invocation; production status deadlines were unchanged.
 - Source `5559f09b2c4b3ee12baa345dcd5ffc126ed74b3c`: Foundation [41450440329](https://github.com/ashutoshpw/zmux/actions/runs/41450440329) and development [41450440458](https://github.com/ashutoshpw/zmux/actions/runs/41450440458) reached `CODEX_FIXTURE_READY`, then failed the empty local Codex baseline assertion. No cause was visible in that source's diagnostics, so no speculative timeout or ownership change was made.
+
+## Parent acceptance
+
+The parent independently confirmed both workflows completed successfully on the exact source SHA, recomputed the inner archive checksum and ZIP integrity, compared bundled/outer build metadata and source plist, and parsed both Mach-O architecture slices and macOS 14 minimum in the app, CLI and native bridge. The sidebar executable hash matches the packaged executable; process/lifecycle source and nonce agree, and the owned app/socket were cleaned up. Each provider row matches every expected owner field, retains current connected activity and verifies cross-workspace selection plus the complete unchanged inventory. All ten status-menu checks pass. The parent inspected the actual populated PNG and independently counted the intended sidebar/terminal/chrome pixels. This artifact is accepted for development delivery. Live authenticated turns, physical Mac/audio and Intel runtime remain outside the executed proof; save-dialog accessibility was explicitly skipped as user-deferred.

@@ -2,6 +2,8 @@
 
 **Updated:** 2026-11-02
 
+**State:** done — implementation and verified development-build delivery; live validation limits are recorded below.
+
 ## Implemented slice: Herdr near-black appearance
 
 The shared native palette in `apps/macos/Sources/WorkspaceViews.swift` has been changed to the requested near-black treatment. `WorkspaceRowView` now uses a neutral selected row and label-based text/icon colors, while the blue accent remains on the drag insertion marker.
@@ -790,3 +792,17 @@ Foundation run 41472796069 passed Ubuntu and macOS. Development run 41472796120 
 ### Post-listen readiness portable gate
 
 `RUST_TEST_THREADS=2 scripts/check` r13 passed with exit 0 (`/tmp/zmux-provider-support-check-r13.log`), including both fixture tests, local/SSH provider ownership, workspace tests, strict Clippy, notices and native bridge ABI checks. The readiness change is limited to the existing fixture helper and its bounded timeout description. `git diff --check` passes. The scoped change and current task records are ready for commit/push; fresh exact-source Foundation and universal native acceptance remain required.
+
+### Next exact-source delivery gate
+
+Readiness correction committed and pushed as `3a910c54df082003f875e7d1fbe5d7faa1fa5913` after r13 passed; no hooks were bypassed. The shared tree again contained only unrelated cloud-origin/profile-lifecycle dirty paths at push. Automatic Foundation and full universal macOS workflows are under exact-source acceptance. This source includes the darker sRGB tokens and current-row pointer diagnostics; actual packaged rendering, all-provider selection/status receipts and a final artifact are still required.
+
+### Accepted universal macOS development delivery
+
+Implementation and packaged development delivery are complete for source `3a910c54df082003f875e7d1fbe5d7faa1fa5913`. [Download the accepted universal build](https://github.com/ashutoshpw/zmux/actions/runs/41476138936/artifacts/13159742344). Foundation [41476139156](https://github.com/ashutoshpw/zmux/actions/runs/41476139156) passed Ubuntu and macOS; development [41476138936](https://github.com/ashutoshpw/zmux/actions/runs/41476138936) passed on macos-15-arm64 through full Rust checks, Swift compilation, universal packaging/signing, terminal selection/browser links, packaged rendering, all-provider sidebar selection, status-menu acceptance and final artifact upload.
+
+Inner ZIP SHA-256: `789eb0df92b448f045f29ca6962e4e6863957948fc9c471b35d01c0de9c1361b`. Downloaded ZIP integrity and its sidecar match. Outer/bundled metadata and plist identify the exact source. Parent independently parsed arm64/x86_64 slices with macOS 14 minimum in the app, CLI and native bridge; signing is ad-hoc, not notarized, and the hosted signature validation passed.
+
+Actual native receipts verify Claude Working, Codex Waiting and OpenCode Idle synthetic records; each click selects the exact existing owner from another workspace, with complete surface/session/PID inventories unchanged. Process hash/source/nonce match the packaged app, owned process/socket cleanup completed, and all ten status-menu checks pass. Parent inspected `/tmp/zmux-provider-build-41476138936/zmux-sidebar-agents.png`; its measured sidebar `(17,18,20)`, terminal `(23,24,27)` and chrome `(20,21,23)` match the requested darker palette.
+
+Limits: the provider/sidebar fixtures are synthetic; authenticated model turns, physical Mac/audio and Intel runtime were not exercised. Save-dialog accessibility was skipped as user-deferred. Detailed source/installed-CLI/transport proof and delivery evidence remain in the linked references. Quit the old Zmux before opening a replacement build. Final task-record updates are documentation-only; they do not change the accepted app source.
